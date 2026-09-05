@@ -1,0 +1,6 @@
+{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: generated while running local commands.</local-command-caveat>"}}
+{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"user","message":{"role":"user","content":"<command-message>superpowers:using-superpowers</command-message>"}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_x","content":"grep output"}]}}
+{"type":"user","message":{"role":"user","content":"rewrite the launcher menu"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading the launcher."}]}}

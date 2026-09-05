@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"<command-message>clear</command-message>\n<command-name>/clear</command-name>\n<command-args></command-args>"}}
+{"type":"user","message":{"role":"user","content":"<command-message>doctor</command-message>\n<command-name>/doctor</command-name>\n<command-args>почему то не обновляется claude</command-args>"}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"# Claude Code Doctor\nHealth-check my setup."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking the installer."}]}}

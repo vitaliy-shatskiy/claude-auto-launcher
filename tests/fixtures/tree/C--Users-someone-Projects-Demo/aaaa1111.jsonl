@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"top level session"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"reply"}]}}

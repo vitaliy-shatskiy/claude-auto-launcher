@@ -1,0 +1,15 @@
+{
+  "accounts": [
+    { "key": "work", "root": "~/.claude", "label": "work account", "tint": "Green" },
+    { "key": "second", "root": "~/.claude-second", "label": "second account", "tint": "Magenta" }
+  ],
+  "sharing": false,
+  "remote": false,
+  "riderMcp": "auto",
+  "extraMcpConfigs": ["~/.claude/mcp-shared.json"],
+  "secretsRoot": "~/.claude-secrets",
+  "launchHooks": ["~/scripts/after-launch.ps1"],
+  "maintenanceActions": [
+    { "key": "i", "label": "reindex", "script": "~/scripts/reindex.ps1", "confirmTwice": true }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "accounts": [
+    { "key": "work",     "root": "~/.claude",              "label": "work account",        "tint": "Green" },
+    { "key": "personal", "root": "~/.claude-acct2",        "label": "personal account",    "tint": "Magenta" },
+    { "key": "shared",   "root": "~/.claude-shared",       "label": "shared account",      "tint": "Cyan", "hidden": true },
+    { "key": "low",      "root": "~/.claude-low",          "label": "low account",         "tint": "Blue" }
+  ],
+  "sharing": true,
+  "remote": true,
+  "riderMcp": "auto",
+  "extraMcpConfigs": ["~/.claude/mcp-shared.json"],
+  "launchHooks": [],
+  "maintenanceActions": [ { "key": "i", "label": "cbm reindex", "script": "C:/nope/reindex.ps1", "confirmTwice": true } ]
+}

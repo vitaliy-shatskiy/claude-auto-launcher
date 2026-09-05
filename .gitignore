@@ -1,0 +1,5 @@
+*.dll
+*.pdb
+*.bak-*
+*.pre-relink
+tests/reference-output.local.txt

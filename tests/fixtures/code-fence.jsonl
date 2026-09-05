@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"show me the fix"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Here:\n```powershell\nWrite-Host 'a'\nWrite-Host 'b'\nWrite-Host 'c'\n```\nDone."}]}}

@@ -1,0 +1,3 @@
+{"type":"user","message":{"content":"<task-notification> <task-id>biht8gmo7</task-id> <tool-use-id>toolu_01Wz</tool-use-id>"}}
+{"type":"user","message":{"content":"the real question"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"the real answer"}]}}

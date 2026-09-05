@@ -1,0 +1,4 @@
+{"type":"user","isSidechain":true,"message":{"role":"user","content":"subagent instruction"}}
+{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"subagent reply"}]}}
+{"type":"user","message":{"role":"user","content":"real user prompt"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden reasoning"},{"type":"text","text":"real assistant reply"}]}}
