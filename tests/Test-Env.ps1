@@ -360,14 +360,24 @@ Assert 'hidden account is typeable, not advertised' ($p.Map['s'] -eq 'shared')
 $one = Get-AccountPrompt -Accounts (Get-LauncherDefaults).Accounts -Default 'work'
 Assert 'one account: no prompt text'             ($one.Text -eq '')
 
+# deferred review finding: Text advertises the raw-case first letter while Map is lower-cased, so
+# a mixed-case key ("Work") advertised "[W]ork" for a letter the map only accepts as lower-case 'w'.
+$mixed = @(
+    [pscustomobject]@{ Key = 'Work'; Hidden = $false }
+    [pscustomobject]@{ Key = 'Personal'; Hidden = $false }
+)
+$mp = Get-AccountPrompt -Accounts $mixed -Default 'Work'
+Assert 'mixed-case key: the advertised letter matches the map''s case' ($mp.Text -ceq 'Claude account: [w]ork / [p]ersonal, Enter = Work : ')
+Assert 'mixed-case key: the map still keys on the lower-case letter'   ($mp.Map['w'] -eq 'Work')
+
 # --- Get-RateLimitSummary: a machine with no records (a fresh install) gets an empty table ---------
 $emptyLimits = Join-Path $env:TEMP ("cal-limits-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $emptyLimits | Out-Null
 try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSummary -Directory $emptyLimits).Count -eq 0) } finally { Remove-Item $emptyLimits -Recurse -Force }
 
 } finally { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 86) {
-    Write-Host "COULD NOT RUN: expected 86 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
+if ($script:Ran -ne 88) {
+    Write-Host "COULD NOT RUN: expected 88 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
 }
 if ($script:fail -gt 0) {
@@ -376,5 +386,5 @@ if ($script:fail -gt 0) {
 }
 # Counted, not guessed: HEAD claimed 72 while running 75 (measured 2026-09-04 by counting the
 # ok/FAIL lines of a bare run). A banner nobody re-counts is a number that drifts silently.
-Write-Host '86 assertions, all pass' -ForegroundColor Green
+Write-Host '88 assertions, all pass' -ForegroundColor Green
 exit 0

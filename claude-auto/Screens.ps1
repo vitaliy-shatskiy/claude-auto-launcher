@@ -55,7 +55,13 @@ function Set-LaunchRoster {
     $script:DefaultAccount = if ($Default -and $Default -in $visible) { $Default } else { $visible[0] }
     $rows = @($script:Rows | Where-Object { $_.Name -ne 'Remote' })
     ($rows | Where-Object { $_.Name -eq 'Account' }).Values = $visible
-    if ($Remote) { $rows = @($rows[0], $script:RemoteRow) + @($rows[1..($rows.Count - 1)]) }
+    if ($Remote) {
+        # PowerShell's range operator counts BACKWARDS when Count is 1 (1..0 is the range
+        # 1,0, not empty), so $rows[1..($rows.Count-1)] silently re-yielded $rows[0] instead of an
+        # empty tail. Guarded explicitly rather than relying on the range never going negative.
+        $tail = if ($rows.Count -gt 1) { @($rows[1..($rows.Count - 1)]) } else { @() }
+        $rows = @($rows[0]) + @($script:RemoteRow) + $tail
+    }
     $script:Rows = $rows
     $script:AccountTints = @{}
     foreach ($a in $Accounts) { $script:AccountTints[$a.Key] = "$($a.Tint)" }

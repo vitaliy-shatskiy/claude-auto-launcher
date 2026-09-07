@@ -1545,8 +1545,25 @@ Assert-Equal 'b' (Get-LaunchDefaultAccount) 'Get-LaunchDefaultAccount agrees wit
 Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
 Assert-Equal $rowsBefore.Count @(Get-LaunchRows).Count 'restoring the fixture roster restores the row count'
 
+# --- deferred review finding: Set-LaunchRoster's Remote-row splice duplicates row 0 when the
+# non-Remote roster is down to ONE row. `$rows[1..($rows.Count - 1)]` counts BACKWARDS when
+# Count is 1 (the range is 1..0), yielding $rows[0] again instead of an empty tail. Seven rows
+# ship today, so this is reached here by shrinking $script:Rows first - the same script-scope
+# variable Screens.ps1 sets, reachable because this file dot-sources it into its own scope. ---
+$savedScriptRows = $script:Rows
+try {
+    $script:Rows = @(@{ Name = 'Account'; Label = 'account'; Values = @('work') })
+    Set-LaunchRoster -Accounts @([pscustomobject]@{ Key = 'me'; Root = 'C:\x'; Label = 'me'; Tint = 'Green'; Hidden = $false; Canonical = $true }) -Remote
+    $oneRowResult = @(Get-LaunchRows)
+    Assert-Equal 2 $oneRowResult.Count 'a one-row roster plus Remote yields two rows, not a duplicated Account row'
+    Assert-Equal 'Remote' $oneRowResult[1].Name 'the second row is Remote'
+} finally {
+    $script:Rows = $savedScriptRows
+    Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
+}
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 716) { Write-Host "COULD NOT RUN: expected 716 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 718) { Write-Host "COULD NOT RUN: expected 718 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

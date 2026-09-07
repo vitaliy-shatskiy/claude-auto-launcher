@@ -87,6 +87,67 @@ try {
     Assert 'env override wins'                    ((Get-LauncherConfigPath) -eq $env:CLAUDE_AUTO_CONFIG)
     Remove-Item Env:CLAUDE_AUTO_CONFIG
     Assert 'default path'                         ((Get-LauncherConfigPath) -eq (Join-Path $HOME '.claude\claude-auto.json'))
+
+    # --- deferred review finding: relative paths must resolve against $PWD, not the process's
+    # unmanaged CWD. Set-Location never touches [Environment]::CurrentDirectory, so the two can
+    # point at different directories; GetFullPath(path) alone reads the latter. ---
+    $otherCwd = Join-Path $tmp 'other-cwd'; New-Item -ItemType Directory $otherCwd | Out-Null
+    $trueCwd = Join-Path $tmp 'true-cwd'; New-Item -ItemType Directory $trueCwd | Out-Null
+    $savedNetCwd = [Environment]::CurrentDirectory
+    [Environment]::CurrentDirectory = $otherCwd
+    Push-Location $trueCwd
+    try {
+        $expanded = Expand-LauncherPath 'rel\thing.json'
+        Assert 'relative path expands against $PWD, not [Environment]::CurrentDirectory' ($expanded -eq (Join-Path $trueCwd 'rel\thing.json'))
+    } finally { Pop-Location; [Environment]::CurrentDirectory = $savedNetCwd }
+
+    # --- deferred review finding: string-typed JSON booleans. [bool]"false" is $true in PowerShell,
+    # so "sharing": "false" used to turn sharing ON. ---
+    Set-Content (Join-Path $tmp 'bool-sharing-false.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "sharing": "false" }'
+    $bsf = Read-LauncherConfig -Path (Join-Path $tmp 'bool-sharing-false.json')
+    Assert 'string "false" sharing stays off'          (-not $bsf.Sharing)
+    Assert 'string "false" sharing warns nothing'      (@($bsf.Warnings).Count -eq 0)
+
+    Set-Content (Join-Path $tmp 'bool-sharing-bad.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "sharing": "yes" }'
+    $bsb = Read-LauncherConfig -Path (Join-Path $tmp 'bool-sharing-bad.json')
+    Assert 'unparseable sharing value keeps the default' (-not $bsb.Sharing)
+    Assert 'and warns naming the key and the value'      (@($bsb.Warnings | Where-Object { $_ -match 'sharing' -and $_ -match 'yes' }).Count -eq 1)
+
+    Set-Content (Join-Path $tmp 'bool-hidden.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"~/.claude-b","hidden":"false"} ] }'
+    $bhf = Read-LauncherConfig -Path (Join-Path $tmp 'bool-hidden.json')
+    Assert 'string "false" hidden stays not-hidden'    (($bhf.Accounts | Where-Object Key -eq 'b').Hidden -eq $false)
+
+    Set-Content (Join-Path $tmp 'bool-hidden-true.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"~/.claude-b","hidden":"true"} ] }'
+    $bht = Read-LauncherConfig -Path (Join-Path $tmp 'bool-hidden-true.json')
+    Assert 'string "true" hidden is hidden'             (($bht.Accounts | Where-Object Key -eq 'b').Hidden -eq $true)
+
+    # --- deferred review finding: "accounts": null must warn, like every other invalid accounts
+    # value does - it currently falls back to the default roster silently. ---
+    Set-Content (Join-Path $tmp 'null-accounts.json') '{ "accounts": null }'
+    $na = Read-LauncherConfig -Path (Join-Path $tmp 'null-accounts.json')
+    Assert 'accounts:null uses the default roster' (@($na.Accounts).Count -eq 1 -and $na.Accounts[0].Key -eq 'work')
+    Assert 'and warns, unlike every other invalid accounts value' (@($na.Warnings | Where-Object { $_ -match 'accounts' -and $_ -match 'null' }).Count -eq 1)
+
+    # --- deferred review finding: two accounts sharing a tint must not fail the roster, but the
+    # collision must be named in a warning - colour is the only way the owner tells accounts apart. ---
+    Set-Content (Join-Path $tmp 'duptint.json') '{ "accounts": [ {"key":"work","root":"~/.claude","tint":"Green"}, {"key":"b","root":"~/.claude-b","tint":"Green"} ] }'
+    $dt = Read-LauncherConfig -Path (Join-Path $tmp 'duptint.json')
+    Assert 'duplicate tints keep both accounts'   (@($dt.Accounts).Count -eq 2)
+    Assert 'and warn naming the colliding keys'   (@($dt.Warnings | Where-Object { $_ -match 'work' -and $_ -match 'b' -and $_ -match 'tint' }).Count -eq 1)
+
+    # --- deferred review finding: tint case is normalised to the allowed list's canonical casing,
+    # so a lower-case value stored verbatim cannot end up looked up under the wrong key elsewhere. ---
+    Set-Content (Join-Path $tmp 'tintcase.json') '{ "accounts": [ {"key":"work","root":"~/.claude","tint":"magenta"} ] }'
+    $tc = Read-LauncherConfig -Path (Join-Path $tmp 'tintcase.json')
+    Assert 'lower-case tint is normalised to canonical casing' ($tc.Accounts[0].Tint -ceq 'Magenta')
+    Assert 'a valid colour in any case warns nothing'          (@($tc.Warnings | Where-Object { $_ -match 'tint' }).Count -eq 0)
+
+    # --- deferred review finding: a second maintenance action reusing an existing key must be
+    # skipped with a warning naming the key, not silently accepted alongside the first. ---
+    Set-Content (Join-Path $tmp 'dupmaint.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "maintenanceActions": [ {"key":"i","label":"first","script":"x.ps1"}, {"key":"i","label":"second","script":"y.ps1"} ] }'
+    $dm = Read-LauncherConfig -Path (Join-Path $tmp 'dupmaint.json')
+    Assert 'duplicate maintenance key: the first one wins'   (@($dm.MaintenanceActions).Count -eq 1 -and $dm.MaintenanceActions[0].Label -eq 'first')
+    Assert 'and a warning names the key'                     (@($dm.Warnings | Where-Object { $_ -match 'maintenanceActions' -and $_ -match "'i'" }).Count -eq 1)
 } finally { Remove-Item $tmp -Recurse -Force }
 if ($script:Ran -eq 0) { Write-Host 'COULD NOT RUN: no assertion executed'; exit 2 }
 if ($script:Failed) { Write-Host "$($script:Failed) failed"; exit 1 }

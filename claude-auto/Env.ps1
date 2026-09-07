@@ -150,7 +150,9 @@ function Get-AccountPrompt {
     foreach ($a in $Accounts) { $map[$a.Key.Substring(0, 1).ToLowerInvariant()] = $a.Key }
     $visible = @($Accounts | Where-Object { -not $_.Hidden })
     if ($visible.Count -lt 2) { return @{ Text = ''; Map = $map } }
-    $parts = @($visible | ForEach-Object { "[$($_.Key.Substring(0,1))]$($_.Key.Substring(1))" })
+    # The bracketed letter must match the case Map keys on (lower), or a mixed-case config key
+    # (e.g. "Work") advertises "[W]ork" for a letter the map only accepts as lower-case 'w'.
+    $parts = @($visible | ForEach-Object { "[$($_.Key.Substring(0,1).ToLowerInvariant())]$($_.Key.Substring(1))" })
     return @{ Text = "Claude account: $($parts -join ' / '), Enter = $Default : "; Map = $map }
 }
 

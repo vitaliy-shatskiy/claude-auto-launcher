@@ -13,7 +13,32 @@ function Expand-LauncherPath {
     if (-not $Path) { return $Path }
     if ($Path -eq '~') { $Path = $HOME }
     elseif ($Path -match '^~[\\/]') { $Path = Join-Path $HOME $Path.Substring(2) }
-    try { return [IO.Path]::GetFullPath($Path) } catch { return $Path }
+    # A relative value is resolved against $PWD explicitly: GetFullPath($Path) alone reads
+    # [Environment]::CurrentDirectory, which Set-Location never updates, so a relative
+    # CLAUDE_AUTO_CONFIG, root, hook or extra could silently resolve somewhere the caller never
+    # navigated to. The two-argument overload resolves relative paths against the base given and
+    # leaves an already-rooted path untouched.
+    try { return [IO.Path]::GetFullPath($Path, $PWD.Path) } catch { return $Path }
+}
+
+function ConvertTo-LauncherBool {
+    # A JSON boolean survives ConvertFrom-Json as [bool]; a quoted "true"/"false" survives as
+    # [string], and PowerShell's [bool] cast treats ANY non-empty string as $true - so
+    # `"sharing": "false"` used to turn sharing ON. Real booleans and the two literal strings
+    # (case-insensitively) are honoured; anything else keeps the caller's default, reported by
+    # naming the field and the value so the failure is never silent.
+    #
+    # Returns @{ Value; Warning }, never mutates a caller's warning list itself: [ref] on a
+    # PROPERTY (e.g. $cfg.Warnings) only wraps a snapshot of its current value in PowerShell, not
+    # a live slot, so a callee-side append through it is silently lost. Handing the warning back
+    # and letting each caller append it to ITS OWN variable sidesteps that trap entirely.
+    param($Value, [bool]$Default, [string]$Name)
+    if ($null -eq $Value) { return @{ Value = $Default; Warning = $null } }
+    if ($Value -is [bool]) { return @{ Value = $Value; Warning = $null } }
+    $s = "$Value"
+    if ($s -eq 'true') { return @{ Value = $true; Warning = $null } }
+    if ($s -eq 'false') { return @{ Value = $false; Warning = $null } }
+    return @{ Value = $Default; Warning = "$Name`: '$s' is not a boolean; using $Default" }
 }
 
 function Get-LauncherDefaults {
@@ -41,13 +66,23 @@ function ConvertTo-LauncherRoster {
         $rooted = ($rawRoot -match '^~([\\/]|$)') -or [IO.Path]::IsPathRooted($rawRoot)
         $root = Expand-LauncherPath $rawRoot
         $tint = if ($a.tint) { "$($a.tint)" } else { 'Green' }
-        if ($tint -notin $script:AllowedTints) { $warnings += "account '$key': tint '$tint' is not one of $($script:AllowedTints -join ', '); using Green"; $tint = 'Green' }
+        # Normalised to the allowed list's own casing when it matches case-insensitively: -notin
+        # below is already case-insensitive, so a lower-case "magenta" passed it and was stored
+        # verbatim - any later exact-case lookup keyed on the stored value would then miss it.
+        $canonicalTint = $script:AllowedTints | Where-Object { $_ -eq $tint } | Select-Object -First 1
+        if ($canonicalTint) { $tint = $canonicalTint }
+        else { $warnings += "account '$key': tint '$tint' is not one of $($script:AllowedTints -join ', '); using Green"; $tint = 'Green' }
+        $hiddenResult = ConvertTo-LauncherBool -Value $a.hidden -Default $false -Name "account '$key': hidden"
+        if ($hiddenResult.Warning) { $warnings += $hiddenResult.Warning }
         $accounts += [pscustomobject]@{
             Key = $key; Root = $root
             Label = if ($a.label) { "$($a.label)" } else { "$key account" }
-            Tint = $tint; Hidden = [bool]$a.hidden
+            Tint = $tint; Hidden = $hiddenResult.Value
             Canonical = ($root -eq $canonicalRoot); Rooted = $rooted
         }
+    }
+    foreach ($g in @($accounts | Group-Object Tint | Where-Object { $_.Count -gt 1 })) {
+        $warnings += "accounts $(($g.Group | ForEach-Object Key) -join ', ') share tint '$($g.Name)'"
     }
     $fatal = $null
     if ($accounts.Count -eq 0) { $fatal = 'accounts is empty' }
@@ -70,7 +105,13 @@ function ConvertTo-MaintenanceActions {
     foreach ($m in @($Raw)) {
         $key = "$($m.key)".Trim().ToLowerInvariant()
         if ($key -notmatch '^[a-z0-9]$' -or $key -in $reserved -or -not $m.script) { $warnings += "maintenanceActions: entry '$key' needs a one-letter key outside $($reserved -join ',') and a script; skipped"; continue }
-        $out += [pscustomobject]@{ Key = $key; Label = if ($m.label) { "$($m.label)" } else { $key }; Script = (Expand-LauncherPath "$($m.script)"); ConfirmTwice = [bool]$m.confirmTwice }
+        if ($out.Key -contains $key) { $warnings += "maintenanceActions: duplicate key '$key'; the first one wins, this entry is skipped"; continue }
+        $confirmResult = ConvertTo-LauncherBool -Value $m.confirmTwice -Default $false -Name "maintenanceActions '$key': confirmTwice"
+        if ($confirmResult.Warning) { $warnings += $confirmResult.Warning }
+        $out += [pscustomobject]@{
+            Key = $key; Label = if ($m.label) { "$($m.label)" } else { $key }; Script = (Expand-LauncherPath "$($m.script)")
+            ConfirmTwice = $confirmResult.Value
+        }
     }
     return @{ Actions = $out; Warnings = $warnings }
 }
@@ -83,9 +124,20 @@ function Read-LauncherConfig {
     try { $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json }
     catch { $cfg.Warnings = @("config $Path could not be read or parsed ($($_.Exception.Message)); using defaults"); return $cfg }
 
-    if ($null -ne $raw.accounts) { $r = ConvertTo-LauncherRoster $raw.accounts; $cfg.Accounts = @($r.Accounts); $cfg.Warnings += $r.Warnings }
-    if ($null -ne $raw.sharing) { $cfg.Sharing = [bool]$raw.sharing }
-    if ($null -ne $raw.remote)  { $cfg.Remote = [bool]$raw.remote }
+    if ($raw.PSObject.Properties.Name -contains 'accounts') {
+        if ($null -eq $raw.accounts) { $cfg.Warnings += 'accounts is null; using the default roster' }
+        else { $r = ConvertTo-LauncherRoster $raw.accounts; $cfg.Accounts = @($r.Accounts); $cfg.Warnings += $r.Warnings }
+    }
+    if ($null -ne $raw.sharing) {
+        $sharingResult = ConvertTo-LauncherBool -Value $raw.sharing -Default $cfg.Sharing -Name 'sharing'
+        $cfg.Sharing = $sharingResult.Value
+        if ($sharingResult.Warning) { $cfg.Warnings += $sharingResult.Warning }
+    }
+    if ($null -ne $raw.remote) {
+        $remoteResult = ConvertTo-LauncherBool -Value $raw.remote -Default $cfg.Remote -Name 'remote'
+        $cfg.Remote = $remoteResult.Value
+        if ($remoteResult.Warning) { $cfg.Warnings += $remoteResult.Warning }
+    }
     if ($null -ne $raw.riderMcp) {
         $mode = "$($raw.riderMcp)".ToLowerInvariant()
         if ($mode -in $script:AllowedRiderModes) { $cfg.RiderMcp = $mode } else { $cfg.Warnings += "riderMcp '$($raw.riderMcp)' is not auto/on/off; using auto" }
