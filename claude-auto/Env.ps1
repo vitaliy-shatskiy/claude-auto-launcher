@@ -138,7 +138,14 @@ function Set-ClaudeProfile {
     try {
         $mirror = Join-Path $PSScriptRoot '..\sharing\claude-mirror-mcp.mjs'
         $mirrored = & node $mirror $root 2>&1
-        if ($LASTEXITCODE -eq 0 -and $mirrored) { Write-Host "  project MCP mirrored: $mirrored" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -eq 0) {
+            if ($mirrored) { Write-Host "  project MCP mirrored: $mirrored" -ForegroundColor DarkGray }
+        } else {
+            # A non-zero exit used to print NOTHING - the exact silent failure this mirror exists to
+            # prevent, since the owner would never learn a project's MCP servers stopped syncing.
+            # The script's own stdout (merged with stderr above) already carries a one-line reason.
+            Write-Host "  project MCP mirror failed: $mirrored" -ForegroundColor DarkYellow
+        }
     } catch { Write-Host "  project MCP mirror skipped: $($_.Exception.Message)" -ForegroundColor DarkYellow }
 }
 

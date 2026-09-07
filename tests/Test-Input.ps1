@@ -256,6 +256,15 @@ if ($Live -and -not $LiveOnly) {
                        (New-TextRec 'u'), (New-UpRec 'u'))
         Assert-Equal '@' (Read-AllChars) 'key-up records inside the sequence do not shift a coordinate byte into the menu'
 
+        # --- SS3 (application-keypad mode) blind-reads one record instead of counting key-downs ---
+        # ESC O is the SS3 introducer; exactly one final byte follows. The queue can interleave the
+        # O key's own key-UP before that byte arrives - ESC, O-down, O-up, u-down is the real shape -
+        # and a blind single read after the introducer consumes the O-up instead of the final byte,
+        # leaking it to the menu as an ordinary hotkey. Application-keypad finals run p-y, so
+        # keypad-5 is ESC O u (Invoke-ClaudeUpdate) and keypad-2 is ESC O r (the rename swap).
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec ([char]0x4F)), (New-UpRec ([char]0x4F)), (New-TextRec 'u'))
+        Assert-Equal '' (Read-AllChars) 'SS3 with an interleaved key-up does not leak the final byte as a menu key'
+
         # --- and a report the menu can ACT on, which is why Claude Code has a mouse in that tab ---
         # Swallowing keeps the terminal from pressing menu keys; decoding is what gives the click
         # back. Same bytes, read as a report instead of as keystrokes.
@@ -276,6 +285,94 @@ if ($Live -and -not $LiveOnly) {
         Assert-Equal 12 "$($ev.Y)" 'and so is its row'
         Assert-Equal $true "$($ev.Left)" 'the left button is down'
         Assert-Equal $false "$($ev.IsMove)" 'a press is not a move - the press guard depends on it'
+
+        # --- the ESC introducer peek must wait for a report that has not fully arrived yet --------
+        # A real terminal delivers a mouse report byte by byte (this machine's own input traces show
+        # 1-6ms between bytes of one report), not as one atomic write. The introducer peek used to be
+        # a single non-blocking PeekConsoleInputW: it ran in the gap right after the ESC was read and
+        # concluded "nothing follows", so the rest of the report leaked to the menu as the literal
+        # keys it is made of (a click at column 41 leaks '<0;41;13M' - 10 stray keys). Simulated here
+        # with a SEPARATE runspace of this same process: it can Start-Sleep without blocking the
+        # foreground reader, unlike a second WriteConsoleInputW call from this thread which would
+        # simply queue the payload before the read even happens.
+        # The expensive part (spinning up a Runspace and opening it) happens BEFORE the ESC is
+        # written, so none of that setup cost counts against the timing this test is pinning: only
+        # BeginInvoke's dispatch plus a short busy-wait (never Start-Sleep - Windows' ~15ms timer
+        # quantum would make a "2ms" sleep swallow the whole point) run after the ESC is on the wire.
+        function New-DelayedSender([array]$Chars, [int]$DelayMs) {
+            $rs = [runspacefactory]::CreateRunspace()
+            $rs.Open()
+            $ps = [powershell]::Create()
+            $ps.Runspace = $rs
+            [void]$ps.AddScript({
+                param($Chars, $DelayMs)
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                while ($sw.Elapsed.TotalMilliseconds -lt $DelayMs) { }
+                $arr = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' $Chars.Count
+                for ($i = 0; $i -lt $Chars.Count; $i++) {
+                    $k = New-Object 'ClaudeAuto.ConsoleInput+KEY_EVENT_RECORD'
+                    $k.bKeyDown = 1; $k.wRepeatCount = 1; $k.wVirtualKeyCode = 0; $k.wVirtualScanCode = 0
+                    $k.UnicodeChar = [uint16][char]$Chars[$i]; $k.dwControlKeyState = 0
+                    $r = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD'
+                    $r.EventType = [ClaudeAuto.ConsoleInput]::KEY_EVENT
+                    $r.KeyEvent = $k
+                    $arr[$i] = $r
+                }
+                [uint32]$n = 0
+                $wh = [ClaudeAuto.ConsoleInput]::CreateFileW('CONIN$',
+                    [ClaudeAuto.ConsoleInput]::GENERIC_READ -bor [ClaudeAuto.ConsoleInput]::GENERIC_WRITE,
+                    [ClaudeAuto.ConsoleInput]::FILE_SHARE_READ -bor [ClaudeAuto.ConsoleInput]::FILE_SHARE_WRITE,
+                    [IntPtr]::Zero, [ClaudeAuto.ConsoleInput]::OPEN_EXISTING, 0, [IntPtr]::Zero)
+                [void][ClaudeAuto.ConsoleInput]::WriteConsoleInputW($wh, $arr, $arr.Count, [ref]$n)
+                [void][ClaudeAuto.ConsoleInput]::CloseHandle($wh)
+            }).AddArgument($Chars).AddArgument($DelayMs)
+            return [pscustomobject]@{ PS = $ps; Runspace = $rs; Handle = $null }
+        }
+        function Start-DelayedSender($Sender) { $Sender.Handle = $Sender.PS.BeginInvoke() }
+        function Wait-DelayedSend($Sender) {
+            $null = $Sender.PS.EndInvoke($Sender.Handle)
+            $Sender.PS.Dispose()
+            $Sender.Runspace.Close()
+        }
+        # ESC is written and read FIRST. The rest of an SGR press (<0;41;13M) is queued only after a
+        # short delay from a background runspace - the payload has not arrived when the ESC is read.
+        #
+        # Warm up the background-runspace machinery once, throwaway: the FIRST BeginInvoke on a
+        # fresh runspace in this harness costs an extra 10-20ms of thread-pool/JIT cold start that
+        # has nothing to do with the defect under test, and would starve the 5ms peek window before
+        # the real attempt even begins.
+        $warm = New-DelayedSender -Chars @('X') -DelayMs 0
+        Start-DelayedSender $warm
+        Start-Sleep -Milliseconds 20
+        Wait-DelayedSend $warm
+        Clear-ClaudeInputQueue -State $state | Out-Null
+
+        # Retried up to 5x: this harness's background runspace occasionally wakes 10-20ms late under
+        # scheduler load (measured), which the fix cannot be expected to out-wait at its production
+        # budget (~5ms, matching real terminals' 1-6ms byte gaps). The OLD code fails this EVERY
+        # attempt regardless of timing, since its peek is instant and never catches a delayed
+        # payload - only the harness's jitter is being retried around, not the defect.
+        $delayedOk = $false
+        $lastEv = $null
+        $lastLeftover = $null
+        for ($attempt = 0; $attempt -lt 5 -and -not $delayedOk; $attempt++) {
+            $sender = New-DelayedSender -Chars @('[','<','0',';','4','1',';','1','3','M') -DelayMs 2
+            Send-Records @((New-TextRec ([char]27)))
+            Start-DelayedSender $sender
+            $ev = Read-FirstEvent
+            Wait-DelayedSend $sender
+            $leftover = Read-AllChars
+            $lastEv = $ev; $lastLeftover = $leftover
+            if ("$($ev.Kind)" -eq 'mouse' -and "$($ev.X)" -eq '40' -and "$($ev.Y)" -eq '12' -and $leftover -eq '') {
+                $delayedOk = $true
+            } else {
+                Clear-ClaudeInputQueue -State $state | Out-Null
+            }
+        }
+        Assert-Equal 'mouse' "$($lastEv.Kind)" 'a report whose payload arrives after the ESC was already read still decodes as one mouse event'
+        Assert-Equal 40 "$($lastEv.X)" 'with the column intact'
+        Assert-Equal 12 "$($lastEv.Y)" 'and the row'
+        Assert-Equal '' $lastLeftover 'no stray keys are left for the menu once the delayed payload is decoded'
 
         # The release carries the same position with no button: ignored by every screen, and it must
         # NOT arrive looking like a second press.
@@ -397,7 +494,7 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # genuine hidden console, never guessed. The bare count (30) IS exact - checkpoint.ps1 only ever
 # runs this suite bare, and that path has no such branching.
 if ($LiveOnly) {
-    if ($script:Ran -lt 61) { Write-Host "COULD NOT RUN: expected at least 61 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+    if ($script:Ran -lt 66) { Write-Host "COULD NOT RUN: expected at least 66 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 } elseif ($script:Ran -ne 30) {
     Write-Host "COULD NOT RUN: expected 30 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
