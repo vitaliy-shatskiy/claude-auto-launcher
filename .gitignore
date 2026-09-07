@@ -1,3 +1,8 @@
+# Agent worktrees: a checkout of this repo inside itself. Never committed, and never scanned -
+# the privacy check walks the git-tracked set and cannot read a nested checkout's internals, so
+# without this line it reports "could not run" (2) rather than clean.
+.claude/worktrees/
+
 *.dll
 *.pdb
 *.bak-*
