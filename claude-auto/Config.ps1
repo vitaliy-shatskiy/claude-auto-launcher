@@ -1,5 +1,6 @@
 # Launcher configuration: ~/.claude/claude-auto.json (CLAUDE_AUTO_CONFIG overrides). No file = defaults.
 # Every validation failure falls back to the default for THAT key and adds a warning; nothing throws.
+# Kept distinct on purpose: two accounts sharing a colour is exactly the confusion a tint exists to prevent.
 $script:AllowedTints = @('Green', 'Magenta', 'Cyan', 'Blue', 'Yellow', 'Red')
 $script:AllowedRiderModes = @('auto', 'on', 'off')
 

@@ -273,9 +273,45 @@ Assert-Equal $false ($st.Profiles.ContainsKey('personal')) 'the active tab''s st
 Assert-Equal $true  ($st.Profiles.ContainsKey('work')) 'another tab''s stash survives a reset'
 Assert-Equal 'max' $st.Profiles['work'].Effort 'with the edit it was holding'
 
+# --- CLAUDE_AUTO_PREFS override (deferred review finding) -------------------------------------
+# The test harness must never read or write the owner's real ~/.claude/claude-auto-prefs.json:
+# Get-LaunchPrefsPath honours this variable, same shape as Get-LauncherConfigPath's
+# CLAUDE_AUTO_CONFIG, so the preview driver can point the whole read/save path at a throwaway file.
+$savedAutoPrefs = $env:CLAUDE_AUTO_PREFS
+try {
+    $env:CLAUDE_AUTO_PREFS = Join-Path $env:TEMP 'claude-auto-prefs-envtest.json'
+    Assert-Equal $env:CLAUDE_AUTO_PREFS (Get-LaunchPrefsPath) 'CLAUDE_AUTO_PREFS overrides the default path'
+    $env:CLAUDE_AUTO_PREFS = '~\prefs-tilde-test.json'
+    Assert-Equal (Join-Path $HOME 'prefs-tilde-test.json') (Get-LaunchPrefsPath) 'a ~-rooted CLAUDE_AUTO_PREFS expands against $HOME'
+} finally {
+    if ($null -eq $savedAutoPrefs) { Remove-Item Env:CLAUDE_AUTO_PREFS -ErrorAction SilentlyContinue }
+    else { $env:CLAUDE_AUTO_PREFS = $savedAutoPrefs }
+}
+Assert-Equal (Join-Path $HOME '.claude\claude-auto-prefs.json') (Get-LaunchPrefsPath) 'with no override, the default path is unchanged'
+
+# A full preview run must never touch the real prefs path - proven against a FAKE home (never the
+# owner's own $HOME) so this assertion cannot itself do the damage it is checking for. $HOME is
+# fixed at process startup, so overriding $env:USERPROFILE here (this process already has its
+# $HOME) has no effect on THIS process, only on the fresh child processes preview.ps1 spawns -
+# which is exactly what is needed: the "default path" the launcher would use if CLAUDE_AUTO_PREFS
+# were not set resolves under the fake home, never under the real one.
+$fakeHome = Join-Path $env:TEMP ('claude-auto-fakehome-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+$savedUserProfile = $env:USERPROFILE
+try {
+    $fakeRealPrefs = Join-Path $fakeHome '.claude\claude-auto-prefs.json'
+    Assert-Equal $false (Test-Path -LiteralPath $fakeRealPrefs) 'before the probe: the fake-home default prefs path has no file'
+    $env:USERPROFILE = $fakeHome
+    $null = & pwsh -NoProfile -File "$PSScriptRoot\preview.ps1" -Keys 'Enter' -Launcher "$PSScriptRoot\..\claude-auto.ps1" 2>&1
+    Assert-Equal $false (Test-Path -LiteralPath $fakeRealPrefs) 'after a preview run: the default-path prefs file is still not there - the run wrote its throwaway file instead'
+} finally {
+    $env:USERPROFILE = $savedUserProfile
+    Remove-Item -LiteralPath $fakeHome -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 foreach ($f in $paths) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 87) { Write-Host "COULD NOT RUN: expected 87 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 92) { Write-Host "COULD NOT RUN: expected 92 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

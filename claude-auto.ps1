@@ -286,8 +286,7 @@ elseif (-not [Console]::IsInputRedirected -and $args.Count -eq 0) {
     $prompt = Get-AccountPrompt -Accounts $Accounts -Default (Get-LaunchDefaultAccount)
     if ($prompt.Text) {
         Write-Host $prompt.Text -NoNewline -ForegroundColor Cyan
-        $answer = "$(Read-Host)".Trim().ToLowerInvariant()
-        if ($answer -and $prompt.Map.ContainsKey($answer.Substring(0, 1))) { $choice = $prompt.Map[$answer.Substring(0, 1)] }
+        $choice = Resolve-AccountAnswer -Answer (Read-Host) -Prompt $prompt.Map -Default $choice
     }
     if ($LauncherConfig.Remote) {
         # One keypress covers the whole remote story. Enter = reachable from the phone, server
@@ -425,17 +424,20 @@ if ($LauncherConfig.Remote -and -not $selectsSession -and $env:CLAUDE_NO_ROAM -n
         Write-Host "  roaming window: session will be reachable from the phone (CLAUDE_NO_ROAM=1 to disable)" -ForegroundColor DarkGray
         try {
             $root = if ($env:CLAUDE_REMOTE_ROOT) { $env:CLAUDE_REMOTE_ROOT } else { Join-Path $HOME 'Desktop/Projects/remote-control-claude-code' }
-            $state = Start-CompanionServer -Root $root
-            if ($state -match '\(dist\)') {
+            # Named apart from the launch-screen $state above: this is latent today (nothing on this
+            # path reads $state afterwards, it exits via $crcExit below), but a variable named the
+            # same as the screen's state object one scope up is a clobber waiting for the next read.
+            $companionState = Start-CompanionServer -Root $root
+            if ($companionState -match '\(dist\)') {
                 # The built server discovers and serves every profile sharing the transcripts
                 # directory (issue #48 closed) - it prints the list in its own log.
-                Write-Host "  companion server: $state (serves all profiles)" -ForegroundColor DarkGray
+                Write-Host "  companion server: $companionState (serves all profiles)" -ForegroundColor DarkGray
             } else {
                 # tsx fallback = pre-multi-profile code: it covers only the profile it inherits.
                 # By VALUE, not by presence: with three accounts, "CLAUDE_CONFIG_DIR is set"
                 # no longer means personal.
                 $profileName = $choice
-                Write-Host "  companion server: $state (serving the $profileName profile)" -ForegroundColor DarkGray
+                Write-Host "  companion server: $companionState (serving the $profileName profile)" -ForegroundColor DarkGray
             }
             # The phone needs an address it can actually reach. The server binds its tailnet address
             # itself (the first 100.x it finds) plus loopback; printing it here saves guessing which

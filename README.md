@@ -71,6 +71,7 @@ See `config.example.json` for a two-account example (sharing off).
 ## Environment switches
 
 - `CLAUDE_AUTO_CONFIG` - path to the config file, instead of `~/.claude/claude-auto.json`
+- `CLAUDE_AUTO_PREFS` - path to the remembered-choices file, instead of `~/.claude/claude-auto-prefs.json` (the test harness points this at a throwaway file so driving the preview seam never touches the real one)
 - `CLAUDE_AUTO_NO_MOUSE=1` - never arms mouse input
 - `CLAUDE_AUTO_INPUT_TRACE=1` - logs every raw input record to `~/.claude/claude-auto-logs/input-<date>-<pid>.log`
 - `CLAUDE_AUTO_ASCII=1` - forces ASCII box-drawing (otherwise auto-detected from the console code page)

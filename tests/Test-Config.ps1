@@ -85,6 +85,13 @@ try {
 
     $env:CLAUDE_AUTO_CONFIG = Join-Path $tmp 'nope.json'
     Assert 'env override wins'                    ((Get-LauncherConfigPath) -eq $env:CLAUDE_AUTO_CONFIG)
+
+    # deferred review finding: nothing pinned CLAUDE_AUTO_CONFIG's own '~' expansion (only an
+    # already-absolute override, above). Get-LauncherConfigPath must run it through
+    # Expand-LauncherPath like every other path in this file.
+    $env:CLAUDE_AUTO_CONFIG = '~/tilde-config-test.json'
+    Assert 'env override expands a leading ~'     ((Get-LauncherConfigPath) -eq (Join-Path $HOME 'tilde-config-test.json'))
+
     Remove-Item Env:CLAUDE_AUTO_CONFIG
     Assert 'default path'                         ((Get-LauncherConfigPath) -eq (Join-Path $HOME '.claude\claude-auto.json'))
 

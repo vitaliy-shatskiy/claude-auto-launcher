@@ -20,6 +20,12 @@ function Assert-Equal {
     } else { Write-Host "ok    $Because" }
 }
 
+# Fixed-length synthetic path, not (Join-Path $HOME '.local\bin\claude.exe'): several assertions
+# below render at the MINIMUM supported width and check that content fits without truncation - a
+# fixture built from the real $HOME would make that margin depend on how long this machine's user
+# name happens to be, which has nothing to do with the code under test.
+$script:FixtureBinPath = 'C:\Users\sample-user\.local\bin\claude.exe'
+
 $tmp = Join-Path $env:TEMP ('claude-auto-maint-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $versions = Join-Path $tmp 'versions'
 New-Item -ItemType Directory -Force -Path $versions | Out-Null
@@ -157,7 +163,7 @@ Assert-Equal 1 (@($f | Where-Object { $_ -match '2\.1\.230' }).Count) 'the newes
 $hash60a = 'a1' * 32
 $hash60b = 'b2' * 32
 $wideInfo = [pscustomobject]@{
-    BinPath = (Join-Path $HOME '.local\bin\claude.exe'); InstalledHash = $hash60a
+    BinPath = $script:FixtureBinPath; InstalledHash = $hash60a
     NewestVersion = '2.1.230'; NewestHash = $hash60b; Matches = $false
     VersionCount = 12; VersionsBytes = 3650722201
 }
@@ -188,21 +194,21 @@ function Assert-MaintenanceFrameRenders {
 }
 
 $fullHashInfo = [pscustomobject]@{
-    BinPath = (Join-Path $HOME '.local\bin\claude.exe'); InstalledHash = ('a1' * 32)
+    BinPath = $script:FixtureBinPath; InstalledHash = ('a1' * 32)
     NewestVersion = '2.1.230'; NewestHash = ('b2' * 32); Matches = $false
     VersionCount = 3; VersionsBytes = 900000000
 }
 Assert-MaintenanceFrameRenders -Info $fullHashInfo -Because 'a full 64-char hash'
 
 $shortHashInfo = [pscustomobject]@{
-    BinPath = (Join-Path $HOME '.local\bin\claude.exe'); InstalledHash = 'ab12c'
+    BinPath = $script:FixtureBinPath; InstalledHash = 'ab12c'
     NewestVersion = '2.1.230'; NewestHash = 'de34f'; Matches = $false
     VersionCount = 3; VersionsBytes = 900000000
 }
 Assert-MaintenanceFrameRenders -Info $shortHashInfo -Because 'a 5-char hash'
 
 $nullHashInfo = [pscustomobject]@{
-    BinPath = (Join-Path $HOME '.local\bin\claude.exe'); InstalledHash = $null
+    BinPath = $script:FixtureBinPath; InstalledHash = $null
     NewestVersion = $null; NewestHash = $null; Matches = $false
     VersionCount = 0; VersionsBytes = 0
 }
@@ -214,7 +220,7 @@ Assert-MaintenanceFrameRenders -Info $nullHashInfo -Because 'a null hash'
 # threw the rest away. Assert on CONTENT - "no line exceeds the width" is satisfied by construction
 # here, because every row is piped through Limit-Line before the frame is returned.
 $statusInfo = [pscustomobject]@{
-    BinPath = (Join-Path $HOME '.local\bin\claude.exe'); InstalledHash = ('a1' * 32)
+    BinPath = $script:FixtureBinPath; InstalledHash = ('a1' * 32)
     NewestVersion = '2.1.230'; NewestHash = ('b2' * 32); Matches = $false
     VersionCount = 3; VersionsBytes = 900000000
 }
@@ -248,7 +254,7 @@ Assert-Equal 1 (@($fl | Where-Object { $_ -match 'more lines' }).Count) 'the rea
 # Both verdict wordings must survive the MINIMUM width - the old ones did not, and the advice was
 # the half that got cut off.
 $verdictInfo = [pscustomobject]@{
-    BinPath = (Join-Path $HOME '.local\bin\claude.exe'); InstalledHash = ('a1' * 32)
+    BinPath = $script:FixtureBinPath; InstalledHash = ('a1' * 32)
     NewestVersion = '2.1.230'; NewestHash = ('b2' * 32); Matches = $false
     VersionCount = 3; VersionsBytes = 900000000
 }

@@ -156,6 +156,18 @@ function Get-AccountPrompt {
     return @{ Text = "Claude account: $($parts -join ' / '), Enter = $Default : "; Map = $map }
 }
 
+function Resolve-AccountAnswer {
+    # What the no-UI fallback prompt does with a typed answer: trim, lower-case, and look up only
+    # the FIRST character - so typing a key in full ('personal') resolves the same as its one-letter
+    # shorthand ('p'), and a hidden account (typeable but not advertised in Text) resolves the same
+    # way as a visible one, since -Prompt (Get-AccountPrompt's Map) carries every account's letter.
+    # An empty, whitespace-only or unmapped answer returns -Default unchanged - the bare-Enter case.
+    param([string]$Answer, [Parameter(Mandatory)][hashtable]$Prompt, [string]$Default)
+    $a = "$Answer".Trim().ToLowerInvariant()
+    if ($a -and $Prompt.ContainsKey($a.Substring(0, 1))) { return $Prompt[$a.Substring(0, 1)] }
+    return $Default
+}
+
 function Import-ProjectSecrets {
     # One place holds a credential, and it is never a config file. The secrets store (a directory
     # beside the profile, `secretsRoot` in the config) uses the same slug Claude Code uses for

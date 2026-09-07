@@ -334,8 +334,13 @@ try {
     Assert 'a failing hook reports its exit code'  (@($lines | Where-Object { $_ -match '^\s*hook two\.ps1 exit 3' }).Count -eq 1)
     Assert 'a missing hook is one line'            (@($lines | Where-Object { $_ -match 'missing\.ps1.*not found' }).Count -eq 1)
     # An unknown extension is refused, never executed: `& file.hook` would ShellExecute the association or throw,
-    # and a hook that runs nothing must not inherit the previous hook's $LASTEXITCODE.
-    Assert 'an unknown extension is refused'       (@($lines | Where-Object { $_ -match 'four\.hook.*unsupported extension' }).Count -eq 1)
+    # and a hook that runs nothing must not inherit the previous hook's $LASTEXITCODE. Counting
+    # lines that mention 'four.hook' AT ALL (not the narrower 'unsupported extension' phrase) is
+    # what catches the reset being removed: without it, $LASTEXITCODE still carries two.ps1's exit
+    # 3, and the default branch's own message is followed by a second, spurious "hook four.hook
+    # exit 3: " line - the narrower match would still see exactly one hit and stay green.
+    Assert 'an unknown extension is refused, and nothing else is said about it' (@($lines | Where-Object { $_ -match 'four\.hook' }).Count -eq 1)
+    Assert 'the one line about it names the reason'                            (@($lines | Where-Object { $_ -match 'four\.hook.*unsupported extension' }).Count -eq 1)
     Assert 'later hooks still run'                 ($lines -contains 'three ran')
     Assert 'an empty list prints nothing'          (@(Invoke-LaunchHooks -Hooks @() 6>&1).Count -eq 0)
 } finally { Remove-Item $hookDir -Recurse -Force }
@@ -370,14 +375,24 @@ $mp = Get-AccountPrompt -Accounts $mixed -Default 'Work'
 Assert 'mixed-case key: the advertised letter matches the map''s case' ($mp.Text -ceq 'Claude account: [w]ork / [p]ersonal, Enter = Work : ')
 Assert 'mixed-case key: the map still keys on the lower-case letter'   ($mp.Map['w'] -eq 'Work')
 
+# --- Resolve-AccountAnswer: what the no-UI fallback prompt does with a typed answer -------------------
+# Extracted out of claude-auto.ps1's fallback branch so the mapping itself is testable without a
+# console: every case below is a scenario the bare-Enter/no-UI prompt has to get right.
+Assert 'empty answer keeps the default'                ((Resolve-AccountAnswer -Answer '' -Prompt $p.Map -Default 'work') -eq 'work')
+Assert 'whitespace-only answer keeps the default'       ((Resolve-AccountAnswer -Answer '   ' -Prompt $p.Map -Default 'work') -eq 'work')
+Assert 'an unmapped letter keeps the default'           ((Resolve-AccountAnswer -Answer 'z' -Prompt $p.Map -Default 'work') -eq 'work')
+Assert 'an exact key typed in full resolves like its shorthand' ((Resolve-AccountAnswer -Answer 'personal' -Prompt $p.Map -Default 'work') -eq 'personal')
+Assert 'a hidden account''s letter still resolves'      ((Resolve-AccountAnswer -Answer 's' -Prompt $p.Map -Default 'work') -eq 'shared')
+Assert 'mixed-case input resolves the same as lower-case' ((Resolve-AccountAnswer -Answer 'P' -Prompt $p.Map -Default 'work') -eq 'personal')
+
 # --- Get-RateLimitSummary: a machine with no records (a fresh install) gets an empty table ---------
 $emptyLimits = Join-Path $env:TEMP ("cal-limits-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $emptyLimits | Out-Null
 try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSummary -Directory $emptyLimits).Count -eq 0) } finally { Remove-Item $emptyLimits -Recurse -Force }
 
 } finally { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 88) {
-    Write-Host "COULD NOT RUN: expected 88 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
+if ($script:Ran -ne 95) {
+    Write-Host "COULD NOT RUN: expected 95 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
 }
 if ($script:fail -gt 0) {
@@ -386,5 +401,5 @@ if ($script:fail -gt 0) {
 }
 # Counted, not guessed: HEAD claimed 72 while running 75 (measured 2026-09-04 by counting the
 # ok/FAIL lines of a bare run). A banner nobody re-counts is a number that drifts silently.
-Write-Host '88 assertions, all pass' -ForegroundColor Green
+Write-Host '95 assertions, all pass' -ForegroundColor Green
 exit 0

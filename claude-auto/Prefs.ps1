@@ -16,6 +16,10 @@
 $script:ProfileFields = @('Model', 'Effort', 'Advisor', 'Permission', 'Remote')
 
 function Get-LaunchPrefsPath {
+    # CLAUDE_AUTO_PREFS overrides, same shape as Get-LauncherConfigPath in Config.ps1 (Expand-LauncherPath
+    # honours '~'): the test harness points this at a throwaway file so driving the preview seam never
+    # reads or writes the owner's real remembered choices.
+    if ($env:CLAUDE_AUTO_PREFS) { return (Expand-LauncherPath $env:CLAUDE_AUTO_PREFS) }
     return (Join-Path $HOME '.claude\claude-auto-prefs.json')
 }
 

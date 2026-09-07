@@ -1382,6 +1382,14 @@ Assert-Equal $true  (Test-ClaudeHotkey -Key (New-VkKey -Char ([char]0x002E) -Vk 
 Assert-Equal $false (Test-ClaudeHotkey -Key 'resize' -Char 'u') 'a resize is never a hotkey'
 Assert-Equal $false (Test-ClaudeHotkey -Key (New-MouseEvent -Y 0 -X 0 -Left) -Char 'u') 'a mouse event is never a hotkey'
 
+# deferred review finding: maintenance action keys may now be [a-z0-9] (Config.ps1), and digits get
+# their own virtual-key branch (ConsoleKey.D0..D9) - no Cyrillic table entry is needed for them,
+# because both Cyrillic layouts type the same 0-9 characters unshifted, same as Latin.
+Assert-Equal $true  (Test-ClaudeHotkey -Key (New-VkKey -Char ([char]0) -Vk ([System.ConsoleKey]::D5)) -Char '5') 'the virtual D5 key with no character (a soft keyboard) is the 5 hotkey'
+Assert-Equal $false (Test-ClaudeHotkey -Key (New-VkKey -Char ([char]0) -Vk ([System.ConsoleKey]::D5) -Shift) -Char '5') 'Shift on the D5 key is not the hotkey'
+Assert-Equal $false (Test-ClaudeHotkey -Key (New-VkKey -Char ([char]0) -Vk ([System.ConsoleKey]::D6)) -Char '5') 'the D6 key is not the 5 hotkey'
+Assert-Equal $true  (Test-ClaudeHotkey -Key (New-VkKey -Char '5' -Vk ([System.ConsoleKey]::D5)) -Char '5') 'typing the digit directly still presses the 5 hotkey'
+
 # Through the screens, not only the matcher: the maintenance reindex confirm and the picker fork.
 $script:reindexRuns = 0
 $ruI = New-VkKey -Char ([char]0x0448) -Vk ([System.ConsoleKey]::I)
@@ -1400,7 +1408,10 @@ Assert-Equal $true $picked.Fork 'the letter a on the F key (Russian layout) fork
 # --- 50 columns (owner ask 2026-09-02). Content, not clamps: every hint must be READABLE on the
 # frame and reachable by click; the frame must fit the terminal with the headroom row. ---
 $narrowSessions = @(1..6 | ForEach-Object { [pscustomobject]@{ SessionId = "n$_"; Project = "project-$_"; Worktree = ''; Title = "question $_"; LastUser = ('word ' * 30); LastAssistant = ('reply ' * 30); Modified = (Get-Date).AddMinutes(-$_); PromptCount = $_; SizeBytes = 2048 } })
-$narrowInfo = [pscustomobject]@{ Matches = $false; NewestVersion = '2.1.240'; InstalledHash = ('a' * 64); NewestHash = ('b' * 64); VersionCount = 3; VersionsBytes = 900000000; BinPath = (Join-Path $HOME '.local\bin\claude.exe') }
+# A fixed-length synthetic BinPath, not (Join-Path $HOME '.local\bin\claude.exe'): this fixture
+# renders at the minimum supported width, so a real $HOME would make the margin depend on how long
+# this machine's user name happens to be - unrelated to the code under test.
+$narrowInfo = [pscustomobject]@{ Matches = $false; NewestVersion = '2.1.240'; InstalledHash = ('a' * 64); NewestHash = ('b' * 64); VersionCount = 3; VersionsBytes = 900000000; BinPath = 'C:\Users\sample-user\.local\bin\claude.exe' }
 # With the model bucket: three bars is what the minimum height is measured against, so the block
 # that asserts the minimum has to render the case that produced it.
 $narrowLimits = @{ work = [pscustomobject]@{ FiveHour = 41; SevenDay = 63; AgeText = '12 min ago'; Model = 15; ModelLabel = 'FABLE' } }
@@ -1522,7 +1533,10 @@ Assert-Equal 0 (@($wrapped.Lines | Where-Object { $_.Text.Length -gt 20 }).Count
 Assert-Equal '  r rename swap' $wrapped.Lines[1].Text 'each wrapped line is indented like the first'
 
 # --- roster is configurable; the Remote row is optional ------------------------------------------
-$rowsBefore = @(Get-LaunchRows)
+# Only .Count is trustworthy off this capture: Get-LaunchRows returns the SAME row hashtables
+# Set-LaunchRoster below mutates in place, so the objects behind this variable can still change
+# shape even though the variable itself never gets reassigned.
+$rowCountBefore = @(Get-LaunchRows).Count
 Assert-Equal 'work,personal,low' ((@(Get-LaunchRows) | Where-Object Name -eq 'Account').Values -join ',') 'hidden accounts stay off the row'
 Assert-Equal $true ((Get-LaunchRows | ForEach-Object Name) -contains 'Remote') 'remote on: the row exists'
 Set-LaunchRoster -Accounts @([pscustomobject]@{ Key = 'me'; Root = 'C:\x'; Label = 'me'; Tint = 'Yellow'; Hidden = $false; Canonical = $true })
@@ -1543,7 +1557,7 @@ Set-LaunchRoster -Accounts @($accB, $accA) -Default 'a'
 Assert-Equal 'b' (New-LaunchState).Account 'a hidden canonical account yields to the first visible key'
 Assert-Equal 'b' (Get-LaunchDefaultAccount) 'Get-LaunchDefaultAccount agrees with the UI default'
 Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
-Assert-Equal $rowsBefore.Count @(Get-LaunchRows).Count 'restoring the fixture roster restores the row count'
+Assert-Equal $rowCountBefore @(Get-LaunchRows).Count 'restoring the fixture roster restores the row count'
 
 # --- deferred review finding: Set-LaunchRoster's Remote-row splice duplicates row 0 when the
 # non-Remote roster is down to ONE row. `$rows[1..($rows.Count - 1)]` counts BACKWARDS when
@@ -1563,7 +1577,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 718) { Write-Host "COULD NOT RUN: expected 718 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 722) { Write-Host "COULD NOT RUN: expected 722 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

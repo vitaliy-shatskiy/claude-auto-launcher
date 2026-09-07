@@ -545,6 +545,11 @@ function Test-ClaudeHotkey {
     $vk =
         if ($script:HotkeyVirtualKeys.ContainsKey($Char)) { $script:HotkeyVirtualKeys[$Char] }
         elseif ($Char -cmatch '^[a-z]$') { [System.ConsoleKey]([int][char]$Char.ToUpperInvariant()) }
+        # Digit maintenance action keys (Config.ps1 accepts [a-z0-9]): the top row's virtual keys are
+        # ConsoleKey.D0..D9. No Cyrillic fallback is needed the way letters get one - both the
+        # Russian and Ukrainian layouts type the same 0-9 characters on that row unshifted, so the
+        # character-only match above already covers a Cyrillic-layout keypress.
+        elseif ($Char -cmatch '^[0-9]$') { [System.ConsoleKey]"D$Char" }
         else { $null }
     if ($null -ne $vk -and $Key.Key -eq $vk) { return $true }
     $layout = $script:HotkeyLayoutChars[$Char]

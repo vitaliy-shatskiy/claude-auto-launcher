@@ -2,9 +2,11 @@
 #
 # Why this exists: this was run about ten times by hand during the v2 rebuild, and the preview path
 # WRITES ~/.claude/claude-auto-prefs.json - which is how the owner's remembered model/effort/
-# permission choices were silently replaced by probe values. The backup here is a file COPY restored
-# by copy: re-saving through the launcher's own serializer does not reproduce the bytes, because it
-# writes an unordered hashtable whose JSON key order varies between processes.
+# permission choices were silently replaced by probe values, and how a crash mid-run (or simply
+# forgetting this script exists) could leave them corrupted even with a backup/restore in the way.
+# Fixed at the source instead: CLAUDE_AUTO_PREFS (Prefs.ps1's Get-LaunchPrefsPath) redirects the
+# whole read/save path to a throwaway file for the run, so the real prefs file is never opened at
+# all - not backed up, not restored, not touched on a friend's machine that has none.
 #
 # CLAUDE_NO_ROAM=1 is always set so a probe can never start the companion server or a real session.
 
@@ -19,21 +21,20 @@ param(
 
 if (-not (Test-Path $Launcher)) { Write-Host "launcher not found: $Launcher" -ForegroundColor Red; exit 2 }
 
-$prefs = Join-Path $HOME '.claude\claude-auto-prefs.json'
-$backup = Join-Path $env:TEMP "claude-auto-prefs.probe-backup.json"
-$had = Test-Path $prefs
-if ($had) { Copy-Item $prefs $backup -Force }
+$fakePrefs = Join-Path $env:TEMP ('claude-auto-prefs.probe-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
 
 $saved = @{
     CLAUDE_AUTO_PREVIEW      = $env:CLAUDE_AUTO_PREVIEW
     CLAUDE_AUTO_PREVIEW_KEYS = $env:CLAUDE_AUTO_PREVIEW_KEYS
     CLAUDE_NO_ROAM           = $env:CLAUDE_NO_ROAM
+    CLAUDE_AUTO_PREFS        = $env:CLAUDE_AUTO_PREFS
 }
 
 try {
     $env:CLAUDE_AUTO_PREVIEW = '1'
     $env:CLAUDE_NO_ROAM = '1'
     $env:CLAUDE_AUTO_PREVIEW_KEYS = $Keys
+    $env:CLAUDE_AUTO_PREFS = $fakePrefs
 
     $out = & pwsh -NoProfile -File $Launcher 2>&1
     $code = $LASTEXITCODE
@@ -52,14 +53,5 @@ try {
         if ($null -eq $saved[$k]) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
         else { Set-Item "Env:$k" $saved[$k] }
     }
-    # Restore by copy, never by re-saving through the launcher - see the header.
-    if ($had) {
-        Copy-Item $backup $prefs -Force
-        $same = (Get-FileHash $prefs).Hash -eq (Get-FileHash $backup).Hash
-        if (-not $same) { Write-Host '  WARNING: prefs restore did not match its backup' -ForegroundColor Red }
-    } elseif (Test-Path $prefs) {
-        # The probe created a prefs file where the owner had none. Leave it, but say so - deleting
-        # something the owner may now want is worse than one line of output.
-        Write-Host "  note: this probe CREATED $prefs (there was none before)" -ForegroundColor Yellow
-    }
+    Remove-Item -LiteralPath $fakePrefs -Force -ErrorAction SilentlyContinue
 }

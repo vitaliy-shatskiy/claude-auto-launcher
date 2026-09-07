@@ -16,6 +16,8 @@
 $script:Rows = @(
     # Placeholder only: Set-LaunchRoster replaces the Values with the config's visible account keys
     # (short keys - this row is the width-critical one at 100 columns) and inserts the Remote row.
+    # The box is capped at 100 columns (Get-LaunchFrame's $boxWidth) and this is the width-critical
+    # row, which is why Config.ps1 limits an account key to 8 characters.
     @{ Name = 'Account';    Label = 'account';    Values = @('work') }
     @{ Name = 'Action';     Label = 'action';     Values = @('new', 'continue', 'resume', 'worktree') }
     @{ Name = 'Model';      Label = 'model';      Values = @('default', 'fable', 'opus1m', 'sonnet1m', 'haiku')
@@ -76,6 +78,8 @@ function Set-LaunchRoster {
 # plus the headroom row Write-Frame needs. It was 18+1 before the advisor row and the third bar.
 # Never guess this number: Test-Ui renders that exact frame at an unrefusable height, counts it and
 # asserts this constant is the count plus one, so it re-measures itself on every run.
+# The "8 rows" above assumes the Remote row is present (remote: true in the config): with
+# remote: false the frame is one row shorter and this minimum has headroom to spare.
 $script:MinWidth = 50
 $script:MinHeight = 21
 $script:TwoPaneWidth = 100
