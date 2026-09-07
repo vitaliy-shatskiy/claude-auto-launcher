@@ -172,6 +172,34 @@ try {
     $mr = Read-LauncherConfig -Path (Join-Path $tmp 'maint-rel.json')
     Assert 'maintenanceActions with a relative script is skipped'   (@($mr.MaintenanceActions).Count -eq 0)
     Assert 'and a warning names the key and absolute path'          (@($mr.Warnings | Where-Object { $_ -match 'maintenanceActions' -and $_ -match "'i'" -and $_ -match 'absolute' }).Count -eq 1)
+
+    # --- friend-trial finding 1: a typo'd top-level key ("account" instead of "accounts") vanished
+    # with no warning at all - Read-LauncherConfig only looks at keys it knows. Unrecognized
+    # top-level keys must warn, once each, naming the key and suggesting a near-miss real key. ---
+    Set-Content (Join-Path $tmp 'typo-key.json') '{ "account": [ {"key":"work","root":"~/.claude"} ] }'
+    $tk = Read-LauncherConfig -Path (Join-Path $tmp 'typo-key.json')
+    Assert 'typo top-level key warns once, naming it'            (@($tk.Warnings | Where-Object { $_ -match "'account'" }).Count -eq 1)
+    Assert 'and suggests the near-miss real key'                 (@($tk.Warnings | Where-Object { $_ -match "'account'" -and $_ -match "'accounts'" }).Count -eq 1)
+
+    Set-Content (Join-Path $tmp 'valid-keys.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "sharing": false }'
+    $vk = Read-LauncherConfig -Path (Join-Path $tmp 'valid-keys.json')
+    Assert 'a config with only valid keys warns nothing about unknown keys' (@($vk.Warnings | Where-Object { $_ -match 'unrecognized' }).Count -eq 0)
+
+    # --- friend-trial finding 2: a structural roster failure discarded the whole roster and named
+    # no account. A relative root, or a first-letter collision, must name the offending account(s)
+    # and the offending value. ---
+    Set-Content (Join-Path $tmp 'rel2.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":".claude-relative"} ] }'
+    $rel2 = Read-LauncherConfig -Path (Join-Path $tmp 'rel2.json')
+    Assert 'relative-root warning names the offending account key'   (@($rel2.Warnings | Where-Object { $_ -match "'b'" -and $_ -match 'absolute' }).Count -eq 1)
+    Assert 'and the offending raw value'                            (@($rel2.Warnings | Where-Object { $_ -match [regex]::Escape('.claude-relative') }).Count -eq 1)
+
+    Assert 'first-letter collision warning names both colliding keys' (@($bad.Warnings | Where-Object { $_ -match "work" -and $_ -match "web" -and $_ -match 'first letter' }).Count -eq 1)
+
+    # --- friend-trial finding 4: a Windows path typed straight into JSON ("C:\Users\...") fails
+    # ConvertFrom-Json with a raw .NET exception and no hint that a single backslash is the cause. ---
+    Set-Content (Join-Path $tmp 'winpath.json') '{ "accounts": [ {"key":"work","root":"C:\Users\me\.claude"} ] }'
+    $wp = Read-LauncherConfig -Path (Join-Path $tmp 'winpath.json')
+    Assert 'a single backslash JSON parse failure names it as the likely cause' (@($wp.Warnings | Where-Object { $_ -match 'backslash' }).Count -eq 1)
 } finally { Remove-Item $tmp -Recurse -Force }
 if ($script:Ran -eq 0) { Write-Host 'COULD NOT RUN: no assertion executed'; exit 2 }
 if ($script:Failed) { Write-Host "$($script:Failed) failed"; exit 1 }

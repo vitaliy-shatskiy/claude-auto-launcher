@@ -54,6 +54,31 @@ function Get-LauncherDefaults {
     }
 }
 
+$script:KnownConfigKeys = @('accounts', 'sharing', 'remote', 'riderMcp', 'extraMcpConfigs', 'secretsRoot', 'launchHooks', 'maintenanceActions')
+
+function Get-LauncherEditDistance {
+    # Plain Levenshtein distance, case-insensitive - used only to suggest a real key for a typo'd
+    # top-level one (e.g. "account" -> "accounts"), never for anything a test asserts exactly.
+    param([string]$A, [string]$B)
+    $a = $A.ToLowerInvariant(); $b = $B.ToLowerInvariant()
+    $la = $a.Length; $lb = $b.Length
+    $d = New-Object 'int[,]' ($la + 1), ($lb + 1)
+    for ($i = 0; $i -le $la; $i++) { $d[$i, 0] = $i }
+    for ($j = 0; $j -le $lb; $j++) { $d[0, $j] = $j }
+    for ($i = 1; $i -le $la; $i++) {
+        for ($j = 1; $j -le $lb; $j++) {
+            # Every arithmetic index below is parenthesised on purpose: $d[$i-1,$j] parses $i-1 as
+            # two comma-separated index arguments ($i and unary -1), not subtraction - PowerShell's
+            # multi-dimensional indexer reads its comma list in argument mode. Verified live: it
+            # threw "does not contain a method named 'op_Subtraction'" until every $x-1 got parens.
+            $prevI = $i - 1; $prevJ = $j - 1
+            $cost = if ($a[$prevI] -eq $b[$prevJ]) { 0 } else { 1 }
+            $d[$i, $j] = [Math]::Min([Math]::Min($d[$prevI, $j] + 1, $d[$i, $prevJ] + 1), $d[$prevI, $prevJ] + $cost)
+        }
+    }
+    return $d[$la, $lb]
+}
+
 function Test-LauncherPathRooted {
     # Same rooted test the account roster and secretsRoot already use, judged on the RAW value
     # BEFORE Expand-LauncherPath: GetFullPath makes every path absolute, so the check would never
@@ -78,6 +103,8 @@ function ConvertTo-LauncherRoster {
         $rooted = ($rawRoot -match '^~([\\/]|$)') -or [IO.Path]::IsPathRooted($rawRoot)
         $root = Expand-LauncherPath $rawRoot
         $tint = if ($a.tint) { "$($a.tint)" } else { 'Green' }
+        # Kept alongside Root (the expanded, absolute one) so a fatal roster failure below can name
+        # the RAW value the owner actually wrote, not the resolved path that hides the mistake.
         # Normalised to the allowed list's own casing when it matches case-insensitively: -notin
         # below is already case-insensitive, so a lower-case "magenta" passed it and was stored
         # verbatim - any later exact-case lookup keyed on the stored value would then miss it.
@@ -90,19 +117,41 @@ function ConvertTo-LauncherRoster {
             Key = $key; Root = $root
             Label = if ($a.label) { "$($a.label)" } else { "$key account" }
             Tint = $tint; Hidden = $hiddenResult.Value
-            Canonical = ($root -eq $canonicalRoot); Rooted = $rooted
+            Canonical = ($root -eq $canonicalRoot); Rooted = $rooted; RawRoot = $rawRoot
         }
     }
     foreach ($g in @($accounts | Group-Object Tint | Where-Object { $_.Count -gt 1 })) {
         $warnings += "accounts $(($g.Group | ForEach-Object Key) -join ', ') share tint '$($g.Name)'"
     }
+    # Every branch below names the offending account(s) and, where there is one, the raw value that
+    # tripped the rule - a newcomer with several accounts could not otherwise tell which one to fix
+    # (deferred review finding: the all-or-nothing fallback used to report the rule with no culprit).
     $fatal = $null
+    $badKeyLen = @($accounts | Where-Object { -not $_.Key -or $_.Key.Length -gt 8 })
+    $dupKeyGroups = @($accounts | Group-Object Key | Where-Object { $_.Count -gt 1 })
+    $letterGroups = @($accounts | Group-Object { if ($_.Key) { $_.Key.Substring(0, 1).ToLowerInvariant() } else { '' } } | Where-Object { $_.Count -gt 1 })
+    $badRoot = @($accounts | Where-Object { -not $_.Rooted })
     if ($accounts.Count -eq 0) { $fatal = 'accounts is empty' }
-    elseif (@($accounts | Where-Object { -not $_.Key -or $_.Key.Length -gt 8 }).Count) { $fatal = 'every account key must be 1 to 8 characters' }
-    elseif (@($accounts.Key | Sort-Object -Unique).Count -ne $accounts.Count) { $fatal = 'account keys must be unique' }
-    elseif (@($accounts.Key | ForEach-Object { $_.Substring(0, 1).ToLowerInvariant() } | Sort-Object -Unique).Count -ne $accounts.Count) { $fatal = 'account keys must start with different first letters (the fallback prompt is one letter per account)' }
-    elseif (@($accounts | Where-Object { -not $_.Rooted }).Count) { $fatal = 'every account root must be an absolute path' }
-    elseif (@($accounts | Where-Object Canonical).Count -ne 1) { $fatal = "exactly one account must have root $canonicalRoot (the canonical one)" }
+    elseif ($badKeyLen.Count) {
+        $names = ($badKeyLen | ForEach-Object { "'$($_.Key)'" }) -join ', '
+        $fatal = "account key(s) $names must be 1 to 8 characters"
+    }
+    elseif ($dupKeyGroups.Count) {
+        $fatal = "account key '$($dupKeyGroups[0].Name)' is used $($dupKeyGroups[0].Count) times; account keys must be unique"
+    }
+    elseif ($letterGroups.Count) {
+        $g = $letterGroups[0]
+        $names = ($g.Group | ForEach-Object Key) -join ', '
+        $fatal = "accounts $names share first letter '$($g.Name)'; account keys must start with different first letters (the fallback prompt is one letter per account)"
+    }
+    elseif ($badRoot.Count) {
+        $detail = ($badRoot | ForEach-Object { "'$($_.Key)': '$($_.RawRoot)'" }) -join ', '
+        $fatal = "account root(s) $detail must be an absolute path"
+    }
+    elseif (@($accounts | Where-Object Canonical).Count -ne 1) {
+        $roots = ($accounts | ForEach-Object { "'$($_.Key)': '$($_.RawRoot)'" }) -join ', '
+        $fatal = "exactly one account must have root $canonicalRoot (the canonical one); accounts have root(s) $roots"
+    }
     if ($fatal) {
         $warnings += "accounts: $fatal; using the default roster"
         return @{ Accounts = (Get-LauncherDefaults).Accounts; Warnings = $warnings }
@@ -135,8 +184,36 @@ function Read-LauncherConfig {
     $cfg = Get-LauncherDefaults
     $cfg.Path = $Path
     if (-not (Test-Path -LiteralPath $Path)) { return $cfg }
-    try { $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json }
-    catch { $cfg.Warnings = @("config $Path could not be read or parsed ($($_.Exception.Message)); using defaults"); return $cfg }
+    $text = $null
+    try { $text = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop }
+    catch { $cfg.Warnings = @("config $Path could not be read ($($_.Exception.Message)); using defaults"); return $cfg }
+    try { $raw = $text | ConvertFrom-Json }
+    catch {
+        # A Windows path typed straight into JSON ("C:\Users\...") fails here with .NET's raw
+        # exception text and no hint that the backslash is the cause (friend-trial finding: the
+        # README's own example paths are POSIX-style, so a newcomer has no reason to suspect this).
+        # Checked on the source text, not the exception message, which never names the character.
+        $hint = if ($text -match '\\[^"\\/bfnrtu]') { ' - a single backslash in a Windows path is the usual cause; use / or double it (\\\\)' } else { '' }
+        $cfg.Warnings = @("config $Path could not be read or parsed ($($_.Exception.Message))$hint; using defaults")
+        return $cfg
+    }
+
+    # deferred (friend-trial) finding: a typo'd top-level key (e.g. "account" for "accounts") is
+    # unknown to every check below, so it silently vanished with no warning at all - the roster then
+    # falls back to the default single account and nothing on screen explains why. Warned once per
+    # unknown key, naming it and, when it is close to a real key, suggesting that key.
+    foreach ($prop in @($raw.PSObject.Properties.Name)) {
+        if ($script:KnownConfigKeys -notcontains $prop) {
+            $best = $null; $bestDist = [int]::MaxValue
+            foreach ($k in $script:KnownConfigKeys) {
+                $dist = Get-LauncherEditDistance $prop $k
+                if ($dist -lt $bestDist) { $bestDist = $dist; $best = $k }
+            }
+            $msg = "unrecognized config key '$prop' is ignored"
+            if ($bestDist -le 2) { $msg += "; did you mean '$best'?" }
+            $cfg.Warnings += $msg
+        }
+    }
 
     if ($raw.PSObject.Properties.Name -contains 'accounts') {
         if ($null -eq $raw.accounts) { $cfg.Warnings += 'accounts is null; using the default roster' }

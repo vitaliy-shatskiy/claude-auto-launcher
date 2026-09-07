@@ -43,11 +43,11 @@ and only adds this folder to the user PATH if it is missing there.
 ## Configuration
 
 `~/.claude/claude-auto.json` (or `CLAUDE_AUTO_CONFIG`). No file = one account, `work` -> `~/.claude`,
-sharing and remote off. Every validation failure falls back to the default for that key and prints a warning at launch; nothing throws.
+sharing and remote off. Every validation failure falls back to the default for that key and prints a warning at launch; nothing throws. An unrecognized top-level key (a typo, e.g. `account` for `accounts`) also warns, naming it. Windows path values must use `~/...` or forward slashes, or double every backslash (`C:\\Users\\me\\.claude`) - JSON reads a single backslash as an escape character, and an unescaped one fails the whole file with no other hint.
 
 | key | type | default | notes |
 |---|---|---|---|
-| `accounts[]` | `{key, root, label, tint, hidden}` | one `work` account | key 1-8 chars, unique, and unique first letters; root absolute, exactly one must resolve to `~/.claude` (the canonical account); tint one of Green/Magenta/Cyan/Blue/Yellow/Red; hidden omits it from the tab strip and the no-UI prompt's text, though it stays typeable there |
+| `accounts[]` | `{key, root, label, tint, hidden}` | one `work` account | key 1-8 chars, unique, and unique first letters; root absolute, exactly one must resolve to `~/.claude` (the canonical account); tint one of Green/Magenta/Cyan/Blue/Yellow/Red; hidden omits it from the tab strip and the no-UI prompt's text, though it stays typeable there. Breaking any one of these rules discards the WHOLE roster, not just the offending account - the warning names the culprit and its value, but every account falls back to the single default `work` account |
 | `sharing` | bool | `false` | forced off with fewer than two accounts; see Multi-account sharing below before turning it on |
 | `remote` | bool | `false` | needs `crc.cmd` on PATH plus a `remote-control-claude-code` checkout (`CLAUDE_REMOTE_ROOT`); adds a Remote row to the launch screen and a second prompt in the no-UI fallback; its `stop server` choice kills whatever process is listening on the companion port, not only one this launcher started |
 | `riderMcp` | `auto`\|`on`\|`off` | `auto` | `auto` scans for Rider's MCP port only while Rider is running |
@@ -68,7 +68,7 @@ are empty there so a fresh clone never warns about a script nobody has - example
 ## What each screen does
 
 - **Launch screen** - rows for account (a tab strip carrying each account's five-hour usage %), action (`worktree` starts the session in a new git worktree, `-w`), model, effort, advisor, permission and mode (`safe` disables CLAUDE.md, skills, plugins, hooks and MCP for that session). With `remote: true` a Remote row appears too. Arrows move and change, enter starts, `u` opens maintenance, esc quits.
-- **Maintenance** (`u`) - `u` update, `r` rename swap, `d` doctor, `m` mcp list, `p` prune, plus one hotkey per configured `maintenanceActions[]` entry, `esc` back.
+- **Maintenance** (`u`) - `u` update, `r` rename swap, `d` doctor, `m` mcp list, `p` prune, plus one hotkey per configured `maintenanceActions[]` entry, `esc` back. **Not covered by `CLAUDE_AUTO_PREVIEW`** - unlike every other screen, its actions run against your real Claude Code install even during a preview run; `tests\preview.ps1` never presses one of these keys.
 - **Session picker** (action = resume) - a list with a last-exchange preview; `/` filters, `enter` opens, `f` forks, `esc` returns to the launch screen.
 
 ## Environment switches
