@@ -16,7 +16,7 @@ param(
     [string]$PreviewScript = (Join-Path $PSScriptRoot 'check-preview.ps1')
 )
 
-$suites = 'Theme', 'Layout', 'Sessions', 'Ui', 'Maintenance', 'Prefs', 'Env', 'Config', 'Input', 'Install'
+$suites = 'Theme', 'Layout', 'Sessions', 'Ui', 'Maintenance', 'Prefs', 'Env', 'Config', 'Input', 'Install', 'Mirror'
 $rows = @()
 $failed = 0
 $unverified = 0
@@ -28,7 +28,11 @@ foreach ($name in $suites) {
         $unverified++
         continue
     }
-    $null = & pwsh -NoProfile -File $path 2>&1
+    # Input's live half (mouse, VT-swallow, console-mode assertions) is skipped without -Live - the
+    # suite runs it correctly on its own (self-spawns a hidden child, reports the child's exit code),
+    # it is just never asked to. Every other suite has no live/bare distinction.
+    $extraArgs = if ($name -eq 'Input') { @('-Live') } else { @() }
+    $null = & pwsh -NoProfile -File $path @extraArgs 2>&1
     $code = $LASTEXITCODE
     # 0 pass, 1 a real failure, 2 the suite could not run (a missing module, a broken dot-source).
     # Two is NOT a pass and it is NOT the same as a failing assertion - it must count toward

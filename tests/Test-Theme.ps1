@@ -36,6 +36,20 @@ Assert-Equal 8 (New-Bar -Percent 0 -Width 8).Length '0% still occupies the whole
 Assert-Equal (New-Bar -Percent 100 -Width 8) (New-Bar -Percent 140 -Width 8) 'over 100% clamps rather than overflowing'
 Assert-Equal (New-Bar -Percent 0 -Width 8) (New-Bar -Percent -5 -Width 8) 'below 0% clamps rather than underflowing'
 
+# The LENGTH assertions above pass even for a bar that ignores Percent entirely and always renders
+# empty - mutation-proved: a New-Bar that drops the Percent parameter still returns $Width empty
+# glyphs, and every assertion above stays green. These count the actual FILL, which is the one
+# thing the bars exist to show - it is how the owner picks which account still has budget.
+$barGlyphs = Get-Glyphs
+$fullGlyph = $barGlyphs.BarFull; $emptyGlyph = $barGlyphs.BarEmpty
+function Count-Glyph([string]$Bar, [string]$Glyph) { @($Bar.ToCharArray() | Where-Object { "$_" -ceq $Glyph }).Count }
+Assert-Equal 8 (Count-Glyph (New-Bar -Percent 100 -Width 8) $fullGlyph) '100% is eight full glyphs, not an empty bar of the right length'
+Assert-Equal 0 (Count-Glyph (New-Bar -Percent 100 -Width 8) $emptyGlyph) 'and no empty glyphs at all'
+Assert-Equal 0 (Count-Glyph (New-Bar -Percent 0 -Width 8) $fullGlyph) '0% is zero full glyphs'
+Assert-Equal 8 (Count-Glyph (New-Bar -Percent 0 -Width 8) $emptyGlyph) 'and eight empty glyphs'
+Assert-Equal 4 (Count-Glyph (New-Bar -Percent 50 -Width 8) $fullGlyph) '50% of an 8-wide bar is exactly four full glyphs'
+Assert-Equal 4 (Count-Glyph (New-Bar -Percent 50 -Width 8) $emptyGlyph) 'and exactly four empty ones - the split, not just the total'
+
 # Both glyph sets must exist and cover the same keys, or a screen renders $null somewhere.
 $uni = Get-Glyphs
 $asc = Get-Glyphs -Ascii
@@ -74,7 +88,7 @@ $env:CLAUDE_AUTO_ASCII = '1'
 Assert-Equal $true (Test-AsciiRequired) 'CLAUDE_AUTO_ASCII=1 forces ASCII glyphs'
 if ($null -eq $savedASCII) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedASCII }
 
-if ($script:Ran -ne 19) { Write-Host "COULD NOT RUN: expected 19 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 25) { Write-Host "COULD NOT RUN: expected 25 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

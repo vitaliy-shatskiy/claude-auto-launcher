@@ -262,16 +262,35 @@ function ConvertTo-ClaudeInputEvent {
 
 function Peek-ClaudeKeyChar {
     # The code point of the next PENDING key-down record, or $null when the next thing waiting is
-    # not one (or nothing is waiting). Peeks only - the caller decides whether to consume.
-    param($State)
+    # not one (or nothing is waiting after a short bounded wait). Peeks only - the caller decides
+    # whether to consume.
+    #
+    # Polls PeekConsoleInputW for about 5ms before giving up. PeekConsoleInputW is a single
+    # non-blocking snapshot: a terminal that delivers a mouse report byte by byte - the real shape;
+    # this machine's own input traces show 1-6ms between bytes of one report - lands the ESC in the
+    # gap before the rest arrives, and a single instant peek right then reads an empty queue and
+    # calls it a bare Escape. The payload loops below already wait (-TimeoutMs 2/4); this keeps the
+    # introducer check no more trigger-happy than they are.
+    #
+    # No Start-Sleep in the loop: Windows' default timer resolution is commonly ~15.6ms, so a single
+    # "sleep 1ms" iteration can itself burn the whole budget before the loop condition is even
+    # re-checked - one coarse sleep and out, exactly the instant-peek bug this exists to fix. A tight
+    # re-peek costs a few microseconds per iteration and is bounded by the Stopwatch regardless of
+    # OS timer granularity.
+    param($State, [int]$TimeoutMs = 5)
     try {
-        $buf = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
-        [uint32]$n = 0
-        if (-not [ClaudeAuto.ConsoleInput]::PeekConsoleInputW($State.Handle, $buf, 1, [ref]$n)) { return $null }
-        if ($n -lt 1) { return $null }
-        if ($buf[0].EventType -ne [ClaudeAuto.ConsoleInput]::KEY_EVENT) { return $null }
-        if ($buf[0].KeyEvent.bKeyDown -eq 0) { return $null }
-        return [int]$buf[0].KeyEvent.UnicodeChar
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        do {
+            $buf = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
+            [uint32]$n = 0
+            if (-not [ClaudeAuto.ConsoleInput]::PeekConsoleInputW($State.Handle, $buf, 1, [ref]$n)) { return $null }
+            if ($n -ge 1) {
+                if ($buf[0].EventType -ne [ClaudeAuto.ConsoleInput]::KEY_EVENT) { return $null }
+                if ($buf[0].KeyEvent.bKeyDown -eq 0) { return $null }
+                return [int]$buf[0].KeyEvent.UnicodeChar
+            }
+        } while ($sw.Elapsed.TotalMilliseconds -lt $TimeoutMs)
+        return $null
     } catch { return $null }
 }
 
@@ -377,8 +396,17 @@ function Skip-ClaudeVtSequence {
     $null = Read-ClaudeRawRecord -State $State -TimeoutMs 0
     $eaten += [char]$next
     if ($next -eq 0x4F) {
-        # SS3: exactly one byte follows.
-        $null = Read-ClaudeRawRecord -State $State -TimeoutMs 0
+        # SS3: exactly one byte follows. Counted the same way the X10 branch below counts to four -
+        # the queue can interleave a key-UP with the final byte (ESC, O-down, O-up, u-down is a real
+        # shape: application-keypad mode maps SS3 finals to p-y, so keypad-5 is ESC O u and
+        # keypad-2 is ESC O r), and a blind single read after the introducer can consume that O-up
+        # instead of the real final byte, leaving it to reach the menu as an ordinary hotkey.
+        $downs = 0
+        for ($i = 0; $i -lt 24 -and $downs -lt 1; $i++) {
+            $rec = Read-ClaudeRawRecord -State $State -TimeoutMs 4
+            if ($null -eq $rec) { break }
+            if ($rec.EventType -eq [ClaudeAuto.ConsoleInput]::KEY_EVENT -and $rec.KeyEvent.bKeyDown -ne 0) { $downs++ }
+        }
         if ($script:TraceOn) { Write-ClaudeInputTrace 'SWALLOW vt ESC O + 1 byte' }
         return $true
     }
