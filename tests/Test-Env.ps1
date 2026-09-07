@@ -229,6 +229,46 @@ try {
     if (Test-Path -LiteralPath $fake) { Remove-Item -LiteralPath $fake -Recurse -Force }
 }
 
+# --- Repair-SharedProfiles: Preview must be side-effect-free -----------------------------------
+# deferred review finding: only the profile-root-creation loop was ever guarded by
+# `if (-not $Preview)` in claude-auto.ps1 - the link and junction repairs ran unconditionally, so
+# every preview run on a sharing machine mutated real files (settings.json re-hardlinked) and could
+# create a junction with its icacls deny ACEs. Fake roots again; the real ~/.claude is never touched.
+$origWorkRoot2 = $WorkRoot; $origSecondary2 = $SecondaryRoots; $origSharedFiles2 = $SharedFiles; $origSharedDirs2 = $SharedDirs
+$fake2 = Join-Path $env:TEMP ("cct-preview-guard-test-" + [guid]::NewGuid().ToString('N'))
+try {
+    $WorkRoot = Join-Path $fake2 'work'
+    $rootP = Join-Path $fake2 'personal'
+    $SecondaryRoots = @($rootP)
+    $SharedFiles = @('settings.json')
+    $SharedDirs = @('projects')
+    New-Item -ItemType Directory -Force $WorkRoot, $rootP | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $WorkRoot 'projects') | Out-Null
+    Set-Content -LiteralPath (Join-Path $WorkRoot 'settings.json') -Value '{"model":"work"}' -NoNewline
+    # A drifted, unlinked copy in the secondary root - a real repair would relink it to $WorkRoot's.
+    Set-Content -LiteralPath (Join-Path $rootP 'settings.json') -Value '{"model":"drifted"}' -NoNewline
+    (Get-Item -LiteralPath (Join-Path $rootP 'settings.json')).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
+
+    $beforeContent = Get-Content -LiteralPath (Join-Path $rootP 'settings.json') -Raw
+    $beforeTime = (Get-Item -LiteralPath (Join-Path $rootP 'settings.json')).LastWriteTimeUtc
+
+    Repair-SharedProfiles -Preview 6>$null
+
+    Assert 'preview: the divergent copy is left untouched (content)' ((Get-Content -LiteralPath (Join-Path $rootP 'settings.json') -Raw) -eq $beforeContent)
+    Assert 'preview: the divergent copy is left untouched (write time)' ((Get-Item -LiteralPath (Join-Path $rootP 'settings.json')).LastWriteTimeUtc -eq $beforeTime)
+    Assert 'preview: no junction is created' (-not (Test-Path -LiteralPath (Join-Path $rootP 'projects')))
+    Assert 'preview: no .pre-relink is left behind either' (-not (Test-Path -LiteralPath (Join-Path $rootP 'settings.json.pre-relink')))
+
+    # Off preview, the same setup DOES get repaired - proves the guard is the ONLY thing that changed,
+    # not that Repair-SharedProfiles silently does nothing.
+    Repair-SharedProfiles 6>$null
+    Assert 'not preview: the drifted copy is relinked to the newest'     ((Get-Content -LiteralPath (Join-Path $rootP 'settings.json') -Raw) -eq '{"model":"work"}')
+    Assert 'not preview: the missing junction is created'                (Test-Path -LiteralPath (Join-Path $rootP 'projects'))
+} finally {
+    $WorkRoot = $origWorkRoot2; $SecondaryRoots = $origSecondary2; $SharedFiles = $origSharedFiles2; $SharedDirs = $origSharedDirs2
+    if (Test-Path -LiteralPath $fake2) { Remove-Item -LiteralPath $fake2 -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # Get-ClaudeInvocation: a SUBCOMMAND must not get --mcp-config (2026-08-22).
 # `claude auto-mode defaults` died with `error: unknown option '--mcp-config'` after the full launch
 # preamble, because the flags were appended to every pass-through. A positional PROMPT is not a
@@ -385,14 +425,30 @@ Assert 'an exact key typed in full resolves like its shorthand' ((Resolve-Accoun
 Assert 'a hidden account''s letter still resolves'      ((Resolve-AccountAnswer -Answer 's' -Prompt $p.Map -Default 'work') -eq 'shared')
 Assert 'mixed-case input resolves the same as lower-case' ((Resolve-AccountAnswer -Answer 'P' -Prompt $p.Map -Default 'work') -eq 'personal')
 
+# --- Resolve-ClaudeExecutable: PATH resolution must never throw and never silently degrade to
+# exit 0 -------------------------------------------------------------------------------------------
+# deferred review finding: `.Source` on a $null match (no -ErrorAction on the old inline
+# Get-Command) is $null, `& $null @args` throws, and `exit $claudeExit` with that variable never set
+# exited 0 - a launch that found nothing to run reported success. -Resolver is injected so both
+# branches are assertable without touching the real PATH.
+$found = Resolve-ClaudeExecutable -Resolver { [pscustomobject]@{ Source = 'C:\fake\claude.cmd' } }
+Assert 'a resolver that finds claude reports Ok'          $found.Ok
+Assert 'and carries its resolved path'                    ($found.Path -eq 'C:\fake\claude.cmd')
+Assert 'and no message'                                   ($null -eq $found.Message)
+
+$missing = Resolve-ClaudeExecutable -Resolver { $null }
+Assert 'a resolver that finds nothing reports not Ok, never throws' (-not $missing.Ok)
+Assert 'and carries no path'                                        ($null -eq $missing.Path)
+Assert 'and names the problem'                                      ($missing.Message -match 'not on PATH')
+
 # --- Get-RateLimitSummary: a machine with no records (a fresh install) gets an empty table ---------
 $emptyLimits = Join-Path $env:TEMP ("cal-limits-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $emptyLimits | Out-Null
 try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSummary -Directory $emptyLimits).Count -eq 0) } finally { Remove-Item $emptyLimits -Recurse -Force }
 
 } finally { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 95) {
-    Write-Host "COULD NOT RUN: expected 95 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
+if ($script:Ran -ne 107) {
+    Write-Host "COULD NOT RUN: expected 107 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
 }
 if ($script:fail -gt 0) {
@@ -401,5 +457,5 @@ if ($script:fail -gt 0) {
 }
 # Counted, not guessed: HEAD claimed 72 while running 75 (measured 2026-09-04 by counting the
 # ok/FAIL lines of a bare run). A banner nobody re-counts is a number that drifts silently.
-Write-Host '95 assertions, all pass' -ForegroundColor Green
+Write-Host '107 assertions, all pass' -ForegroundColor Green
 exit 0

@@ -42,8 +42,16 @@ if ($ModulesOk) {
 # in this mode, and silently starting a crippled session would be worse than saying so.
 if (-not $ModulesOk) {
     Write-Host "  starting WITHOUT profile choice, secrets or MCP config - fix the error above" -ForegroundColor Red
-    $bareClaude = (Get-Command claude -CommandType Application | Select-Object -First 1).Source
-    & $bareClaude @args
+    # Deliberately NOT Resolve-ClaudeExecutable (Env.ps1): a module failed to load and Env.ps1 may be
+    # the one that failed, so this fallback must resolve claude itself rather than lean on a function
+    # that might not exist. Same guard inline: -ErrorAction so a missing claude does not throw on
+    # `.Source`, and an explicit exit 1 so a launch that found nothing to run never reports success.
+    $bareCmd = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $bareCmd) {
+        Write-Host "  claude is not on PATH - install Claude Code first" -ForegroundColor Red
+        exit 1
+    }
+    & $bareCmd.Source @args
     exit $LASTEXITCODE
 }
 
@@ -224,7 +232,16 @@ if ($UseUi) {
                 & $paint (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Width $w -Height $h -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
                 $map
             }
-            $picked = Invoke-SessionPicker -Sessions (Get-ClaudeSessions -Limit 40) -ReadKey $KeySource -Wait $wait -Draw $pdraw
+            # deferred review finding: this used to call Get-ClaudeSessions with no root at all,
+            # which lists the CANONICAL account's sessions regardless of which account is selected -
+            # with sharing off, resuming one then attaches under a CLAUDE_CONFIG_DIR that never held it.
+            $sessionsRoot = Get-SessionsRootForAccount -Account $state.Account -ProfileRoots $ProfileRoots
+            # @() is load-bearing (same trap as $mcpConfigs below): Get-ClaudeSessions returning ZERO
+            # items unrolls to $null on the pipeline, and Invoke-SessionPicker's -Sessions is
+            # Mandatory - an account with no sessions yet (a fresh secondary root, or any account
+            # once the root fix above actually scopes to it) crashed here with a raw PowerShell
+            # binding error instead of showing an empty picker. Found via tests\check-preview.ps1.
+            $picked = Invoke-SessionPicker -Sessions @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit 40) -ReadKey $KeySource -Wait $wait -Draw $pdraw
             if ($picked) { $resumeId = $picked.Session.SessionId; $forkSession = [bool]$picked.Fork; break }
             # Escape at the picker returns $null (cancel) and, in a real session, this loop goes back
             # to the launch screen. Preview cannot loop - the scripted key list is finite - so it must
@@ -304,26 +321,8 @@ Set-ClaudeProfile -Account $choice
 $null = Import-ProjectSecrets -WorkingDirectory $PWD.Path -Root $LauncherConfig.SecretsRoot
 
 # Profile sharing only when the config asks for it: a single-account machine has nothing to link.
-if ($LauncherConfig.Sharing) {
-    if (-not $Preview) {
-        # Every account's root exists from the first launch onwards, so the owner can pick it and
-        # log in rather than discovering a missing directory mid-launch. Creating a root is a side
-        # effect, hence the preview guard; the sharing repairs below are idempotent and run either way.
-        foreach ($r in $SecondaryRoots) {
-            try { $null = New-ClaudeProfileRoot -Root $r } catch { Write-Host "  profile root check failed for ${r}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
-        }
-    }
-    foreach ($f in $SharedFiles) {
-        # One call per file, not per pair: Repair-SharedLink compares the File ID of every root at
-        # once, because a pairwise check passes while a third copy drifts.
-        try { Repair-SharedLink -Name $f } catch { Write-Host "  link check failed for ${f}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
-    }
-    foreach ($r in $SecondaryRoots) {
-        foreach ($d in $SharedDirs) {
-            try { Repair-SharedJunction -Name $d -Root $r } catch { Write-Host "  junction check failed for ${d}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
-        }
-    }
-}
+# Preview must be side-effect-free - Repair-SharedProfiles (Env.ps1) guards every step on it.
+Repair-SharedProfiles -Preview:$Preview
 # Config-listed launch hooks (best-effort, each its own line). Preview stays side-effect-free.
 if (-not $Preview) { Invoke-LaunchHooks -Hooks $LauncherConfig.LaunchHooks }
 
@@ -333,7 +332,14 @@ if (-not $Preview) { Invoke-LaunchHooks -Hooks $LauncherConfig.LaunchHooks }
 # rejects 39 config paths. Fires whenever Rider is closed, because then only one config path exists.
 $mcpConfigs = @(Get-McpConfigPaths)
 
-$claude = (Get-Command claude -CommandType Application | Select-Object -First 1).Source
+# deferred review finding: `.Source` on $null threw, and `exit $claudeExit` with the variable
+# never set exited 0 - a launch that could not even find claude reported success.
+$resolvedClaude = Resolve-ClaudeExecutable
+if (-not $resolvedClaude.Ok) {
+    Write-Host "  $($resolvedClaude.Message)" -ForegroundColor Red
+    exit 1
+}
+$claude = $resolvedClaude.Path
 
 # A session picked in the UI is resumed by id. That works from any directory: passing an id
 # explicitly makes Claude Code search the current project, its worktrees, then every other project

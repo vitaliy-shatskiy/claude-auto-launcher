@@ -27,7 +27,7 @@ The `default (…)` labels above resolve from the reader's own `~/.claude/settin
 ## Requirements
 
 - PowerShell 7 (`pwsh`) - without it the launcher re-execs under `pwsh` if it can find one, else warns and continues with the full UI but no MCP configuration (a bare session is a separate, module-load failure path)
-- Claude Code (`claude` on PATH)
+- Claude Code (`claude` on PATH) - the launch-screen rows (model/effort/advisor/permission values) were built against `2.1.263`; a much older or newer CLI may accept different flags
 
 ## Install
 
@@ -49,14 +49,17 @@ sharing and remote off. Every validation failure falls back to the default for t
 |---|---|---|---|
 | `accounts[]` | `{key, root, label, tint, hidden}` | one `work` account | key 1-8 chars, unique, and unique first letters; root absolute, exactly one must resolve to `~/.claude` (the canonical account); tint one of Green/Magenta/Cyan/Blue/Yellow/Red; hidden omits it from the tab strip and the no-UI prompt's text, though it stays typeable there |
 | `sharing` | bool | `false` | forced off with fewer than two accounts; see Multi-account sharing below before turning it on |
-| `remote` | bool | `false` | needs `crc.cmd` on PATH plus a `remote-control-claude-code` checkout (`CLAUDE_REMOTE_ROOT`); adds a Remote row to the launch screen and a second prompt in the no-UI fallback |
+| `remote` | bool | `false` | needs `crc.cmd` on PATH plus a `remote-control-claude-code` checkout (`CLAUDE_REMOTE_ROOT`); adds a Remote row to the launch screen and a second prompt in the no-UI fallback; its `stop server` choice kills whatever process is listening on the companion port, not only one this launcher started |
 | `riderMcp` | `auto`\|`on`\|`off` | `auto` | `auto` scans for Rider's MCP port only while Rider is running |
-| `extraMcpConfigs[]` | paths | `["~/.claude/mcp-shared.json"]` | |
+| `extraMcpConfigs[]` | paths | `["~/.claude/mcp-shared.json"]` | must be absolute; a relative entry is skipped with a warning |
 | `secretsRoot` | path | `~/.claude-secrets` | must be absolute; see Secrets below |
-| `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice, each best-effort |
-| `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p`; `script` is required |
+| `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice, each best-effort; must be absolute |
+| `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p`; `script` is required, must be absolute, and an entry failing either check is skipped with a warning |
 
-See `config.example.json` for a two-account example (sharing off).
+See `config.example.json` for a two-account example (sharing off; `launchHooks`/`maintenanceActions`
+are empty there so a fresh clone never warns about a script nobody has - example values:
+`"launchHooks": ["~/scripts/after-launch.ps1"]`,
+`"maintenanceActions": [{ "key": "i", "label": "reindex", "script": "~/scripts/reindex.ps1", "confirmTwice": true }]`).
 
 ### Secrets
 
@@ -84,7 +87,9 @@ See `config.example.json` for a two-account example (sharing off).
 - `~/.claude/claude-auto-prefs.json` - remembered account, model/effort/advisor/permission/remote
 - `~/.claude/launcher-logs/*.jsonl` - one file per day, 14-day retention
 - `~/.claude/claude-auto-hash-cache.json` - the maintenance screen's version-check cache
+- `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (one per account root)
 - `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day
+- `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan
 - `claude-auto\ConsoleInput.dll` - compiled from `ConsoleInput.cs` into this clone on first run (gitignored)
 - `<file>.pre-relink` beside a shared file a sharing repair just replaced (see Multi-account sharing)
 
@@ -96,10 +101,19 @@ The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer;
 pwsh -File tests\checkpoint.ps1
 ```
 
-On a fresh clone `tests\reference-output.local.txt` does not exist yet (it is gitignored), so the checkpoint reports `regression 2 DID NOT RUN` - correctly, not a pass - until you record one:
+On a fresh clone `tests\reference-output.local.txt` does not exist yet (it is gitignored), so the
+checkpoint reports BOTH `regression 2 DID NOT RUN` and `droplist 2 DID NOT RUN` - correctly, not a
+pass - until you record one (droplist reads the same reference file, so recording it fixes both rows):
 
 ```
 pwsh -File tests\check-regression.ps1 -Record
+```
+
+`check-preview` similarly needs its own recorded reference (`tests\preview-reference.local.txt`,
+also gitignored) before it reports anything but `2 DID NOT RUN`:
+
+```
+pwsh -File tests\check-preview.ps1 -Record
 ```
 
 ## Multi-account sharing

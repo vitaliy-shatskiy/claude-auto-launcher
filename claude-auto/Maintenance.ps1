@@ -70,16 +70,31 @@ function Get-CachedFileHash {
     return $hash
 }
 
+function Get-DefaultClaudeBinPath {
+    # deferred review finding: ~/.local/bin/claude.exe is only true for the NATIVE installer. An npm
+    # or global install has neither that file nor ~/.local/share/claude/versions, so the maintenance
+    # screen showed no hash and 'u' reported the download message even after a real update. Resolve
+    # where `claude` actually runs from first, and fall back to the native path only when PATH has
+    # nothing to say (e.g. this screen open before a first login).
+    $cmd = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
+    return (Join-Path $HOME '.local\bin\claude.exe')
+}
+
 function Get-ClaudeInstallInfo {
     param(
-        [string]$BinPath = (Join-Path $HOME '.local\bin\claude.exe'),
+        [string]$BinPath = (Get-DefaultClaudeBinPath),
         [string]$VersionsDir = (Join-Path $HOME '.local\share\claude\versions')
     )
     $installedHash = $null
     if (Test-Path -LiteralPath $BinPath) { $installedHash = Get-CachedFileHash -Path $BinPath }
 
+    # Whether the versions directory exists at all - not whether it has anything in it - is what
+    # tells a native install (nothing downloaded yet) apart from an npm/global one (no such
+    # directory, ever). Invoke-ClaudeUpdate's message depends on this distinction.
+    $native = Test-Path -LiteralPath $VersionsDir
     $builds = @()
-    if (Test-Path -LiteralPath $VersionsDir) {
+    if ($native) {
         $builds = @(Get-OrderedClaudeBuilds -Builds (Get-ChildItem -LiteralPath $VersionsDir -File -ErrorAction SilentlyContinue))
     }
     $newest = $builds | Select-Object -First 1
@@ -95,6 +110,7 @@ function Get-ClaudeInstallInfo {
         VersionCount  = $builds.Count
         VersionsBytes = ($builds | Measure-Object Length -Sum).Sum
         VersionsDir   = $VersionsDir
+        Native        = $native
     }
 }
 
@@ -112,7 +128,7 @@ function Invoke-ClaudeUpdate {
     #
     # -Updater is injected so this whole chain is assertable against a fake tree - the real one
     # downloads ~300 MB and mutates the live installation.
-    param([string]$BinPath = (Join-Path $HOME '.local\bin\claude.exe'),
+    param([string]$BinPath = (Get-DefaultClaudeBinPath),
           [string]$VersionsDir = (Join-Path $HOME '.local\share\claude\versions'),
           [scriptblock]$Updater = { & claude update 2>&1 })
     $output = ''
@@ -130,6 +146,11 @@ function Invoke-ClaudeUpdate {
     $message =
         if ($after.Matches) {
             "the updater could not overwrite the running claude.exe, so it was installed by rename: now $($after.NewestVersion), verified by hash. New windows get it; sessions already open keep the old build, and claude.exe.old stays locked until they all exit."
+        } elseif (-not $info.Native) {
+            # deferred review finding: an npm/global install has no versions directory at all, so
+            # this used to show the download message even right after a real, successful update -
+            # 'u' looked like a dead end instead of naming the actual situation.
+            'not a native install; updates are handled by your installer'
         } elseif (-not $info.NewestPath) {
             'nothing to install: no build has been downloaded. Check the connection and press u again.'
         } else {
@@ -182,7 +203,7 @@ function Repair-ClaudeBinaryByRename {
     # Windows forbids overwriting a running image but allows RENAMING it: the live session keeps
     # its old inode, new launches get the new build, and claude.exe.old stays locked until every
     # session exits.
-    param([string]$BinPath = (Join-Path $HOME '.local\bin\claude.exe'),
+    param([string]$BinPath = (Get-DefaultClaudeBinPath),
           [string]$VersionsDir = (Join-Path $HOME '.local\share\claude\versions'))
     $info = Get-ClaudeInstallInfo -BinPath $BinPath -VersionsDir $VersionsDir
     if (-not $info.NewestPath) { return [pscustomobject]@{ Ok = $false; Message = 'no downloaded build to install' } }
@@ -205,7 +226,7 @@ function Remove-OldClaudeVersions {
     param(
         [string]$VersionsDir = (Join-Path $HOME '.local\share\claude\versions'),
         [int]$Keep = 2,
-        [string]$BinPath = (Join-Path $HOME '.local\bin\claude.exe')
+        [string]$BinPath = (Get-DefaultClaudeBinPath)
     )
     $builds = @(Get-ChildItem -LiteralPath $VersionsDir -File -ErrorAction SilentlyContinue)
     $ordered = @(Get-OrderedClaudeBuilds -Builds $builds)

@@ -447,6 +447,18 @@ Assert-Equal $true      $sel.Fork              'f marks the launch as a fork'
 $sel = Invoke-SessionPicker -Sessions $fake -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {}
 Assert-Equal '' "$sel" 'escape leaves the picker with nothing'
 
+# deferred review finding: Select-ResumableSessions wraps ITS OWN return in @(), but the CALL SITE
+# inside Invoke-SessionPicker did not - a function emitting ZERO items unrolls to $null on the
+# pipeline regardless of how it built that array internally, so a session list of zero (or, after
+# Select-ResumableSessions drops every zero-prompt entry, a list that becomes zero) crashed
+# Select-SessionMatch's Mandatory -Sessions with a raw PowerShell binding error instead of showing
+# "no sessions found". Found via tests\check-preview.ps1's empty-fixture-account run.
+$threwOnEmpty = $false
+try { $selEmpty = Invoke-SessionPicker -Sessions @() -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {} }
+catch { $threwOnEmpty = $true }
+Assert-Equal $false $threwOnEmpty 'an empty session list does not crash the picker'
+Assert-Equal ''      "$selEmpty"  'and escape still leaves it with nothing, exactly like a non-empty list'
+
 Assert-Equal 1 (Select-SessionMatch -Sessions $fake -Filter 'batch').Count 'filter matches the worktree name'
 Assert-Equal 1 (Select-SessionMatch -Sessions $fake -Filter 'parse errors').Count 'filter matches assistant text'
 Assert-Equal 2 (Select-SessionMatch -Sessions $fake -Filter '').Count 'empty filter keeps everything'
@@ -1577,7 +1589,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 722) { Write-Host "COULD NOT RUN: expected 722 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 724) { Write-Host "COULD NOT RUN: expected 724 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

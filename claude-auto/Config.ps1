@@ -54,6 +54,17 @@ function Get-LauncherDefaults {
     }
 }
 
+function Test-LauncherPathRooted {
+    # Same rooted test the account roster and secretsRoot already use, judged on the RAW value
+    # BEFORE Expand-LauncherPath: GetFullPath makes every path absolute, so the check would never
+    # fire after it ran. deferred review finding: launchHooks, extraMcpConfigs and
+    # maintenanceActions[].script had no such check, so a relative value silently resolved against
+    # $PWD - the same config running a different hook depending on which directory the owner
+    # launched from.
+    param([string]$Value)
+    return (("$Value" -match '^~([\\/]|$)') -or [IO.Path]::IsPathRooted("$Value"))
+}
+
 function ConvertTo-LauncherRoster {
     # Returns @{ Accounts = ...; Warnings = ... }. Any structural failure returns the default roster.
     param($Raw)
@@ -107,6 +118,8 @@ function ConvertTo-MaintenanceActions {
         $key = "$($m.key)".Trim().ToLowerInvariant()
         if ($key -notmatch '^[a-z0-9]$' -or $key -in $reserved -or -not $m.script) { $warnings += "maintenanceActions: entry '$key' needs a one-letter key outside $($reserved -join ',') and a script; skipped"; continue }
         if ($out.Key -contains $key) { $warnings += "maintenanceActions: duplicate key '$key'; the first one wins, this entry is skipped"; continue }
+        $rawScript = "$($m.script)"
+        if (-not (Test-LauncherPathRooted $rawScript)) { $warnings += "maintenanceActions '$key': script must be an absolute path; skipped"; continue }
         $confirmResult = ConvertTo-LauncherBool -Value $m.confirmTwice -Default $false -Name "maintenanceActions '$key': confirmTwice"
         if ($confirmResult.Warning) { $warnings += $confirmResult.Warning }
         $out += [pscustomobject]@{
@@ -143,7 +156,15 @@ function Read-LauncherConfig {
         $mode = "$($raw.riderMcp)".ToLowerInvariant()
         if ($mode -in $script:AllowedRiderModes) { $cfg.RiderMcp = $mode } else { $cfg.Warnings += "riderMcp '$($raw.riderMcp)' is not auto/on/off; using auto" }
     }
-    if ($null -ne $raw.extraMcpConfigs) { $cfg.ExtraMcpConfigs = @($raw.extraMcpConfigs | ForEach-Object { Expand-LauncherPath "$_" }) }
+    if ($null -ne $raw.extraMcpConfigs) {
+        $validExtras = @()
+        foreach ($e in @($raw.extraMcpConfigs)) {
+            $rawExtra = "$e"
+            if (-not (Test-LauncherPathRooted $rawExtra)) { $cfg.Warnings += "extraMcpConfigs: '$rawExtra' is not an absolute path; skipped"; continue }
+            $validExtras += Expand-LauncherPath $rawExtra
+        }
+        $cfg.ExtraMcpConfigs = @($validExtras)
+    }
     if ($null -ne $raw.secretsRoot) {
         # Judged BEFORE expansion, same as the account roster's Rooted check: GetFullPath makes
         # every path absolute, so a relative value would never fail the check after it ran.
@@ -156,7 +177,15 @@ function Read-LauncherConfig {
             $cfg.SecretsRoot = Expand-LauncherPath $rawSecrets
         }
     }
-    if ($null -ne $raw.launchHooks) { $cfg.LaunchHooks = @($raw.launchHooks | ForEach-Object { Expand-LauncherPath "$_" }) }
+    if ($null -ne $raw.launchHooks) {
+        $validHooks = @()
+        foreach ($h in @($raw.launchHooks)) {
+            $rawHook = "$h"
+            if (-not (Test-LauncherPathRooted $rawHook)) { $cfg.Warnings += "launchHooks: '$rawHook' is not an absolute path; skipped"; continue }
+            $validHooks += Expand-LauncherPath $rawHook
+        }
+        $cfg.LaunchHooks = @($validHooks)
+    }
     if ($null -ne $raw.maintenanceActions) { $m = ConvertTo-MaintenanceActions $raw.maintenanceActions; $cfg.MaintenanceActions = @($m.Actions); $cfg.Warnings += $m.Warnings }
     if ($cfg.Sharing -and @($cfg.Accounts).Count -lt 2) { $cfg.Sharing = $false; $cfg.Warnings += 'sharing needs at least two accounts; off' }
     return $cfg

@@ -1,0 +1,13 @@
+{
+  "accounts": [
+    { "key": "work", "root": "~/.claude", "label": "work account", "tint": "Green" },
+    { "key": "second", "root": "~/.claude-preview-fixture", "label": "second account", "tint": "Magenta" }
+  ],
+  "sharing": false,
+  "remote": false,
+  "riderMcp": "off",
+  "extraMcpConfigs": [],
+  "secretsRoot": "C:/nope/preview-fixture-secrets",
+  "launchHooks": [],
+  "maintenanceActions": []
+}

@@ -147,7 +147,38 @@ Assert-Equal '[code: 1 lines] and [code: 2 lines]' (Get-CodeFenceCollapsedText -
 $s = Get-ClaudeSessionSummary -Path "$fx\code-fence.jsonl"
 Assert-Equal 'Here: [code: 3 lines] Done.' $s.RecentMessages[1].Text 'a fenced block in a real transcript collapses to a compact marker in RecentMessages, with the real line count preserved from before whitespace cleanup'
 
-if ($script:Ran -ne 42) { Write-Host "COULD NOT RUN: expected 42 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# 14. deferred review finding: the session picker must read the SELECTED account's root, never a
+#     hardcoded default - claude-auto.ps1 used to call Get-ClaudeSessions with no root at all, which
+#     lists the canonical account's sessions no matter which account is chosen.
+$roots = [ordered]@{ work = "$fx\multi-root\work"; second = "$fx\multi-root\second" }
+Assert-Equal (Join-Path $roots['second'] 'projects') (Get-SessionsRootForAccount -Account 'second' -ProfileRoots $roots) 'resolves to the SELECTED account root, not the first one'
+Assert-Equal (Join-Path $roots['work'] 'projects')   (Get-SessionsRootForAccount -Account 'work' -ProfileRoots $roots)   'and to the canonical root when that IS the selected account'
+try { $null = Get-SessionsRootForAccount -Account 'nope' -ProfileRoots $roots; $threw = $false } catch { $threw = $true }
+Assert-Equal $true $threw 'an unknown account throws rather than silently resolving somewhere'
+
+$mrRoot = Join-Path $env:TEMP ("claude-auto-multiroot-$(Get-Random)")
+$workProjects = Join-Path $mrRoot 'work\projects'; $secondProjects = Join-Path $mrRoot 'second\projects'
+New-Item -ItemType Directory -Force (Join-Path $workProjects 'C--Users-someone-Desktop-Projects-WorkOnly') | Out-Null
+New-Item -ItemType Directory -Force (Join-Path $secondProjects 'C--Users-someone-Desktop-Projects-SecondOnly') | Out-Null
+$workLines = @('{"type":"user","message":{"content":"work session prompt"}}', '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}')
+$secondLines = @('{"type":"user","message":{"content":"second session prompt"}}', '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}')
+[IO.File]::WriteAllText((Join-Path $workProjects 'C--Users-someone-Desktop-Projects-WorkOnly\aaaaaaaa.jsonl'), (($workLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText((Join-Path $secondProjects 'C--Users-someone-Desktop-Projects-SecondOnly\bbbbbbbb.jsonl'), (($secondLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+
+$rootsFake = [ordered]@{ work = (Join-Path $mrRoot 'work'); second = (Join-Path $mrRoot 'second') }
+$sessionsForSecond = @(Get-ClaudeSessions -ProjectsRoot (Get-SessionsRootForAccount -Account 'second' -ProfileRoots $rootsFake) -Limit 40)
+Assert-Equal 1 $sessionsForSecond.Count 'account second sees exactly one session'
+Assert-Equal 'bbbbbbbb' $sessionsForSecond[0].SessionId 'and it is SECOND''s own session, not WORK''s'
+Assert-Equal $false ($sessionsForSecond.SessionId -contains 'aaaaaaaa') 'the picker''s source list for account B does not contain A''s session'
+
+# The default CachePath is keyed off the account's OWN root, not one hardcoded path shared by
+# every account - otherwise every call's whole-file overwrite thrashes the other accounts' entries.
+$sessionsForWork = @(Get-ClaudeSessions -ProjectsRoot (Get-SessionsRootForAccount -Account 'work' -ProfileRoots $rootsFake) -Limit 40)
+Assert-Equal $true (Test-Path (Join-Path $rootsFake['second'] 'claude-auto-sessions.json')) 'account second gets its own cache file'
+Assert-Equal $true (Test-Path (Join-Path $rootsFake['work'] 'claude-auto-sessions.json'))   'account work gets its own cache file, not a shared one that just got overwritten'
+Remove-Item -LiteralPath $mrRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 50) { Write-Host "COULD NOT RUN: expected 50 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

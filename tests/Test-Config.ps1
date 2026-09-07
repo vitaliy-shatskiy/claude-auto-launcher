@@ -151,10 +151,27 @@ try {
 
     # --- deferred review finding: a second maintenance action reusing an existing key must be
     # skipped with a warning naming the key, not silently accepted alongside the first. ---
-    Set-Content (Join-Path $tmp 'dupmaint.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "maintenanceActions": [ {"key":"i","label":"first","script":"x.ps1"}, {"key":"i","label":"second","script":"y.ps1"} ] }'
+    Set-Content (Join-Path $tmp 'dupmaint.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "maintenanceActions": [ {"key":"i","label":"first","script":"C:\\x.ps1"}, {"key":"i","label":"second","script":"C:\\y.ps1"} ] }'
     $dm = Read-LauncherConfig -Path (Join-Path $tmp 'dupmaint.json')
     Assert 'duplicate maintenance key: the first one wins'   (@($dm.MaintenanceActions).Count -eq 1 -and $dm.MaintenanceActions[0].Label -eq 'first')
     Assert 'and a warning names the key'                     (@($dm.Warnings | Where-Object { $_ -match 'maintenanceActions' -and $_ -match "'i'" }).Count -eq 1)
+    # --- deferred review finding: launchHooks, extraMcpConfigs and maintenanceActions[].script must
+    # each be absolute, like accounts[].root and secretsRoot already are - a relative value resolves
+    # against $PWD, so the same config would run a different hook depending on launch directory. ---
+    Set-Content (Join-Path $tmp 'hook-rel.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "launchHooks": ["rel/hook.ps1", "~/ok/hook.ps1"] }'
+    $hr = Read-LauncherConfig -Path (Join-Path $tmp 'hook-rel.json')
+    Assert 'relative launchHooks entry is skipped'        (@($hr.LaunchHooks).Count -eq 1 -and $hr.LaunchHooks[0] -eq (Join-Path $HOME 'ok\hook.ps1'))
+    Assert 'and a warning names it as not absolute'       (@($hr.Warnings | Where-Object { $_ -match 'launchHooks' -and $_ -match 'absolute' }).Count -eq 1)
+
+    Set-Content (Join-Path $tmp 'extra-rel.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "extraMcpConfigs": ["rel/x.json", "C:\\ok\\x.json"] }'
+    $er = Read-LauncherConfig -Path (Join-Path $tmp 'extra-rel.json')
+    Assert 'relative extraMcpConfigs entry is skipped'    (@($er.ExtraMcpConfigs).Count -eq 1 -and $er.ExtraMcpConfigs[0] -eq 'C:\ok\x.json')
+    Assert 'and a warning names it as not absolute'       (@($er.Warnings | Where-Object { $_ -match 'extraMcpConfigs' -and $_ -match 'absolute' }).Count -eq 1)
+
+    Set-Content (Join-Path $tmp 'maint-rel.json') '{ "accounts": [ {"key":"work","root":"~/.claude"} ], "maintenanceActions": [ {"key":"i","script":"rel/x.ps1"} ] }'
+    $mr = Read-LauncherConfig -Path (Join-Path $tmp 'maint-rel.json')
+    Assert 'maintenanceActions with a relative script is skipped'   (@($mr.MaintenanceActions).Count -eq 0)
+    Assert 'and a warning names the key and absolute path'          (@($mr.Warnings | Where-Object { $_ -match 'maintenanceActions' -and $_ -match "'i'" -and $_ -match 'absolute' }).Count -eq 1)
 } finally { Remove-Item $tmp -Recurse -Force }
 if ($script:Ran -eq 0) { Write-Host 'COULD NOT RUN: no assertion executed'; exit 2 }
 if ($script:Failed) { Write-Host "$($script:Failed) failed"; exit 1 }

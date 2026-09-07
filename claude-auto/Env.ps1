@@ -142,6 +142,17 @@ function Set-ClaudeProfile {
     } catch { Write-Host "  project MCP mirror skipped: $($_.Exception.Message)" -ForegroundColor DarkYellow }
 }
 
+function Resolve-ClaudeExecutable {
+    # `claude` missing from PATH used to end in two raw PowerShell errors and exit 0: `.Source` on a
+    # $null match (no -ErrorAction on Get-Command) is $null, `& $null @args` throws, and the caller's
+    # `exit $claudeExit` with that variable never set exits 0 - a failed launch reporting success.
+    # -Resolver is injected so this is assertable without depending on the real PATH.
+    param([scriptblock]$Resolver = { Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 })
+    $cmd = & $Resolver
+    if ($cmd) { return [pscustomobject]@{ Ok = $true; Path = $cmd.Source; Message = $null } }
+    return [pscustomobject]@{ Ok = $false; Path = $null; Message = 'claude is not on PATH - install Claude Code first' }
+}
+
 function Get-AccountPrompt {
     # The fallback (no-UI) account prompt, generated from the roster. Hidden accounts stay typeable
     # through Map but are not advertised in Text; fewer than two visible accounts means no prompt.
@@ -290,6 +301,32 @@ function Repair-SharedLink {
     }
     if ($relinked.Count -gt 0) {
         Write-Host "  re-linked $Name in $($relinked -join ', ') (kept the newest copy, discarded ones saved as .pre-relink)" -ForegroundColor Yellow
+    }
+}
+
+function Repair-SharedProfiles {
+    # Everything the sharing feature repairs at launch, gathered in one place so Preview can guard
+    # ALL of it. deferred review finding: only the New-ClaudeProfileRoot loop was ever wrapped in
+    # `if (-not $Preview)` - Repair-SharedLink and Repair-SharedJunction ran unconditionally, so
+    # every preview run on a sharing machine deleted and re-hardlinked settings.json/statusline.js
+    # and could create a junction with its icacls deny ACEs. Preview must be side-effect-free.
+    param([switch]$Preview)
+    if (-not $script:LauncherConfig.Sharing) { return }
+    if ($Preview) { return }
+    # Every account's root exists from the first launch onwards, so the owner can pick it and log in
+    # rather than discovering a missing directory mid-launch.
+    foreach ($r in $SecondaryRoots) {
+        try { $null = New-ClaudeProfileRoot -Root $r } catch { Write-Host "  profile root check failed for ${r}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+    }
+    foreach ($f in $SharedFiles) {
+        # One call per file, not per pair: Repair-SharedLink compares the File ID of every root at
+        # once, because a pairwise check passes while a third copy drifts.
+        try { Repair-SharedLink -Name $f } catch { Write-Host "  link check failed for ${f}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+    }
+    foreach ($r in $SecondaryRoots) {
+        foreach ($d in $SharedDirs) {
+            try { Repair-SharedJunction -Name $d -Root $r } catch { Write-Host "  junction check failed for ${d}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+        }
     }
 }
 

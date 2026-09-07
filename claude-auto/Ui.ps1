@@ -254,7 +254,12 @@ function Invoke-SessionPicker {
         # Select-ResumableSessions drops empty (zero-prompt) sessions before the filter runs, and
         # Get-PickerFrame does the exact same thing before rendering - the two must never disagree
         # about which index points at which session.
-        $items = Select-SessionMatch -Sessions (Select-ResumableSessions -Sessions $Sessions) -Filter $filter
+        # @() is load-bearing even though Select-ResumableSessions already wraps ITS OWN return in
+        # @(): a function returning zero items unrolls to $null on the pipeline regardless of how it
+        # built that array internally, and Select-SessionMatch's -Sessions is Mandatory - an account
+        # with every session filtered out (or none at all) crashed the picker here with a raw
+        # PowerShell binding error. Found via tests\check-preview.ps1's empty-fixture-account run.
+        $items = Select-SessionMatch -Sessions @(Select-ResumableSessions -Sessions $Sessions) -Filter $filter
         if ($index -ge $items.Count) { $index = [Math]::Max(0, $items.Count - 1) }
         $rowMap = & $Draw $Sessions $index $filter
         $key = & $Wait

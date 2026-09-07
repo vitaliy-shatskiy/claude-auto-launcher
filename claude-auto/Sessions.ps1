@@ -260,14 +260,31 @@ function Get-ClaudeSessionSummary {
     }
 }
 
+function Get-SessionsRootForAccount {
+    # deferred review finding: the session picker used to call Get-ClaudeSessions with no root at
+    # all, which defaults to the CANONICAL account's ~/.claude/projects regardless of which account
+    # is actually selected. With sharing off (the shipped default) that lists the wrong account's
+    # sessions, and a chosen one then resumes into a CLAUDE_CONFIG_DIR that never held it.
+    # Extracted so the resolution itself is assertable without a console.
+    param([Parameter(Mandatory)][string]$Account, [Parameter(Mandatory)][System.Collections.IDictionary]$ProfileRoots)
+    if (-not $ProfileRoots.Contains($Account)) { throw "unknown account '$Account' (roster: $($ProfileRoots.Keys -join ', '))" }
+    return (Join-Path $ProfileRoots[$Account] 'projects')
+}
+
 function Get-ClaudeSessions {
     # Newest $Limit transcripts, summarised. Over 2000 files and more than a gigabyte live under
     # the projects root, so the sort touches filesystem metadata only and just the survivors are
     # ever opened.
+    #
+    # CachePath defaults from ProjectsRoot (not a single hardcoded ~/.claude path): the cache key
+    # already carries each session's own full path, so correctness never depended on this, but the
+    # whole cache FILE is overwritten on every call (see the Set-Content at the end) - a launcher
+    # with sharing off and several accounts thrashed one shared cache file on every account switch
+    # instead of keeping one per root.
     param(
         [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
         [int]$Limit = 40,
-        [string]$CachePath = (Join-Path $HOME '.claude\claude-auto-sessions.json')
+        [string]$CachePath = (Join-Path (Split-Path $ProjectsRoot -Parent) 'claude-auto-sessions.json')
     )
     if (-not (Test-Path $ProjectsRoot)) { return @() }
 

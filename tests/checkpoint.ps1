@@ -12,7 +12,8 @@
 param(
     [string]$RegressionScript = (Join-Path $PSScriptRoot 'check-regression.ps1'),
     [string]$CleanScript = (Join-Path $PSScriptRoot 'check-clean.ps1'),
-    [string]$DroplistScript = (Join-Path $PSScriptRoot 'check-regression.droplist.ps1')
+    [string]$DroplistScript = (Join-Path $PSScriptRoot 'check-regression.droplist.ps1'),
+    [string]$PreviewScript = (Join-Path $PSScriptRoot 'check-preview.ps1')
 )
 
 $suites = 'Theme', 'Layout', 'Sessions', 'Ui', 'Maintenance', 'Prefs', 'Env', 'Config', 'Input', 'Install'
@@ -87,6 +88,20 @@ if (-not (Test-Path $DroplistScript)) {
     $verdict = switch ($code) { 0 { 'pass' } 1 { 'FAIL' } 2 { 'DID NOT RUN' } default { "UNKNOWN($code)" } }
     if ($code -eq 1) { $failed++ } elseif ($code -ne 0) { $unverified++ }
     $rows += [pscustomobject]@{ Check = 'droplist'; Code = $code; Verdict = $verdict }
+}
+
+if (-not (Test-Path $PreviewScript)) {
+    $rows += [pscustomobject]@{ Check = 'preview'; Code = '-'; Verdict = 'MISSING' }
+    $unverified++
+} else {
+    $null = & pwsh -NoProfile -File $PreviewScript 2>&1
+    $code = $LASTEXITCODE
+    # 0 the decision summary is unchanged, 1 it changed (a REGRESSION), 2 could-not-run (no
+    # reference yet, or the launcher/fixture went missing). Two is NOT a pass - same contract as
+    # regression and droplist above.
+    $verdict = switch ($code) { 0 { 'pass' } 1 { 'REGRESSION' } 2 { 'DID NOT RUN' } default { "UNKNOWN($code)" } }
+    if ($code -eq 1) { $failed++ } elseif ($code -ne 0) { $unverified++ }
+    $rows += [pscustomobject]@{ Check = 'preview'; Code = $code; Verdict = $verdict }
 }
 
 $rows | Format-Table -AutoSize | Out-String | Write-Host

@@ -303,6 +303,30 @@ New-Item -ItemType Directory -Force -Path $emptyDir | Out-Null
 $r = Invoke-ClaudeUpdate -BinPath $upBin -VersionsDir $emptyDir -Updater { 'nothing to do' }
 Assert-Equal $false $r.Matches 'nothing downloaded is not a match'
 Assert-Equal $true ($r.Message -match 'no build has been downloaded') 'the empty-versions case names its own cause'
+Assert-Equal $true (Get-ClaudeInstallInfo -BinPath $upBin -VersionsDir $emptyDir).Native 'a versions directory that EXISTS (even empty) is a native install'
+
+# deferred review finding: an npm/global install has no versions directory AT ALL - Maintenance.ps1
+# hardcoded ~/.local/bin/claude.exe and ~/.local/share/claude/versions, so this case showed no hash
+# and reported the download message even right after a real, successful update. The versions
+# directory NOT EXISTING (never created, not merely empty) is what must trigger the different message.
+$neverCreated = Join-Path $tmp 'never-created-versions'
+Assert-Equal $false (Test-Path -LiteralPath $neverCreated) 'fixture sanity: the non-native versions dir does not exist'
+Assert-Equal $false (Get-ClaudeInstallInfo -BinPath $upBin -VersionsDir $neverCreated).Native 'a versions directory that does not exist at all is reported as not native'
+$rNonNative = Invoke-ClaudeUpdate -BinPath $upBin -VersionsDir $neverCreated -Updater { 'Successfully updated from 2.1.200 to version 2.1.240' }
+Assert-Equal $false $rNonNative.Matches 'a non-native install cannot match a build that was never downloaded here'
+Assert-Equal 'not a native install; updates are handled by your installer' $rNonNative.Message 'the message names the real situation instead of the download message'
+
+# --- Get-DefaultClaudeBinPath: derives from wherever `claude` actually resolves --------------------
+# deferred review finding: the maintenance functions' own BinPath defaults were hardcoded to the
+# native installer's path, so an npm/global install always showed "no hash" regardless of what was
+# really running. Asserted against the real PATH (this machine has claude on it, like any dev box
+# these functions run on) rather than an injected resolver, because the fix IS the Get-Command call.
+$resolvedClaude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($resolvedClaude) {
+    Assert-Equal $resolvedClaude.Source (Get-DefaultClaudeBinPath) 'the default bin path is wherever claude actually resolves on PATH'
+} else {
+    Assert-Equal (Join-Path $HOME '.local\bin\claude.exe') (Get-DefaultClaudeBinPath) 'with no claude on PATH at all, the native path is the fallback'
+}
 
 # The maintenance screen is what someone opens when the install is already broken, so an updater
 # that cannot start at all must become a status line, never a throw.
@@ -365,7 +389,7 @@ Remove-Item -Recurse -Force $tmp
 # Invoke-ClaudeCommandText (Ui.ps1) is still not asserted: beyond try/catch its only logic is
 # ConvertTo-StatusText, which Test-Ui.ps1 asserts, and exercising it means shelling out to the real
 # binary.
-if ($script:Ran -ne 72) { Write-Host "COULD NOT RUN: expected 72 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 78) { Write-Host "COULD NOT RUN: expected 78 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
