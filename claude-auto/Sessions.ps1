@@ -130,10 +130,17 @@ function Get-FileTailLines {
     # file, which matters because the largest transcript on this machine is 112 MB. Counting 0x0A
     # on RAW BYTES is safe regardless of chunk boundaries: UTF-8 continuation bytes are all >= 0x80,
     # so a newline can never be half of a multi-byte character.
+    #
+    # The walk is bounded by BYTES as well as by newlines. Counting newlines alone is not a bound at
+    # all: a transcript with few newlines is read end to end, and one 200 MB newline-free file cost
+    # 14 127 ms and 2 515 MB of managed heap to return a single line (adversarial review, 2026-09-08 -
+    # a transcript can hold a fetched page or a minified bundle on one line). Past the budget the
+    # function returns what it found, which is what a preview pane needs; it is not a parser.
     param(
         [Parameter(Mandatory)][string]$Path,
         [int]$Count = 120,
-        [int]$ChunkSize = 65536
+        [int]$ChunkSize = 65536,
+        [int]$MaxBytes = 4MB
     )
     $stream = $null
     try {
@@ -145,14 +152,26 @@ function Get-FileTailLines {
 
         $chunks = [System.Collections.Generic.List[byte[]]]::new()
         $newlines = 0
+        $walked = 0
         $pos = $stream.Length
-        while ($pos -gt 0 -and $newlines -le $Count) {
+        while ($pos -gt 0 -and $newlines -le $Count -and $walked -lt $MaxBytes) {
             $take = [Math]::Min($ChunkSize, $pos)
+            $take = [Math]::Min($take, $MaxBytes - $walked)   # never step over the byte budget
             $pos -= $take
+            $walked += $take
             $null = $stream.Seek($pos, [System.IO.SeekOrigin]::Begin)
             $buf = [byte[]]::new($take)
-            $got = $stream.Read($buf, 0, $take)
-            if ($got -lt $take) { $buf = $buf[0..($got - 1)] }
+            # Read returns "up to" count bytes and is free to return fewer. $pos has already moved,
+            # so accepting a short read would splice bytes from two different offsets into one
+            # buffer and hand back a line that never existed in the file. Loop to $take or EOF.
+            $read = 0
+            while ($read -lt $take) {
+                $got = $stream.Read($buf, $read, $take - $read)
+                if ($got -le 0) { break }
+                $read += $got
+            }
+            if ($read -le 0) { break }
+            if ($read -lt $take) { $buf = $buf[0..($read - 1)] }
             $chunks.Insert(0, $buf)
             # IndexOf is a native scan; a per-byte PowerShell loop here would cost more than the
             # -Tail call this function exists to replace.
@@ -244,7 +263,15 @@ function Get-ClaudeSessionSummary {
     # a bare hex id in the title column reads like the parser failed.
     if (-not $title) { $title = "(no prompt) " + $file.BaseName.Substring(0, [Math]::Min(8, $file.BaseName.Length)) }
 
-    $clean = { param($s) if ($s) { ($s -replace '\s+', ' ').Trim() } else { '' } }
+    # Transcript text is UNTRUSTED: these files routinely hold fetched web pages, other people's
+    # repository text and command output. Every field below reaches the terminal through Write-Frame
+    # -> [Console]::Write, so a transcript carrying ESC ] 0 ; ... BEL, ESC [ 2 J or an OSC 52
+    # clipboard write would drive the reader's terminal instead of being displayed. '\s' in .NET
+    # does NOT match ESC (0x1B) or BEL (0x07), so whitespace normalisation alone let all of it
+    # through. Control and format characters become spaces FIRST, so the collapse that follows also
+    # closes the gaps they leave. Sanitising here rather than in each renderer keeps it with the
+    # reader: anything that reads a transcript gets it, and a new renderer cannot forget it.
+    $clean = { param($s) if ($s) { ($s -replace '[\p{Cc}\p{Cf}]', ' ' -replace '\s+', ' ').Trim() } else { '' } }
     return [pscustomobject]@{
         SessionId       = $file.BaseName
         Path            = $file.FullName

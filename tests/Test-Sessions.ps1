@@ -178,7 +178,54 @@ Assert-Equal $true (Test-Path (Join-Path $rootsFake['second'] 'claude-auto-sessi
 Assert-Equal $true (Test-Path (Join-Path $rootsFake['work'] 'claude-auto-sessions.json'))   'account work gets its own cache file, not a shared one that just got overwritten'
 Remove-Item -LiteralPath $mrRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 50) { Write-Host "COULD NOT RUN: expected 50 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# 15. Transcript text is UNTRUSTED: these files routinely hold fetched web pages and other repos'
+#     source. Every summary field reaches the terminal through Write-Frame -> [Console]::Write, so a
+#     transcript carrying ESC ] 0 ; ... BEL (window title / OSC 52 clipboard write), ESC [ 2 J
+#     (clear screen) or SGR colour would drive the reader's terminal. '\s' in .NET does NOT match
+#     ESC (0x1B) or BEL (0x07), so the summary's own whitespace cleanup let all of it through.
+#     Written as \u escapes so this file stays plain ASCII; ConvertFrom-Json turns them into the
+#     real control bytes, exactly as a hostile transcript would carry them.
+$escRoot = Join-Path $env:TEMP "claude-auto-esc-$(Get-Random)"
+$escSlug = Join-Path $escRoot 'C--Users-someone-Desktop-Projects-EscTest'
+New-Item -ItemType Directory -Path $escSlug -Force | Out-Null
+$escFile = Join-Path $escSlug 'cccc3333.jsonl'
+# ESC and BEL are built here from their code points, never typed into this file: a source file
+# carrying raw control bytes is unreadable in a diff and one careless editor away from being lost.
+$esc = [char]27; $bel = [char]7
+$escLines = @(
+    ('{"type":"user","message":{"content":"' + $esc + ']0;pwned' + $bel + 'hello ' + $esc + '[2Jworld"}}'),
+    ('{"type":"assistant","message":{"content":[{"type":"text","text":"' + $esc + '[31mred' + $esc + '[0m reply' + $bel + '"}]}}'),
+    ('{"type":"user","message":{"content":"second ' + $esc + ']52;c;cGF5bG9hZA==' + $bel + 'prompt"}}')
+)
+[IO.File]::WriteAllText($escFile, (($escLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+
+$ctrl = '[\p{Cc}\p{Cf}]'
+$s = Get-ClaudeSessionSummary -Path $escFile
+Assert-Equal ']0;pwned hello [2Jworld' $s.Title 'control bytes in the title become spaces and collapse, leaving the printable text'
+Assert-Equal $false ($s.Title -match $ctrl)         'no control character survives into Title'
+Assert-Equal $false ($s.LastUser -match $ctrl)      'no control character survives into LastUser'
+Assert-Equal $false ($s.LastAssistant -match $ctrl) 'no control character survives into LastAssistant'
+Assert-Equal 0 (@($s.RecentMessages | Where-Object { $_.Text -match $ctrl }).Count) 'no control character survives into any RecentMessages entry'
+Assert-Equal $true ($s.LastAssistant -match 'red') 'the printable text of a colour-escaped reply is kept, not dropped wholesale'
+Remove-Item -LiteralPath $escRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# 16. The tail walk stopped only when it had counted $Count newlines, so a file with few newlines
+#     was read end to end - measured 14 127 ms and 2 515 MB of managed heap to return ONE line from
+#     a 200 MB newline-free transcript (adversarial review, 2026-09-08). A byte budget bounds it.
+#     MaxBytes is injected here so the assertion costs a 1 MB fixture instead of a 200 MB one; the
+#     shipped default is 4 MB.
+$tailPath = Join-Path $env:TEMP "claude-auto-tail-$(Get-Random).txt"
+[IO.File]::WriteAllText($tailPath, (('x' * 1MB) + "`n" + 'tail line' + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+$tailLines = @(Get-FileTailLines -Path $tailPath -Count 5 -MaxBytes 65536)
+$longest = (@($tailLines | ForEach-Object { $_.Length }) | Measure-Object -Maximum).Maximum
+Assert-Equal 'tail line' $tailLines[-1] 'the real last line still comes back with a byte budget in force'
+# `-le` alone would pass on NOTHING coming back at all ($null -le 70000 is true in PowerShell,
+# which is exactly what an unknown -MaxBytes parameter produces), so the bound is asserted together
+# with "a line actually came back".
+Assert-Equal $true ($longest -gt 0 -and $longest -le 70000) "the walk stops at the byte budget instead of reading the whole file (longest line returned: $longest)"
+Remove-Item -LiteralPath $tailPath -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 58) { Write-Host "COULD NOT RUN: expected 58 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
