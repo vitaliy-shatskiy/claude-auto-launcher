@@ -19,11 +19,54 @@ function Assert-Equal {
     }
 }
 
+# Characters built from code points, never typed: a literal CJK or emoji in this file is at the
+# mercy of every editor and shell that touches it, and a normalised character tests nothing.
+$script:CJK = [string][char]0x4E2D                    # a Chinese ideograph - two columns
+$script:Emoji = [char]::ConvertFromUtf32(0x1F600)     # one code point, TWO UTF-16 code units
+$script:Combining = 'e' + [string][char]0x0301        # e + combining acute - two code units, one cell
+
+# The marker is pinned so the suite does not depend on the runner's console code page: Get-Ellipsis
+# falls back to Test-AsciiRequired, and a CI runner whose console is cp437 would otherwise flip
+# every truncation marker under this line. The ASCII section at the end clears the pin on purpose.
+$script:Ellipsis = [string][char]0x2026
+
+function Get-LoneSurrogateCount {
+    # A surrogate without its partner is not a character: the console renders a replacement box and
+    # some terminals lose the rest of the line. Any cut that produces one is a bug.
+    param([string]$Text)
+    $n = 0
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        if ([char]::IsHighSurrogate($Text[$i])) {
+            if (($i + 1) -lt $Text.Length -and [char]::IsLowSurrogate($Text[$i + 1])) { $i++ } else { $n++ }
+        } elseif ([char]::IsLowSurrogate($Text[$i])) { $n++ }
+    }
+    return $n
+}
+
+# --- display cells, not code units --------------------------------------------------------
+# The console draws CELLS. .Length counts UTF-16 code units, and the two differ for exactly the
+# content this launcher shows: a session's last message. Measured 2026-09-08 on the unfixed code,
+# a picker rendered at -Width 60 with a Chinese message produced rows of len=60 / cells=100.
+Assert-Equal 3 (Get-DisplayWidth -Text 'abc') 'ASCII text measures one cell per character'
+Assert-Equal 6 (Get-DisplayWidth -Text ($script:CJK * 3)) 'a CJK ideograph measures two cells'
+Assert-Equal 2 (Get-DisplayWidth -Text $script:Emoji) 'an astral emoji measures two cells, not its two code units'
+Assert-Equal 1 (Get-DisplayWidth -Text $script:Combining) 'a combining mark adds no cell of its own'
+Assert-Equal 0 (Get-DisplayWidth -Text '') 'empty text measures zero cells'
+Assert-Equal 1 (Get-DisplayWidth -Text ([string][char]0x0416)) 'Cyrillic stays one cell - only East Asian and emoji are wide'
+
 # --- truncation --------------------------------------------------------------------------
 Assert-Equal 'abc' (Limit-Line -Text 'abc' -Max 10) 'a short line is untouched'
 Assert-Equal 4 (Limit-Line -Text 'abcdefgh' -Max 4).Length 'a long line is cut to the width'
 Assert-Equal $true (Limit-Line -Text 'abcdefgh' -Max 4).EndsWith([string][char]0x2026) 'truncation ends with an ellipsis'
 Assert-Equal '' (Limit-Line -Text $null -Max 10) 'null text becomes an empty line'
+
+# Truncation is a CELL budget. `.Length -le $Max` let a 60-cell budget through 60 wide characters.
+Assert-Equal $true ((Get-DisplayWidth -Text (Limit-Line -Text ($script:CJK * 50) -Max 20)) -le 20) 'a CJK line is truncated to the cell width, not the code-unit count'
+Assert-Equal ($script:CJK * 8) (Limit-Line -Text ($script:CJK * 8) -Max 16) 'a CJK line that exactly fits its cell budget is untouched'
+Assert-Equal $true ((Get-DisplayWidth -Text (Limit-Line -Text ($script:CJK * 8) -Max 15)) -le 15) 'one cell short of fitting, a CJK line is still cut to the budget'
+# Cutting between a high surrogate and its low half leaves a lone surrogate - U+D83D on its own.
+Assert-Equal 0 (Get-LoneSurrogateCount -Text (Limit-Line -Text ('ab' + $script:Emoji + 'cd') -Max 4)) 'truncation never cuts a surrogate pair in half'
+Assert-Equal $true ((Get-DisplayWidth -Text (Limit-Line -Text ($script:Emoji * 10) -Max 7)) -le 7) 'an emoji run is truncated to the cell width'
 
 # --- word wrap ---------------------------------------------------------------------------
 $w = Split-TextLines -Text 'the quick brown fox jumps over the lazy dog' -Width 12
@@ -63,6 +106,27 @@ Assert-Equal 0 (@($w | Where-Object { $_.Length -gt 10 }).Count) 'a short final 
 
 Assert-Equal 0 (Split-TextLines -Text '' -Width 10).Count 'empty text wraps to nothing'
 
+# --- word wrap in cells ---------------------------------------------------------------------
+$w = @(Split-TextLines -Text ((($script:CJK * 8) + ' ') * 4) -Width 12)
+Assert-Equal 0 (@($w | Where-Object { (Get-DisplayWidth -Text $_) -gt 12 }).Count) 'no wrapped line exceeds the width in cells'
+Assert-Equal $true ($w.Count -gt 1) 'CJK text wraps rather than being welded into one over-wide line'
+
+# An over-long token is cut. Cutting on code units puts U+D83D at the end of one line and U+DE00 at
+# the start of the next - two broken characters where there was one emoji.
+$w = @(Split-TextLines -Text ($script:Emoji * 6) -Width 5)
+Assert-Equal 0 (@($w | Where-Object { (Get-LoneSurrogateCount -Text $_) -ne 0 }).Count) 'wrapping never splits a surrogate pair across two lines'
+Assert-Equal 0 (@($w | Where-Object { (Get-DisplayWidth -Text $_) -gt 5 }).Count) 'an over-long emoji token is cut on cell boundaries'
+Assert-Equal 12 ((@($w | ForEach-Object { Get-DisplayWidth -Text $_ }) | Measure-Object -Sum).Sum) 'no emoji is dropped while cutting - six of them, twelve cells'
+
+$w = @(Split-TextLines -Text ((($script:CJK * 10) + ' ') * 5) -Width 20 -MaxLines 2)
+Assert-Equal 2 $w.Count 'MaxLines caps a CJK wrap too'
+Assert-Equal 0 (@($w | Where-Object { (Get-DisplayWidth -Text $_) -gt 20 }).Count) 'a capped CJK wrap still fits the width in cells'
+
+# A pane narrower than a single glyph has no correct answer, but it must terminate and it must
+# never emit a row wider than the pane - an over-wide row wraps and desynchronises every row below.
+$narrow = @(Split-TextLines -Text ($script:CJK * 4) -Width 1)
+Assert-Equal 0 (@($narrow | Where-Object { (Get-DisplayWidth -Text $_) -gt 1 }).Count) 'a pane narrower than one glyph emits no over-wide row'
+
 # --- boxes -------------------------------------------------------------------------------
 $box = New-Box -Lines @('hello', 'world') -Width 20 -Ascii
 Assert-Equal 4 $box.Count 'a two-line box is four lines tall'
@@ -77,11 +141,26 @@ Assert-Equal 30 $box[0].Length 'a titled top border is still exactly the box wid
 $box = New-Box -Lines @('0123456789012345678901234567890123456789') -Width 20 -Ascii
 Assert-Equal 0 (@($box | Where-Object { $_.Length -ne 20 }).Count) 'over-long content is truncated to fit the box'
 
+# --- boxes in cells ------------------------------------------------------------------------
+# The reproduction: a 60-column picker with a CJK last message drew rows of 100 cells. PadRight
+# counts code units too, so a box whose content is narrow in cells was padded PAST its own border.
+$box = New-Box -Lines @(($script:CJK * 40), 'ascii', ($script:CJK * 3), ($script:Emoji + ' hi')) -Width 60 -Ascii
+Assert-Equal 0 (@($box | Where-Object { (Get-DisplayWidth -Text $_) -ne 60 }).Count) 'every box row is exactly the box width in cells, whatever the content'
+Assert-Equal 0 (@($box | Where-Object { (Get-LoneSurrogateCount -Text $_) -ne 0 }).Count) 'no box row carries a lone surrogate'
+
+$box = New-Box -Lines @('x') -Width 30 -Title ($script:CJK * 20) -Ascii
+Assert-Equal 30 (Get-DisplayWidth -Text $box[0]) 'a CJK title does not push the top border past the box width'
+
 # --- two panes ---------------------------------------------------------------------------
 $j = Join-Panes -Left @('a', 'b', 'c') -Right @('1') -LeftWidth 10 -RightWidth 8 -Ascii
 Assert-Equal 3 $j.Count 'the joined height is the taller pane'
 Assert-Equal 0 (@($j | Where-Object { $_.Length -ne 19 }).Count) 'each joined line is left + divider + right'
 Assert-Equal $true ($j[2] -match '\|') 'the divider is drawn on every line, including padded ones'
+
+# The divider must stay in ONE column: measured in code units it drifts right by one per wide glyph.
+$j = Join-Panes -Left @(($script:CJK * 9), 'a') -Right @('1', ($script:Emoji * 6)) -LeftWidth 10 -RightWidth 8 -Ascii
+Assert-Equal 0 (@($j | Where-Object { (Get-DisplayWidth -Text $_) -ne 19 }).Count) 'each joined line is exactly left + divider + right in cells'
+Assert-Equal 0 (@($j | ForEach-Object { Get-DisplayWidth -Text ($_.Substring(0, $_.IndexOf('|'))) } | Where-Object { $_ -ne 10 }).Count) 'the divider sits in the same column on every line'
 
 # --- viewport ----------------------------------------------------------------------------
 $v = Get-Viewport -Count 100 -Index 0 -Visible 10
@@ -137,7 +216,36 @@ Assert-Equal $true ($one[0] -match '\(\+10 more lines\)') 'that single row is th
 Assert-Equal 0 @(Split-OutputLines -Text '' -Width 40).Count 'empty output produces no rows'
 Assert-Equal 0 @(Split-OutputLines -Text "  `n `n" -Width 40).Count 'whitespace-only output produces no rows'
 
-if ($script:Ran -ne 51) { Write-Host "COULD NOT RUN: expected 51 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the ASCII fallback covers the truncation marker too -------------------------------------
+# -Ascii exists because a console that is not on UTF-8 renders U+2026 as mojibake exactly like the
+# box glyphs. Verified 2026-09-08 on the unfixed code with the console at cp866: New-Box -Ascii
+# still returned '|a very long line <U+2026>|'. The pin is cleared here so the ambient decision is
+# the thing under test.
+function Get-NonAsciiCount {
+    param([string[]]$Lines)
+    return (@($Lines | ForEach-Object { $_.ToCharArray() } | Where-Object { [int]$_ -gt 126 })).Count
+}
+$script:Ellipsis = $null
+$savedAscii = $env:CLAUDE_AUTO_ASCII
+$env:CLAUDE_AUTO_ASCII = '1'
+$asciiBox = @(New-Box -Lines @('a very long line that will certainly not fit in twenty columns') -Width 20 -Ascii)
+Assert-Equal 0 (Get-NonAsciiCount -Lines $asciiBox) 'an ASCII box carries no character above ASCII, the truncation marker included'
+Assert-Equal 20 (Get-DisplayWidth -Text $asciiBox[1]) 'the ASCII marker still fills the row to the box width'
+Assert-Equal 0 (Get-NonAsciiCount -Lines @(Limit-Line -Text 'abcdefgh' -Max 4)) 'ASCII mode truncates a bare line with an ASCII marker'
+Assert-Equal 0 (Get-NonAsciiCount -Lines @(Split-TextLines -Text 'one two three four five six seven' -Width 10 -MaxLines 2)) 'ASCII mode caps a wrap with an ASCII marker'
+# The override channel, asserted without asking what the runner's console code page is: with the
+# marker pinned, the ambient decision must not win. This is how the launcher hands its own -Ascii
+# verdict to helpers that take no switch.
+$script:Ellipsis = [string][char]0x2026
+Assert-Equal $true ((Limit-Line -Text 'abcdefgh' -Max 4).EndsWith([string][char]0x2026)) 'an explicit marker overrides the ambient ASCII decision'
+$script:Ellipsis = $null
+# A caller that passes -Ascii explicitly gets the ASCII marker even where the console would allow
+# U+2026: the frame and its marker must come from ONE glyph set, or a box is half mojibake.
+Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line that will certainly not fit') -Width 20 -Ascii)) 'an explicit -Ascii box keeps its marker in the same glyph set'
+if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
+$script:Ellipsis = [string][char]0x2026
+
+if ($script:Ran -ne 81) { Write-Host "COULD NOT RUN: expected 81 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
