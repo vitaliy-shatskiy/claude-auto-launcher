@@ -185,6 +185,22 @@ Assert-Equal '' (ConvertFrom-ClaudeVtKey -Sequence '[<0;41;13M') 'a mouse report
 Assert-Equal '' (ConvertFrom-ClaudeVtKey -Sequence '[I') 'a focus-in report maps to no key and stays swallowed'
 Assert-Equal 0 ([int](ConvertFrom-ClaudeVtKey -Sequence '[A').KeyChar) 'a cursor key carries no character, so no hotkey matcher can mistake it for one'
 
+# ------------------------------------------------------------------- Caps Lock is not a modifier
+# Reported live 2026-09-09: with Caps Lock on, the maintenance screen would not open. `u` arrives as
+# 'U' with NO Shift, and the uppercase guard - which exists so a mouse report's coordinate byte
+# cannot press a menu key - rejected a real keypress before the virtual-key match could see it.
+#
+# The guard STAYS. What tells the two apart is the record's control-key state: a genuine press
+# carries CAPSLOCK_ON, a byte from a report does not. So the flag is threaded, not the guard removed.
+$upperU = [System.ConsoleKeyInfo]::new([char]'U', [System.ConsoleKey]::U, $false, $false, $false)
+Assert-Equal $true  (Test-ClaudeHotkey -Key $upperU -Char 'u' -CapsLock $true)  'Caps Lock on: an uppercase U IS the u hotkey'
+Assert-Equal $false (Test-ClaudeHotkey -Key $upperU -Char 'u' -CapsLock $false) 'Caps Lock off: an uppercase U is not - that is the hover guard, still standing'
+# The SGR terminator, which is the whole reason the guard exists. Caps Lock must not excuse it: it
+# arrives with SHIFT set through ConPTY, and the modifier guard is checked before any of this.
+$sgrM = [System.ConsoleKeyInfo]::new([char]'M', [System.ConsoleKey]::M, $true, $false, $false)
+Assert-Equal $false (Test-ClaudeHotkey -Key $sgrM -Char 'm' -CapsLock $true) 'a shifted M is never the m hotkey, Caps Lock or not'
+Assert-Equal $true  (Test-ClaudeHotkey -Key ([System.ConsoleKeyInfo]::new([char]'u', [System.ConsoleKey]::U, $false, $false, $false)) -Char 'u' -CapsLock $true) 'and a plain lowercase u still matches with Caps Lock on'
+
 # ---------------------------------------------------------------- live console
 
 if ($Live -and -not $LiveOnly) {
@@ -581,6 +597,18 @@ if ($Live -and -not $LiveOnly) {
         Assert-Equal $true ($null -ne $burst1 -and $burst2 -ge $burst1) 'every record read carries an arrival stamp, and the stamps move forward'
         Assert-Equal $true (($burst2 - $burst1) -lt 150) 'two records of one burst arrive far closer together than the confirm gate - which is what tells a paste from a second press'
 
+        # --- Caps Lock is read off the RECORD, not guessed ---------------------------------------
+        # The matcher's exception is only as good as this wiring: a key delivered with CAPSLOCK_ON
+        # must set the flag, and the next key without it must clear it again, or a single Caps-Locked
+        # press would excuse every uppercase character that followed.
+        $null = Clear-ClaudeInputQueue -State $state
+        Send-Records @((New-KeyRec 1 0x55 ([uint16][char]'U') ([ClaudeAuto.ConsoleInput]::CAPSLOCK_ON)))
+        $null = Read-ClaudeInputEvent -State $state -TimeoutMs 60
+        Assert-Equal $true (Get-ClaudeInputCapsLock) 'a record delivered with CAPSLOCK_ON sets the flag the hotkey matcher reads'
+        Send-Records @((New-KeyRec 1 0x55 ([uint16][char]'u') 0))
+        $null = Read-ClaudeInputEvent -State $state -TimeoutMs 60
+        Assert-Equal $false (Get-ClaudeInputCapsLock) 'and the next record without it clears the flag again'
+
         # --- Exit-AltBuffer restores the Ctrl+C setting it FOUND, not a hardcoded $false ----------
         # Asserted HERE, in the live child, because it cannot be asserted anywhere else: Test-Ui runs
         # with output redirected, where the TreatControlCAsInput setter throws and Enter/Exit's own
@@ -682,12 +710,12 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # (arming a SECOND time after TreatControlCAsInput can fail, in which case only 1 assertion runs
 # there instead of 4 - see 'arming after TreatControlCAsInput should still work'), so its count is
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
-# genuine hidden console, never guessed. The bare count (49) IS exact - checkpoint.ps1 only ever
+# genuine hidden console, never guessed. The bare count (53) IS exact - checkpoint.ps1 only ever
 # runs this suite bare, and that path has no such branching.
 if ($LiveOnly) {
-    if ($script:Ran -lt 103) { Write-Host "COULD NOT RUN: expected at least 103 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
-} elseif ($script:Ran -ne 49) {
-    Write-Host "COULD NOT RUN: expected 49 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
+    if ($script:Ran -lt 111) { Write-Host "COULD NOT RUN: expected at least 111 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+} elseif ($script:Ran -ne 53) {
+    Write-Host "COULD NOT RUN: expected 53 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

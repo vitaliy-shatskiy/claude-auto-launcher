@@ -60,6 +60,10 @@ namespace ClaudeAuto
         public const uint MOUSE_HWHEELED = 0x0008;
 
         public const uint SHIFT_PRESSED = 0x0010;
+        // Caps Lock is a STATE, not a modifier: with it on, the u key reports 'U' and no Shift.
+        // The hotkey matcher needs it to tell that real keypress from a mouse report's coordinate
+        // byte, which is also an uppercase character and carries no such flag.
+        public const uint CAPSLOCK_ON = 0x0080;
         public const uint LEFT_ALT_PRESSED = 0x0002;
         public const uint RIGHT_ALT_PRESSED = 0x0001;
         public const uint LEFT_CTRL_PRESSED = 0x0008;

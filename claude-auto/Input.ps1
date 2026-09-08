@@ -393,12 +393,23 @@ function Read-ClaudeRawRecord {
     # plus Get-ClaudeInstallInfo between two real presses easily outlasts any threshold worth
     # setting. Stamped here, where the record actually arrives.
     $script:LastRecordMs = [Environment]::TickCount64
+    # Caps Lock travels beside the record, not inside the ConsoleKeyInfo, because that type has no
+    # room for it - it carries Shift, Alt and Ctrl only. The hotkey matcher reads it in the same
+    # loop iteration the record was read in, which is the only moment it means anything.
+    if ($buf[0].EventType -eq [ClaudeAuto.ConsoleInput]::KEY_EVENT) {
+        $script:LastRecordCapsLock = [bool]($buf[0].KeyEvent.dwControlKeyState -band [ClaudeAuto.ConsoleInput]::CAPSLOCK_ON)
+    }
     # A genuine MOUSE_EVENT record proves this console does not need the text protocol, and the
     # downgrade to it is one-way.
     if ($buf[0].EventType -eq [ClaudeAuto.ConsoleInput]::MOUSE_EVENT -and $State) {
         try { $State.SawConsoleMouse = $true } catch { }
     }
     return $buf[0]
+}
+
+function Get-ClaudeInputCapsLock {
+    # Whether the last key record arrived with Caps Lock on. $false until one has.
+    return [bool]$script:LastRecordCapsLock
 }
 
 function Get-ClaudeInputRecordTime {
@@ -691,7 +702,14 @@ function Test-ClaudeHotkey {
     # hotkey. -ceq alone was the first hover defence - the 'M' that ends an SGR mouse report reaches
     # the queue as vk=M with SHIFT set through ConPTY, and the case check catches a terminal that
     # forgets the flag. A virtual-key match without those guards would reopen that hole.
-    param([Parameter(Mandatory)]$Key, [Parameter(Mandatory)][string]$Char)
+    #
+    # CAPS LOCK is the exception, and it is not a hole. Reported live 2026-09-09: with Caps Lock on
+    # the maintenance screen would not open, because `u` arrives as 'U' with NO Shift and the
+    # uppercase guard rejected the owner's real keypress before the virtual-key match could see it.
+    # A genuine press carries CAPSLOCK_ON in the record's control-key state; a byte from a mouse
+    # report does not. So the flag lifts the CASE guard only - the modifier guard above still runs
+    # first, which is what actually stops the shifted 'M'.
+    param([Parameter(Mandatory)]$Key, [Parameter(Mandatory)][string]$Char, [bool]$CapsLock = (Get-ClaudeInputCapsLock))
     if ($null -eq $Key -or $Key -is [string]) { return $false }
     if ($Key.Kind -eq 'mouse') { return $false }
     $ch = "$($Key.KeyChar)"
@@ -699,7 +717,7 @@ function Test-ClaudeHotkey {
     $mods = [int]$Key.Modifiers
     $blocked = [int][System.ConsoleModifiers]::Shift -bor [int][System.ConsoleModifiers]::Control -bor [int][System.ConsoleModifiers]::Alt
     if ($mods -band $blocked) { return $false }
-    if ($ch.Length -gt 0 -and [char]::IsUpper($ch[0])) { return $false }
+    if (-not $CapsLock -and $ch.Length -gt 0 -and [char]::IsUpper($ch[0])) { return $false }
     $vk =
         if ($script:HotkeyVirtualKeys.ContainsKey($Char)) { $script:HotkeyVirtualKeys[$Char] }
         elseif ($Char -cmatch '^[a-z]$') { [System.ConsoleKey]([int][char]$Char.ToUpperInvariant()) }
