@@ -927,8 +927,8 @@ try {
     else { $env:CLAUDE_AUTO_PREVIEW = $savedPreview }
 }
 
-# --- Speaker colour in the preview (owner ask 2026-08-15: "не видно чьё сообщение ... добавь
-# цвета"). The words were already there; what was missing was colour. These pin BOTH halves: the
+# --- Speaker colour in the preview (reported 2026-08-15: you could not tell whose message was
+# whose). The words were already there; what was missing was colour. These pin BOTH halves: the
 # colour appears, AND the literal attribution survives, because NO_COLOR and dumb terminals are
 # real and the words are what has to work when the colour does not.
 $uni = Get-Glyphs

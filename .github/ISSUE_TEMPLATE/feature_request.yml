@@ -1,0 +1,15 @@
+name: Feature request
+description: Something the launcher should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are doing today and why it is awkward. Not the solution — the problem.
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional. If it adds a row, a screen or a config key, say which.

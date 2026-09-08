@@ -44,7 +44,7 @@ Assert-Equal 'fine' $s.LastAssistant 'the last valid assistant record is still f
 # 5. A slash command carries its human text in <command-args>. Bare /clear stays noise, but
 #    /doctor with an argument is the only description such a session has.
 $s = Get-ClaudeSessionSummary -Path "$fx\slash-command.jsonl"
-Assert-Equal '/doctor почему то не обновляется claude' $s.Title 'command args become the title, bare /clear is skipped'
+Assert-Equal '/doctor установка зависла на 40%' $s.Title 'command args become the title, bare /clear is skipped'
 Assert-Equal 'Checking the installer.' $s.LastAssistant 'assistant reply still read from the tail'
 
 # 6. The slug parser indexed a STRING with [-1] when the pipeline yielded one element, so

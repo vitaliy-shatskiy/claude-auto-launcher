@@ -1,0 +1,42 @@
+name: Bug report
+description: Something the launcher does wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got. A screenshot of the console helps.
+    validations: { required: true }
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of the three commands below.
+      value: |
+        $PSVersionTable.PSVersion
+        claude --version
+        git -C <this clone> rev-parse --short HEAD
+      render: shell
+    validations: { required: true }
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: Windows Terminal, conhost, Rider's terminal, VS Code, something else. Console behaviour differs enough between them to matter.
+    validations: { required: true }
+  - type: textarea
+    id: checkpoint
+    attributes:
+      label: Test result
+      description: "`pwsh -File tests\\checkpoint.ps1` — paste the table. Skip if the bug stops it from running."
+      render: shell
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Features in play
+      options:
+        - label: "`sharing: true` (hardlinks and junctions between account roots)"
+        - label: "`remote: true` (the crc companion)"
+        - label: "`secretsRoot` configured"
+        - label: More than one launcher running at once

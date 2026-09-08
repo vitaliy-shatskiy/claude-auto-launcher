@@ -2,16 +2,26 @@
 # an optional private list (one regex per line; CLAUDE_AUTO_CLEAN_PATTERNS or -Patterns). The private
 # list never enters the repository - it IS the list of things that must not.
 # Exit: 0 clean · 1 a hit · 2 could not run (not a pass).
+#
+# SCOPE: the git-tracked worktree only. It never reads commit history and never reads commit
+# authorship, so a name or address baked into a commit header passes this scan untouched. Check
+# those separately before publishing: `git log --all --format='%an <%ae>'`.
 [CmdletBinding()]
 param([string]$Root = (Join-Path $PSScriptRoot '..'), [string]$Patterns = $env:CLAUDE_AUTO_CLEAN_PATTERNS)
 $ErrorActionPreference = 'Stop'
 try {
     $Root = (Resolve-Path $Root).Path
-    $list = @('\b' + [regex]::Escape($env:USERNAME) + '\b')   # word-bounded: a username that is a prefix of the author's name must not flag LICENSE
+    # Word-bounded: a username that is a prefix of the author's name must not flag LICENSE. An
+    # EMPTY username must not become '\b\b', which matches at every word boundary and would flag
+    # every line of every file - a service account or a CI runner with no USERNAME set does that.
+    $list = @()
+    if ($env:USERNAME) { $list += '\b' + [regex]::Escape($env:USERNAME) + '\b' }
     if ($Patterns) {
         if (-not (Test-Path -LiteralPath $Patterns)) { Write-Host "pattern file not found: $Patterns"; exit 2 }
         $list += @(Get-Content -LiteralPath $Patterns | Where-Object { $_.Trim() -and -not $_.StartsWith('#') })
     }
+    # Nothing to look for is not a clean tree. Fail closed, the same way a missing pattern file does.
+    if ($list.Count -eq 0) { Write-Host 'no patterns: USERNAME is empty and no pattern file was given'; exit 2 }
     # Scoped to what git would ship, not the whole disk: a gitignored local execution ledger
     # (review packages, a recorded regression reference) is expected to carry things that never
     # leave this machine, and scanning it would turn a real privacy gate into permanent noise.

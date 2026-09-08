@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Claude Code itself
+    url: https://github.com/anthropics/claude-code/issues
+    about: This is an unofficial third-party launcher. Bugs in the claude CLI belong upstream.
+  - name: Security issue
+    url: https://github.com/vitaliy-shatskiy/claude-auto-launcher/security/advisories/new
+    about: Report privately, not as a public issue.

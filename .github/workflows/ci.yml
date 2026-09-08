@@ -1,0 +1,37 @@
+## Unit suites only. The other four checkpoint rows cannot run here and must not be faked green:
+##   regression / droplist / preview - need `tests\*-reference.local.txt`, recorded per machine and
+##     gitignored, and a real `claude` on PATH.
+##   check-clean - its whole value is the private pattern list supplied out of band; with none it
+##     degrades to the runner's own username and proves nothing.
+## Test-Input runs WITHOUT -Live: the live half needs a real console, and a runner has none.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test suites
+        shell: pwsh
+        run: |
+          $suites = 'Theme','Layout','Sessions','Ui','Maintenance','Prefs','Env','Config','Input','Install','Mirror'
+          $bad = 0
+          foreach ($n in $suites) {
+            & pwsh -NoProfile -File "tests\Test-$n.ps1"
+            # 0 pass - 1 failed assertion - 2 could not run, which is NOT a pass.
+            $code = $LASTEXITCODE
+            $verdict = switch ($code) { 0 { 'pass' } 1 { 'FAIL' } 2 { 'DID NOT RUN' } default { "UNKNOWN($code)" } }
+            "{0,-18} {1}  {2}" -f "Test-$n", $code, $verdict
+            if ($code -ne 0) { $bad++ }
+          }
+          if ($bad) { throw "$bad of $($suites.Count) suites did not pass" }
+          "all $($suites.Count) suites pass"

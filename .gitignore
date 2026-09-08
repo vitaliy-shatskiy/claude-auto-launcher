@@ -3,9 +3,18 @@
 # without this line it reports "could not run" (2) rather than clean.
 .claude/worktrees/
 
+# Agent scratch. The SDD ledger self-ignores through .superpowers/sdd/.gitignore, but only that one
+# subdirectory does - named here so a sibling under it cannot be picked up on another clone.
+.superpowers/
+
 *.dll
 *.pdb
 *.bak-*
 *.pre-relink
 tests/reference-output.local.txt
 tests/preview-reference.local.txt
+
+# A real config never belongs in the clone. The launcher reads ~/.claude/claude-auto.json, but
+# CLAUDE_AUTO_CONFIG can point anywhere and config.example.json is one careless copy away.
+config.json
+*.local.json
