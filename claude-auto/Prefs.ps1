@@ -51,8 +51,18 @@ function Read-LaunchPrefs {
     param([string]$Path = (Get-LaunchPrefsPath))
     $empty = @{ Version = 2; Profiles = @{} }
     if (-not (Test-Path -LiteralPath $Path)) { return $empty }
+    # Reading the bytes and parsing them are separate failures with opposite answers, and they used
+    # to share one catch. CORRUPT is safe to rebuild - that self-heal is deliberate. UNREADABLE
+    # (locked, denied) is not: the file holds profiles this process cannot see, and Save rebuilds
+    # from what this returns, so answering "empty" would delete every other account's profile.
+    # -ErrorAction Stop matters for the same reason: a file held open by another launcher is a
+    # NON-terminating error, so Get-Content wrote four red lines to the console, handed on $null,
+    # and the caller carried on as though the file were empty.
+    $raw = $null
+    try { $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop }
+    catch { $empty['Unreadable'] = $true; return $empty }
     try {
-        $flat = ConvertTo-PrefsTable (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+        $flat = ConvertTo-PrefsTable ($raw | ConvertFrom-Json)
         if ($flat.Count -eq 0) { return $empty }
         # No Version key at all is the v1 (flat) file every launcher wrote before 2026-09-04.
         $version = if ($flat.ContainsKey('Version')) { [int]$flat['Version'] } else { 1 }
@@ -95,6 +105,18 @@ function Read-LaunchPrefs {
     } catch { return $empty }   # a corrupt file is rewritten on the next save, never fatal
 }
 
+function Get-PrefsMutexName {
+    # One mutex per prefs FILE, not one global one: the suites point CLAUDE_AUTO_PREFS at throwaway
+    # files, and they must not serialise against a live launcher (or against each other). The path is
+    # hashed because a mutex name may not contain a path separator.
+    param([string]$Path)
+    $norm = ''
+    try { $norm = ([IO.Path]::GetFullPath($Path)).ToLowerInvariant() } catch { $norm = "$Path".ToLowerInvariant() }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($norm)) } finally { $sha.Dispose() }
+    return 'Local\claude-auto-prefs-' + (($bytes[0..15] | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
 function Save-LaunchPrefs {
     # -NowMs is a parameter so the test does not depend on the clock.
     param(
@@ -107,56 +129,92 @@ function Save-LaunchPrefs {
     # launchers write it, so every profile that is not the launching one has to be copied forward
     # verbatim - last writer wins per PROFILE, not per file. And a row left at 'default' has to be
     # able to fall back to what THIS profile already remembered.
-    $prev = Read-LaunchPrefs -Path $Path
-    $account = if ($State.Account) { "$($State.Account)" } else { 'work' }
-    $prevEntry = if ($prev.Profiles.ContainsKey($account)) { $prev.Profiles[$account] } else { @{} }
-
-    $entry = @{ SavedAtMs = $NowMs }
-    foreach ($f in $script:ProfileFields) {
-        # A field with no row (Remote when the feature is off) is never written from the state: the
-        # state still carries the seed value, and writing it would overwrite what a config WITH the
-        # row remembered. Carry the previous answer forward instead - the same guard Merge has.
-        if (-not ($Rows | Where-Object { $_.Name -eq $f })) {
-            if ($prevEntry.ContainsKey($f)) { $entry[$f] = $prevEntry[$f] }
-            continue
-        }
-        $v = $State.$f
-        # 'stop server' is an action, not a state - but skipping it entirely meant the NEXT launch
-        # silently reverted to remote 'on', which read as "my remote choice is not remembered"
-        # (owner, 2026-08-11). Someone who just killed the server wants it to stay down: remember it
-        # as 'off'.
-        if ($f -eq 'Remote' -and $v -eq 'stop server') { $entry[$f] = 'off'; continue }
-        # 'default' is the screen's "never chosen", not a choice - and ctrl+r puts it back on every
-        # row of the active tab at once. Written verbatim it ERASED the remembered model, effort and
-        # permission, and the launch after that came up bare: the owner read it as the settings
-        # resetting themselves (2026-08-23, launcher-logs 12:57:02 - argv carried no state flags at
-        # all). Saying nothing leaves the previous answer standing, and the previous answer is THIS
-        # profile's - never another account's.
-        if ($v -eq 'default') {
-            # `-ne 'default'` drops a literal 'default' left in a file written before this rule:
-            # inherited forever it would be restored and marked `*`, claiming a habit nobody had.
-            if ($prevEntry.ContainsKey($f) -and $prevEntry[$f] -ne 'default') { $entry[$f] = $prevEntry[$f] }
-            continue
-        }
-        if ($v) { $entry[$f] = $v }
-    }
-
-    $data = @{ Version = 2; Account = $account; SavedAtMs = $NowMs; Profiles = $prev.Profiles }
-    $data.Profiles[$account] = $entry
+    # Read, merge and write under ONE lock. Without it the comment above was simply false: two
+    # launchers over 12 seconds lost 63 of 300 writes and finished with a file holding one profile
+    # where there had been two - each had read before the other wrote, and the later write carried a
+    # stale copy of everything it was supposed to be preserving. A launch must never WAIT on this,
+    # so a lock that does not arrive is a skipped save, not a delay.
+    $mutex = $null
+    $held = $false
     try {
-        $dir = Split-Path -LiteralPath $Path
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-        # Temp then Move-Item -Force: four launchers share this file, and a reader that catches a
-        # half-written one would fall back to "nothing remembered" and come up bare. The temp name
-        # carries the pid so two launchers writing at the same instant cannot share it.
-        $tmp = "$Path.$PID-$([guid]::NewGuid().ToString('N').Substring(0, 6)).tmp"
-        $data | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tmp -Encoding utf8
-        Move-Item -LiteralPath $tmp -Destination $Path -Force
-    } catch { }   # never let a preferences write stop a session from starting
-    # Returned so the launch log can record it. The prefs file is untracked by git and every launch
-    # overwrites it, so without this line the state a launch remembered is unrecoverable the moment
-    # the next one starts - which is what made the 2026-08-23 investigation guess.
-    return $data
+        $mutex = New-Object Threading.Mutex($false, (Get-PrefsMutexName -Path $Path))
+        # An abandoned mutex means the previous holder died mid-write. WaitOne throws and ownership
+        # passes to us, which is exactly right: we are about to rewrite the file anyway.
+        try { $held = $mutex.WaitOne(2000) } catch [Threading.AbandonedMutexException] { $held = $true }
+    } catch { $mutex = $null }
+
+    try {
+        $prev = Read-LaunchPrefs -Path $Path
+        $account = if ($State.Account) { "$($State.Account)" } else { 'work' }
+        $prevEntry = if ($prev.Profiles.ContainsKey($account)) { $prev.Profiles[$account] } else { @{} }
+
+        $entry = @{ SavedAtMs = $NowMs }
+        foreach ($f in $script:ProfileFields) {
+            # A field with no row (Remote when the feature is off) is never written from the state:
+            # the state still carries the seed value, and writing it would overwrite what a config
+            # WITH the row remembered. Carry the previous answer forward instead - the same guard
+            # Merge has.
+            if (-not ($Rows | Where-Object { $_.Name -eq $f })) {
+                if ($prevEntry.ContainsKey($f)) { $entry[$f] = $prevEntry[$f] }
+                continue
+            }
+            $v = $State.$f
+            # 'stop server' is an action, not a state - but skipping it entirely meant the NEXT
+            # launch silently reverted to remote 'on', which read as "my remote choice is not
+            # remembered" (owner, 2026-08-11). Someone who just killed the server wants it to stay
+            # down: remember it as 'off'.
+            if ($f -eq 'Remote' -and $v -eq 'stop server') { $entry[$f] = 'off'; continue }
+            # 'default' is the screen's "never chosen", not a choice - and ctrl+r puts it back on
+            # every row of the active tab at once. Written verbatim it ERASED the remembered model,
+            # effort and permission, and the launch after that came up bare: the owner read it as
+            # the settings resetting themselves (2026-08-23, launcher-logs 12:57:02 - argv carried
+            # no state flags at all). Saying nothing leaves the previous answer standing, and the
+            # previous answer is THIS profile's - never another account's.
+            if ($v -eq 'default') {
+                # `-ne 'default'` drops a literal 'default' left in a file written before this rule:
+                # inherited forever it would be restored and marked `*`, claiming a habit nobody had.
+                if ($prevEntry.ContainsKey($f) -and $prevEntry[$f] -ne 'default') { $entry[$f] = $prevEntry[$f] }
+                continue
+            }
+            if ($v) { $entry[$f] = $v }
+        }
+
+        $data = @{ Version = 2; Account = $account; SavedAtMs = $NowMs; Profiles = $prev.Profiles }
+        $data.Profiles[$account] = $entry
+
+        # Two reasons not to write. A file that EXISTS but could not be read carries profiles this
+        # process cannot see, and rebuilding from an empty read would delete them - the loudest
+        # version of the very bug this function had. And a lock we never got means another launcher
+        # is mid-write: its answer is as good as ours, and a lost preference is worth less than a
+        # delayed or corrupted launch.
+        if ($prev['Unreadable']) { return $data }
+        if (-not $held) { return $data }
+
+        $tmp = $null
+        try {
+            $dir = Split-Path -LiteralPath $Path
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+            # Temp then atomic replace. The temp name carries the pid so two launchers writing at
+            # the same instant cannot share it. [IO.File]::Move with overwrite:$true, NOT
+            # Move-Item -Force, which on Windows is not an atomic replace and threw
+            # "Cannot create a file when that file already exists" 37 times in a two-writer run,
+            # leaving 91 orphaned .tmp files in ~/.claude that nothing sweeps.
+            $tmp = "$Path.$PID-$([guid]::NewGuid().ToString('N').Substring(0, 6)).tmp"
+            $data | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tmp -Encoding utf8
+            [IO.File]::Move($tmp, $Path, $true)
+            $tmp = $null
+        } catch { }   # never let a preferences write stop a session from starting
+        finally { if ($tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } }
+        # Returned so the launch log can record it. The prefs file is untracked by git and every
+        # launch overwrites it, so without this line the state a launch remembered is unrecoverable
+        # the moment the next one starts - which is what made the 2026-08-23 investigation guess.
+        return $data
+    } finally {
+        if ($mutex) {
+            if ($held) { try { $mutex.ReleaseMutex() } catch { } }
+            $mutex.Dispose()
+        }
+    }
 }
 
 function Merge-LaunchPrefs {

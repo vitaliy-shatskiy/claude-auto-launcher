@@ -117,7 +117,12 @@ function ConvertTo-LauncherRoster {
             Key = $key; Root = $root
             Label = if ($a.label) { "$($a.label)" } else { "$key account" }
             Tint = $tint; Hidden = $hiddenResult.Value
-            Canonical = ($root -eq $canonicalRoot); Rooted = $rooted; RawRoot = $rawRoot
+            # Trailing separator trimmed on BOTH sides. GetFullPath keeps one, so `~/.claude/`
+            # compared unequal to `~/.claude` and the account stopped being canonical - which
+            # discards the whole roster, several accounts at once, over a character the warning then
+            # prints back looking entirely correct.
+            Canonical = ([IO.Path]::TrimEndingDirectorySeparator($root) -eq [IO.Path]::TrimEndingDirectorySeparator($canonicalRoot))
+            Rooted = $rooted; RawRoot = $rawRoot
         }
     }
     foreach ($g in @($accounts | Group-Object Tint | Where-Object { $_.Count -gt 1 })) {

@@ -56,6 +56,23 @@ try {
     $t = Read-LauncherConfig -Path (Join-Path $tmp 'tint.json')
     Assert 'bad tint → Green + warning'           ($t.Accounts[0].Tint -eq 'Green' -and @($t.Warnings | Where-Object { $_ -match 'tint' }).Count -eq 1)
 
+    # A trailing separator on the canonical root discarded the WHOLE roster. GetFullPath preserves
+    # one, so the equality test missed - and the warning then prints the raw value, which looks
+    # perfectly correct to the reader trying to work out what is wrong with it.
+    Set-Content (Join-Path $tmp 'slash.json') '{ "accounts": [ {"key":"work","root":"~/.claude/","tint":"Green"}, {"key":"beta","root":"~/.claude-b","tint":"Cyan"} ] }'
+    $sl = Read-LauncherConfig -Path (Join-Path $tmp 'slash.json')
+    # Each assertion below pins the COUNT as well as the key: the default roster is a single
+    # canonical 'work' account, so "the canonical account is work" is satisfied by the very fallback
+    # these cases exist to prevent - written the short way first, both halves passed, and neither
+    # proved anything.
+    Assert 'trailing slash on the canonical root keeps the roster' (@($sl.Accounts).Count -eq 2 -and (@($sl.Accounts | Where-Object Canonical).Key) -eq 'work')
+    Assert 'and the second account survives with it'               (@($sl.Accounts | Where-Object { $_.Key -eq 'beta' }).Count -eq 1)
+    Assert 'and no roster warning is raised for it'                (@($sl.Warnings | Where-Object { $_ -match 'canonical' }).Count -eq 0)
+
+    Set-Content (Join-Path $tmp 'backslash.json') '{ "accounts": [ {"key":"work","root":"~\\.claude\\","tint":"Green"}, {"key":"beta","root":"~/.claude-b","tint":"Cyan"} ] }'
+    $bs = Read-LauncherConfig -Path (Join-Path $tmp 'backslash.json')
+    Assert 'a trailing BACKslash is the same case'                 (@($bs.Accounts).Count -eq 2 -and (@($bs.Accounts | Where-Object Canonical).Key) -eq 'work')
+
     Set-Content (Join-Path $tmp 'nocanon.json') '{ "accounts": [ {"key":"a","root":"~/.claude-a","tint":"Green"} ] }'
     $n = Read-LauncherConfig -Path (Join-Path $tmp 'nocanon.json')
     Assert 'no ~/.claude entry → default roster + warning' ($n.Accounts[0].Key -eq 'work' -and @($n.Warnings | Where-Object { $_ -match 'canonical' }).Count -eq 1)

@@ -309,9 +309,92 @@ try {
     Remove-Item -LiteralPath $fakeHome -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# --- Concurrent writers ------------------------------------------------------------------------
+# The design says up to four launchers share this file and that it is "last writer wins per PROFILE,
+# not per file". It was not: read-merge-write was unserialised, so each writer merged onto a copy
+# taken before the other's write. Measured before the fix, two writers over 12 s lost 63 of 300
+# writes and ended with ONE profile where there had been two, plus 91 orphaned .tmp files.
+#
+# Real child processes, because that is the only thing that reproduces it: the defect lives between
+# OS processes, and a same-process loop is serialised by the runtime for free.
+$cRoot = Join-Path $env:TEMP ("cal-prefs-conc-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $cRoot | Out-Null
+try {
+    $cPath = Join-Path $cRoot 'prefs.json'
+    $child = Join-Path $cRoot 'writer.ps1'
+    Set-Content -LiteralPath $child -Encoding utf8 -Value @"
+param([string]`$Path, [string]`$Account, [int]`$Count)
+`$env:CLAUDE_AUTO_CONFIG = '$PSScriptRoot\fixtures\config-four.json'
+. '$PSScriptRoot\..\claude-auto\Theme.ps1'
+. '$PSScriptRoot\..\claude-auto\Layout.ps1'
+. '$PSScriptRoot\..\claude-auto\Sessions.ps1'
+. '$PSScriptRoot\..\claude-auto\Screens.ps1'
+. '$PSScriptRoot\..\claude-auto\Prefs.ps1'
+. '$PSScriptRoot\..\claude-auto\Config.ps1'
+Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
+`$state = [pscustomobject]@{ Account = `$Account; Model = 'opus'; Effort = 'high' }
+for (`$i = 0; `$i -lt `$Count; `$i++) { `$null = Save-LaunchPrefs -State `$state -Path `$Path }
+"@
+    $writers = @(foreach ($acct in 'work', 'personal', 'low') {
+        Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList @(
+            '-NoProfile', '-File', $child, '-Path', $cPath, '-Account', $acct, '-Count', '200')
+    })
+    $writers | ForEach-Object { $_.WaitForExit() }
+
+    $conc = Read-LaunchPrefs -Path $cPath
+    Assert-Equal $true ($conc.Profiles.ContainsKey('work'))     'three concurrent writers: the work profile survives'
+    Assert-Equal $true ($conc.Profiles.ContainsKey('personal')) 'three concurrent writers: the personal profile survives'
+    Assert-Equal $true ($conc.Profiles.ContainsKey('low'))      'three concurrent writers: the low profile survives'
+    Assert-Equal 0 @(Get-ChildItem -LiteralPath $cRoot -Filter '*.tmp').Count 'no orphaned .tmp file is left behind'
+
+    # The racing test above is a smoke test and was NOT enough on its own: with the lock removed
+    # entirely it still came back green at 25 writes per process, because process startup dominates
+    # and the windows barely overlapped. This is the deterministic half - the parent holds the lock,
+    # so a child save must come back having written nothing at all.
+    $lockPath = Join-Path $cRoot 'held.json'
+    Set-Content -LiteralPath $lockPath -Value '{"Version":2,"Profiles":{"work":{"Model":"opus"}}}' -NoNewline
+    $gate = New-Object Threading.Mutex($false, (Get-PrefsMutexName -Path $lockPath))
+    $null = $gate.WaitOne(0)
+    try {
+        $blockedProc = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList @(
+            '-NoProfile', '-File', $child, '-Path', $lockPath, '-Account', 'low', '-Count', '1')
+        $blockedProc.WaitForExit()
+        $blocked = Read-LaunchPrefs -Path $lockPath
+        Assert-Equal $false ($blocked.Profiles.ContainsKey('low'))  'a save that cannot take the lock writes nothing'
+        Assert-Equal $true  ($blocked.Profiles.ContainsKey('work')) 'and leaves the file it could not lock exactly as it was'
+    } finally { $gate.ReleaseMutex(); $gate.Dispose() }
+
+    $freeProc = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList @(
+        '-NoProfile', '-File', $child, '-Path', $lockPath, '-Account', 'low', '-Count', '1')
+    $freeProc.WaitForExit()
+    Assert-Equal $true ((Read-LaunchPrefs -Path $lockPath).Profiles.ContainsKey('low')) 'once the lock is free the very same save lands'
+
+    # The lock is per FILE. A global one would make the suites and a live launcher wait on each other.
+    Assert-Equal $true  ((Get-PrefsMutexName -Path $cPath) -eq (Get-PrefsMutexName -Path $cPath)) 'the mutex name is stable for one path'
+    Assert-Equal $false ((Get-PrefsMutexName -Path $cPath) -eq (Get-PrefsMutexName -Path (Join-Path $cRoot 'other.json'))) 'and different for a different path'
+
+    # Unreadable and corrupt are opposite answers, and they used to share one catch. Corrupt
+    # self-heals on the next save - deliberate, and older than this change. Unreadable must not,
+    # because the bytes it could not read are the other accounts' profiles.
+    $badPath = Join-Path $cRoot 'corrupt.json'
+    Set-Content -LiteralPath $badPath -Value '{ this is not json' -NoNewline
+    $bad = Read-LaunchPrefs -Path $badPath
+    Assert-Equal $false ([bool]$bad['Unreadable']) 'a corrupt file is not flagged unreadable - it is still rebuilt on the next save'
+
+    $lockedPath = Join-Path $cRoot 'locked.json'
+    Set-Content -LiteralPath $lockedPath -Value '{"Version":2,"Profiles":{"work":{"Model":"opus"}}}' -NoNewline
+    $lockHandle = [IO.File]::Open($lockedPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+    try {
+        $lockedRead = Read-LaunchPrefs -Path $lockedPath
+        Assert-Equal $true ([bool]$lockedRead['Unreadable']) 'a file that cannot be read IS flagged, so the save never rebuilds from an empty view'
+        $lockErrs = @(Read-LaunchPrefs -Path $lockedPath 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        Assert-Equal 0 $lockErrs.Count 'and it writes nothing to the error stream on the way'
+    } finally { $lockHandle.Dispose() }
+} finally { Remove-Item -LiteralPath $cRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
 foreach ($f in $paths) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 92) { Write-Host "COULD NOT RUN: expected 92 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 104) { Write-Host "COULD NOT RUN: expected 104 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
