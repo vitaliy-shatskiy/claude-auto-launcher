@@ -46,7 +46,13 @@ function Get-CachedFileHash {
     param([Parameter(Mandatory)][string]$Path)
     $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
     if (-not $item) { return $null }
-    if ($item.Length -lt $script:HashCacheMinBytes) { return (Get-FileHash -LiteralPath $Path).Hash }
+    # A file that exists but cannot be READ - an antivirus or indexer holding a just-downloaded
+    # build, or the other half of a swap in flight - answers $null, exactly like a missing one. The
+    # bare Get-FileHash threw a four-line red PowerShell error straight into the maintenance screen,
+    # and every caller here already treats $null as "unknown".
+    if ($item.Length -lt $script:HashCacheMinBytes) {
+        try { return (Get-FileHash -LiteralPath $Path -ErrorAction Stop).Hash } catch { return $null }
+    }
 
     $key = '{0}|{1}|{2}' -f $item.FullName, $item.Length, $item.LastWriteTimeUtc.Ticks
     $cache = @{}
@@ -56,7 +62,9 @@ function Get-CachedFileHash {
     } catch { $cache = @{} }
     if ($cache.ContainsKey($key)) { return $cache[$key] }
 
-    $hash = (Get-FileHash -LiteralPath $Path).Hash
+    # Same as the small-file path above: unreadable answers $null and nothing is cached, so the next
+    # call retries instead of remembering a failure.
+    try { $hash = (Get-FileHash -LiteralPath $Path -ErrorAction Stop).Hash } catch { return $null }
     $cache[$key] = $hash
     # Drop entries whose file is gone or has changed, so retired builds do not accumulate forever.
     $live = @{}
@@ -206,15 +214,45 @@ function Repair-ClaudeBinaryByRename {
     param([string]$BinPath = (Get-DefaultClaudeBinPath),
           [string]$VersionsDir = (Join-Path $HOME '.local\share\claude\versions'))
     $info = Get-ClaudeInstallInfo -BinPath $BinPath -VersionsDir $VersionsDir
+    # BinPath is wherever `claude` RESOLVES, which on a machine with an npm or global install is a
+    # shim - claude.cmd, claude.ps1 - and this function's payload is raw native build bytes. Copying
+    # them over a shim destroys it and leaves nothing that runs. A leftover versions directory from
+    # a native install tried once is all it takes to reach here, so the guard is on the target, not
+    # on whether builds happen to exist.
+    if ([IO.Path]::GetExtension($BinPath) -ne '.exe') {
+        return [pscustomobject]@{ Ok = $false; Message = 'not a native install; updates are handled by your installer' }
+    }
     if (-not $info.NewestPath) { return [pscustomobject]@{ Ok = $false; Message = 'no downloaded build to install' } }
     if ($info.Matches) { return [pscustomobject]@{ Ok = $true; Message = 'already on the newest build' } }
+    # Copy FIRST, move second. The old order renamed the working binary aside and only then copied,
+    # so any copy failure - an antivirus or a search indexer holding the just-downloaded build is the
+    # everyday one - left the user with no claude at all and a claude.exe.old nobody mentioned. Now
+    # nothing moves until the new build is on disk beside the old one, and a failure after that
+    # renames the original back.
+    $new = "$BinPath.new"
+    $old = "$BinPath.old"
     try {
-        $old = "$BinPath.old"
+        if (Test-Path -LiteralPath $new) { Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue }
+        Copy-Item -LiteralPath $info.NewestPath -Destination $new -ErrorAction Stop
+    } catch {
+        Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue
+        return [pscustomobject]@{ Ok = $false; Message = "rename swap failed before anything moved, the installed build is untouched: $($_.Exception.Message)" }
+    }
+    $renamed = $false
+    try {
         if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue }
         Rename-Item -LiteralPath $BinPath -NewName (Split-Path $old -Leaf) -ErrorAction Stop
-        Copy-Item -LiteralPath $info.NewestPath -Destination $BinPath -ErrorAction Stop
+        $renamed = $true
+        Rename-Item -LiteralPath $new -NewName (Split-Path $BinPath -Leaf) -ErrorAction Stop
     } catch {
-        return [pscustomobject]@{ Ok = $false; Message = "rename swap failed: $($_.Exception.Message)" }
+        $reason = $_.Exception.Message
+        if ($renamed -and -not (Test-Path -LiteralPath $BinPath)) {
+            try { Rename-Item -LiteralPath $old -NewName (Split-Path $BinPath -Leaf) -ErrorAction Stop } catch { }
+        }
+        Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue
+        $back = if (Test-Path -LiteralPath $BinPath) { 'the working binary was put back' }
+                else { "the working binary is at $old and must be renamed back by hand" }
+        return [pscustomobject]@{ Ok = $false; Message = "rename swap failed: $reason; $back" }
     }
     $after = Get-ClaudeInstallInfo -BinPath $BinPath -VersionsDir $VersionsDir
     return [pscustomobject]@{ Ok = $after.Matches; Message = if ($after.Matches) { "swapped to $($after.NewestVersion), verified by hash" } else { 'the swap ran but the hashes still differ' } }
@@ -228,19 +266,33 @@ function Remove-OldClaudeVersions {
         [int]$Keep = 2,
         [string]$BinPath = (Get-DefaultClaudeBinPath)
     )
-    $builds = @(Get-ChildItem -LiteralPath $VersionsDir -File -ErrorAction SilentlyContinue)
+    # A build is a file whose NAME is a version, and nothing else. This directory belongs to the
+    # updater, not to us: it also holds partial downloads a concurrent launcher is still writing,
+    # and whatever the user has dropped there. Worse, Get-OrderedClaudeBuilds sorts unparseable
+    # names LAST, so without this filter they were the first things pruned.
+    $builds = @(Get-ChildItem -LiteralPath $VersionsDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $v = $null; [version]::TryParse($_.Name, [ref]$v) })
     $ordered = @(Get-OrderedClaudeBuilds -Builds $builds)
-    $doomed = @($ordered | Select-Object -Skip $Keep)
 
-    # The installed build is the only one that cannot be re-obtained by rolling back, so it is
-    # never a prune candidate regardless of its version.
-    if (Test-Path -LiteralPath $BinPath) {
-        $installedHash = (Get-FileHash -LiteralPath $BinPath).Hash
-        $installedBuild = $doomed | Where-Object { (Get-FileHash -LiteralPath $_.FullName).Hash -eq $installedHash } | Select-Object -First 1
-        if ($installedBuild) { $doomed = @($doomed | Where-Object { $_.FullName -ne $installedBuild.FullName }) }
-    }
+    # The installed build is the only one that cannot be re-obtained by rolling back, so it is never
+    # a prune candidate regardless of its version - and if it cannot be IDENTIFIED, nothing is
+    # pruned at all. Failing open here deleted the running build: the guard used to sit inside a
+    # `Test-Path $BinPath`, and an absent binary is not exotic, it is the window between the two
+    # renames of a swap, which a second launcher on the same machine can walk straight into.
+    #
+    # ONE guard, not two. A missing binary and a binary matching no build were separate checks, and
+    # a mutation run showed the second silently masking the first - Get-FileHash on a missing file
+    # is a non-terminating error whose $null hash then matches nothing. Two mechanisms for one
+    # condition means neither is really tested. Get-CachedFileHash already answers $null for missing
+    # AND unreadable, which is exactly the question being asked here.
+    $unidentified = [pscustomobject]@{ Deleted = @(); FreedBytes = [long]0
+        Message = 'could not identify the running build - nothing pruned' }
+    $installedHash = Get-CachedFileHash -Path $BinPath
+    $installedBuild = @($ordered | Where-Object { $installedHash -and (Get-CachedFileHash -Path $_.FullName) -eq $installedHash }) | Select-Object -First 1
+    if (-not $installedBuild) { return $unidentified }
 
+    $doomed = @($ordered | Select-Object -Skip $Keep | Where-Object { $_.FullName -ne $installedBuild.FullName })
     $freed = ($doomed | Measure-Object Length -Sum).Sum
     foreach ($d in $doomed) { Remove-Item -LiteralPath $d.FullName -Force -ErrorAction SilentlyContinue }
-    return [pscustomobject]@{ Deleted = @($doomed.Name); FreedBytes = [long]$freed }
+    return [pscustomobject]@{ Deleted = @($doomed.Name); FreedBytes = [long]$freed; Message = '' }
 }

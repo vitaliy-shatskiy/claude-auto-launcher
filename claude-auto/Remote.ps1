@@ -17,23 +17,62 @@ function Get-CompanionPort {
     return $port
 }
 
+function Get-CompanionRoot {
+    if ($env:CLAUDE_REMOTE_ROOT) { return $env:CLAUDE_REMOTE_ROOT }
+    return (Join-Path $HOME 'Desktop/Projects/remote-control-claude-code')
+}
+
+function Test-CompanionProcess {
+    # The companion is node, running out of the configured checkout. Both halves are needed: the
+    # port says nothing about identity, and "some node process" is not identity either on a machine
+    # that runs several.
+    param($Info, [string]$Root)
+    if (-not $Info -or $Info.Name -ne 'node') { return $false }
+    $cmd = "$($Info.CommandLine)"
+    if (-not $cmd) { return $false }
+    $needle = ($Root -replace '\\', '/').TrimEnd('/')
+    if (-not $needle) { return $false }
+    return (($cmd -replace '\\', '/') -like "*$needle*")
+}
+
 function Stop-CompanionServer {
-    # Nothing tracks a pid file, so "the server" is whatever listens on the configured port.
-    # A foreign process squatting there would die too - acceptable on this machine, where the
-    # port is reserved for the companion server.
+    # Nothing writes a pid file, so "the server" used to mean whatever listens on the configured
+    # port - and that is not an identity, it is a coincidence. The original note called a foreign
+    # process dying "acceptable on this machine, where the port is reserved"; on anybody else's
+    # machine it is a loaded gun, and it fired here on 2026-09-08, killing an unrelated node server
+    # during a review. Identify the process first; anything that is not ours is named and left
+    # running, which is also the more useful answer - the reader learns who has the port.
+    #
+    # The three seams are injected so the whole path is assertable without starting or stopping any
+    # real process.
+    param(
+        [string]$Root = (Get-CompanionRoot),
+        [scriptblock]$GetListener = { param($Port)
+            Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 },
+        [scriptblock]$GetProcessInfo = { param($ProcessId)
+            $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+            if (-not $p) { return $null }
+            $cmd = ''
+            try { $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop).CommandLine } catch { }
+            return [pscustomobject]@{ Name = $p.ProcessName; CommandLine = $cmd } },
+        [scriptblock]$StopProcess = { param($ProcessId) Stop-Process -Id $ProcessId -Force -ErrorAction Stop }
+    )
     $port = Get-CompanionPort
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    $conn = & $GetListener $port
     if (-not $conn) { return "nothing listening on $port" }
+    $owner = $conn.OwningProcess
     # The socket table can briefly keep a listen entry for a pid that just died - treat a
     # missing process as already stopped, not as a failure.
-    if (-not (Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue)) {
-        return "nothing listening on $port (stale socket entry for pid $($conn.OwningProcess))"
+    $info = & $GetProcessInfo $owner
+    if (-not $info) { return "nothing listening on $port (stale socket entry for pid $owner)" }
+    if (-not (Test-CompanionProcess -Info $info -Root $Root)) {
+        return "port $port is held by $($info.Name) (pid $owner), which is not the companion server - left alone"
     }
     try {
-        Stop-Process -Id $conn.OwningProcess -Force -ErrorAction Stop
-        return "stopped pid $($conn.OwningProcess) on port $port"
+        & $StopProcess $owner
+        return "stopped pid $owner on port $port"
     } catch {
-        return "failed to stop pid $($conn.OwningProcess): $($_.Exception.Message)"
+        return "failed to stop pid $($owner): $($_.Exception.Message)"
     }
 }
 

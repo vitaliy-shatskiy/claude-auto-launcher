@@ -23,7 +23,7 @@ jobs:
       - name: Run test suites
         shell: pwsh
         run: |
-          $suites = 'Theme','Layout','Sessions','Ui','Maintenance','Prefs','Env','Config','Input','Install','Mirror'
+          $suites = 'Theme','Layout','Sessions','Ui','Maintenance','Remote','Prefs','Env','Config','Input','Install','Mirror'
           $bad = 0
           foreach ($n in $suites) {
             & pwsh -NoProfile -File "tests\Test-$n.ps1"

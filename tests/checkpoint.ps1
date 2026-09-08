@@ -16,7 +16,7 @@ param(
     [string]$PreviewScript = (Join-Path $PSScriptRoot 'check-preview.ps1')
 )
 
-$suites = 'Theme', 'Layout', 'Sessions', 'Ui', 'Maintenance', 'Prefs', 'Env', 'Config', 'Input', 'Install', 'Mirror'
+$suites = 'Theme', 'Layout', 'Sessions', 'Ui', 'Maintenance', 'Remote', 'Prefs', 'Env', 'Config', 'Input', 'Install', 'Mirror'
 $rows = @()
 $failed = 0
 $unverified = 0

@@ -86,7 +86,11 @@ Remove-Item -Recurse -Force $tieDir
 # "newest build" that Get-ClaudeInstallInfo and Repair-ClaudeBinaryByRename rely on further down. ---
 $pruneDir = Join-Path $tmp 'prune-versions'
 New-Item -ItemType Directory -Force -Path $pruneDir | Out-Null
-$noBin = Join-Path $tmp 'no-such-binary.exe'   # nothing installed - the hash exemption must not fire
+# The installed binary is INSIDE the keep window here, so the hash exemption is a no-op and the
+# keep count alone decides. It still has to exist: prune fails closed when it cannot identify the
+# running build, because "no binary" is also the state during a swap, and deleting then is how the
+# running build disappeared.
+$keptBin = Join-Path $tmp 'installed-newest.exe'
 
 # Pruning orders by parsed VERSION, not write time. This fixture deliberately writes '2.1.200'
 # LAST - giving it the newest LastWriteTime even though it is the oldest version - to prove the
@@ -94,7 +98,8 @@ $noBin = Join-Path $tmp 'no-such-binary.exe'   # nothing installed - the hash ex
 Set-Content -Path (Join-Path $pruneDir '2.1.226') -Value 'build 226' -NoNewline
 Set-Content -Path (Join-Path $pruneDir '2.1.230') -Value 'build 230' -NoNewline
 Set-Content -Path (Join-Path $pruneDir '2.1.200') -Value 'ancient'   -NoNewline
-$r = Remove-OldClaudeVersions -VersionsDir $pruneDir -Keep 2 -BinPath $noBin
+Copy-Item -LiteralPath (Join-Path $pruneDir '2.1.230') -Destination $keptBin -Force
+$r = Remove-OldClaudeVersions -VersionsDir $pruneDir -Keep 2 -BinPath $keptBin
 Assert-Equal 1 $r.Deleted.Count 'pruning deletes only what is beyond the keep count'
 Assert-Equal $false (Test-Path (Join-Path $pruneDir '2.1.200')) 'the oldest-by-version build is gone, despite having the newest write time'
 Assert-Equal $true  (Test-Path (Join-Path $pruneDir '2.1.230')) 'the newest-by-version build survives'
@@ -120,12 +125,14 @@ New-Item -ItemType Directory -Force -Path $pruneDir | Out-Null
 Set-Content -Path (Join-Path $pruneDir '2.1.226') -Value 'build 226' -NoNewline
 Set-Content -Path (Join-Path $pruneDir '2.1.230') -Value 'build 230' -NoNewline
 Set-Content -Path (Join-Path $pruneDir 'nightly')  -Value 'unparseable' -NoNewline
+Copy-Item -LiteralPath (Join-Path $pruneDir '2.1.230') -Destination $keptBin -Force
 $threw = $false
-try { $r = Remove-OldClaudeVersions -VersionsDir $pruneDir -Keep 2 -BinPath $noBin }
+try { $r = Remove-OldClaudeVersions -VersionsDir $pruneDir -Keep 2 -BinPath $keptBin }
 catch { $threw = $true }
 Assert-Equal $false $threw 'an unparseable build name does not throw'
 Assert-Equal $true  (Test-Path (Join-Path $pruneDir '2.1.230')) 'the real newest build still survives alongside an unparseable name'
 Assert-Equal $true  (Test-Path (Join-Path $pruneDir '2.1.226')) 'the real second-newest build also survives - the unparseable name was not treated as newest'
+Assert-Equal $true  (Test-Path (Join-Path $pruneDir 'nightly')) 'and the unparseable name itself is left alone - it is not a build to prune'
 
 Remove-Item -Recurse -Force $pruneDir
 
@@ -385,11 +392,107 @@ Assert-Equal $true ([bool]($pruned.PSObject.Properties.Name -match 'big\.bin')) 
 
 Assert-Equal $null (Get-CachedFileHash -Path (Join-Path $hashDir 'never-existed.bin')) 'a missing file yields null rather than throwing'
 
+# A file that EXISTS but cannot be read is the same answer. It used to throw a raw PowerShell error
+# into the maintenance screen - reachable whenever an antivirus or indexer holds a just-downloaded
+# build, which is exactly when someone is looking at that screen. Both size branches, because only
+# the large one goes through the cache.
+$lockedSmall = Join-Path $hashDir 'locked-small.txt'
+Set-Content -LiteralPath $lockedSmall -Value 'held' -NoNewline
+$lockSmall = [IO.File]::Open($lockedSmall, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+try {
+    # The RETURN value was already null before this was fixed - Get-FileHash's failure is
+    # non-terminating, so $null.Hash is null either way. What changed is the ERROR STREAM: a
+    # four-line red record went straight into the maintenance screen. Assert on the stream, or the
+    # assertion cannot fail (a mutation run proved exactly that about the first version of it).
+    $lockErr = @(Get-CachedFileHash -Path $lockedSmall 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+    Assert-Equal 0 $lockErr.Count 'a small file held open writes nothing to the error stream'
+    Assert-Equal $null (Get-CachedFileHash -Path $lockedSmall) 'and answers null, exactly like a missing file'
+} finally { $lockSmall.Dispose() }
+
+$lockedBig = Join-Path $hashDir 'locked-big.bin'
+[IO.File]::WriteAllBytes($lockedBig, [byte[]]::new(2MB))
+$lockBig = [IO.File]::Open($lockedBig, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+try {
+    $lockErrBig = @(Get-CachedFileHash -Path $lockedBig 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+    Assert-Equal 0 $lockErrBig.Count 'a large file held open writes nothing to the error stream either'
+    Assert-Equal $null (Get-CachedFileHash -Path $lockedBig) 'and answers null too'
+} finally { $lockBig.Dispose() }
+$lockCache = Get-Content -LiteralPath $script:HashCachePath -Raw | ConvertFrom-Json
+Assert-Equal $false ([bool]($lockCache.PSObject.Properties.Name -match 'locked-big')) 'a failed hash is never remembered, so the next call retries'
+
+# --- Prune and swap safety -------------------------------------------------------------------
+# Four ways the maintenance screen could destroy the user's working CLI, each reachable from one
+# keypress with no confirmation. Assertions are on the FILES, never on a returned message: a report
+# that the right thing happened is exactly what this module exists not to trust.
+
+$safeDir = Join-Path $tmp 'safe-versions'
+New-Item -ItemType Directory -Force -Path $safeDir | Out-Null
+foreach ($v in '2.1.260', '2.1.261', '2.1.262') { Set-Content -LiteralPath (Join-Path $safeDir $v) -Value "build $v" -NoNewline }
+Set-Content -LiteralPath (Join-Path $safeDir 'notes.txt') -Value 'my notes' -NoNewline
+Set-Content -LiteralPath (Join-Path $safeDir '2.1.264.exe.partial') -Value 'half a download' -NoNewline
+$safeBin = Join-Path $tmp 'safe-bin.exe'
+Set-Content -LiteralPath $safeBin -Value 'build 2.1.262' -NoNewline
+
+# Prune had no name filter at all, and Get-OrderedClaudeBuilds sorts unparseable names LAST - so
+# they were the FIRST things deleted: another launcher's in-flight download, and a file of the
+# user's own that happened to sit in that directory.
+$p = Remove-OldClaudeVersions -VersionsDir $safeDir -Keep 2 -BinPath $safeBin
+Assert-Equal $true (Test-Path -LiteralPath (Join-Path $safeDir 'notes.txt')) 'prune never deletes a file that is not a build'
+Assert-Equal $true (Test-Path -LiteralPath (Join-Path $safeDir '2.1.264.exe.partial')) 'prune never deletes an in-flight download'
+Assert-Equal $false (Test-Path -LiteralPath (Join-Path $safeDir '2.1.260')) 'prune still removes the build it was asked to remove'
+Assert-Equal 1 $p.Deleted.Count 'exactly one build was pruned'
+
+# The in-use guard sat INSIDE `if (Test-Path $BinPath)`, so with the binary absent it was skipped
+# entirely and the running build was deleted. Absent is not a rare state: it is the window between
+# the rename and the copy of a swap, which a second launcher can walk into.
+$gapDir = Join-Path $tmp 'gap-versions'
+New-Item -ItemType Directory -Force -Path $gapDir | Out-Null
+foreach ($v in '2.1.270', '2.1.271') { Set-Content -LiteralPath (Join-Path $gapDir $v) -Value "build $v" -NoNewline }
+$g = Remove-OldClaudeVersions -VersionsDir $gapDir -Keep 1 -BinPath (Join-Path $tmp 'not-there.exe')
+Assert-Equal 0 $g.Deleted.Count 'with no installed binary to identify, prune deletes nothing'
+Assert-Equal $true (Test-Path -LiteralPath (Join-Path $gapDir '2.1.270')) 'the build that might have been the running one survives'
+
+# Same fail-closed rule when the binary exists but matches no build on disk: unidentified is
+# unidentified, and a silent no-op guard is how the running build got deleted.
+$strayBin = Join-Path $tmp 'stray.exe'
+Set-Content -LiteralPath $strayBin -Value 'a build this directory has never seen' -NoNewline
+$g2 = Remove-OldClaudeVersions -VersionsDir $gapDir -Keep 1 -BinPath $strayBin
+Assert-Equal 0 $g2.Deleted.Count 'an installed binary matching no build on disk also stops the prune'
+
+# The swap renamed the working binary aside and only THEN copied. Any copy failure - an antivirus or
+# a search indexer holding the just-downloaded build is the everyday one - left the user with no
+# claude at all, and a claude.exe.old nobody told them about.
+$swapDir = Join-Path $tmp 'swap-versions'
+New-Item -ItemType Directory -Force -Path $swapDir | Out-Null
+$swapSrc = Join-Path $swapDir '2.1.280'
+Set-Content -LiteralPath $swapSrc -Value 'build 280' -NoNewline
+$swapBin = Join-Path $tmp 'swap-bin.exe'
+Set-Content -LiteralPath $swapBin -Value 'build 200' -NoNewline
+$held = [IO.File]::Open($swapSrc, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+try { $sr = Repair-ClaudeBinaryByRename -BinPath $swapBin -VersionsDir $swapDir }
+finally { $held.Dispose() }
+Assert-Equal $false $sr.Ok 'a swap that cannot read the new build reports failure'
+Assert-Equal $true (Test-Path -LiteralPath $swapBin) 'a failed swap leaves the working binary in place'
+Assert-Equal 'build 200' (Get-Content -LiteralPath $swapBin -Raw) 'and it is the ORIGINAL binary, not a partial copy'
+Assert-Equal $true ($sr.Message -match 'swap') 'the failure names the swap'
+
+# BinPath is wherever `claude` resolves on PATH. With an npm or global shim first on PATH and a
+# leftover versions directory from a native install tried once, the swap copied native build bytes
+# straight over the shim and destroyed it.
+$shimBin = Join-Path $tmp 'claude.cmd'
+$shimText = '@echo off & node claude.js %*'
+Set-Content -LiteralPath $shimBin -Value $shimText -NoNewline
+$cr = Repair-ClaudeBinaryByRename -BinPath $shimBin -VersionsDir $swapDir
+Assert-Equal $false $cr.Ok 'the swap refuses a binary that is not a native .exe'
+Assert-Equal $shimText (Get-Content -LiteralPath $shimBin -Raw) 'an npm shim is left exactly as it was'
+Assert-Equal $true ($cr.Message -match 'not a native install') 'and the message names why'
+Assert-Equal $false (Test-Path -LiteralPath "$shimBin.old") 'no .old copy of the shim is left behind'
+
 Remove-Item -Recurse -Force $tmp
 # Invoke-ClaudeCommandText (Ui.ps1) is still not asserted: beyond try/catch its only logic is
 # ConvertTo-StatusText, which Test-Ui.ps1 asserts, and exercising it means shelling out to the real
 # binary.
-if ($script:Ran -ne 78) { Write-Host "COULD NOT RUN: expected 78 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 99) { Write-Host "COULD NOT RUN: expected 99 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

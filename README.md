@@ -130,9 +130,9 @@ The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer;
 pwsh -File tests\checkpoint.ps1
 ```
 
-15 checks: 11 unit suites (`Theme`, `Layout`, `Sessions`, `Ui`, `Maintenance`, `Prefs`, `Env`,
-`Config`, `Input`, `Install`, `Mirror`), a privacy scan, and three launcher-level checks. Every exit
-code is read on its own line, and **`2` means the check could not run — never a pass**.
+16 checks: 12 unit suites (`Theme`, `Layout`, `Sessions`, `Ui`, `Maintenance`, `Remote`, `Prefs`,
+`Env`, `Config`, `Input`, `Install`, `Mirror`), a privacy scan, and three launcher-level checks.
+Every exit code is read on its own line, and **`2` means the check could not run — never a pass**.
 
 Any suite runs alone: `pwsh -File tests\Test-Ui.ps1`. `Test-Input.ps1 -Live` adds the console-mode
 and mouse assertions, which self-spawn a hidden child console; the checkpoint always passes `-Live`.
