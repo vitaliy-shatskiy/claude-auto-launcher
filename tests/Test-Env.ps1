@@ -39,11 +39,17 @@ Set-Content -LiteralPath "$root\org\acme\ORG_BEATS_THIS" -Value 'from-org' -NoNe
 Set-Content -LiteralPath "$root\$slug\PROJ_ONLY"  -Value "from-proj`r`n"
 Set-Content -LiteralPath "$root\$slug\OVERRIDDEN" -Value 'from-proj' -NoNewline
 Set-Content -LiteralPath "$root\$slug\EMPTY"      -Value '' -NoNewline
+# A store that already holds a secret literally named <NAME>_FILE: its own VALUE must win over the
+# path derived from <NAME>, or adding the generalised _FILE export silently destroys a real secret.
+Set-Content -LiteralPath "$root\$slug\PAIR"       -Value 'pair-value' -NoNewline
+Set-Content -LiteralPath "$root\$slug\PAIR_FILE"  -Value 'a-real-secret-not-a-path' -NoNewline
 # An index file inside a tier would otherwise become $env:NOTES.md - the loader must skip it.
 Set-Content -LiteralPath "$root\$slug\NOTES.md"   -Value 'not a secret' -NoNewline
 New-Item -ItemType Junction -Path "$root\$slug\org" -Target "$root\org\acme" | Out-Null
 
-$vars = 'SHARED_ONLY', 'ORG_ONLY', 'PROJ_ONLY', 'OVERRIDDEN', 'ORG_BEATS_THIS', 'EMPTY', 'NOTES.md', 'SONAR_TOKEN_FILE'
+$vars = 'SHARED_ONLY', 'ORG_ONLY', 'PROJ_ONLY', 'OVERRIDDEN', 'ORG_BEATS_THIS', 'EMPTY', 'NOTES.md',
+        'SHARED_ONLY_FILE', 'ORG_ONLY_FILE', 'PROJ_ONLY_FILE', 'OVERRIDDEN_FILE', 'ORG_BEATS_THIS_FILE', 'EMPTY_FILE',
+        'TIERED_TOKEN', 'TIERED_TOKEN_FILE', 'PAIR', 'PAIR_FILE', 'PAIR_FILE_FILE', 'SONAR_TOKEN_FILE'
 foreach ($v in $vars) { Remove-Item -LiteralPath "Env:$v" -ErrorAction SilentlyContinue }
 
 $loaded = @(Import-ProjectSecrets -WorkingDirectory 'C:\test\.proj' -Root $root)
@@ -57,7 +63,27 @@ Assert 'trailing newline is trimmed'          ($env:PROJ_ONLY -notmatch '\s$')
 Assert 'markdown is not loaded as a variable' (-not (Test-Path 'Env:NOTES.md'))
 Assert 'an empty file sets nothing'           (-not (Test-Path 'Env:EMPTY'))
 Assert 'the return value names each tier'     (($loaded -join ',') -match 'shared' -and ($loaded -join ',') -match 'org' -and ($loaded -join ',') -match 'project')
-Assert 'no SONARQUBE_TOKEN means no SONAR_TOKEN_FILE' (-not $env:SONAR_TOKEN_FILE)
+
+# Every loaded secret also gets a <NAME>_FILE companion holding its PATH - some checkers take a
+# token's path rather than its value. This was hardcoded to ONE tool's token name (SONARQUBE_TOKEN
+# -> SONAR_TOKEN_FILE): a private convention shipped inside a public launcher, and dead weight for
+# everyone else. The mechanism is the same for every secret, so it applies to all of them.
+Assert 'a loaded secret gets a _FILE companion'      ($env:SHARED_ONLY_FILE -eq (Join-Path "$root\shared" 'SHARED_ONLY'))
+Assert '_FILE points at the tier that won'           ($env:OVERRIDDEN_FILE -eq (Join-Path "$root\$slug" 'OVERRIDDEN'))
+Assert '_FILE follows an org-tier win too'           ($env:ORG_BEATS_THIS_FILE -eq (Join-Path "$root\$slug\org" 'ORG_BEATS_THIS'))
+Assert 'a skipped empty file gets no _FILE'          (-not (Test-Path 'Env:EMPTY_FILE'))
+Assert 'a skipped markdown file gets no _FILE'       (-not (Test-Path 'Env:NOTES.md_FILE'))
+# The DERIVED names stay out of the loaded list - they are paths, not secrets. A real secret whose
+# own name ends in _FILE is a secret and belongs there, which is why this names the derived one
+# rather than matching '_FILE' at all: written the loose way it contradicted this suite's own
+# PAIR_FILE fixture and failed against a correct implementation.
+Assert 'a derived name stays out of the loaded list'   (($loaded -join ',') -notmatch 'SHARED_ONLY_FILE')
+Assert 'while a real secret named _FILE is in it'      (($loaded -join ',') -match 'PAIR_FILE\(project\)')
+# A real secret FILE named PAIR_FILE outranks the path derived from PAIR: the derived export is a
+# convenience, the file is the credential, and overwriting it would be silent data loss.
+Assert 'a real _FILE secret is not overwritten by a derived path' ($env:PAIR_FILE -eq 'a-real-secret-not-a-path')
+Assert 'and it still gets a derived path of its own' ($env:PAIR_FILE_FILE -eq (Join-Path "$root\$slug" 'PAIR_FILE'))
+Assert 'no author-specific SONAR_TOKEN_FILE is exported' (-not $env:SONAR_TOKEN_FILE)
 
 # -Root's default must track the LIVE config, not Get-LauncherDefaults - a machine that set a
 # non-default secretsRoot must have it picked up without every call site passing -Root by hand.
@@ -76,11 +102,13 @@ try {
     Remove-Item -LiteralPath $defaultRootTest -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# SONAR_TOKEN_FILE resolves to the winning tier's file, not the first one found.
-Set-Content -LiteralPath "$root\shared\SONARQUBE_TOKEN" -Value 'shared-token' -NoNewline
-Set-Content -LiteralPath "$root\$slug\SONARQUBE_TOKEN"  -Value 'proj-token' -NoNewline
+# A _FILE path resolves against the tier that WON, not the first tier that happens to hold the file:
+# a project token whose path pointed at the shared copy would hand a checker the wrong credential.
+Set-Content -LiteralPath "$root\shared\TIERED_TOKEN" -Value 'shared-token' -NoNewline
+Set-Content -LiteralPath "$root\$slug\TIERED_TOKEN"  -Value 'proj-token' -NoNewline
 $null = Import-ProjectSecrets -WorkingDirectory 'C:\test\.proj' -Root $root
-Assert 'SONAR_TOKEN_FILE points at the winning tier' ($env:SONAR_TOKEN_FILE -eq (Join-Path "$root\$slug" 'SONARQUBE_TOKEN'))
+Assert 'a _FILE path resolves to the winning tier'  ($env:TIERED_TOKEN_FILE -eq (Join-Path "$root\$slug" 'TIERED_TOKEN'))
+Assert 'and the value comes from that same tier'    ($env:TIERED_TOKEN -eq 'proj-token')
 
 # A project with no directory of its own still gets the shared tier, and does not throw.
 foreach ($v in $vars) { Remove-Item -LiteralPath "Env:$v" -ErrorAction SilentlyContinue }
@@ -95,6 +123,145 @@ Assert 'a missing root returns empty and does not throw' ($missing.Count -eq 0)
 
 foreach ($v in $vars) { Remove-Item -LiteralPath "Env:$v" -ErrorAction SilentlyContinue }
 Remove-Item -LiteralPath $root -Recurse -Force
+
+# --- a file name is not an environment variable name -------------------------------------------
+# `Set-Item -Path "Env:$($f.Name)"` took the file name on trust. Reproduced 2026-09-08: a file named
+# PATH silently REPLACED $env:PATH for the rest of the session, and a name holding '=' threw a
+# NON-terminating ArgumentException whose four-line PowerShell dump landed in the launch banner.
+# Neither is an attack - both are "somebody put a file in a directory". One warning line each.
+$nmRoot = Join-Path $env:TEMP ("cct-badnames-test-" + [guid]::NewGuid().ToString('N'))
+$nmVars = 'GOOD_NAME', 'GOOD_NAME_FILE', '1DIGIT', 'HAS SPACE'
+try {
+    New-Item -ItemType Directory -Force "$nmRoot\shared" | Out-Null
+    Set-Content -LiteralPath "$nmRoot\shared\PATH"      -Value 'CLOBBERED' -NoNewline
+    Set-Content -LiteralPath "$nmRoot\shared\A=B"       -Value 'x' -NoNewline
+    Set-Content -LiteralPath "$nmRoot\shared\1DIGIT"    -Value 'x' -NoNewline
+    Set-Content -LiteralPath "$nmRoot\shared\HAS SPACE" -Value 'x' -NoNewline
+    Set-Content -LiteralPath "$nmRoot\shared\GOOD_NAME" -Value 'good' -NoNewline
+    foreach ($v in $nmVars) { Remove-Item -LiteralPath "Env:$v" -ErrorAction SilentlyContinue }
+
+    # PATH is saved and put back IMMEDIATELY: while the guard is missing this call really does
+    # clobber it, and every native call later in the suite (fsutil, icacls, node) would then fail
+    # for a reason that has nothing to do with what it is testing.
+    $pathBefore = $env:PATH
+    $nmAll = @(Import-ProjectSecrets -WorkingDirectory 'C:\test\.names' -Root $nmRoot 2>&1 6>&1)
+    $pathAfter = $env:PATH
+    $env:PATH = $pathBefore
+
+    $nmErr  = @($nmAll | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+    $nmText = @($nmAll | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
+    Assert 'a secret file named PATH does not replace PATH' ($pathAfter -eq $pathBefore)
+    Assert 'a name holding = raises no PowerShell error'    ($nmErr.Count -eq 0)
+    Assert 'each rejected name costs exactly one line'      (@($nmText | Where-Object { $_ -match "^\s*secret '" }).Count -eq 4)
+    Assert 'the line names the offending file'              (@($nmText | Where-Object { $_ -match "secret 'A=B'" }).Count -eq 1)
+    Assert 'a reserved name is refused as reserved'         (@($nmText | Where-Object { $_ -match "secret 'PATH'.*reserved" }).Count -eq 1)
+    Assert 'a valid name beside them still loads'           ($env:GOOD_NAME -eq 'good')
+
+    $nmLoaded = @(Import-ProjectSecrets -WorkingDirectory 'C:\test\.names' -Root $nmRoot 6>$null 2>$null)
+    $env:PATH = $pathBefore
+    Assert 'a rejected name never reaches the loaded list'  (($nmLoaded -join ',') -notmatch 'A=B|1DIGIT|HAS SPACE|PATH\(')
+    Assert 'and the valid one is still reported'            (($nmLoaded -join ',') -match 'GOOD_NAME\(shared\)')
+} finally {
+    foreach ($v in $nmVars) { Remove-Item -LiteralPath "Env:$v" -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $nmRoot) { Remove-Item -LiteralPath $nmRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# --- non-literal path cmdlets break on [ ] in a real path --------------------------------------
+# Reproduced 2026-09-08: on a REAL directory named 'br[x]dir', Test-Path answers False, Get-ChildItem
+# returns nothing, and Copy-Item/Remove-Item report success while copying and deleting NOTHING -
+# -Path takes a wildcard PATTERN, and [x] is a character class matching one 'x'. A user whose repos
+# live under C:\Users\J\Projects\[old]\app therefore loses every secret and the whole shared-link
+# repair, with no message at all. -LiteralPath on every one of them is the fix.
+$brBase = Join-Path $env:TEMP ("cct-brackets-test-" + [guid]::NewGuid().ToString('N'))
+$brRoot = Join-Path $brBase 'br[x]dir'
+$brVars = 'BRACKET_SHARED', 'BRACKET_PROJ', 'BRACKET_SHARED_FILE', 'BRACKET_PROJ_FILE'
+$origWR3 = $WorkRoot; $origSR3 = $SecondaryRoots
+try {
+    $brSlug = 'C--test--brk'
+    New-Item -ItemType Directory -Force "$brRoot\shared", "$brRoot\$brSlug" | Out-Null
+    Set-Content -LiteralPath "$brRoot\shared\BRACKET_SHARED" -Value 'br-shared' -NoNewline
+    Set-Content -LiteralPath "$brRoot\$brSlug\BRACKET_PROJ"  -Value 'br-proj' -NoNewline
+    foreach ($v in $brVars) { Remove-Item -LiteralPath "Env:$v" -ErrorAction SilentlyContinue }
+
+    $null = Import-ProjectSecrets -WorkingDirectory 'C:\test\.brk' -Root $brRoot 6>$null
+    Assert 'a store under a [bracket] path loads the shared tier'  ($env:BRACKET_SHARED -eq 'br-shared')
+    Assert 'a store under a [bracket] path loads the project tier' ($env:BRACKET_PROJ -eq 'br-proj')
+    Assert 'and the _FILE path survives the brackets'              ($env:BRACKET_PROJ_FILE -eq (Join-Path "$brRoot\$brSlug" 'BRACKET_PROJ'))
+
+    # Repair-SharedLink under a bracket root: the drifted copy must actually be relinked. Under the
+    # bug the whole function returned at `Test-Path $_` before looking at anything.
+    $brWork = Join-Path $brRoot 'work'; $brSec = Join-Path $brRoot 'personal'
+    New-Item -ItemType Directory -Force $brWork, $brSec | Out-Null
+    Set-Content -LiteralPath "$brWork\settings.json" -Value '{"model":"work"}' -NoNewline
+    Set-Content -LiteralPath "$brSec\settings.json"  -Value '{"model":"drifted"}' -NoNewline
+    (Get-Item -LiteralPath "$brSec\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
+    $WorkRoot = $brWork; $SecondaryRoots = @($brSec)
+    Repair-SharedLink -Name 'settings.json' 6>$null
+    $brIds = @(@($brWork, $brSec) | ForEach-Object { Get-SharedFileId -Path (Join-Path $_ 'settings.json') } | Sort-Object -Unique)
+    Assert 'a drifted copy under a [bracket] root is re-linked' ($brIds.Count -eq 1 -and $brIds[0])
+    Assert 'the newest copy won there too'                      ((Get-Content -LiteralPath "$brSec\settings.json" -Raw) -eq '{"model":"work"}')
+    Assert 'and the .pre-relink backup was really written'      (Test-Path -LiteralPath "$brSec\settings.json.pre-relink")
+
+    # Repair-SharedJunction under a bracket root: a real directory where the junction belongs must
+    # still be reported. Under the bug every Test-Path in it answered False, so it returned at the
+    # first line and the divergence stayed invisible forever.
+    New-Item -ItemType Directory -Force (Join-Path $brWork 'projects'), (Join-Path $brSec 'projects') | Out-Null
+    $brJunc = @(Repair-SharedJunction -Name 'projects' -Root $brSec 6>&1 | ForEach-Object { "$_" })
+    Assert 'a real directory under a [bracket] root is reported' (@($brJunc | Where-Object { $_ -match 'not a junction' }).Count -eq 1)
+} finally {
+    $WorkRoot = $origWR3; $SecondaryRoots = $origSR3
+    foreach ($v in $brVars) { Remove-Item -LiteralPath "Env:$v" -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $brBase) { Remove-Item -LiteralPath $brBase -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# --- Repair-SharedLink: a re-link that cannot finish must not eat the file ----------------------
+# `Copy-Item -Force` then `Remove-Item` then `New-Item -ItemType HardLink` ran with nothing around
+# them: any refusal between the delete and the link left the owner's settings.json ABSENT with only
+# <file>.pre-relink beside it. Both failures below are forced with deny ACEs on a throwaway
+# directory - the same two rights Protect-SharedJunction already reasons about - so nothing outside
+# $env:TEMP is touched, and the finally lifts them again.
+$who = "$env:USERDOMAIN\$env:USERNAME"
+$fbBase = Join-Path $env:TEMP ("cct-failedrelink-test-" + [guid]::NewGuid().ToString('N'))
+$origWR4 = $WorkRoot; $origSR4 = $SecondaryRoots
+$fbSecA = Join-Path $fbBase 'a\personal'; $fbSecB = Join-Path $fbBase 'b\personal'
+try {
+    # (a) the BACKUP cannot be written (no add-file on the directory): the file must be left exactly
+    # as it was, because a re-link with no backup has nothing to restore from.
+    $fbWorkA = Join-Path $fbBase 'a\work'
+    New-Item -ItemType Directory -Force $fbWorkA, $fbSecA | Out-Null
+    Set-Content -LiteralPath "$fbWorkA\settings.json" -Value '{"model":"work"}' -NoNewline
+    Set-Content -LiteralPath "$fbSecA\settings.json"  -Value '{"model":"drifted"}' -NoNewline
+    (Get-Item -LiteralPath "$fbSecA\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
+    & icacls.exe $fbSecA '/deny' "${who}:(WD)" *>$null
+    $WorkRoot = $fbWorkA; $SecondaryRoots = @($fbSecA)
+    $fbA = @(Repair-SharedLink -Name 'settings.json' 6>&1 | ForEach-Object { "$_" })
+    Assert 'a re-link that cannot be backed up leaves the file alone' ((Get-Content -LiteralPath "$fbSecA\settings.json" -Raw) -eq '{"model":"drifted"}')
+    Assert 'and says so in one line'                                  (@($fbA | Where-Object { $_ -match 'could not back up' }).Count -eq 1)
+
+    # (b) the DELETE is refused (no delete on the file, no delete-child on the directory - exactly
+    # the pair an AV product or a locked file produces): the copy must survive, and the launcher
+    # must not report a re-link that never happened.
+    $fbWorkB = Join-Path $fbBase 'b\work'
+    New-Item -ItemType Directory -Force $fbWorkB, $fbSecB | Out-Null
+    Set-Content -LiteralPath "$fbWorkB\settings.json" -Value '{"model":"work"}' -NoNewline
+    Set-Content -LiteralPath "$fbSecB\settings.json"  -Value '{"model":"drifted"}' -NoNewline
+    (Get-Item -LiteralPath "$fbSecB\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
+    & icacls.exe "$fbSecB\settings.json" '/deny' "${who}:(DE)" *>$null
+    & icacls.exe $fbSecB '/deny' "${who}:(DC)" *>$null
+    $WorkRoot = $fbWorkB; $SecondaryRoots = @($fbSecB)
+    $fbB = @(Repair-SharedLink -Name 'settings.json' 6>&1 | ForEach-Object { "$_" })
+    Assert 'a re-link refused mid-way leaves the file in place' (Test-Path -LiteralPath "$fbSecB\settings.json")
+    Assert 'its content is untouched'                           ((Get-Content -LiteralPath "$fbSecB\settings.json" -Raw) -eq '{"model":"drifted"}')
+    Assert 'the failure costs one line'                         (@($fbB | Where-Object { $_ -match 'could not re-link' }).Count -eq 1)
+    Assert 'and nothing claims it was re-linked'                (@($fbB | Where-Object { $_ -match 're-linked settings\.json' }).Count -eq 0)
+} finally {
+    $WorkRoot = $origWR4; $SecondaryRoots = $origSR4
+    # Lift every deny before the sweep, or the tree cannot be removed and the temp dir is littered.
+    & icacls.exe $fbSecA '/remove:d' $who *>$null
+    & icacls.exe "$fbSecB\settings.json" '/remove:d' $who *>$null
+    & icacls.exe $fbSecB '/remove:d' $who *>$null
+    if (Test-Path -LiteralPath $fbBase) { Remove-Item -LiteralPath $fbBase -Recurse -Force -ErrorAction SilentlyContinue }
+}
 
 # --- launch log -------------------------------------------------------------------------------
 # Also against a throwaway root: the real log under ~/.claude/launcher-logs is evidence about how
@@ -471,8 +638,8 @@ try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSumma
 
 } finally { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 110) {
-    Write-Host "COULD NOT RUN: expected 110 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
+if ($script:Ran -ne 141) {
+    Write-Host "COULD NOT RUN: expected 141 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
 }
 if ($script:fail -gt 0) {
@@ -481,5 +648,5 @@ if ($script:fail -gt 0) {
 }
 # Counted, not guessed: HEAD claimed 72 while running 75 (measured 2026-09-04 by counting the
 # ok/FAIL lines of a bare run). A banner nobody re-counts is a number that drifts silently.
-Write-Host '110 assertions, all pass' -ForegroundColor Green
+Write-Host '141 assertions, all pass' -ForegroundColor Green
 exit 0

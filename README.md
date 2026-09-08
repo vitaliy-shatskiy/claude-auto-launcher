@@ -32,7 +32,7 @@ The `default (…)` labels above resolve from the reader's own `~/.claude/settin
 
 ## Requirements
 
-- PowerShell 7 (`pwsh`) - without it the launcher re-execs under `pwsh` if it can find one, else warns and continues with the full UI but no MCP configuration (a bare session is a separate, module-load failure path)
+- PowerShell 7 (`pwsh`) - required, not preferred. Typed in a Windows PowerShell 5.1 window the launcher re-execs itself under `pwsh`; with no `pwsh` on the machine at all it refuses and says so. It used to carry on there and start a session with no account choice, no sharing repair and no MCP configuration - several modules do not even parse under 5.1
 - Claude Code (`claude` on PATH) - the launch-screen rows (model/effort/advisor/permission values) were built against `2.1.263`; a much older or newer CLI may accept different flags
 - Node.js - only for two things: the MCP mirror used by multi-account `sharing`, and `Test-Mirror.ps1`, which exits `2` (could not run) without it. The launcher itself does not need it
 
@@ -98,7 +98,11 @@ are empty there so a fresh clone never warns about a script nobody has - example
 - **Maintenance** (`u`) - `u` update, `r` rename swap, `d` doctor, `m` mcp list, `p` prune, plus one hotkey per configured `maintenanceActions[]` entry, `esc` back. **Not covered by `CLAUDE_AUTO_PREVIEW`** - unlike every other screen, its actions run against your real Claude Code install even during a preview run; `tests\preview.ps1` never presses one of these keys.
 - **Session picker** (action = resume) - a list with a last-exchange preview; `/` filters, `enter` opens, `f` forks, `esc` returns to the launch screen.
 
-## Environment switches
+## Arguments and environment switches
+
+Every argument is passed through to `claude` untouched. The one exception is
+`claude-auto --launcher-version`, which prints the launcher's own version and exits - `--version`
+belongs to the CLI.
 
 - `CLAUDE_AUTO_CONFIG` - path to the config file, instead of `~/.claude/claude-auto.json`
 - `CLAUDE_AUTO_PREFS` - path to the remembered-choices file, instead of `~/.claude/claude-auto-prefs.json` (the test harness points this at a throwaway file so driving the preview seam never touches the real one)

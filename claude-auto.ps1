@@ -7,17 +7,30 @@
 # and only warns. There is deliberately no param() block - adding one changes how PowerShell
 # binds --resume, --continue and -p, and passing those through untouched is the hard invariant.
 
-# Windows PowerShell 5.1 has no ForEach-Object -Parallel, which Env.ps1 uses to find the Rider MCP
-# port. Under 5.1 the launcher does not die - it silently starts a session with NO MCP configuration,
-# which is worse than dying. PowerShell resolves this .ps1 ahead of claude-auto.cmd, so the shim that
-# exists to force pwsh is bypassed whenever `claude-auto` is typed in a 5.1 window.
+# The launcher's own version. Deliberately NOT on --version: that argument is passed through to
+# claude, and the headless regression check depends on it staying that way.
+$script:LauncherVersion = '0.1.0'
+if ($args.Count -eq 1 -and $args[0] -eq '--launcher-version') {
+    Write-Host "claude-auto $script:LauncherVersion"
+    exit 0
+}
+
+# PowerShell 7 or nothing. PowerShell resolves this .ps1 ahead of claude-auto.cmd, so the shim that
+# exists to force pwsh is bypassed whenever `claude-auto` is typed in a 5.1 window - hence the
+# re-exec. Without pwsh at all this used to carry on and start a session with no MCP configuration,
+# described as "the full UI but no MCP". That was false: several modules do not even PARSE under
+# 5.1, so every helper was missing and the launcher fell through to a bare `claude` with no account
+# choice, no sharing repair and no config. install.ps1 already refuses to install without pwsh 7;
+# refusing here says the same thing at the same volume instead of degrading into something else.
 if ($PSVersionTable.PSVersion.Major -lt 6) {
     $pwshExe = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($pwshExe) {
         & $pwshExe.Source -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @args
         exit $LASTEXITCODE
     }
-    Write-Host "  pwsh 7 not found - continuing under Windows PowerShell $($PSVersionTable.PSVersion); MCP configuration will be skipped" -ForegroundColor Red
+    Write-Host "  claude-auto needs PowerShell 7 and this is Windows PowerShell $($PSVersionTable.PSVersion)." -ForegroundColor Red
+    Write-Host "  Install it - winget install Microsoft.PowerShell - and run claude-auto again." -ForegroundColor Red
+    exit 1
 }
 
 $ModuleDir = Join-Path $PSScriptRoot 'claude-auto'
@@ -120,9 +133,9 @@ $resumeId = $null
 $forkSession = $false
 $previewPickerCancelled = $false
 
-# The screen draws only for a bare interactive launch. Redirected stdin is the nightly audit
-# (run-audit.cmd feeds it < NUL to take the defaults); arguments mean the caller already knows
-# what it wants. Either way the UI must stay out of the way.
+# The screen draws only for a bare interactive launch. Redirected stdin means something is driving
+# this unattended - a scheduled task feeding it `< NUL` to take the defaults; arguments mean the
+# caller already knows what it wants. Either way the UI must stay out of the way.
 $UseUi = $UiOk -and ($Preview -or (-not [Console]::IsInputRedirected -and $args.Count -eq 0))
 if ($UseUi -and -not $Preview) {
     try { $null = $Host.UI.RawUI.WindowSize } catch { $UseUi = $false }
@@ -176,9 +189,9 @@ if ($UseUi) {
 
         # Esc in the picker lands back on this screen rather than silently starting a new session:
         # cancelling a resume is a change of mind about which session, not about launching at all.
-        # Preferences load ONLY here, inside the interactive branch. run-audit.cmd feeds the launcher
-        # `< NUL` and takes the defaults; an audit that silently inherited yesterday's --effort max
-        # would change automated runs and spend the weekly limit with nobody watching.
+        # Preferences load ONLY here, inside the interactive branch. An unattended caller feeds the
+        # launcher `< NUL` and takes the defaults; a scheduled run that silently inherited
+        # yesterday's --effort max would spend the weekly limit with nobody watching.
         # Read once and keep it: the screen needs the OTHER accounts' profiles too, so that arriving
         # at a tab with no stash yet loads what that account last launched with.
         $prefs = Read-LaunchPrefs

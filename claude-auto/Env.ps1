@@ -197,6 +197,12 @@ function Resolve-AccountAnswer {
     return $Default
 }
 
+# Names the shell owns. A secret file called PATH is somebody's mistake, never an instruction.
+$script:ReservedSecretNames = @(
+    'PATH', 'PATHEXT', 'COMSPEC', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP',
+    'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'OS', 'PSMODULEPATH'
+)
+
 function Import-ProjectSecrets {
     # One place holds a credential, and it is never a config file. The secrets store (a directory
     # beside the profile, `secretsRoot` in the config) uses the same slug Claude Code uses for
@@ -228,14 +234,31 @@ function Import-ProjectSecrets {
     }
 
     $winner = [ordered]@{}
+    $winnerPath = @{}
     foreach ($tier in $tiers.Keys) {
         $dir = $tiers[$tier]
-        if (-not (Test-Path $dir)) { continue }
+        # -LiteralPath, here and below. -Path takes a wildcard PATTERN, so on a real directory named
+        # 'br[x]dir' this answered False and Get-ChildItem returned nothing: a user whose repos live
+        # under C:\Users\J\Projects\[old]\app lost every secret with no message at all.
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
         # One environment variable per FILE, named after the file - so an index file placed in a
         # tier would become $env:README.md. The charter lives at the tree root for
         # that reason, and this skip is the guard, because a convention nobody can break is not a
         # convention that depends on nobody adding a readme.
-        foreach ($f in Get-ChildItem $dir -File | Where-Object { $_.Extension -ne '.md' }) {
+        foreach ($f in Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.Extension -ne '.md' }) {
+            # A FILE NAME is not an environment variable name, and this used to take it on trust. A
+            # file called PATH silently REPLACED $env:PATH for the rest of the session, and a name
+            # holding '=' threw a non-terminating ArgumentException whose four-line PowerShell dump
+            # landed in the launch banner. Neither is an attack - both are somebody putting a file
+            # in a directory - so each costs one line and the rest of the store still loads.
+            if ($f.Name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+                Write-Host "  secret '$($f.Name)' skipped: not a valid environment variable name" -ForegroundColor DarkYellow
+                continue
+            }
+            if ($script:ReservedSecretNames -contains $f.Name.ToUpperInvariant()) {
+                Write-Host "  secret '$($f.Name)' skipped: that name is reserved by the system" -ForegroundColor DarkYellow
+                continue
+            }
             # -Raw then Trim: a trailing newline is not part of a token, and an invisible one turns
             # HTTP Basic auth into a 401 that reads like the credential is wrong.
             #
@@ -244,23 +267,30 @@ function Import-ProjectSecrets {
             # holds the PREVIOUS file's value - so an empty secret file silently inherited another
             # secret's value. Present in this function since it was written; caught 2026-08-13 by
             # Test-Env.ps1's "an empty file sets nothing".
-            $value = Get-Content $f.FullName -Raw
+            $value = Get-Content -LiteralPath $f.FullName -Raw
             if ($null -eq $value) { continue }
             $value = $value.Trim()
             if (-not $value) { continue }
-            Set-Item -Path "Env:$($f.Name)" -Value $value
+            Set-Item -LiteralPath "Env:$($f.Name)" -Value $value
             $winner[$f.Name] = $tier
+            $winnerPath[$f.Name] = $f.FullName
         }
     }
 
-    # Some checkers take a token's PATH rather than its value, so this one name also gets a _FILE
-    # variable. Resolved against the tier that actually won, so a project token is not silently
-    # shadowed by a shared one.
-    $sonarFile = @($tiers.Values) |
-        ForEach-Object { Join-Path $_ 'SONARQUBE_TOKEN' } |
-        Where-Object { Test-Path $_ } |
-        Select-Object -Last 1
-    if ($sonarFile) { $env:SONAR_TOKEN_FILE = $sonarFile }
+    # Some checkers take a token's PATH rather than its value, so every loaded secret also gets a
+    # <NAME>_FILE companion holding the path of the tier that WON - a project token is never
+    # shadowed by the shared copy. This used to be hardcoded to one tool's token name: a private
+    # convention shipped inside a launcher meant to be public, and dead weight for everyone else.
+    # The mechanism was never specific to that tool, so it applies to every secret.
+    #
+    # A real secret FILE already called <NAME>_FILE outranks the derived path. The file is the
+    # credential; the derived export is a convenience, and overwriting one with the other would be
+    # silent data loss. The derived names stay out of the returned list - they are not secrets.
+    foreach ($name in @($winner.Keys)) {
+        $derived = "${name}_FILE"
+        if ($winner.Contains($derived)) { continue }
+        Set-Item -LiteralPath "Env:$derived" -Value $winnerPath[$name]
+    }
 
     # Report the tier beside each name: an unexpected shared value is then visible at launch rather
     # than diagnosed later as a wrong credential.
@@ -293,7 +323,10 @@ function Repair-SharedLink {
     # third profile drifts forever - the precise failure the whole mechanism exists to prevent.
     # File IDs are compared per root instead, which is identity rather than "somebody shares".
     param([string]$Name, [string[]]$Roots = (@($WorkRoot) + $SecondaryRoots))
-    $paths = @($Roots | ForEach-Object { Join-Path $_ $Name } | Where-Object { Test-Path $_ })
+    # -LiteralPath throughout. -Path is a wildcard PATTERN, so under a real directory named
+    # 'br[x]dir' this filter dropped every path and the whole repair returned before looking at
+    # anything - silently, on a machine whose profiles were drifting.
+    $paths = @($Roots | ForEach-Object { Join-Path $_ $Name } | Where-Object { Test-Path -LiteralPath $_ })
     if ($paths.Count -lt 2) { return }
 
     $ids = @{}
@@ -307,14 +340,30 @@ function Repair-SharedLink {
 
     # One winner for the whole set, not a pairwise repair: relinking pair by pair would undo the
     # previous pair's work whenever three roots hold three different inodes.
-    $src = @($paths | Sort-Object { (Get-Item $_).LastWriteTimeUtc } -Descending)[0]
+    $src = @($paths | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending)[0]
     $srcId = $ids[$src]
     $relinked = @()
     foreach ($dst in $paths) {
         if ($ids[$dst] -eq $srcId) { continue }
-        Copy-Item $dst "$dst.pre-relink" -Force
-        Remove-Item $dst -Force
-        New-Item -ItemType HardLink -Path $dst -Target $src | Out-Null
+        # Delete-then-link with no guard left the reader's settings.json GONE whenever the link
+        # failed - a permission, an antivirus lock - with only a .pre-relink beside it and nothing
+        # said. The backup is taken first and put back if the link does not land.
+        $backup = "$dst.pre-relink"
+        try { Copy-Item -LiteralPath $dst -Destination $backup -Force -ErrorAction Stop }
+        catch {
+            Write-Host "  could not back up $dst before re-linking ($($_.Exception.Message)); left alone" -ForegroundColor DarkYellow
+            continue
+        }
+        try {
+            Remove-Item -LiteralPath $dst -Force -ErrorAction Stop
+            New-Item -ItemType HardLink -Path $dst -Target $src -ErrorAction Stop | Out-Null
+        } catch {
+            if (-not (Test-Path -LiteralPath $dst)) {
+                try { Copy-Item -LiteralPath $backup -Destination $dst -Force -ErrorAction Stop } catch { }
+            }
+            Write-Host "  could not re-link $Name in $(Split-Path -Parent $dst | Split-Path -Leaf): $($_.Exception.Message)" -ForegroundColor DarkYellow
+            continue
+        }
         $relinked += (Split-Path -Parent $dst | Split-Path -Leaf)
     }
     if ($relinked.Count -gt 0) {
@@ -435,13 +484,16 @@ function Repair-SharedJunction {
     param([string]$Name, [Parameter(Mandatory)][string]$Root)
     $w = Join-Path $WorkRoot $Name
     $p = Join-Path $Root $Name
-    if (-not (Test-Path $w)) { return }
+    # -LiteralPath on all three. -Path is a wildcard pattern, so under a real directory named
+    # 'br[x]dir' every one of them answered False: this returned at the first line and a diverged
+    # directory stayed invisible forever, which is the exact failure it exists to report.
+    if (-not (Test-Path -LiteralPath $w)) { return }
     # A root that does not exist yet is not a broken share: New-ClaudeProfileRoot creates it, and
     # creating a junction under a missing parent would only raise a warning at every launch.
-    if (-not (Test-Path $Root)) { return }
+    if (-not (Test-Path -LiteralPath $Root)) { return }
     $rootName = Split-Path -Leaf $Root
-    if (Test-Path $p) {
-        if (-not ((Get-Item $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    if (Test-Path -LiteralPath $p) {
+        if (-not ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
             Write-Host "  $Name is a real directory in $rootName, not a junction - merge it by hand" -ForegroundColor DarkYellow
         }
         return
