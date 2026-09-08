@@ -68,9 +68,15 @@ Assert 'the return value names each tier'     (($loaded -join ',') -match 'share
 # token's path rather than its value. This was hardcoded to ONE tool's token name (SONARQUBE_TOKEN
 # -> SONAR_TOKEN_FILE): a private convention shipped inside a public launcher, and dead weight for
 # everyone else. The mechanism is the same for every secret, so it applies to all of them.
-Assert 'a loaded secret gets a _FILE companion'      ($env:SHARED_ONLY_FILE -eq (Join-Path "$root\shared" 'SHARED_ONLY'))
-Assert '_FILE points at the tier that won'           ($env:OVERRIDDEN_FILE -eq (Join-Path "$root\$slug" 'OVERRIDDEN'))
-Assert '_FILE follows an org-tier win too'           ($env:ORG_BEATS_THIS_FILE -eq (Join-Path "$root\$slug\org" 'ORG_BEATS_THIS'))
+# Asserted on what the path CONTAINS, not on how it is spelled. A string compare against a path
+# built from $env:TEMP is not a test of the loader: on a machine whose account name is longer than
+# eight characters, $env:TEMP is the 8.3 form (`C:\Users\RUNNER~1\...` on a GitHub runner) while the
+# loader hands back the long one, and the assertion fails over spelling alone. CI caught exactly
+# that on its first run - this suite is green on any machine with a short user name. Reading the
+# file is also the stronger claim: the path has to be usable, not merely equal to a string.
+Assert 'a loaded secret gets a _FILE companion'      ((Get-Content -LiteralPath $env:SHARED_ONLY_FILE -Raw) -eq 'from-shared')
+Assert '_FILE points at the tier that won'           ((Get-Content -LiteralPath $env:OVERRIDDEN_FILE -Raw) -eq 'from-proj')
+Assert '_FILE follows an org-tier win too'           ((Get-Content -LiteralPath $env:ORG_BEATS_THIS_FILE -Raw) -eq 'from-org')
 Assert 'a skipped empty file gets no _FILE'          (-not (Test-Path 'Env:EMPTY_FILE'))
 Assert 'a skipped markdown file gets no _FILE'       (-not (Test-Path 'Env:NOTES.md_FILE'))
 # The DERIVED names stay out of the loaded list - they are paths, not secrets. A real secret whose
@@ -82,7 +88,7 @@ Assert 'while a real secret named _FILE is in it'      (($loaded -join ',') -mat
 # A real secret FILE named PAIR_FILE outranks the path derived from PAIR: the derived export is a
 # convenience, the file is the credential, and overwriting it would be silent data loss.
 Assert 'a real _FILE secret is not overwritten by a derived path' ($env:PAIR_FILE -eq 'a-real-secret-not-a-path')
-Assert 'and it still gets a derived path of its own' ($env:PAIR_FILE_FILE -eq (Join-Path "$root\$slug" 'PAIR_FILE'))
+Assert 'and it still gets a derived path of its own' ((Get-Content -LiteralPath $env:PAIR_FILE_FILE -Raw) -eq 'a-real-secret-not-a-path')
 Assert 'no author-specific SONAR_TOKEN_FILE is exported' (-not $env:SONAR_TOKEN_FILE)
 
 # -Root's default must track the LIVE config, not Get-LauncherDefaults - a machine that set a
@@ -107,7 +113,7 @@ try {
 Set-Content -LiteralPath "$root\shared\TIERED_TOKEN" -Value 'shared-token' -NoNewline
 Set-Content -LiteralPath "$root\$slug\TIERED_TOKEN"  -Value 'proj-token' -NoNewline
 $null = Import-ProjectSecrets -WorkingDirectory 'C:\test\.proj' -Root $root
-Assert 'a _FILE path resolves to the winning tier'  ($env:TIERED_TOKEN_FILE -eq (Join-Path "$root\$slug" 'TIERED_TOKEN'))
+Assert 'a _FILE path resolves to the winning tier'  ((Get-Content -LiteralPath $env:TIERED_TOKEN_FILE -Raw) -eq 'proj-token')
 Assert 'and the value comes from that same tier'    ($env:TIERED_TOKEN -eq 'proj-token')
 
 # A project with no directory of its own still gets the shared tier, and does not throw.
@@ -186,7 +192,7 @@ try {
     $null = Import-ProjectSecrets -WorkingDirectory 'C:\test\.brk' -Root $brRoot 6>$null
     Assert 'a store under a [bracket] path loads the shared tier'  ($env:BRACKET_SHARED -eq 'br-shared')
     Assert 'a store under a [bracket] path loads the project tier' ($env:BRACKET_PROJ -eq 'br-proj')
-    Assert 'and the _FILE path survives the brackets'              ($env:BRACKET_PROJ_FILE -eq (Join-Path "$brRoot\$brSlug" 'BRACKET_PROJ'))
+    Assert 'and the _FILE path survives the brackets'              ((Get-Content -LiteralPath $env:BRACKET_PROJ_FILE -Raw) -eq 'br-proj')
 
     # Repair-SharedLink under a bracket root: the drifted copy must actually be relinked. Under the
     # bug the whole function returned at `Test-Path $_` before looking at anything.

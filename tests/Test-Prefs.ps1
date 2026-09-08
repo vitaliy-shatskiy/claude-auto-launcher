@@ -280,7 +280,14 @@ Assert-Equal 'max' $st.Profiles['work'].Effort 'with the edit it was holding'
 $savedAutoPrefs = $env:CLAUDE_AUTO_PREFS
 try {
     $env:CLAUDE_AUTO_PREFS = Join-Path $env:TEMP 'claude-auto-prefs-envtest.json'
-    Assert-Equal $env:CLAUDE_AUTO_PREFS (Get-LaunchPrefsPath) 'CLAUDE_AUTO_PREFS overrides the default path'
+    # Asserted on WHERE it points, not on how the path is spelled. A raw string compare is not a
+    # test of the override: on a machine whose account name is longer than eight characters
+    # $env:TEMP is the 8.3 form (`C:\Users\RUNNER~1\...` on a GitHub runner) while the expanded
+    # answer is the long one, so it failed over spelling alone - CI caught it on the first run, and
+    # this suite is green on any machine with a short user name. The two halves below still fail if
+    # the variable is ignored, which is the thing under test.
+    Assert-Equal 'claude-auto-prefs-envtest.json' (Split-Path -Leaf (Get-LaunchPrefsPath)) 'CLAUDE_AUTO_PREFS decides the prefs file'
+    Assert-Equal $false ((Get-LaunchPrefsPath) -like (Join-Path $HOME '.claude*')) 'and the default under ~/.claude is not used'
     $env:CLAUDE_AUTO_PREFS = '~\prefs-tilde-test.json'
     Assert-Equal (Join-Path $HOME 'prefs-tilde-test.json') (Get-LaunchPrefsPath) 'a ~-rooted CLAUDE_AUTO_PREFS expands against $HOME'
 } finally {
@@ -394,7 +401,7 @@ for (`$i = 0; `$i -lt `$Count; `$i++) { `$null = Save-LaunchPrefs -State `$state
 
 foreach ($f in $paths) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 104) { Write-Host "COULD NOT RUN: expected 104 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 105) { Write-Host "COULD NOT RUN: expected 105 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
