@@ -396,7 +396,14 @@ function Invoke-MaintenanceScreen {
         # queued in the meantime is noise behind a ten-second command, not an instruction to this
         # menu - see the drain comment below. $null keeps every existing caller (and every test that
         # omits it) on the old behaviour.
-        [scriptblock]$Drain = $null
+        [scriptblock]$Drain = $null,
+        # When the terminal delivered the record now being handled. From the INPUT RECORD, never
+        # from this loop's own clock: a redraw plus Get-ClaudeInstallInfo between two real presses
+        # easily outlasts any threshold worth setting, while two characters of one paste arrive
+        # microseconds apart however slow the screen is. $null - the keyboard-only ReadKey path -
+        # leaves the guard inert rather than blocking a confirm the reader really did press twice.
+        [scriptblock]$RecordTime = { try { Get-ClaudeInputRecordTime } catch { $null } },
+        [int]$ConfirmMinMs = 150
     )
     $status = ''
     $rowMap = $null
@@ -404,6 +411,10 @@ function Invoke-MaintenanceScreen {
     # key interpolated into a regex ('.' or '[') either matched everything or threw, and a generic
     # '^confirm' let one key's warning confirm ANOTHER key's action. Any press consumes it.
     $pending = $null
+    # When that confirm was armed. A PASTE is not two presses: this screen acts on every character
+    # it is handed and ConfirmTwice was the only brake, so a pasted string containing 'pp' deleted
+    # builds and 'ii' started a five-minute fleet reindex with nobody touching the keyboard.
+    $pendingAt = $null
     # One place, so a new action cannot forget it: run the child, then throw away everything the
     # terminal queued while it owned the screen (a replayed hover ran `mcp list` over and over).
     $run = {
@@ -456,7 +467,13 @@ function Invoke-MaintenanceScreen {
         # keys must work on the Russian and Ukrainian layouts).
         if ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return }
         $wasPending = $pending
+        $wasPendingAt = $pendingAt
         $pending = $null
+        $pendingAt = $null
+        # Too fast to be a second press. The armed key is RE-armed rather than cancelled, so a long
+        # paste of the same letter is a stream of re-arms and never an action.
+        $now = & $RecordTime
+        $tooFast = ($null -ne $now -and $null -ne $wasPendingAt -and ($now - $wasPendingAt) -lt $ConfirmMinMs)
         # An unrelated key cancels an armed confirm AND its text: otherwise "press i again" stays on
         # screen while the next i only re-arms. Branches that re-arm set their own text below.
         if ($wasPending -and -not (Test-ClaudeHotkey -Key $key -Char $wasPending)) { $status = '' }
@@ -469,7 +486,7 @@ function Invoke-MaintenanceScreen {
         elseif (Test-ClaudeHotkey -Key $key -Char 'd') { $status = 'running claude doctor...'; & $Draw $info $status; $status = (& $run { Invoke-ClaudeCommandText -Arguments @('doctor') }) }
         elseif (Test-ClaudeHotkey -Key $key -Char 'm') { $status = 'running claude mcp list...'; & $Draw $info $status; $status = (& $run { Invoke-ClaudeCommandText -Arguments @('mcp', 'list') }) }
         elseif (Test-ClaudeHotkey -Key $key -Char 'p') {
-            if ($wasPending -ne 'p') { $pending = 'p'; $status = "confirm: press p again to delete all but the 2 newest builds" }
+            if ($wasPending -ne 'p' -or $tooFast) { $pending = 'p'; $pendingAt = $now; $status = "confirm: press p again to delete all but the 2 newest builds" }
             else { $r = Remove-OldClaudeVersions -Keep 2; $status = "deleted $($r.Deleted.Count) builds, freed $('{0:N1}' -f ($r.FreedBytes / 1GB)) GB" }
         }
         # Configured actions. ConfirmTwice ones are confirmed first because they are SLOW - a menu
@@ -477,8 +494,9 @@ function Invoke-MaintenanceScreen {
         else {
             foreach ($a in $Actions) {
                 if (-not (Test-ClaudeHotkey -Key $key -Char $a.Key)) { continue }
-                if ($a.ConfirmTwice -and $wasPending -ne $a.Key) {
+                if ($a.ConfirmTwice -and ($wasPending -ne $a.Key -or $tooFast)) {
                     $pending = $a.Key
+                    $pendingAt = $now
                     $status = "confirm: press $($a.Key) again to run $($a.Label) (the screen will sit still while it runs)"
                 } else {
                     $status = "running $($a.Label)..."

@@ -1530,6 +1530,58 @@ Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 
 Assert-Equal 1 @($script:actionRuns).Count 'i, x, x runs exactly one action'
 Assert-Equal $true ($script:lastStatus -match 'quick finished green') 'and it is x, not i'
 
+# --- W5: a PASTE must not satisfy "press it twice" -------------------------------------------
+# This screen acts on every character it is handed, and ConfirmTwice was the only brake - so any
+# pasted string containing `pp` deleted builds and `ii` started a five-minute fleet reindex, with
+# no keypress at all. The brake now also needs the confirming character to have ARRIVED more than
+# ConfirmMinMs after the arming one; two characters of one paste arrive microseconds apart.
+# The clock is injected because the screen's OWN elapsed time is the wrong instrument: a redraw
+# plus Get-ClaudeInstallInfo between two presses can outlast any threshold worth setting, which is
+# why the real stamp comes from the input record (asserted in Test-Input.ps1).
+$script:pasteClock = 1000
+$burstClock = { $script:pasteClock += 10; return $script:pasteClock }
+$typedClock = { $script:pasteClock += 400; return $script:pasteClock }
+
+$script:pruneRuns = 0
+$script:pasteClock = 1000
+$w = New-EventReader @($pKey, $pKey, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner $fakeRunner -RecordTime $burstClock
+Assert-Equal 0 $script:pruneRuns 'two p characters 10 ms apart are a paste, not a confirmed prune'
+Assert-Equal $true ($script:lastStatus -match '^confirm: press p again') 'and the screen still stands on its confirm rather than reporting a deletion'
+
+$script:pruneRuns = 0
+$script:pasteClock = 1000
+$w = New-EventReader @($pKey, $pKey, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner $fakeRunner -RecordTime $typedClock
+Assert-Equal 1 $script:pruneRuns 'two p presses 400 ms apart still prune - the brake is a paste guard, not a lockout'
+
+$script:reindexRuns = 0
+$script:pasteClock = 1000
+$w = New-EventReader @($iKey, $iKey, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner $fakeRunner -RecordTime $burstClock
+Assert-Equal 0 $script:reindexRuns 'a pasted "ii" does not start the five-minute fleet reindex either'
+$script:reindexRuns = 0
+$script:pasteClock = 1000
+$w = New-EventReader @($iKey, $iKey, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner $fakeRunner -RecordTime $typedClock
+Assert-Equal 1 $script:reindexRuns 'and two real presses still run it'
+
+# A third pasted character must not confirm what the second one re-armed: the guard re-arms on the
+# too-fast press, so a long paste of the same letter is a stream of re-arms and never an action.
+$script:pruneRuns = 0
+$script:pasteClock = 1000
+$w = New-EventReader @($pKey, $pKey, $pKey, $pKey, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner $fakeRunner -RecordTime $burstClock
+Assert-Equal 0 $script:pruneRuns 'four pasted p characters still prune nothing'
+
+# With no arrival stamp to offer - the keyboard-only [Console]::ReadKey path, and every test above
+# that injects no clock - the gate stays inert rather than inventing a timestamp and blocking a
+# confirm the owner really did press twice.
+$script:pruneRuns = 0
+$w = New-EventReader @($pKey, $pKey, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner $fakeRunner -RecordTime { $null }
+Assert-Equal 1 $script:pruneRuns 'with no arrival stamp available the confirm behaves exactly as it did before'
+
 # Without -Width the footer is one line, as every caller that never wraps expects.
 $oneLine = New-HintFooter -Glyphs (Get-Glyphs) -Hints @(
     @{ Token = 'u'; Label = 'update'; Clickable = $true; Key = ''; Char = 'u' }
@@ -1589,7 +1641,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 724) { Write-Host "COULD NOT RUN: expected 724 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 731) { Write-Host "COULD NOT RUN: expected 731 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
