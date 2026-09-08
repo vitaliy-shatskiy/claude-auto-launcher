@@ -100,8 +100,13 @@ try {
     $g = Read-LauncherConfig -Path (Join-Path $tmp 'garbage.json')
     Assert 'unparsable → defaults + warning'      (@($g.Accounts).Count -eq 1 -and @($g.Warnings).Count -eq 1)
 
+    # Asserted on WHICH file it chose, not on how the path is spelled: $tmp comes from $env:TEMP,
+    # which is the 8.3 form on a machine whose account name is longer than eight characters
+    # (C:\Users\RUNNER~1\... on a GitHub runner) while the expander hands back the long one. A raw
+    # string compare fails there on spelling alone - it went red on CI and is green on any machine
+    # with a short user name. Both halves still fail if the override is ignored.
     $env:CLAUDE_AUTO_CONFIG = Join-Path $tmp 'nope.json'
-    Assert 'env override wins'                    ((Get-LauncherConfigPath) -eq $env:CLAUDE_AUTO_CONFIG)
+    Assert 'env override wins'                    ((Split-Path -Leaf (Get-LauncherConfigPath)) -eq 'nope.json' -and (Get-LauncherConfigPath) -ne (Join-Path $HOME '.claude\claude-auto.json'))
 
     # deferred review finding: nothing pinned CLAUDE_AUTO_CONFIG's own '~' expansion (only an
     # already-absolute override, above). Get-LauncherConfigPath must run it through
@@ -122,7 +127,10 @@ try {
     Push-Location $trueCwd
     try {
         $expanded = Expand-LauncherPath 'rel\thing.json'
-        Assert 'relative path expands against $PWD, not [Environment]::CurrentDirectory' ($expanded -eq (Join-Path $trueCwd 'rel\thing.json'))
+        # Which of the two directories it landed in is the whole question, so that is what this
+        # asks - the two names are distinct on purpose. Comparing the full path as a string added
+        # nothing and made the case fail wherever $env:TEMP is an 8.3 path.
+        Assert 'relative path expands against $PWD, not [Environment]::CurrentDirectory' (($expanded -like '*true-cwd*rel*thing.json') -and ($expanded -notlike '*other-cwd*'))
     } finally { Pop-Location; [Environment]::CurrentDirectory = $savedNetCwd }
 
     # --- deferred review finding: string-typed JSON booleans. [bool]"false" is $true in PowerShell,
