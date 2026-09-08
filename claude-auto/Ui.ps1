@@ -30,12 +30,22 @@ function Enter-AltBuffer {
     # Escape while the alternate buffer is up - the alternative is the process dying before the
     # `finally` that restores the buffer ever runs, leaving the terminal on the wrong screen with no
     # cursor. A console-less host (tests, redirected stdin) throws here; that failure must be silent.
-    try { [Console]::TreatControlCAsInput = $true } catch { }
+    #
+    # Kept here as well as in Open-ClaudeConsoleInput because the two paths are independent: with
+    # CLAUDE_AUTO_NO_MOUSE=1 the console is never armed and this is the only thing standing between
+    # Ctrl+C and a terminal left on the alternate screen. Nested set-and-restore is safe as long as
+    # each side puts back what IT found, which is what the previous hardcoded $false did not do -
+    # a process started with Ctrl+C already treated as input had that setting taken away by a
+    # launcher that never set it.
+    try { $script:AltBufferPrevTcc = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $true } catch { }
 }
 
 function Exit-AltBuffer {
     [Console]::Write("$([char]27)[?25h$([char]27)[?1049l")
-    try { [Console]::TreatControlCAsInput = $false } catch { }
+    if ($null -ne $script:AltBufferPrevTcc) {
+        try { [Console]::TreatControlCAsInput = [bool]$script:AltBufferPrevTcc } catch { }
+    }
+    $script:AltBufferPrevTcc = $null
 }
 
 function Write-Frame {

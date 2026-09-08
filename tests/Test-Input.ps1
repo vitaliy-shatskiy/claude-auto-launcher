@@ -46,6 +46,11 @@ if (-not (Initialize-ClaudeConsoleInput)) {
     exit 2
 }
 
+# Before ANY record has been read: there is no arrival stamp to offer, and the maintenance screen's
+# paste guard must stay inert rather than invent one. Asserted first, because every read below sets
+# it - this is the only point in the suite where "no record yet" is still true.
+Assert-Equal '' "$(Get-ClaudeInputRecordTime)" 'with no record read yet there is no arrival stamp, so the confirm gate stays inert'
+
 function New-KeyRec([int]$Down, [uint16]$Vk, [uint16]$Char, [uint32]$Cks = 0) {
     $k = New-Object 'ClaudeAuto.ConsoleInput+KEY_EVENT_RECORD'
     $k.bKeyDown = $Down; $k.wRepeatCount = 1; $k.wVirtualKeyCode = $Vk; $k.wVirtualScanCode = 0
@@ -119,6 +124,67 @@ Assert-Equal $true $up.WheelUp     'scrolling up is reported as up'
 Assert-Equal $true $down.WheelDown 'scrolling down is reported as DOWN'
 Assert-Equal $false $up.WheelDown  'up is not also down'
 
+# ------------------------------------------------- a restore that failed is not a restore (W2)
+#
+# Close-ClaudeConsoleInput verifies the mode bit-exact and returns $false when it did not come
+# back - but it used to mark the state Closed anyway, which turns the `finally` block's second
+# call into a no-op. A failed restore was therefore both SILENT and unretryable, and what it
+# leaves behind is the owner's terminal with QuickEdit off for the rest of the day.
+#
+# INVALID_HANDLE_VALUE, so SetConsoleMode genuinely fails without touching any real console.
+$noRestore = [pscustomobject]@{ Handle = [IntPtr]::new(-1); OriginalMode = 0; ArmedMode = 0; Closed = $false }
+$errSink = [IO.StringWriter]::new()
+$prevErr = [Console]::Error
+[Console]::SetError($errSink)
+try { $closeResult = Close-ClaudeConsoleInput -State $noRestore } finally { [Console]::SetError($prevErr) }
+Assert-Equal $false $closeResult 'a console-mode restore that failed reports failure'
+Assert-Equal $false $noRestore.Closed 'and leaves the state OPEN, so the finally block can actually retry it'
+Assert-Equal $true ($errSink.ToString() -match 'console mode') 'and says so on stderr rather than failing in silence'
+
+# ------------------------------------------- the mouse downgrade is one-way, so guard it (W6)
+#
+# Switch-ClaudeMouseToText permanently clears ENABLE_MOUSE_INPUT and asks the TERMINAL for text
+# reports instead. Two ways that misfires: one pasted `ESC[<0;1;1M` kills the console mouse for
+# the rest of the session, and with stdout redirected the compensating ?1000h/?1006h lands in the
+# redirect FILE while the terminal is left with no mouse at all. Both guards are asserted through
+# a captured [Console]::Out, so a regression cannot arm mouse tracking in a real terminal either.
+function Invoke-CapturedSwitch {
+    param($State, [bool]$Redirected, [bool]$SawConsoleMouse)
+    $sink = [IO.StringWriter]::new()
+    $prevOut = [Console]::Out
+    [Console]::SetOut($sink)
+    $r = $null
+    try { $r = Switch-ClaudeMouseToText -State $State -OutputRedirected $Redirected -SawConsoleMouse $SawConsoleMouse }
+    catch { $r = "THREW: $($_.Exception.Message)" }
+    finally { [Console]::SetOut($prevOut) }
+    return [pscustomobject]@{ Switched = $r; Wrote = $sink.ToString() }
+}
+function New-FakeMouseState { [pscustomobject]@{ Handle = [IntPtr]::new(-1); ArmedMode = 0; Closed = $false } }
+$sw1 = Invoke-CapturedSwitch -State (New-FakeMouseState) -Redirected $true -SawConsoleMouse $false
+Assert-Equal $false $sw1.Switched 'with stdout redirected the console mouse is never taken away'
+Assert-Equal '' $sw1.Wrote 'and no tracking request is written, because it would land in the redirect file, not the terminal'
+$sw2 = Invoke-CapturedSwitch -State (New-FakeMouseState) -Redirected $false -SawConsoleMouse $true
+Assert-Equal $false $sw2.Switched 'a terminal that has already delivered MOUSE_EVENT records keeps its console mouse'
+Assert-Equal '' $sw2.Wrote 'and is never asked for text reports'
+$sw3 = Invoke-CapturedSwitch -State (New-FakeMouseState) -Redirected $false -SawConsoleMouse $false
+Assert-Equal $true $sw3.Switched 'a text-only terminal still gets the downgrade - the guards are not a blanket off switch'
+
+# ------------------------------------------------------ an arrow delivered as VT TEXT (U2) ---
+# Pure, because the mapping is the whole fix: both VT branches used to consume to the final byte
+# and return $true, which Read-ClaudeInputEvent turns into $null. On the very terminal the
+# text-mouse path exists for, up/down/left/right were dead keys - while the footer advertises them
+# as the only way to change a value.
+Assert-Equal 'UpArrow'    "$((ConvertFrom-ClaudeVtKey -Sequence '[A').Key)" 'CSI A is the Up arrow'
+Assert-Equal 'DownArrow'  "$((ConvertFrom-ClaudeVtKey -Sequence '[B').Key)" 'CSI B is the Down arrow'
+Assert-Equal 'RightArrow' "$((ConvertFrom-ClaudeVtKey -Sequence '[C').Key)" 'CSI C is the Right arrow'
+Assert-Equal 'LeftArrow'  "$((ConvertFrom-ClaudeVtKey -Sequence '[D').Key)" 'CSI D is the Left arrow'
+Assert-Equal 'UpArrow'    "$((ConvertFrom-ClaudeVtKey -Sequence 'OA').Key)" 'SS3 A is the Up arrow too - application cursor mode sends O, not ['
+Assert-Equal 'Home'       "$((ConvertFrom-ClaudeVtKey -Sequence '[1~').Key)" 'CSI 1~ is Home'
+Assert-Equal 'End'        "$((ConvertFrom-ClaudeVtKey -Sequence '[4~').Key)" 'CSI 4~ is End'
+Assert-Equal '' (ConvertFrom-ClaudeVtKey -Sequence '[<0;41;13M') 'a mouse report is NOT a cursor key - it has its own decoder'
+Assert-Equal '' (ConvertFrom-ClaudeVtKey -Sequence '[I') 'a focus-in report maps to no key and stays swallowed'
+Assert-Equal 0 ([int](ConvertFrom-ClaudeVtKey -Sequence '[A').KeyChar) 'a cursor key carries no character, so no hotkey matcher can mistake it for one'
+
 # ---------------------------------------------------------------- live console
 
 if ($Live -and -not $LiveOnly) {
@@ -141,12 +207,25 @@ if ($Live -and -not $LiveOnly) {
 } elseif (-not $LiveOnly) {
     Write-Host 'skip  live console half (pass -Live to run it in a hidden child console)'
 } else {
+    # Captured BEFORE arming, because arming is now what neutralises Ctrl+C and the restore has to
+    # put back whatever this process was actually found with, not a guessed $false.
+    $tccBefore = try { [Console]::TreatControlCAsInput } catch { $null }
     $state = Open-ClaudeConsoleInput
     if (-not $state) {
         Write-Host "COULD NOT RUN: -LiveOnly was asked for but this process has no console"
         exit 2
     }
     try {
+        # --- W1: Ctrl+C is neutralised by ARMING, not by the alternate buffer ---------------------
+        # Open-ClaudeConsoleInput is called on a path where Enter-AltBuffer never runs:
+        # Test-AltBufferSupported returns $false whenever output is redirected, so `claude-auto > log`
+        # armed QuickEdit-off with a live Ctrl+C - which tears the process down before the `finally`
+        # that restores this very console mode can run. Nothing above sets TreatControlCAsInput, so
+        # this is the redirected-output shape exactly.
+        Assert-Equal $false ([bool]($state.ArmedMode -band [ClaudeAuto.ConsoleInput]::ENABLE_PROCESSED_INPUT)) `
+            'arming clears PROCESSED_INPUT by itself, with no alternate buffer - Ctrl+C arrives as a key instead of killing the launcher'
+        Assert-Equal $true ([Console]::TreatControlCAsInput) 'and .NET agrees, so the keyboard-only [Console]::ReadKey path sees it too'
+
         Assert-Equal $false ([bool]($state.ArmedMode -band [ClaudeAuto.ConsoleInput]::ENABLE_QUICK_EDIT_MODE)) 'arming clears QuickEdit, or the terminal keeps the mouse for selection'
         Assert-Equal $true  ([bool]($state.ArmedMode -band [ClaudeAuto.ConsoleInput]::ENABLE_MOUSE_INPUT)) 'arming enables mouse input'
         Assert-Equal $true  ([bool]($state.ArmedMode -band [ClaudeAuto.ConsoleInput]::ENABLE_WINDOW_INPUT)) 'arming enables resize events'
@@ -240,6 +319,21 @@ if ($Live -and -not $LiveOnly) {
                        (New-TextRec '1'), (New-TextRec '2'), (New-TextRec 'M'))
         Assert-Equal '@' (Read-AllChars) 'an SGR report reaches the menu as a mouse event - never as the characters it is made of'
 
+        # --- W6: decoding a report must not COST this console its mouse --------------------------
+        # This console delivered a genuine MOUSE_EVENT record a few assertions ago, so it is not a
+        # terminal that needs the text protocol - and the downgrade is one-way. One report-shaped
+        # sequence (a paste of `ESC[<0;1;1M` is enough) used to clear ENABLE_MOUSE_INPUT for the
+        # rest of the session.
+        Assert-Equal $false ([bool]$state.TextMouse) 'a decoded report does not take the console mouse away once real MOUSE_EVENT records have arrived'
+        [uint32]$modeAfterReport = 0
+        $mh = [ClaudeAuto.ConsoleInput]::CreateFileW('CONIN$',
+            [ClaudeAuto.ConsoleInput]::GENERIC_READ -bor [ClaudeAuto.ConsoleInput]::GENERIC_WRITE,
+            [ClaudeAuto.ConsoleInput]::FILE_SHARE_READ -bor [ClaudeAuto.ConsoleInput]::FILE_SHARE_WRITE,
+            [IntPtr]::Zero, [ClaudeAuto.ConsoleInput]::OPEN_EXISTING, 0, [IntPtr]::Zero)
+        [void][ClaudeAuto.ConsoleInput]::GetConsoleMode($mh, [ref]$modeAfterReport)
+        [void][ClaudeAuto.ConsoleInput]::CloseHandle($mh)
+        Assert-Equal $true ([bool]($modeAfterReport -band [ClaudeAuto.ConsoleInput]::ENABLE_MOUSE_INPUT)) 'and ENABLE_MOUSE_INPUT is still set on the live console'
+
         # X10 / normal tracking: ESC [ M then three RAW bytes. 32+85 is 'u' - the update key. It is
         # decoded into a mouse event, so what reaches the menu is a click, never those letters.
         Send-Records @((New-TextRec ([char]27)), (New-TextRec '['), (New-TextRec 'M'),
@@ -255,6 +349,34 @@ if ($Live -and -not $LiveOnly) {
                        (New-TextRec ([char]32)), (New-UpRec ([char]32)),
                        (New-TextRec 'u'), (New-UpRec 'u'))
         Assert-Equal '@' (Read-AllChars) 'key-up records inside the sequence do not shift a coordinate byte into the menu'
+
+        # --- U1: the key-up BEFORE the introducer, which the suite above never pinned -------------
+        # Every payload loop in Input.ps1 counts key-DOWNS precisely because the queue interleaves
+        # releases. The introducer PEEK did not: it peeked a one-record buffer and returned $null the
+        # moment record[0] was a release, so the ESC's OWN key-up hid the '[' sitting behind it and
+        # the whole report reached the menu as the literal keys it is made of. Measured before the
+        # fix: '[M ur' - `claude update` (32+85 = 'u') and the rename swap (32+82 = 'r') from one
+        # hover at column 85, and for SGR the leading ESC reaches the launch screen as Escape, so a
+        # click quits the launcher. The suite's existing shapes all put the ups AFTER the introducer.
+        Send-Records @((New-KeyRec 1 27 27 0), (New-KeyRec 0 27 27 0),
+                       (New-TextRec '['), (New-TextRec 'M'),
+                       (New-TextRec ([char]32)), (New-TextRec 'u'), (New-TextRec 'r'))
+        Assert-Equal '@' (Read-AllChars) 'the ESC key-UP does not hide the introducer behind it: an X10 report is still ONE mouse event'
+
+        Send-Records @((New-KeyRec 1 27 27 0), (New-KeyRec 0 27 27 0),
+                       (New-TextRec '['), (New-TextRec '<'), (New-TextRec '0'), (New-TextRec ';'),
+                       (New-TextRec '4'), (New-TextRec '1'), (New-TextRec ';'),
+                       (New-TextRec '1'), (New-TextRec '3'), (New-TextRec 'M'))
+        Assert-Equal '@' (Read-AllChars) 'nor does it turn an SGR click into Escape plus ten stray menu keys'
+
+        # A mouse record queued between the ESC and its sequence must not hide the introducer
+        # either - the peek has to skip everything that is not a key-down, not just releases. That
+        # stray record is swallowed WITH the sequence, which costs one hover pixel and is the whole
+        # price of not leaking three coordinate letters into the menu.
+        Send-Records @((New-KeyRec 1 27 27 0), (New-MouseRec 3 3 0 ([ClaudeAuto.ConsoleInput]::MOUSE_MOVED)),
+                       (New-TextRec '['), (New-TextRec 'M'),
+                       (New-TextRec ([char]32)), (New-TextRec 'u'), (New-TextRec 'r'))
+        Assert-Equal '@' (Read-AllChars) 'a mouse record between the ESC and its introducer does not hide it either'
 
         # --- SS3 (application-keypad mode) blind-reads one record instead of counting key-downs ---
         # ESC O is the SS3 introducer; exactly one final byte follows. The queue can interleave the
@@ -412,9 +534,58 @@ if ($Live -and -not $LiveOnly) {
         # And an ordinary keypress that merely FOLLOWS an Escape is not swallowed with it.
         Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec 'u'))
         Assert-Equal "$([char]27)u" (Read-AllChars) 'Escape then u is two keys, not a sequence'
+
+        # --- U2 end to end: an arrow delivered as VT text reaches the menu AS an arrow -------------
+        # The pure assertions above pin the mapping; these pin the two swallow branches actually
+        # returning it, which is where both arrows died. On a terminal that reports the mouse as
+        # text - the exact terminal this whole path exists for - up/down/left/right were dead while
+        # the footer advertised them as the only way to change a value.
+        function Read-FirstKeyName {
+            for ($i = 0; $i -lt 40; $i++) {
+                $e = Read-ClaudeInputEvent -State $state -TimeoutMs 30
+                if ($null -ne $e) { return "$($e.Key)" }
+            }
+            return ''
+        }
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec '['), (New-TextRec 'A'))
+        Assert-Equal 'UpArrow' (Read-FirstKeyName) 'CSI A arrives as the Up arrow, not as a swallowed nothing'
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec '['), (New-TextRec 'B'))
+        Assert-Equal 'DownArrow' (Read-FirstKeyName) 'CSI B arrives as the Down arrow'
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec '['), (New-TextRec 'C'))
+        Assert-Equal 'RightArrow' (Read-FirstKeyName) 'CSI C arrives as the Right arrow - which is how a value is changed'
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec '['), (New-TextRec 'D'))
+        Assert-Equal 'LeftArrow' (Read-FirstKeyName) 'CSI D arrives as the Left arrow'
+        # SS3, with the introducer's own key-up interleaved - the shape the SS3 branch was written
+        # for. It must survive the mapping too, not just the swallow.
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec ([char]0x4F)), (New-UpRec ([char]0x4F)), (New-TextRec 'B'))
+        Assert-Equal 'DownArrow' (Read-FirstKeyName) 'SS3 B arrives as the Down arrow even with the introducer key-up interleaved'
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec '['), (New-TextRec '1'), (New-TextRec '~'))
+        Assert-Equal 'Home' (Read-FirstKeyName) 'CSI 1~ arrives as Home'
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec '['), (New-TextRec '4'), (New-TextRec '~'))
+        Assert-Equal 'End' (Read-FirstKeyName) 'CSI 4~ arrives as End'
+        # A sequence with no key of its own is still swallowed whole - the mapping must not turn the
+        # bounded scan into a leak.
+        Send-Records @((New-KeyRec 1 27 27 0), (New-TextRec '['), (New-TextRec 'I'))
+        Assert-Equal '' (Read-AllChars) 'a focus-in report still reaches the menu as nothing at all'
+
+        # --- W5 support: a record carries WHEN the terminal delivered it --------------------------
+        # The maintenance screen's paste guard rests on this stamp and not on its own loop clock:
+        # a paste arrives as one burst however slow the screen is, and Get-ClaudeInstallInfo plus a
+        # redraw between two presses can easily outlast any threshold worth setting.
+        Clear-ClaudeInputQueue -State $state | Out-Null
+        Send-Records @((New-TextRec 'a'), (New-TextRec 'b'))
+        $null = Read-ClaudeInputEvent -State $state -TimeoutMs 60
+        $burst1 = Get-ClaudeInputRecordTime
+        $null = Read-ClaudeInputEvent -State $state -TimeoutMs 60
+        $burst2 = Get-ClaudeInputRecordTime
+        Assert-Equal $true ($null -ne $burst1 -and $burst2 -ge $burst1) 'every record read carries an arrival stamp, and the stamps move forward'
+        Assert-Equal $true (($burst2 - $burst1) -lt 150) 'two records of one burst arrive far closer together than the confirm gate - which is what tells a paste from a second press'
     } finally {
         $restored = Close-ClaudeConsoleInput -State $state
         Assert-Equal $true $restored 'the console mode is restored bit-exact, verified by reading it back'
+        # Paired with the arming, so the path that has no alternate buffer to undo still puts Ctrl+C
+        # back the way this process was found - never a hardcoded $false.
+        Assert-Equal "$tccBefore" "$([Console]::TreatControlCAsInput)" 'and closing puts Ctrl+C back exactly as it was found'
         Assert-Equal $true (Close-ClaudeConsoleInput -State $state) 'closing twice is harmless — it runs from a finally that can unwind twice'
     }
 
@@ -491,12 +662,12 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # (arming a SECOND time after TreatControlCAsInput can fail, in which case only 1 assertion runs
 # there instead of 4 - see 'arming after TreatControlCAsInput should still work'), so its count is
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
-# genuine hidden console, never guessed. The bare count (30) IS exact - checkpoint.ps1 only ever
+# genuine hidden console, never guessed. The bare count (49) IS exact - checkpoint.ps1 only ever
 # runs this suite bare, and that path has no such branching.
 if ($LiveOnly) {
-    if ($script:Ran -lt 66) { Write-Host "COULD NOT RUN: expected at least 66 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
-} elseif ($script:Ran -ne 30) {
-    Write-Host "COULD NOT RUN: expected 30 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
+    if ($script:Ran -lt 103) { Write-Host "COULD NOT RUN: expected at least 103 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+} elseif ($script:Ran -ne 49) {
+    Write-Host "COULD NOT RUN: expected 49 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

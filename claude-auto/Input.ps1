@@ -179,15 +179,37 @@ function Open-ClaudeConsoleInput {
             [void][ClaudeAuto.ConsoleInput]::CloseHandle($h)
             return $null
         }
+        # PROCESSED_INPUT cleared here, and NOT in Enter-AltBuffer where it used to live. The alt
+        # buffer is skipped whenever output is redirected (Test-AltBufferSupported), so
+        # `claude-auto > log` armed QuickEdit-off with Ctrl+C still live - and Ctrl+C tears the
+        # process down before the `finally` that restores this very console mode can run, leaving
+        # the owner's terminal without its own text selection for the rest of the day. Arming and
+        # neutralising Ctrl+C are one decision and now live in one place.
+        # Read BEFORE arming. [Console]::TreatControlCAsInput is not a separate setting - it IS the
+        # PROCESSED_INPUT bit of this same console mode, which the arming below clears. Read after,
+        # the getter reports the value this function has just imposed, and the restore then puts
+        # that back instead of what the process was found with.
+        $tcc = $null
+        try { $tcc = [Console]::TreatControlCAsInput } catch { }
+
         $armed = ($mode -bor [ClaudeAuto.ConsoleInput]::ENABLE_WINDOW_INPUT `
                         -bor [ClaudeAuto.ConsoleInput]::ENABLE_MOUSE_INPUT `
                         -bor [ClaudeAuto.ConsoleInput]::ENABLE_EXTENDED_FLAGS) `
-                 -band (-bnot [ClaudeAuto.ConsoleInput]::ENABLE_QUICK_EDIT_MODE)
+                 -band (-bnot ([ClaudeAuto.ConsoleInput]::ENABLE_QUICK_EDIT_MODE -bor [ClaudeAuto.ConsoleInput]::ENABLE_PROCESSED_INPUT))
         if (-not [ClaudeAuto.ConsoleInput]::SetConsoleMode($h, $armed)) {
             [void][ClaudeAuto.ConsoleInput]::CloseHandle($h)
             return $null
         }
-        return [pscustomobject]@{ Handle = $h; OriginalMode = $mode; ArmedMode = $armed; Closed = $false }
+        # The keyboard-only [Console]::ReadKey path reads this flag rather than the console mode, so
+        # both have to agree; $tcc above is what the restore puts back.
+        try { [Console]::TreatControlCAsInput = $true } catch { }
+        return [pscustomobject]@{
+            Handle = $h; OriginalMode = $mode; ArmedMode = $armed; Closed = $false
+            OriginalTreatControlC = $tcc
+            # Set the first time a genuine MOUSE_EVENT record arrives. A console that sends those
+            # must never be downgraded to the text protocol - see Switch-ClaudeMouseToText.
+            SawConsoleMouse = $false
+        }
     } catch { return $null }
 }
 
@@ -212,7 +234,17 @@ function Close-ClaudeConsoleInput {
         if ([ClaudeAuto.ConsoleInput]::GetConsoleMode($State.Handle, [ref]$now)) { $ok = $ok -and ($now -eq $State.OriginalMode) }
         [void][ClaudeAuto.ConsoleInput]::CloseHandle($State.Handle)
     } catch { $ok = $false }
-    $State.Closed = $true
+    if ($null -ne $State.OriginalTreatControlC) {
+        try { [Console]::TreatControlCAsInput = [bool]$State.OriginalTreatControlC } catch { }
+    }
+    # Closed ONLY on success. It used to be set either way, which turned the second call - the one
+    # the `finally` block makes on an unwind - into a no-op, so a failed restore was both silent and
+    # unretryable. What it leaves behind is the reader's terminal with QuickEdit off for the rest of
+    # the day, and nothing said so.
+    if ($ok) { $State.Closed = $true }
+    else {
+        try { [Console]::Error.WriteLine('claude-auto: the console mode could not be restored; QuickEdit may still be off in this terminal') } catch { }
+    }
     return $ok
 }
 
@@ -277,21 +309,70 @@ function Peek-ClaudeKeyChar {
     # re-checked - one coarse sleep and out, exactly the instant-peek bug this exists to fix. A tight
     # re-peek costs a few microseconds per iteration and is bounded by the Stopwatch regardless of
     # OS timer granularity.
+    # SIXTEEN records, not one, and releases are SKIPPED rather than treated as an answer. A
+    # one-record peek that bailed on record[0] being a release could not see past the ESC's OWN
+    # key-up - and every payload loop in this file counts key-DOWNS precisely because the queue
+    # interleaves releases. So the introducer sitting behind that release was invisible, the report
+    # was not recognised as a sequence, and its characters reached the menu as keys: an X10 report
+    # at column 85 is the byte 32+85 = 'u', which runs `claude update`, and column 82 is 'r', the
+    # rename swap. For SGR the leading ESC reached the launch screen as Escape, so a click quit the
+    # launcher. Measured 2026-09-08: the menu received '[M ur'.
     param($State, [int]$TimeoutMs = 5)
     try {
         $sw = [Diagnostics.Stopwatch]::StartNew()
         do {
-            $buf = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
+            $buf = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 16
             [uint32]$n = 0
-            if (-not [ClaudeAuto.ConsoleInput]::PeekConsoleInputW($State.Handle, $buf, 1, [ref]$n)) { return $null }
-            if ($n -ge 1) {
-                if ($buf[0].EventType -ne [ClaudeAuto.ConsoleInput]::KEY_EVENT) { return $null }
-                if ($buf[0].KeyEvent.bKeyDown -eq 0) { return $null }
-                return [int]$buf[0].KeyEvent.UnicodeChar
+            if (-not [ClaudeAuto.ConsoleInput]::PeekConsoleInputW($State.Handle, $buf, 16, [ref]$n)) { return $null }
+            for ($i = 0; $i -lt [int]$n; $i++) {
+                if ($buf[$i].EventType -ne [ClaudeAuto.ConsoleInput]::KEY_EVENT) { continue }
+                if ($buf[$i].KeyEvent.bKeyDown -eq 0) { continue }
+                return [int]$buf[$i].KeyEvent.UnicodeChar
             }
         } while ($sw.Elapsed.TotalMilliseconds -lt $TimeoutMs)
         return $null
     } catch { return $null }
+}
+
+function Read-ClaudeKeyDown {
+    # Consume records until a key-DOWN is taken, and return it. The counterpart of the peek above:
+    # everything it skips to find the next key-down, this has to skip to consume the same one.
+    # Bounded, so a queue of nothing but releases costs a few reads rather than the menu.
+    param($State, [int]$TimeoutMs = 0, [int]$Max = 16)
+    for ($i = 0; $i -lt $Max; $i++) {
+        $rec = Read-ClaudeRawRecord -State $State -TimeoutMs $TimeoutMs
+        if ($null -eq $rec) { return $null }
+        if ($rec.EventType -eq [ClaudeAuto.ConsoleInput]::KEY_EVENT -and $rec.KeyEvent.bKeyDown -ne 0) { return $rec }
+    }
+    return $null
+}
+
+function ConvertFrom-ClaudeVtKey {
+    # A cursor or navigation key delivered as VT TEXT -> the ConsoleKeyInfo every screen already
+    # consumes. Nothing else maps: a mouse report has its own decoder, and a focus or device report
+    # is not a key at all and stays swallowed.
+    #
+    # Both VT branches below used to consume to the final byte and return $true, which
+    # Read-ClaudeInputEvent turns into $null - so on the very terminal the text-mouse path exists
+    # for, up/down/left/right were dead keys while the footer advertised them as the only way to
+    # change a value.
+    #
+    # $Sequence carries the introducer: '[A' (CSI) or 'OA' (SS3, which is what a terminal in
+    # application-cursor mode sends for the same key).
+    param([string]$Sequence)
+    $map = @{
+        'A' = [ConsoleKey]::UpArrow; 'B' = [ConsoleKey]::DownArrow
+        'C' = [ConsoleKey]::RightArrow; 'D' = [ConsoleKey]::LeftArrow
+        'H' = [ConsoleKey]::Home; 'F' = [ConsoleKey]::End
+    }
+    $key = $null
+    if ($Sequence -match '^[\[O]([A-DHF])$') { $key = $map[$Matches[1]] }
+    elseif ($Sequence -eq '[1~') { $key = [ConsoleKey]::Home }
+    elseif ($Sequence -eq '[4~') { $key = [ConsoleKey]::End }
+    if ($null -eq $key) { return }
+    # KeyChar 0 on purpose: a cursor key carries no character, and one that did would be matched by
+    # every hotkey comparison on the way up.
+    return [System.ConsoleKeyInfo]::new([char]0, $key, $false, $false, $false)
 }
 
 function Read-ClaudeRawRecord {
@@ -307,7 +388,23 @@ function Read-ClaudeRawRecord {
     # The formatting is inside the guard, not only the write: building the line is a switch plus a
     # -f on every record, and "every record" means every pixel of mouse movement.
     if ($script:TraceOn) { Write-ClaudeInputTrace (Format-ClaudeInputRecord -Record $buf[0]) }
+    # When the TERMINAL delivered it. The maintenance screen's confirm gate rests on this and not on
+    # its own loop clock: a paste arrives as one burst however slow the screen is, while a redraw
+    # plus Get-ClaudeInstallInfo between two real presses easily outlasts any threshold worth
+    # setting. Stamped here, where the record actually arrives.
+    $script:LastRecordMs = [Environment]::TickCount64
+    # A genuine MOUSE_EVENT record proves this console does not need the text protocol, and the
+    # downgrade to it is one-way.
+    if ($buf[0].EventType -eq [ClaudeAuto.ConsoleInput]::MOUSE_EVENT -and $State) {
+        try { $State.SawConsoleMouse = $true } catch { }
+    }
     return $buf[0]
+}
+
+function Get-ClaudeInputRecordTime {
+    # $null until the first record is read, so a confirm gate with nothing to compare against stays
+    # inert rather than inventing a stamp.
+    return $script:LastRecordMs
 }
 
 function ConvertFrom-ClaudeMouseReport {
@@ -352,8 +449,18 @@ function Switch-ClaudeMouseToText {
     # at all: X10 spends a single byte on the coordinate.
     #
     # Idempotent: the read path sees many reports before the first switch lands.
-    param($State)
+    # Two guards, because the downgrade is permanent for the session and one report-shaped sequence
+    # is enough to trigger it - a paste of `ESC[<0;1;1M` will do. A console that has already
+    # delivered real MOUSE_EVENT records does not need the text protocol and must keep its mouse.
+    # And with stdout redirected the compensating ?1000h/?1006h lands in the redirect FILE, so the
+    # terminal is left with no mouse at all and no request to give it one.
+    param(
+        $State,
+        [bool]$OutputRedirected = [Console]::IsOutputRedirected,
+        [bool]$SawConsoleMouse = $(if ($State) { [bool]$State.SawConsoleMouse } else { $false })
+    )
     if (-not $State -or $State.Closed -or $State.TextMouse) { return $false }
+    if ($OutputRedirected -or $SawConsoleMouse) { return $false }
     try {
         $mode = $State.ArmedMode -band (-bnot [ClaudeAuto.ConsoleInput]::ENABLE_MOUSE_INPUT)
         $null = [ClaudeAuto.ConsoleInput]::SetConsoleMode($State.Handle, $mode)
@@ -393,7 +500,11 @@ function Skip-ClaudeVtSequence {
     # CSI (0x5B '[') and SS3 (0x4F 'O') are the two introducers a terminal uses here.
     if ($next -ne 0x5B -and $next -ne 0x4F) { return $false }
     $eaten = @()
-    $null = Read-ClaudeRawRecord -State $State -TimeoutMs 0
+    # Consume THE INTRODUCER, not "one record". The peek above looks past key-ups and stray mouse
+    # records to find it; a blind single read then ate the ESC's own key-up and left the introducer
+    # sitting in the queue, so the scan below started one byte late and the report leaked into the
+    # menu exactly as before. Peek and consume have to agree about what they are skipping.
+    $null = Read-ClaudeKeyDown -State $State
     $eaten += [char]$next
     if ($next -eq 0x4F) {
         # SS3: exactly one byte follows. Counted the same way the X10 branch below counts to four -
@@ -402,10 +513,21 @@ function Skip-ClaudeVtSequence {
         # keypad-2 is ESC O r), and a blind single read after the introducer can consume that O-up
         # instead of the real final byte, leaving it to reach the menu as an ordinary hotkey.
         $downs = 0
+        $final = 0
         for ($i = 0; $i -lt 24 -and $downs -lt 1; $i++) {
             $rec = Read-ClaudeRawRecord -State $State -TimeoutMs 4
             if ($null -eq $rec) { break }
-            if ($rec.EventType -eq [ClaudeAuto.ConsoleInput]::KEY_EVENT -and $rec.KeyEvent.bKeyDown -ne 0) { $downs++ }
+            if ($rec.EventType -eq [ClaudeAuto.ConsoleInput]::KEY_EVENT -and $rec.KeyEvent.bKeyDown -ne 0) {
+                $downs++
+                $final = [int]$rec.KeyEvent.UnicodeChar
+            }
+        }
+        # An arrow in application-cursor mode arrives exactly here. Swallowing it was the whole of
+        # the old behaviour, which left the four keys the footer advertises doing nothing at all.
+        $vtKey = ConvertFrom-ClaudeVtKey -Sequence ('O' + [char]$final)
+        if ($vtKey) {
+            if ($script:TraceOn) { Write-ClaudeInputTrace ("VT KEY ESC O$([char]$final)") }
+            return $vtKey
         }
         if ($script:TraceOn) { Write-ClaudeInputTrace 'SWALLOW vt ESC O + 1 byte' }
         return $true
@@ -462,6 +584,14 @@ function Skip-ClaudeVtSequence {
         return (ConvertFrom-ClaudeMouseReport -Button ([int]$m.Groups[1].Value) `
                     -X ([int]$m.Groups[2].Value) -Y ([int]$m.Groups[3].Value) `
                     -Released:($m.Groups[4].Value -ceq 'm'))
+    }
+    # Not a mouse report: it may still be a KEY the terminal chose to spell out. Anything that maps
+    # to nothing - a focus report, a device attributes answer - stays swallowed, which is what keeps
+    # the bounded scan from becoming a leak.
+    $vtKey = ConvertFrom-ClaudeVtKey -Sequence $seq
+    if ($vtKey) {
+        if ($script:TraceOn) { Write-ClaudeInputTrace ("VT KEY ESC $seq") }
+        return $vtKey
     }
     if ($script:TraceOn) { Write-ClaudeInputTrace ('SWALLOW vt ESC ' + $seq) }
     return $true
