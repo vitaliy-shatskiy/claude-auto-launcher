@@ -20,11 +20,17 @@ if ($base.Count -eq 0) {
 
 $script:Fails = 0
 function Try-Ref {
-    param([string]$Name, [string[]]$Extra, [int]$Expect)
+    param([string]$Name, [string[]]$Extra, [int]$Expect, [string]$Patterns)
     $f = Join-Path $env:TEMP "claude-auto-droplist-ref-$Name.txt"
     # inserted after the account line, i.e. exactly where the launcher would print them
     Set-Content -LiteralPath $f -Value (@($base[0]) + $Extra + $base[1..($base.Count - 1)]) -Encoding utf8
-    $null = & pwsh -NoProfile -File $check -Reference $f -EvidenceDir $evDir 2>&1
+    # Only passed when a case names one. Every case compares a LIVE launcher run against the
+    # reference, so this machine's own hook lines have to be dropped on both sides or nothing
+    # matches at all - written the other way first, passing an empty value to keep the cases
+    # "pure", and all seven drop cases went red. The mechanism cases below therefore supply a file
+    # that EXTENDS the machine's list rather than replacing it.
+    $extraArgs = if ($PSBoundParameters.ContainsKey('Patterns')) { @('-VolatilePatterns', $Patterns) } else { @() }
+    $null = & pwsh -NoProfile -File $check -Reference $f -EvidenceDir $evDir @extraArgs 2>&1
     $code = $LASTEXITCODE
     if ($code -eq $Expect) { $verdict = 'PASS' } else { $verdict = 'FAIL'; $script:Fails++ }
     Write-Host ("{0,-6} {1,-34} expected={2} got={3}" -f $verdict, $Name, $Expect, $code)
@@ -37,17 +43,37 @@ Try-Ref 'fileid-unknown'  @('  could not read the File ID of C:\Users\owner\.cla
 Try-Ref 'junction'        @('  junction created and shielded: .claude-acct2 skills -> work') 0
 Try-Ref 'linked-into'     @('  linked settings.json into .claude-low') 0
 Try-Ref 'created-root'    @('  created profile root C:\Users\owner\.claude-low - log in there on the first session with that account') 0
-Try-Ref 'cbm-started'     @('  cbm daemon started (watchdog retires it after claude exits)') 0
-Try-Ref 'cbm-failed'      @('  cbm daemon start failed: address in use | already running') 0
-Try-Ref 'doccounts'       @('  doc counts refreshed: 1 marker(s) were stale') 0
-Try-Ref 'doccounts-exit2' @('  doc-count sync could not run (exit 2, not a pass): ENOENT') 0
-Try-Ref 'git-committed'   @('  ~/.claude git: committed 5 file(s)') 0
-Try-Ref 'git-indexlock'   @('  ~/.claude git: skipped: git add failed (fatal: Unable to create index.lock)') 0
 Try-Ref 'all-of-them'     @(
     '  re-linked settings.json in .claude-acct2 (kept the newest copy, discarded ones saved as .pre-relink)'
-    '  cbm daemon started (watchdog retires it after claude exits)'
-    '  doc counts refreshed: 2 marker(s) were stale'
-    '  ~/.claude git: committed 12 file(s)') 0
+    '  linked settings.json into .claude-low'
+    '  junction created and shielded: .claude-acct2 skills -> work') 0
+
+# --- the machine-local pattern file ------------------------------------------------------------
+# A machine that runs launchHooks has their stdout in the preamble, one-shot in exactly the same
+# way. Five such patterns used to be hardcoded above, naming one owner's tooling inside a repository
+# meant to be published; they come from CLAUDE_AUTO_VOLATILE_PATTERNS now. What these cases assert is
+# the MECHANISM, against a synthetic line no tool prints - so they keep working on any machine and
+# name nothing.
+$machineVp = "$env:CLAUDE_AUTO_VOLATILE_PATTERNS"
+$machineLines = if ($machineVp -and (Test-Path -LiteralPath $machineVp)) { @(Get-Content -LiteralPath $machineVp) } else { @() }
+# Two files: this machine's list alone, and the same list plus one synthetic pattern. The pair is
+# what makes the case a control - the only difference between them is the line under test.
+$vpBase = Join-Path $env:TEMP 'claude-auto-droplist-volatile-base.txt'
+$vpPlus = Join-Path $env:TEMP 'claude-auto-droplist-volatile.txt'
+Set-Content -LiteralPath $vpBase -Encoding utf8 -Value $machineLines
+Set-Content -LiteralPath $vpPlus -Encoding utf8 -Value ($machineLines + @(
+    '# a comment, which the loader must ignore',
+    '',
+    '^\s*synthetic hook line: \d+ things\s*$'
+))
+Try-Ref 'external-dropped'  @('  synthetic hook line: 3 things') 0 -Patterns $vpPlus
+# The same line with the pattern REMOVED must still fail, or the case above proves nothing.
+Try-Ref 'external-absent'   @('  synthetic hook line: 3 things') 1 -Patterns $vpBase
+# Anchored like every pattern in the repo's own list: a reworded hook line is still a regression.
+Try-Ref 'external-reworded' @('  synthetic hook line: three things') 1 -Patterns $vpPlus
+# Named but unreadable is NOT "no extra patterns". Comparing against a shorter drop list is how a
+# real regression gets filtered away, so the check refuses to run instead.
+Try-Ref 'external-missing'  @('  synthetic hook line: 3 things') 2 -Patterns (Join-Path $env:TEMP 'claude-auto-no-such-patterns.txt')
 
 # --- lines that PERSIST across runs: must still fail (exit 1) ---
 Try-Ref 'kept-real-directory' @('  skills is a real directory in .claude-acct2, not a junction - merge it by hand') 1
@@ -59,9 +85,9 @@ Try-Ref 'kept-module-fail'    @('  module Env.ps1 failed to load: syntax error')
 Try-Ref 'kept-git-autocommit' @('  ~/.claude git auto-commit failed: boom') 1
 
 # --- anchoring: a REWORDED one-shot line must still fail ---
-Try-Ref 'reworded-doccounts' @('  doc counts refreshed AGAIN: 1 marker(s) were stale') 1
-Try-Ref 'reworded-cbm'       @('  cbm daemon started up (watchdog retires it after claude exits)') 1
 Try-Ref 'reworded-relink'    @('  re-linked settings.json in .claude-acct2 (kept the oldest copy)') 1
+Try-Ref 'reworded-junction'  @('  junction created but not shielded: .claude-acct2 skills -> work') 1
+Try-Ref 'reworded-root'      @('  created profile root C:\Users\owner\.claude-low - log in there later') 1
 
 if ($script:Fails -gt 0) { Write-Host "$($script:Fails) case(s) failed" -ForegroundColor Red; exit 1 }
 Write-Host 'all droplist cases pass' -ForegroundColor Green

@@ -210,13 +210,31 @@ if ($Live -and -not $LiveOnly) {
     # queue first. That is an artefact of the surroundings, not of the code, and the way to keep
     # the assertion meaningful is to give it a console nobody else is reading.
     Write-Host "…  running the live half in a hidden child with its own console"
-    $child = Start-Process -FilePath (Get-Process -Id $PID).Path `
-        -ArgumentList @('-NoProfile', '-File', $PSCommandPath, '-LiveOnly') `
-        -WindowStyle Hidden -Wait -PassThru
-    if ($child.ExitCode -eq 0) {
-        Write-Host "ok    the live console path passed in a child process with its own console"
+    # ONE retry, and it is announced. This half injects records into a real console and reads them
+    # back on timeouts, so a machine busy launching child consoles back to back can make it miss:
+    # measured twice (2026-09-08 and 09-09), both times as a mutation run reporting the RESTORED
+    # tree as not green, both times followed by three consecutive green runs and a clean diff.
+    #
+    # A retry that hid the first result would turn this into a suite nobody can trust, so a pass on
+    # the second attempt is printed as exactly that. A second failure is a failure - the retry buys
+    # one flake, never a red.
+    $liveAttempts = 0
+    $liveCode = 1
+    while ($liveAttempts -lt 2 -and $liveCode -ne 0) {
+        $liveAttempts++
+        $child = Start-Process -FilePath (Get-Process -Id $PID).Path `
+            -ArgumentList @('-NoProfile', '-File', $PSCommandPath, '-LiveOnly') `
+            -WindowStyle Hidden -Wait -PassThru
+        $liveCode = $child.ExitCode
+        if ($liveCode -ne 0 -and $liveAttempts -lt 2) {
+            Write-Host "…  the live child exited $liveCode - retrying once, because this half is timing-sensitive"
+        }
+    }
+    if ($liveCode -eq 0) {
+        $note = if ($liveAttempts -gt 1) { " (on attempt $liveAttempts - the first one was a flake)" } else { '' }
+        Write-Host "ok    the live console path passed in a child process with its own console$note"
     } else {
-        Write-Host "FAIL  the live console path failed in the child process (exit $($child.ExitCode))"
+        Write-Host "FAIL  the live console path failed in the child process twice (exit $liveCode)"
         Write-Host "      re-run to see it: pwsh -NoProfile -File `"$PSCommandPath`" -LiveOnly"
         $script:Failed++
     }

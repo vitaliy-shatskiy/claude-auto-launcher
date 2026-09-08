@@ -37,6 +37,9 @@ param(
     # dirtying the reference file. checkpoint.ps1 calls this bare; the defaults are the contract.
     [string]$Reference = (Join-Path $PSScriptRoot 'reference-output.local.txt'),
     [string]$EvidenceDir = $env:TEMP,
+    # One regex per line, '#' comments allowed: the one-shot lines THIS machine's launch hooks print,
+    # which the published checkout has no business naming. Same shape as check-clean.ps1's -Patterns.
+    [string]$VolatilePatterns = $env:CLAUDE_AUTO_VOLATILE_PATTERNS,
     # Capture a fresh reference from the launcher's current headless output instead of comparing.
     [switch]$Record
 )
@@ -52,11 +55,13 @@ $ErrorActionPreference = 'Stop'
 # `module <m> failed to load`, `MCP config skipped`, the remote/crc lines, `link check failed`.
 # Every pattern is anchored at the start of the line so a reworded launcher message still fails.
 #
-# The cbm/doc-counts/`~/.claude git:` patterns below are not printed by THIS launcher on its own -
-# they are owner-side hook output. With `launchHooks` configured, Invoke-LaunchHooks (Env.ps1)
-# prints a hook's stdout verbatim, and on a machine that runs such a hook these are exactly the
-# lines it emits. Kept for whoever configures a hook that does the same thing again - do not delete
-# them for looking unreachable on a clean checkout with no hooks configured.
+# The list below covers only what THIS launcher prints. A configured `launchHooks` entry has its
+# stdout printed verbatim by Invoke-LaunchHooks (Env.ps1), so a machine that runs hooks has its own
+# one-shot lines - and those are that machine's business, not the published checkout's. They come
+# from CLAUDE_AUTO_VOLATILE_PATTERNS, one regex per line, exactly the way check-clean.ps1 takes its
+# private pattern list. Five such patterns used to sit here hardcoded, naming one owner's tools, and
+# one of them was even attributed to claude-auto.ps1 in a comment although nothing in the launcher
+# prints it.
 # ---------------------------------------------------------------------------------------------
 $OneShotLines = @(
     # claude-auto\Env.ps1 - the hardlink repair. THE line this whole check kept tripping over:
@@ -73,19 +78,20 @@ $OneShotLines = @(
     # account appears. This is defect (b)'s "created profile root ..." literal.
     '^\s*linked \S+ into \S+\s*$'
     '^\s*created profile root .+ - log in there on the first session with that account\s*$'
-    # Env.ps1 - whether the CBM daemon was already up is decided by every other claude process on
-    # the machine, and two launchers starting it at once make one of them fail.
-    '^\s*cbm daemon started \(watchdog retires it after claude exits\)\s*$'
-    '^\s*cbm daemon start failed: '
-    # Env.ps1 - doc-count sync --write. Reproduced as a live red.
-    '^\s*doc counts refreshed: \d+ marker\(s\) were stale\s*$'
-    '^\s*doc-count sync could not run \(exit 2, not a pass\): '
-    # claude-auto.ps1 - `~/.claude git: committed N file(s)` after any config change, and
-    # `~/.claude git: skipped: ... index.lock` when another instance is mid-commit. Both are the
-    # state of a repository, never the launcher's launch path. The launcher's OWN failure line
-    # (`~/.claude git auto-commit failed:`) has no colon after `git` and is deliberately kept.
-    '^\s*~/\.claude git: '
 )
+
+# This machine's own hook output, if it has any. Missing file, missing variable and empty list are
+# all normal - a checkout with no launchHooks configured has nothing extra to drop. A file that is
+# NAMED but unreadable is not normal and stops the check, because silently comparing against a
+# smaller drop list is how a real regression gets filtered away.
+if ($VolatilePatterns) {
+    if (-not (Test-Path -LiteralPath $VolatilePatterns)) {
+        Write-Host "CANNOT RUN: volatile pattern file not found: $VolatilePatterns"
+        exit 2
+    }
+    $OneShotLines += @(Get-Content -LiteralPath $VolatilePatterns |
+        Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') })
+}
 
 function Get-ComparableLines {
     # Rider assigns its MCP port dynamically and records it nowhere, so the reference captured one
