@@ -35,7 +35,7 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 
 $ModuleDir = Join-Path $PSScriptRoot 'claude-auto'
 $ModulesOk = $true
-foreach ($m in @('Config.ps1', 'Env.ps1', 'Remote.ps1', 'Sessions.ps1', 'Theme.ps1', 'Layout.ps1', 'Screens.ps1', 'Prefs.ps1', 'Input.ps1', 'Ui.ps1', 'Maintenance.ps1')) {
+foreach ($m in @('Config.ps1', 'Env.ps1', 'Remote.ps1', 'Sessions.ps1', 'Projects.ps1', 'Theme.ps1', 'Layout.ps1', 'Screens.ps1', 'Prefs.ps1', 'Input.ps1', 'Ui.ps1', 'Maintenance.ps1')) {
     try { . (Join-Path $ModuleDir $m) }
     catch {
         Write-Host "  module $m failed to load: $($_.Exception.Message)" -ForegroundColor DarkYellow
