@@ -1258,7 +1258,7 @@ Assert-Equal $plainFooter.Text (Add-HintColor -Line $plainFooter.Text -Spans $pl
 # leaves on the first pass, and one that is ignored asks for a second event and throws. That is what
 # makes both directions falsifiable without inspecting internal state. ---
 # Any EXISTING file: the fake -Runner never executes it, but the existence check runs regardless of the runner.
-$cfgActions = @([pscustomobject]@{ Key = 'i'; Label = 'cbm reindex'; Script = (Join-Path $PSScriptRoot 'fixtures\config-four.json'); ConfirmTwice = $true })
+$cfgActions = @([pscustomobject]@{ Key = 'i'; Label = 'full reindex'; Script = (Join-Path $PSScriptRoot 'fixtures\config-four.json'); ConfirmTwice = $true })
 $fakeInfo = [pscustomobject]@{ Matches = $true; NewestVersion = '2.1.233'; InstalledHash = 'A'; NewestHash = 'A'; VersionCount = 3; BinPath = 'x' }
 $mmap = $null
 $null = Get-MaintenanceFrame -Info $fakeInfo -Width 100 -Height 24 -RowMap ([ref]$mmap) -Actions $cfgActions
@@ -1307,7 +1307,7 @@ Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -Actions $cfgAct
 Assert-Equal 1 $script:reindexRuns 'the second press runs it, exactly once'
 Assert-Equal $true ($script:lastStatus -match 'green') 'and reports the verdict'
 
-# A click on "i cbm reindex" must behave identically to the key - it becomes that key.
+# A click on "i full reindex" must behave identically to the key - it becomes that key.
 $script:reindexRuns = 0
 $iSpan = Get-HintSpan -Map $mmap -Char 'i'
 $w = New-EventReader @((New-MouseEvent -Y $mmap.FooterY -X $iSpan.Start -Left), (New-MouseEvent -Y $mmap.FooterY -X $iSpan.Start -Left), $esc)
@@ -1323,7 +1323,7 @@ Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 
 Assert-Equal $true ($script:lastStatus -match 'FAILED') 'a non-zero exit is reported as a failure'
 
 # A missing script must say so rather than silently doing nothing.
-$missing = Invoke-MaintenanceScript -ScriptPath 'C:\nope\does-not-exist.ps1' -Label 'cbm reindex'
+$missing = Invoke-MaintenanceScript -ScriptPath 'C:\nope\does-not-exist.ps1' -Label 'full reindex'
 Assert-Equal $false $missing.Ran 'a missing reindex script is reported, not silently skipped'
 Assert-Equal $true ($missing.Message -match 'not found') 'and the message names the problem'
 $missingInjected = Invoke-MaintenanceScript -ScriptPath 'C:\nope\x.ps1' -Label 'q' -Runner { throw 'must not run' }
@@ -1460,7 +1460,7 @@ foreach ($h in @($script:MinHeight, 50)) {
 
     $mf = @(Get-MaintenanceFrame -Info $narrowInfo -Width 50 -Height $h -Status $longStatus -Actions $cfgActions)
     $mfText = $mf -join "`n"
-    foreach ($hint in @('u update', 'r rename swap', 'd doctor', 'm mcp list', 'p prune', 'i cbm reindex', 'esc back')) {
+    foreach ($hint in @('u update', 'r rename swap', 'd doctor', 'm mcp list', 'p prune', 'i full reindex', 'esc back')) {
         Assert-Equal $true $mfText.Contains($hint) "50x${h} maintenance: the hint '$hint' is readable"
     }
     Assert-Equal $true ($mf.Count -le ($h - 1)) "50x${h} maintenance: $($mf.Count) lines with a long status leave the headroom row"
@@ -1486,9 +1486,9 @@ Assert-Equal 0 $script:reindexRuns 'the same column on the FIRST footer line is 
 # --- Maintenance actions come from the config: no action, no hint; one hint per action; a key with
 # no action does nothing; ConfirmTwice=false runs on the first press. ---
 $noActions = Get-MaintenanceFrame -Info $narrowInfo -Width 78 -Height 24
-Assert-Equal $false (($noActions | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match 'cbm reindex') 'no action, no hint'
+Assert-Equal $false (($noActions | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match 'full reindex') 'no action, no hint'
 $withAction = Get-MaintenanceFrame -Info $narrowInfo -Width 78 -Height 24 -Actions $cfgActions
-Assert-Equal $true (($withAction | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match 'i\s+cbm reindex') 'a configured action is a footer hint'
+Assert-Equal $true (($withAction | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match 'i\s+full reindex') 'a configured action is a footer hint'
 $w = New-EventReader @($iKey, $esc)
 Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions @() -Runner { throw 'must not run' }
 Assert-Equal $false ($script:lastStatus -match 'confirm') 'a key with no action does nothing'
@@ -1586,12 +1586,12 @@ Assert-Equal 1 $script:pruneRuns 'with no arrival stamp available the confirm be
 $oneLine = New-HintFooter -Glyphs (Get-Glyphs) -Hints @(
     @{ Token = 'u'; Label = 'update'; Clickable = $true; Key = ''; Char = 'u' }
     @{ Token = 'r'; Label = 'rename swap'; Clickable = $true; Key = ''; Char = 'r' }
-    @{ Token = 'i'; Label = 'cbm reindex'; Clickable = $true; Key = ''; Char = 'i' })
+    @{ Token = 'i'; Label = 'full reindex'; Clickable = $true; Key = ''; Char = 'i' })
 Assert-Equal 1 @($oneLine.Lines).Count 'no width: one footer line'
 $wrapped = New-HintFooter -Glyphs (Get-Glyphs) -Width 20 -Hints @(
     @{ Token = 'u'; Label = 'update'; Clickable = $true; Key = ''; Char = 'u' }
     @{ Token = 'r'; Label = 'rename swap'; Clickable = $true; Key = ''; Char = 'r' }
-    @{ Token = 'i'; Label = 'cbm reindex'; Clickable = $true; Key = ''; Char = 'i' })
+    @{ Token = 'i'; Label = 'full reindex'; Clickable = $true; Key = ''; Char = 'i' })
 Assert-Equal 3 @($wrapped.Lines).Count 'width 20: three hints of 8-13 characters take three lines'
 Assert-Equal 0 (@($wrapped.Lines | Where-Object { $_.Text.Length -gt 20 }).Count) 'width 20: no footer line exceeds the width'
 Assert-Equal '  r rename swap' $wrapped.Lines[1].Text 'each wrapped line is indented like the first'

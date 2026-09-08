@@ -580,6 +580,26 @@ if ($Live -and -not $LiveOnly) {
         $burst2 = Get-ClaudeInputRecordTime
         Assert-Equal $true ($null -ne $burst1 -and $burst2 -ge $burst1) 'every record read carries an arrival stamp, and the stamps move forward'
         Assert-Equal $true (($burst2 - $burst1) -lt 150) 'two records of one burst arrive far closer together than the confirm gate - which is what tells a paste from a second press'
+
+        # --- Exit-AltBuffer restores the Ctrl+C setting it FOUND, not a hardcoded $false ----------
+        # Asserted HERE, in the live child, because it cannot be asserted anywhere else: Test-Ui runs
+        # with output redirected, where the TreatControlCAsInput setter throws and Enter/Exit's own
+        # try/catch swallows it - so the mutation reverting this survived that suite and the fix
+        # shipped unproven. Ui.ps1 is dot-sourced late for the same reason; the pure half has no
+        # console either.
+        #
+        # A process that already treats Ctrl+C as input meant it. The old Exit-AltBuffer took that
+        # away from a launcher that never set it.
+        . "$PSScriptRoot\..\claude-auto\Ui.ps1"
+        $tccAroundAlt = [Console]::TreatControlCAsInput
+        try {
+            [Console]::TreatControlCAsInput = $true
+            Enter-AltBuffer; Exit-AltBuffer
+            Assert-Equal $true ([Console]::TreatControlCAsInput) 'Exit-AltBuffer puts Ctrl+C back as it found it: true stays true'
+            [Console]::TreatControlCAsInput = $false
+            Enter-AltBuffer; Exit-AltBuffer
+            Assert-Equal $false ([Console]::TreatControlCAsInput) 'and false stays false - the hardcoded restore only ever got this one right'
+        } finally { [Console]::TreatControlCAsInput = $tccAroundAlt }
     } finally {
         $restored = Close-ClaudeConsoleInput -State $state
         Assert-Equal $true $restored 'the console mode is restored bit-exact, verified by reading it back'

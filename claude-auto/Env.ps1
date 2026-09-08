@@ -579,6 +579,11 @@ function Get-RiderMcpUrl {
 }
 
 function Get-McpConfigPaths {
+    # -Preview names the file it WOULD pass without creating it. The path still goes into the printed
+    # command, which is the entire output of a preview run, but a dry run must not write to %TEMP%
+    # nor sweep yesterday's files - this was the last write left on a path three comments in this
+    # repo describe as side-effect-free.
+    param([switch]$Preview)
     $mcpConfigs = @()
     try {
         foreach ($extra in @($script:LauncherConfig.ExtraMcpConfigs)) {
@@ -591,14 +596,17 @@ function Get-McpConfigPaths {
         if ($mode -eq 'off' -or ($mode -eq 'auto' -and -not $riderRunning)) { return $mcpConfigs }
         $riderUrl = Get-RiderMcpUrl
         if ($riderUrl) {
-            # One file per launch would otherwise accumulate forever; a live session still
-            # holds its own, so only sweep yesterday's.
-            Get-ChildItem (Join-Path $env:TEMP 'claude-mcp-rider-*.json') -ErrorAction SilentlyContinue |
-                Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue
             # Per-launch file keyed by PID: two Rider windows resolve to two ports and
             # must not overwrite each other's config.
             $tmp = Join-Path $env:TEMP "claude-mcp-rider-$PID.json"
-            (@{ mcpServers = @{ rider = @{ type = 'http'; url = $riderUrl } } } | ConvertTo-Json -Depth 5) | Set-Content $tmp -Encoding utf8
+            if (-not $Preview) {
+                # One file per launch would otherwise accumulate forever; a live session still
+                # holds its own, so only sweep yesterday's. The wildcard here is deliberate - it is
+                # a pattern, not a literal path.
+                Get-ChildItem (Join-Path $env:TEMP 'claude-mcp-rider-*.json') -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue
+                (@{ mcpServers = @{ rider = @{ type = 'http'; url = $riderUrl } } } | ConvertTo-Json -Depth 5) | Set-Content $tmp -Encoding utf8
+            }
             $mcpConfigs += $tmp
             Write-Host "  rider MCP: $riderUrl" -ForegroundColor DarkGray
         } else {

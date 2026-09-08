@@ -56,27 +56,18 @@ function Get-LauncherDefaults {
 
 $script:KnownConfigKeys = @('accounts', 'sharing', 'remote', 'riderMcp', 'extraMcpConfigs', 'secretsRoot', 'launchHooks', 'maintenanceActions')
 
-function Get-LauncherEditDistance {
-    # Plain Levenshtein distance, case-insensitive - used only to suggest a real key for a typo'd
-    # top-level one (e.g. "account" -> "accounts"), never for anything a test asserts exactly.
-    param([string]$A, [string]$B)
-    $a = $A.ToLowerInvariant(); $b = $B.ToLowerInvariant()
-    $la = $a.Length; $lb = $b.Length
-    $d = New-Object 'int[,]' ($la + 1), ($lb + 1)
-    for ($i = 0; $i -le $la; $i++) { $d[$i, 0] = $i }
-    for ($j = 0; $j -le $lb; $j++) { $d[0, $j] = $j }
-    for ($i = 1; $i -le $la; $i++) {
-        for ($j = 1; $j -le $lb; $j++) {
-            # Every arithmetic index below is parenthesised on purpose: $d[$i-1,$j] parses $i-1 as
-            # two comma-separated index arguments ($i and unary -1), not subtraction - PowerShell's
-            # multi-dimensional indexer reads its comma list in argument mode. Verified live: it
-            # threw "does not contain a method named 'op_Subtraction'" until every $x-1 got parens.
-            $prevI = $i - 1; $prevJ = $j - 1
-            $cost = if ($a[$prevI] -eq $b[$prevJ]) { 0 } else { 1 }
-            $d[$i, $j] = [Math]::Min([Math]::Min($d[$prevI, $j] + 1, $d[$i, $prevJ] + 1), $d[$prevI, $prevJ] + $cost)
-        }
-    }
-    return $d[$la, $lb]
+function Get-LauncherNearKey {
+    # The real key a mistyped one probably meant, or $null. A prefix match either way covers the
+    # typo that actually happens - a missing or doubled trailing character, 'account' for
+    # 'accounts' - and this replaced a 22-line Levenshtein matrix that existed for that one case,
+    # complete with a comment about PowerShell reading a multi-dimensional indexer's commas in
+    # argument mode. Anything a prefix cannot catch gets the full key list instead, which is more
+    # useful than a wrong guess.
+    param([string]$Key, [string[]]$Known)
+    return $Known | Where-Object {
+        $_.StartsWith($Key, [StringComparison]::OrdinalIgnoreCase) -or
+        $Key.StartsWith($_, [StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -First 1
 }
 
 function Test-LauncherPathRooted {
@@ -209,13 +200,10 @@ function Read-LauncherConfig {
     # unknown key, naming it and, when it is close to a real key, suggesting that key.
     foreach ($prop in @($raw.PSObject.Properties.Name)) {
         if ($script:KnownConfigKeys -notcontains $prop) {
-            $best = $null; $bestDist = [int]::MaxValue
-            foreach ($k in $script:KnownConfigKeys) {
-                $dist = Get-LauncherEditDistance $prop $k
-                if ($dist -lt $bestDist) { $bestDist = $dist; $best = $k }
-            }
+            $best = Get-LauncherNearKey -Key $prop -Known $script:KnownConfigKeys
             $msg = "unrecognized config key '$prop' is ignored"
-            if ($bestDist -le 2) { $msg += "; did you mean '$best'?" }
+            if ($best) { $msg += "; did you mean '$best'?" }
+            else { $msg += " (known keys: $($script:KnownConfigKeys -join ', '))" }
             $cfg.Warnings += $msg
         }
     }

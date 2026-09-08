@@ -10,5 +10,5 @@
   "riderMcp": "auto",
   "extraMcpConfigs": ["~/.claude/mcp-shared.json"],
   "launchHooks": [],
-  "maintenanceActions": [ { "key": "i", "label": "cbm reindex", "script": "C:/nope/reindex.ps1", "confirmTwice": true } ]
+  "maintenanceActions": [ { "key": "i", "label": "full reindex", "script": "C:/nope/reindex.ps1", "confirmTwice": true } ]
 }

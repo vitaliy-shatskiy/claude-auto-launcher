@@ -347,7 +347,7 @@ if (-not $Preview) { Invoke-LaunchHooks -Hooks $LauncherConfig.LaunchHooks }
 # splatting a string with @ enumerates it CHARACTER BY CHARACTER - `--mcp-config C : \ U s e r s`.
 # `.Count` on a string is 1, so a `-gt 0` guard passes and the damage is invisible until claude
 # rejects 39 config paths. Fires whenever Rider is closed, because then only one config path exists.
-$mcpConfigs = @(Get-McpConfigPaths)
+$mcpConfigs = @(Get-McpConfigPaths -Preview:$Preview)
 
 # deferred review finding: `.Source` on $null threw, and `exit $claudeExit` with the variable
 # never set exited 0 - a launch that could not even find claude reported success.
