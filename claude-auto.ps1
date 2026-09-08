@@ -259,7 +259,11 @@ if ($UseUi) {
     # what a launch remembered is unreadable the moment the next one starts. On 2026-08-23 that made
     # a "my settings reset themselves" report unanswerable from the file - the launch log had to be
     # reconstructed from argv instead. The record goes into the `ui` line below.
-    $savedPrefs = Save-LaunchPrefs -State $state
+    # Guarded like every other write on this path: a preview run created the prefs file from
+    # nothing, and on a machine that already had one it would have rewritten the remembered choices
+    # of a launch that never happened. The suites hid it - they point CLAUDE_AUTO_PREFS at a
+    # throwaway file, so the write landed somewhere harmless and nothing ever noticed.
+    $savedPrefs = if ($Preview) { $null } else { Save-LaunchPrefs -State $state }
 
     # 'off' on the advisor row is an ENVIRONMENT variable, not a flag - the CLI has no --advisor off
     # (code.claude.com/docs/en/advisor.md). Set here, before either exec path, so the child inherits
@@ -317,7 +321,7 @@ elseif (-not [Console]::IsInputRedirected -and $args.Count -eq 0) {
     }
 }
 
-Set-ClaudeProfile -Account $choice
+Set-ClaudeProfile -Account $choice -Preview:$Preview
 $null = Import-ProjectSecrets -WorkingDirectory $PWD.Path -Root $LauncherConfig.SecretsRoot
 
 # Profile sharing only when the config asks for it: a single-account machine has nothing to link.

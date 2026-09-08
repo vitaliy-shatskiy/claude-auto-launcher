@@ -119,7 +119,13 @@ function Write-LauncherLog {
 function Set-ClaudeProfile {
     # The canonical account is the absence of CLAUDE_CONFIG_DIR, which is also why it stays the
     # default: a launcher fed `< NUL` takes the defaults and runs under that account.
-    param([Parameter(Mandatory)][string]$Account)
+    # -Mirror is injected so the sharing path is assertable without running node against a real
+    # profile root - the same seam shape as -Updater and -Runner in Maintenance.ps1.
+    param(
+        [Parameter(Mandatory)][string]$Account,
+        [switch]$Preview,
+        [scriptblock]$Mirror = { param($Root) & node (Join-Path $PSScriptRoot '..\sharing\claude-mirror-mcp.mjs') $Root 2>&1 }
+    )
     if (-not $ProfileRoots.Contains($Account)) { throw "unknown account '$Account' (roster: $($ProfileRoots.Keys -join ', '))" }
     $label = $ProfileLabels[$Account]; $tint = $ProfileTints[$Account]
     if ($Account -eq $CanonicalAccount) {
@@ -131,13 +137,18 @@ function Set-ClaudeProfile {
     $env:CLAUDE_CONFIG_DIR = $root
     Write-Host "-> $label" -ForegroundColor $tint
     if (-not $script:LauncherConfig.Sharing) { return }
+    # Setting CLAUDE_CONFIG_DIR above is this process's own environment and dies with it, so preview
+    # may do it. The mirror below is different: it REWRITES the target account's .claude.json. Three
+    # comments in this repo assert the preview path is side-effect-free, and this was the place where
+    # it was not - a dry run rewrote a real profile's file wholesale, through node, on a machine
+    # where the reader had asked for nothing to happen.
+    if ($Preview) { return }
     # projects[*].mcpServers cannot live in a shared file (.claude.json also holds the account identity):
     # carry it over here, just before the session starts. One direction, canonical root is the source.
     # The target root is passed explicitly: hardcoding one root is how a third account would have
     # silently lost per-project servers, which is the exact bug this mirror was written for.
     try {
-        $mirror = Join-Path $PSScriptRoot '..\sharing\claude-mirror-mcp.mjs'
-        $mirrored = & node $mirror $root 2>&1
+        $mirrored = & $Mirror $root
         if ($LASTEXITCODE -eq 0) {
             if ($mirrored) { Write-Host "  project MCP mirrored: $mirrored" -ForegroundColor DarkGray }
         } else {

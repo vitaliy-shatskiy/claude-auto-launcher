@@ -194,6 +194,30 @@ try {
     $ids = @(@($WorkRoot, $rootA, $rootB) | ForEach-Object { Get-SharedFileId -Path (Join-Path $_ 'settings.json') } | Sort-Object -Unique)
     Assert 'the shared file is one inode in all three' ($ids.Count -eq 1 -and $ids[0])
 
+    # Set-ClaudeProfile under preview. Setting CLAUDE_CONFIG_DIR is this process's own environment
+    # and may happen; running the MCP mirror may not - it rewrites the target account's .claude.json
+    # wholesale, and a preview run did exactly that to a real profile. The account root is pointed
+    # at the fake tree first, so that even a build with the guard removed cannot reach a real one.
+    $savedPersonalRoot = $ProfileRoots['personal']
+    $savedConfigDir = $env:CLAUDE_CONFIG_DIR
+    try {
+        $ProfileRoots['personal'] = $rootA
+        # Counted through the injected seam, not read off the output: a mirror run that finds nothing
+        # to copy prints NOTHING, so "no line mentioning mirror" is satisfied by a mirror that really
+        # ran. Written that way first, and the mutation that removes the guard survived it.
+        $script:MirrorRuns = 0
+        $recordingMirror = { param($Root) $script:MirrorRuns++; '' }
+        $previewOut = @(Set-ClaudeProfile -Account 'personal' -Preview -Mirror $recordingMirror 6>&1 | ForEach-Object { "$_" })
+        Assert 'preview never runs the project MCP mirror'   ($script:MirrorRuns -eq 0)
+        Assert 'preview still announces the account'         (@($previewOut | Where-Object { $_ -match '->' }).Count -eq 1)
+        $null = Set-ClaudeProfile -Account 'personal' -Mirror $recordingMirror 6>&1
+        Assert 'and without preview it does run, once'       ($script:MirrorRuns -eq 1)
+    } finally {
+        $ProfileRoots['personal'] = $savedPersonalRoot
+        if ($null -eq $savedConfigDir) { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+        else { $env:CLAUDE_CONFIG_DIR = $savedConfigDir }
+    }
+
     # THE REGRESSION: work+personal stay linked while the third copy is replaced by an atomic
     # write. The old hardlink-count check saw 2 names and returned "shared".
     $sharedFile = Join-Path $rootB 'settings.json'
@@ -447,8 +471,8 @@ try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSumma
 
 } finally { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 107) {
-    Write-Host "COULD NOT RUN: expected 107 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
+if ($script:Ran -ne 110) {
+    Write-Host "COULD NOT RUN: expected 110 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
 }
 if ($script:fail -gt 0) {
@@ -457,5 +481,5 @@ if ($script:fail -gt 0) {
 }
 # Counted, not guessed: HEAD claimed 72 while running 75 (measured 2026-09-04 by counting the
 # ok/FAIL lines of a bare run). A banner nobody re-counts is a number that drifts silently.
-Write-Host '107 assertions, all pass' -ForegroundColor Green
+Write-Host '110 assertions, all pass' -ForegroundColor Green
 exit 0
