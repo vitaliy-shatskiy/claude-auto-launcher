@@ -179,6 +179,19 @@ function Save-LaunchPrefs {
             if ($v) { $entry[$f] = $v }
         }
 
+        # Project is remembered per account but is NOT a ProfileFields row: it has no option list to
+        # validate against, so it carries its own line here and its own existence check in Merge.
+        # Silence carries the previous answer forward, exactly like a row left at 'default'.
+        #
+        # This is the only place a vanished project is NOT dropped, and that is deliberate: Merge
+        # ignores a remembered path that does not exist right now, but Save keeps writing it forward
+        # forever regardless. Projects on this machine legitimately live on a drive that is not
+        # always mounted - forgetting one because it was briefly absent would be worse than an
+        # ignored, harmless line sitting in the file until the drive comes back (owner ruling).
+        $proj = "$($State.Project)"
+        if ($proj) { $entry['Project'] = $proj }
+        elseif ($prevEntry.ContainsKey('Project')) { $entry['Project'] = $prevEntry['Project'] }
+
         $data = @{ Version = 2; Account = $account; SavedAtMs = $NowMs; Profiles = $prev.Profiles }
         $data.Profiles[$account] = $entry
 
@@ -250,6 +263,20 @@ function Merge-LaunchPrefs {
             $State.$f = $entry[$f]
             $restored += $f
         }
+        # Validated by EXISTENCE and by being a DIRECTORY, not by an option list. The prefs file is
+        # ordinary text and this value becomes a Set-Location target - -PathType Container matters
+        # because the file is hand-editable by this function's own threat model, and a remembered
+        # directory can be replaced by a plain file: Test-Path alone would say true and Set-Location
+        # would throw ItemNotFoundException (found in review). A path that is not there, or is there
+        # but is not a directory, is ignored rather than carried into the launch.
+        #
+        # NOT added to $restored: that list marks LAUNCH-SCREEN rows so the "* restored (<age>),
+        # ctrl+r resets" legend stays true, and the project is not a row there - it lives on its own
+        # screen, where the restored path is simply the preselected row, its own feedback. Marking it
+        # here would print a legend advertising a ctrl+r that deliberately never touches it (owner
+        # ruling).
+        $rp = "$($entry['Project'])"
+        if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) { $State.Project = $rp }
         $age = Get-PrefsAgeText -SavedAtMs $entry['SavedAtMs'] -NowMs $NowMs
     }
     if (-not $age) { $age = Get-PrefsAgeText -SavedAtMs $Prefs['SavedAtMs'] -NowMs $NowMs }
@@ -270,6 +297,14 @@ function Switch-LaunchAccount {
     # Order of preference on arrival: this session's stash, then the file, then the defaults. The
     # stash wins because it is newer by definition, and it carries its own Restored marks so a tab
     # restored from the file still shows its `*` after a round trip.
+    #
+    # Project rides alongside the stash but is handled explicitly, never through $ProfileFields: it
+    # is a filesystem path, not a pick from a row's option list. Before this fix it was left off the
+    # park/reload entirely, so it stayed a single property on $State that every switch carried
+    # UNCHANGED into the arriving account - switching accounts leaked one account's project into
+    # another's, and a launch there overwrote the FILE with the wrong account's project (found in
+    # review). Reload is existence- AND directory-checked exactly like Merge-LaunchPrefs, from BOTH
+    # the session stash and the file, so a stale or hand-edited path can never ride in unvalidated.
     param(
         [Parameter(Mandatory)]$State,
         [Parameter(Mandatory)][string]$To,
@@ -277,7 +312,7 @@ function Switch-LaunchAccount {
         [Parameter(Mandatory)]$Rows,
         [long]$NowMs = ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
     )
-    $stash = @{ Restored = @($State.Restored); RestoredAge = "$($State.RestoredAge)" }
+    $stash = @{ Restored = @($State.Restored); RestoredAge = "$($State.RestoredAge)"; Project = "$($State.Project)" }
     foreach ($f in $script:ProfileFields) { $stash[$f] = $State.$f }
     $State.Profiles[$State.Account] = $stash
 
@@ -286,12 +321,15 @@ function Switch-LaunchAccount {
     foreach ($f in $script:ProfileFields) { $State.$f = $fresh.$f }
     $State.Restored = @()
     $State.RestoredAge = ''
+    $State.Project = ''
 
     if ($State.Profiles.ContainsKey($To)) {
         $entry = $State.Profiles[$To]
         foreach ($f in $script:ProfileFields) { if ($null -ne $entry[$f]) { $State.$f = $entry[$f] } }
         $State.Restored = @($entry['Restored'])
         $State.RestoredAge = "$($entry['RestoredAge'])"
+        $rp = "$($entry['Project'])"
+        if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) { $State.Project = $rp }
         return $State
     }
 
@@ -309,6 +347,8 @@ function Switch-LaunchAccount {
         }
         $State.Restored = @($restored)
         $State.RestoredAge = Get-PrefsAgeText -SavedAtMs $entry['SavedAtMs'] -NowMs $NowMs
+        $rp = "$($entry['Project'])"
+        if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) { $State.Project = $rp }
     }
     return $State
 }

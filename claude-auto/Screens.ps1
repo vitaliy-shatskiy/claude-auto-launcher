@@ -103,6 +103,10 @@ function New-LaunchState {
         # account; Restored/RestoredAge are recomputed on every tab switch, which is why the frame
         # reads them from here rather than from a copy the launcher captured before the screen.
         Profiles = @{}; Restored = @(); RestoredAge = ''
+        # The last project directory launched from, per account (Prefs.ps1). Not in $ProfileFields:
+        # it is a filesystem path, not a pick from a row's option list, so it is saved and merged by
+        # its own explicit lines, validated by existence rather than membership.
+        Project = ''
     }
 }
 
