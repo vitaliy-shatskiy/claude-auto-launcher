@@ -832,7 +832,9 @@ $footerTo = $footerFrom + $lMapPlain.FooterLines - 1
 # Same pin as the picker above: an unpinned window that drifted wide would make both comparison
 # loops below pass vacuously (an empty or past-the-end comparison), on a frame that never actually
 # got compared.
-Assert-Equal 2 $lMapPlain.FooterLines 'the launch footer at width 84 is exactly two lines'
+# w/s and a/d (2026-09-09) are shorter than up/down and left/right - the footer that used to wrap
+# to two lines at width 84 now fits on one. Re-measured, not guessed.
+Assert-Equal 1 $lMapPlain.FooterLines 'the launch footer at width 84 is exactly one line now that the arrow hints are w/s and a/d'
 Assert-Equal $true ($footerTo -lt $plain.Count) 'the footer window stays inside the frame'
 $mismatch = 0
 for ($i = 0; $i -lt $plain.Count; $i++) {
@@ -1541,7 +1543,7 @@ foreach ($h in @($script:MinHeight, 50)) {
     $lf = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height $h -Limits $narrowLimits -Restored @('Model') -RestoredAge '12 min' -RowMap ([ref]$nmap))
     $lfText = $lf -join "`n"
     # Clickable tokens are bracketed here (no -Color): '[enter] start', not 'enter start'.
-    foreach ($hint in @('[enter] start', '[u] maintenance', '[esc] quit', 'up/down row', 'left/right value')) {
+    foreach ($hint in @('[enter] start', '[u] maintenance', '[esc] quit', 'w/s row', 'a/d value')) {
         Assert-Equal $true $lfText.Contains($hint) "50x${h} launch: the hint '$hint' is readable"
     }
     Assert-Equal $true ($lf.Count -le ($h - 1)) "50x${h} launch: $($lf.Count) lines leave the headroom row"
@@ -1550,7 +1552,9 @@ foreach ($h in @($script:MinHeight, 50)) {
 
     $pf = @(Get-PickerFrame -Sessions $narrowSessions -Index 2 -Width 50 -Height $h)
     $pfText = $pf -join "`n"
-    foreach ($hint in @('[/] filter', '[enter] open', '[f] fork', '[esc] back')) {
+    # 'w/s move' pinned alongside the picker's other 50-column hints (fix round 1: it was asserted
+    # nowhere, the same way 'w/s row' is pinned for the launch screen above).
+    foreach ($hint in @('w/s move', '[/] filter', '[enter] open', '[f] fork', '[esc] back')) {
         Assert-Equal $true $pfText.Contains($hint) "50x${h} picker: the hint '$hint' is readable"
     }
     Assert-Equal $true ($pf.Count -le ($h - 1)) "50x${h} picker: $($pf.Count) lines leave the headroom row"
@@ -1737,8 +1741,50 @@ try {
     Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
 }
 
+# --- Task 5: WASD navigates alongside the arrows, on every screen with a cursor ------------------
+# Assert-Equal here is (Expected, Actual) - the house order; a written brief's own sample assertions
+# had it backwards (see the ruling this task was dispatched with).
+$sDown = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
+Assert-Equal 2 $sDown.Row 's moves the launch cursor down twice'
+$sBack = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('s', 'w', 'Enter')) -Draw {}
+Assert-Equal 0 $sBack.Row 'w moves it back up'
+
+# The modifier guard is not weakened by adding a letter: a SHIFTED W must not navigate. Fix round 1
+# (the first version was vacuous both ways: New-LaunchState starts at Row 0, and the w branch is
+# `if ($State.Row -gt 0) { $State.Row-- }`, so a shifted W that DID navigate would ALSO leave Row at
+# 0). Move first with a plain 's' to Row 1, then the shifted W: guard intact leaves it at 1; a guard
+# that let the shifted key through would pull it back to 0.
+$ShiftW = [System.ConsoleKeyInfo]::new('W', [System.ConsoleKey]::W, $true, $false, $false)
+$sShift = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-MixedKeyReader -Keys @('s', $ShiftW, 'Enter')) -Draw {}
+Assert-Equal 1 $sShift.Row 'a shifted W does not navigate the launch screen back up'
+
+# a/d step the selected row's value, exactly like left/right - reuse the same "reach the last row,
+# then wrap the value" shape the arrow-key assertions above already use.
+$aBack = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys ($remoteDowns + @('a', 'Enter'))) -Draw {}
+Assert-Equal 'stop server' $aBack.Remote 'a wraps to the last value of the remote row, like left'
+$dForward = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('d', 'Enter')) -Draw {}
+Assert-Equal ((Get-LaunchRows | Where-Object Name -eq 'Account').Values | Select-Object -Skip 1 -First 1) $dForward.Account 'd steps the account row forward, like right'
+
+# The session picker: reuse the small two-session fixture from screen 2's own arrow-key assertions.
+$sPick = Invoke-SessionPicker -Sessions $fake -ReadKey (New-ScriptedKeyReader -Keys @('s', 'Enter')) -Draw {}
+Assert-Equal 'bbbb2222' $sPick.Session.SessionId 's moves the picker selection down, like DownArrow'
+$wPick = Invoke-SessionPicker -Sessions $fake -ReadKey (New-ScriptedKeyReader -Keys @('s', 'w', 'Enter')) -Draw {}
+Assert-Equal 'aaaa1111' $wPick.Session.SessionId 'w moves it back up'
+
+# Typed filter text must not navigate: 's' and 'w' inside an open filter are characters, not moves.
+# Fix round 1: the final session id alone cannot tell filtering from navigating here (s and w cancel
+# each other, and Escape resets the index to 0 anyway - both paths land on the same session). $Draw
+# already receives (s, i, f) every redraw, so capture what it is actually called with instead.
+$script:typedDrawCalls = [System.Collections.Generic.List[object]]::new()
+$typedDraw = { param($s, $i, $f) $script:typedDrawCalls.Add([pscustomobject]@{ Index = $i; Filter = $f }); $null }
+$typedKeys = @('/', 's', 'w', 'Escape', 'Enter')
+$typedPick = Invoke-SessionPicker -Sessions $fake -ReadKey (New-ScriptedKeyReader -Keys $typedKeys) -Draw $typedDraw
+$sw = @($script:typedDrawCalls | Where-Object { $_.Filter -eq 'sw' })
+Assert-Equal 1 $sw.Count 'w and s typed into an open filter reach it as characters - the filter becomes "sw"'
+Assert-Equal 0 $sw[0].Index 'and the index never moved while those letters were being typed'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 748) { Write-Host "COULD NOT RUN: expected 748 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 759) { Write-Host "COULD NOT RUN: expected 759 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -201,6 +201,19 @@ $sgrM = [System.ConsoleKeyInfo]::new([char]'M', [System.ConsoleKey]::M, $true, $
 Assert-Equal $false (Test-ClaudeHotkey -Key $sgrM -Char 'm' -CapsLock $true) 'a shifted M is never the m hotkey, Caps Lock or not'
 Assert-Equal $true  (Test-ClaudeHotkey -Key ([System.ConsoleKeyInfo]::new([char]'u', [System.ConsoleKey]::U, $false, $false, $false)) -Char 'u' -CapsLock $true) 'and a plain lowercase u still matches with Caps Lock on'
 
+# ------------------------------------------------------- WASD: the Cyrillic layout entries -----
+# VK_PACKET input (an RDP soft keyboard, the owner's actual case) carries no virtual key at all, so
+# the physical-key match cannot see it - only the character the Russian/Ukrainian layout produces
+# on that key does. Table entries added for w/a/s; 'd' already existed for the maintenance screen.
+foreach ($pair in @(@('w', 0x0446), @('a', 0x0444), @('s', 0x044B))) {
+    $ch = [char]$pair[1]
+    $k = [System.ConsoleKeyInfo]::new($ch, [System.ConsoleKey]0, $false, $false, $false)
+    Assert-Equal $true (Test-ClaudeHotkey -Key $k -Char $pair[0] -CapsLock $false) "$($pair[0]) matches its Cyrillic layout letter"
+}
+# The modifier guard is not weakened by adding a letter: a SHIFTED w must still not navigate.
+$shiftedW = [System.ConsoleKeyInfo]::new('W', [System.ConsoleKey]::W, $true, $false, $false)
+Assert-Equal $false (Test-ClaudeHotkey -Key $shiftedW -Char 'w') 'a shifted w is never the w hotkey'
+
 # ---------------------------------------------------------------- live console
 
 if ($Live -and -not $LiveOnly) {
@@ -728,12 +741,13 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # (arming a SECOND time after TreatControlCAsInput can fail, in which case only 1 assertion runs
 # there instead of 4 - see 'arming after TreatControlCAsInput should still work'), so its count is
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
-# genuine hidden console, never guessed. The bare count (53) IS exact - checkpoint.ps1 only ever
-# runs this suite bare, and that path has no such branching.
+# genuine hidden console, never guessed. The bare count (57, since the WASD Cyrillic-layout block
+# added 4) IS exact - checkpoint.ps1 only ever runs this suite bare, and that path has no such
+# branching.
 if ($LiveOnly) {
-    if ($script:Ran -lt 111) { Write-Host "COULD NOT RUN: expected at least 111 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
-} elseif ($script:Ran -ne 53) {
-    Write-Host "COULD NOT RUN: expected 53 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
+    if ($script:Ran -lt 115) { Write-Host "COULD NOT RUN: expected at least 115 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+} elseif ($script:Ran -ne 57) {
+    Write-Host "COULD NOT RUN: expected 57 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

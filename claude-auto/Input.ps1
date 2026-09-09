@@ -681,12 +681,16 @@ function Get-ClaudeFooterHit {
 $script:HotkeyLayoutChars = @{
     'u' = [char]0x0433   # CYRILLIC SMALL LETTER GHE
     'r' = [char]0x043A   # CYRILLIC SMALL LETTER KA
-    'd' = [char]0x0432   # CYRILLIC SMALL LETTER VE
+    'd' = [char]0x0432   # CYRILLIC SMALL LETTER VE (right, on the launch/picker screens; doctor, on maintenance)
     'm' = [char]0x044C   # CYRILLIC SMALL LETTER SOFT SIGN
     'p' = [char]0x0437   # CYRILLIC SMALL LETTER ZE
     'i' = [char]0x0448   # CYRILLIC SMALL LETTER SHA
     'f' = [char]0x0430   # CYRILLIC SMALL LETTER A
     '/' = [char]0x002E   # the slash key is '.' unshifted on both layouts
+    # WASD navigation (2026-09-09): up/left/down/right on every screen that has a cursor.
+    'w' = [char]0x0446   # CYRILLIC SMALL LETTER TSE
+    'a' = [char]0x0444   # CYRILLIC SMALL LETTER EF
+    's' = [char]0x044B   # CYRILLIC SMALL LETTER YERU
 }
 # Hotkeys whose virtual key is not the uppercase Latin letter.
 $script:HotkeyVirtualKeys = @{ '/' = [System.ConsoleKey]::Oem2 }

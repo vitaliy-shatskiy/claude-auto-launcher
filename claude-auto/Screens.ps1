@@ -80,11 +80,13 @@ function Set-LaunchRoster {
 # asserts this constant is the count plus one, so it re-measures itself on every run.
 # The "8 rows" above assumes the Remote row is present (remote: true in the config): with
 # remote: false the frame is one row shorter and this minimum has headroom to spare.
-# ZERO MARGIN on the footer since the key caps became buttons (2026-09-09): the two wrapped footer
-# lines measure 34 and 50 - the second one fills all 50 columns exactly. One more character in any
-# launch hint label, or a fourth clickable hint, wraps to a THIRD footer line and this constant
-# must become 22 - the self-measuring assertion above will fail loudly and say so, but there is no
-# spare width left to absorb it silently.
+# RE-MEASURED 2026-09-09 when the arrow hints shrank from up/down and left/right to w/s and a/d
+# (WASD navigation): the frame is still 20 lines at 50 columns - the footer still wraps to two
+# lines (41 and 32 characters) - so $script:MinHeight did not move. The zero-margin note from when
+# the key caps became buttons no longer applies: there is 9 columns of slack on the wider wrapped
+# line now, not none. One more character in any launch hint label, or a fourth clickable hint,
+# could still wrap to a THIRD footer line - the self-measuring assertion above will fail loudly and
+# say so if it ever does, but this is no longer the zero-margin case it once was.
 $script:MinWidth = 50
 $script:MinHeight = 21
 $script:TwoPaneWidth = 100
@@ -571,11 +573,13 @@ function Get-LaunchFrame {
         $when = if ($RestoredAge -eq 'just now') { 'just now' } else { "$RestoredAge ago" }
         $lines += "  * restored ($when), ctrl+r resets"
     }
-    # Arrows are deliberately NOT clickable: "up/down" names two directions, and a click on it
-    # cannot mean one of them. Everything that IS a single action is.
+    # Arrows are deliberately NOT clickable: "w/s" (or "a/d") names two directions, and a click on
+    # it cannot mean one of them. Everything that IS a single action is. w/s and a/d, not
+    # up/down and left/right (2026-09-09): WASD navigates every screen with a cursor now, and
+    # naming it here is what tells the owner the shorter keys exist at all.
     $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
-        @{ Token = 'up/down';    Label = 'row';         Clickable = $false }
-        @{ Token = 'left/right'; Label = 'value';       Clickable = $false }
+        @{ Token = 'w/s'; Label = 'row';         Clickable = $false }
+        @{ Token = 'a/d'; Label = 'value';       Clickable = $false }
         @{ Token = 'enter';      Label = 'start';       Clickable = $true; Key = 'Enter';  Char = '' }
         @{ Token = 'u';          Label = 'maintenance'; Clickable = $true; Key = '';       Char = 'u' }
         @{ Token = 'esc';        Label = 'quit';        Clickable = $true; Key = 'Escape'; Char = '' }
@@ -738,9 +742,9 @@ function Get-PickerFrame {
     if ($hiddenCount -gt 0) { $title += " $($g.H) $hiddenCount empty hidden" }
     if ($Filter) { $title += " $($g.H) filter: $Filter" }
     # Same rule as the launch screen: the arrow hint names two directions and cannot be clicked
-    # into one of them; every single action can.
+    # into one of them; every single action can. w/s, not up/down (2026-09-09) - see Get-LaunchFrame.
     $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
-        @{ Token = 'up/down'; Label = 'move';   Clickable = $false }
+        @{ Token = 'w/s'; Label = 'move';   Clickable = $false }
         @{ Token = '/';       Label = 'filter'; Clickable = $true; Key = ''; Char = '/' }
         @{ Token = 'enter';   Label = 'open';   Clickable = $true; Key = 'Enter'; Char = '' }
         @{ Token = 'f';       Label = 'fork';   Clickable = $true; Key = ''; Char = 'f' }

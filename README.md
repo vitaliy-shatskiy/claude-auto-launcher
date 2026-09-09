@@ -24,7 +24,7 @@ CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
    mode        ● [normal] ○ safe
 
   ──────────────────────────────────────────────────────────────────────────
-  up/down row  ┊  left/right value  ┊  enter start  ┊  u maintenance
+  w/s row  ┊  a/d value  ┊  enter start  ┊  u maintenance
   esc quit
 ```
 

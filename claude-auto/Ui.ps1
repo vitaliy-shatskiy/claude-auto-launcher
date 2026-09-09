@@ -220,13 +220,18 @@ function Invoke-LaunchScreen {
         # whole-state reset would flatten every tab's stash, which is the same "my settings reset
         # themselves" failure one level up.
         if ($key.Key -eq [System.ConsoleKey]::R -and ($key.Modifiers -band [System.ConsoleModifiers]::Control)) { $State = Reset-LaunchTab -State $State }
-        elseif ($name -eq 'UpArrow') { if ($State.Row -gt 0) { $State.Row-- } }
-        elseif ($name -eq 'DownArrow') { if ($State.Row -lt (Get-LaunchRows).Count - 1) { $State.Row++ } }
+        # WASD navigates alongside the arrows on every screen with a cursor (2026-09-09): w/a/s/d
+        # go through Test-ClaudeHotkey (Input.ps1), never -eq, so a shifted or Cyrillic-layout key
+        # is judged by the same modifier/case guards as every other hotkey.
+        elseif ($name -eq 'UpArrow' -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($State.Row -gt 0) { $State.Row-- } }
+        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($State.Row -lt (Get-LaunchRows).Count - 1) { $State.Row++ } }
         # The account row is a tab strip: stepping it is a tab switch, and the five habit rows have
         # to travel with it. Every other row steps and nothing else happens.
-        elseif ($name -eq 'LeftArrow' -or $name -eq 'RightArrow') {
+        elseif ($name -eq 'LeftArrow' -or $name -eq 'RightArrow' -or
+                (Test-ClaudeHotkey -Key $key -Char 'a') -or (Test-ClaudeHotkey -Key $key -Char 'd')) {
             $leaving = $State.Account
-            $State = Step-LaunchValue -State $State -Delta $(if ($name -eq 'LeftArrow') { -1 } else { 1 })
+            $back = ($name -eq 'LeftArrow') -or (Test-ClaudeHotkey -Key $key -Char 'a')
+            $State = Step-LaunchValue -State $State -Delta $(if ($back) { -1 } else { 1 })
             if ((Get-LaunchRows)[$State.Row].Name -eq 'Account') { $State = Switch-LaunchTab -State $State -From $leaving -Prefs $Prefs -Rows (Get-LaunchRows) }
         }
         elseif ($name -eq 'Enter') { return $State }
@@ -325,8 +330,10 @@ function Invoke-SessionPicker {
             continue
         }
 
-        if ($name -eq 'UpArrow') { if ($index -gt 0) { $index-- } }
-        elseif ($name -eq 'DownArrow') { if ($index -lt $items.Count - 1) { $index++ } }
+        # WASD alongside the arrows here too - reached only outside the $typing branch above, so
+        # letters typed into an open filter are never read as navigation.
+        if ($name -eq 'UpArrow' -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
+        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($index -lt $items.Count - 1) { $index++ } }
         elseif ($name -eq 'Enter') { if ($items.Count -gt 0) { return [pscustomobject]@{ Session = $items[$index]; Fork = $false } } }
         elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return $null }
         # Test-ClaudeHotkey (Input.ps1): the character, the virtual key or the Cyrillic letter on
