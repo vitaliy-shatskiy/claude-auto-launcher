@@ -28,6 +28,16 @@ function Assert-Equal {
         Write-Host "ok    $Because"
     }
 }
+function Assert-True {
+    param([bool]$Actual, [string]$Because)
+    $script:Ran++
+    if (-not $Actual) {
+        Write-Host "FAIL  $Because"
+        $script:Failed++
+    } else {
+        Write-Host "ok    $Because"
+    }
+}
 
 # Fix 1 (Ctrl+C): New-ScriptedKeyReader has no way to express a modifier, so a mixed reader
 # combines its string-driven keys with a pre-built Ctrl+C ConsoleKeyInfo. The last three
@@ -776,29 +786,66 @@ Assert-Equal $false ($pickerFooter -match [regex]::Escape($doubledCursor)) 'the 
 $launchFooter = @(Get-LaunchFrame -State (New-LaunchState) -Width 120 -Height 24)[-1]
 Assert-Equal $false ($launchFooter -match [regex]::Escape($doubledCursor)) 'the launch footer contains no doubled cursor glyph'
 
-# Colour identity for the picker, at both layouts.
+# Colour identity for the picker, at both layouts. The footer's key caps are the one deliberate
+# exception (Task 4): bracketed with colour off, padded with it on - same WIDTH either way, never
+# the same characters - so those lines are compared normalised (brackets -> padding) rather than
+# byte for byte.
 foreach ($w in @(80, 120)) {
-    $plainP   = Get-PickerFrame -Sessions $fake -Index 0 -Filter '' -Width $w -Height 24 -Now $now
+    $pMapPlain = $null
+    $plainP   = Get-PickerFrame -Sessions $fake -Index 0 -Filter '' -Width $w -Height 24 -Now $now -RowMap ([ref]$pMapPlain)
     $coloredP = Get-PickerFrame -Sessions $fake -Index 0 -Filter '' -Width $w -Height 24 -Now $now -Color
+    $footerFrom = $pMapPlain.FooterY
+    $footerTo = $footerFrom + $pMapPlain.FooterLines - 1
+    # Pin the window before trusting it: an unpinned FooterY/FooterLines that ever drifted WIDE
+    # would make the skip loop swallow the whole frame and index $plainP[$i] past the end, where
+    # $null -replace ... is '' and Remove-AnsiColor $null is '' - both loops below would then pass
+    # on an empty comparison instead of a real one. Measured at width $w: one footer line.
+    Assert-Equal 1 $pMapPlain.FooterLines "width ${w}: the picker footer is exactly one line"
+    Assert-Equal $true ($footerTo -lt $plainP.Count) "width ${w}: the footer window stays inside the frame"
     $mismatch = 0
     for ($i = 0; $i -lt $plainP.Count; $i++) {
+        if ($i -ge $footerFrom -and $i -le $footerTo) { continue }
         if ((Remove-AnsiColor -Text $coloredP[$i]) -ne $plainP[$i]) { $mismatch++ }
     }
-    Assert-Equal 0 $mismatch "stripping colour returns the plain picker frame exactly at width $w"
+    Assert-Equal 0 $mismatch "stripping colour returns the plain picker frame exactly at width $w, outside the footer's key caps"
+    $footerMismatch = 0
+    for ($i = $footerFrom; $i -le $footerTo; $i++) {
+        $normalizedPlain = (($plainP[$i] -replace '\[', ' ') -replace '\]', ' ')
+        if ($normalizedPlain -ne (Remove-AnsiColor -Text $coloredP[$i])) { $footerMismatch++ }
+    }
+    Assert-Equal 0 $footerMismatch "stripping colour and normalising brackets-to-padding matches the plain picker footer at width $w"
 }
 
 # --- colour ------------------------------------------------------------------------------
 # The whole point of painting after layout: stripping the escapes must give back exactly the
 # plain frame. If this ever fails, colour has started corrupting the width arithmetic.
 
-$plain   = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Limits @{ work = [pscustomobject]@{ FiveHour = 15; SevenDay = 97; AgeText = 'just now' } }
+$lMapPlain = $null
+$plain   = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Limits @{ work = [pscustomobject]@{ FiveHour = 15; SevenDay = 97; AgeText = 'just now' } } -RowMap ([ref]$lMapPlain)
 $colored = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Limits @{ work = [pscustomobject]@{ FiveHour = 15; SevenDay = 97; AgeText = 'just now' } } -Color
 Assert-Equal $plain.Count $colored.Count 'colouring does not change the number of lines'
+# Same exception as the picker above: the footer's key caps are bracketed here (colour off) and
+# padded there (colour on) - same width, deliberately different characters - so it is normalised
+# rather than compared byte for byte.
+$footerFrom = $lMapPlain.FooterY
+$footerTo = $footerFrom + $lMapPlain.FooterLines - 1
+# Same pin as the picker above: an unpinned window that drifted wide would make both comparison
+# loops below pass vacuously (an empty or past-the-end comparison), on a frame that never actually
+# got compared.
+Assert-Equal 2 $lMapPlain.FooterLines 'the launch footer at width 84 is exactly two lines'
+Assert-Equal $true ($footerTo -lt $plain.Count) 'the footer window stays inside the frame'
 $mismatch = 0
 for ($i = 0; $i -lt $plain.Count; $i++) {
+    if ($i -ge $footerFrom -and $i -le $footerTo) { continue }
     if ((Remove-AnsiColor -Text $colored[$i]) -ne $plain[$i]) { $mismatch++ }
 }
-Assert-Equal 0 $mismatch 'stripping colour returns the plain launch frame exactly'
+Assert-Equal 0 $mismatch 'stripping colour returns the plain launch frame exactly, outside the footer key caps'
+$footerMismatch = 0
+for ($i = $footerFrom; $i -le $footerTo; $i++) {
+    $normalizedPlain = (($plain[$i] -replace '\[', ' ') -replace '\]', ' ')
+    if ($normalizedPlain -ne (Remove-AnsiColor -Text $colored[$i])) { $footerMismatch++ }
+}
+Assert-Equal 0 $footerMismatch 'stripping colour and normalising brackets-to-padding matches the plain launch footer'
 Assert-Equal $true ([bool](@($colored | Where-Object { $_ -match "$([char]27)\[" }).Count -gt 0)) 'colour actually emitted escapes'
 
 # Percentages carry meaning, not decoration: a 97% week must not look like a 15% one.
@@ -1250,8 +1297,49 @@ $plainFooter = (New-HintFooter -Glyphs (Get-Glyphs) -Hints @(
     @{ Token = 'esc';   Label = 'quit';  Clickable = $true; Key = 'Escape'; Char = '' }))
 $paintedFooter = Add-HintColor -Line $plainFooter.Text -Spans $plainFooter.Spans -Enabled
 Assert-Equal $plainFooter.Text ($paintedFooter -replace "$([char]27)\[[0-9;]*m", '') 'stripping the colour off the footer returns it unchanged'
-Assert-Equal $true ($paintedFooter.Contains([string][char]27 + '[96m')) 'the key words are tinted'
+# The literal escape, not $script:C.Reverse: .Contains($script:C.Reverse) would pass vacuously if
+# Reverse were ever present-and-EMPTY ('' is contained in anything) - only a missing key (Contains
+# $null -> False) would have caught that trap, not an empty one.
+Assert-Equal $true ($paintedFooter.Contains("$([char]27)[7m")) 'the key caps are painted reverse video'
 Assert-Equal $plainFooter.Text (Add-HintColor -Line $plainFooter.Text -Spans $plainFooter.Spans) 'colour disabled leaves the footer exactly as it was'
+
+# --- footer hotkeys render as BUTTONS (Task 4). A clickable token gets a cell of its own -
+# padded with a space either side when colour will paint it, bracketed when it will not - so the
+# structure survives NO_COLOR. Assert-Equal here is (Expected, Actual) - the house order; the
+# brief's own sample had it backwards. ---
+$g4 = Get-Glyphs
+$f4 = New-HintFooter -Glyphs $g4 -Hints @(
+    @{ Token = 'up/down'; Label = 'row';   Clickable = $false }
+    @{ Token = 'enter';   Label = 'start'; Clickable = $true; Key = 'Enter'; Char = '' }
+)
+Assert-True ($f4.Text -match ' enter  start') 'a clickable token is padded into a key cap'
+$click4 = @($f4.Spans | Where-Object { $_.Key -eq 'Enter' })[0]
+Assert-Equal ' enter ' $f4.Text.Substring($click4.KeyStart, $click4.KeyEnd - $click4.KeyStart + 1) 'the cap span includes the padding'
+Assert-True ($f4.Text.Substring($click4.Start, $click4.End - $click4.Start + 1) -match 'start') 'the click span still covers the label'
+
+$plain4 = New-HintFooter -Glyphs $g4 -Plain -Hints @(
+    @{ Token = 'enter'; Label = 'start'; Clickable = $true; Key = 'Enter'; Char = '' }
+)
+Assert-True ($plain4.Text -match '\[enter\] start') 'without colour the cap is bracketed'
+
+$painted4 = Add-HintColor -Line $f4.Text -Spans $f4.Spans -Enabled
+# Not [regex]::Escape($script:C.Reverse) -match ... : Escape($null) silently returns '', and an
+# empty pattern matches ANY string - a missing Reverse code would pass this check by accident.
+Assert-True ((-not [string]::IsNullOrEmpty($script:C.Reverse)) -and $painted4.Contains($script:C.Reverse)) 'the cap is painted reverse video'
+Assert-Equal $f4.Text (Remove-AnsiColor $painted4) 'painting stays reversible'
+
+# The width fact the padded and bracketed forms share (1 + token + 1, either way): they cannot
+# wrap to a different number of lines, so $script:MinHeight cannot diverge between colour and
+# no-colour. If this ever fails, something is wrong with the -Plain implementation.
+$widthHints = @(
+    @{ Token = 'up/down'; Label = 'row';   Clickable = $false }
+    @{ Token = 'enter';   Label = 'start'; Clickable = $true; Key = 'Enter'; Char = '' }
+    @{ Token = 'u';       Label = 'maintenance'; Clickable = $true; Key = ''; Char = 'u' }
+    @{ Token = 'esc';     Label = 'quit';  Clickable = $true; Key = 'Escape'; Char = '' }
+)
+$paddedWrap = New-HintFooter -Glyphs $g4 -Width 30 -Hints $widthHints
+$bracketWrap = New-HintFooter -Glyphs $g4 -Width 30 -Plain -Hints $widthHints
+Assert-Equal @($paddedWrap.Lines).Count @($bracketWrap.Lines).Count 'the padded and bracketed forms wrap to the same number of lines'
 
 # --- Maintenance screen. It has no rows to select, so the mouse does exactly one thing there. The
 # assertion works by EVENT BUDGET: the reader holds a single event, so a click that is honoured
@@ -1269,14 +1357,22 @@ $mChars = @($mmap.Footer | ForEach-Object { if ($_.Char) { $_.Char } else { $_.K
 Assert-Equal 'u,r,d,m,p,i,Escape' $mChars 'every maintenance action is clickable, reindex included'
 
 $escSpan = Get-HintSpan -Map $mmap -Key 'Escape'
-$w = New-EventReader @((New-MouseEvent -Y $mmap.FooterY -X $escSpan.Start -Left))
+# +$escSpan.Line: the padded key caps push this footer to wrap at width 100, so 'esc' now sits on
+# the SECOND footer line - the same offset every other wrapped-hint click in this file already uses.
+$w = New-EventReader @((New-MouseEvent -Y ($mmap.FooterY + $escSpan.Line) -X $escSpan.Start -Left))
 $threw = $false
 try { Invoke-MaintenanceScreen -ReadKey $w -Draw $mDraw -Wait $w -GetWindowTop { 0 } } catch { $threw = $true }
 Assert-Equal $false $threw 'clicking "esc back" leaves the maintenance screen on the first event'
 
-# The same click one column past the span must NOT leave - proving the hit test is what decided it,
-# not the mere arrival of a mouse event.
-$w = New-EventReader @((New-MouseEvent -Y $mmap.FooterY -X ($escSpan.End + 1) -Left))
+# A click one column past a span must NOT leave - proving the hit test is what decided it, not the
+# mere arrival of a mouse event. 'esc' no longer works for this: it is now ALONE on the wrapped
+# second footer line, so one column past its end is merely past end-of-line, not a boundary against
+# an ADJACENT hint. 'd doctor' sits between 'r rename swap' and 'm mcp list' on the FIRST footer
+# line, so one column past its end lands in the separator before 'm' - the adjacency this was
+# written to prove.
+$dSpan = Get-HintSpan -Map $mmap -Char 'd'
+Assert-Equal 0 $dSpan.Line 'doctor sits on the first, unwrapped footer line'
+$w = New-EventReader @((New-MouseEvent -Y ($mmap.FooterY + $dSpan.Line) -X ($dSpan.End + 1) -Left))
 $threw = $false
 try { Invoke-MaintenanceScreen -ReadKey $w -Draw $mDraw -Wait $w -GetWindowTop { 0 } } catch { $threw = $true }
 Assert-Equal $true $threw 'a click one column past the hint does not leave — the span decided, not the event'
@@ -1444,7 +1540,8 @@ foreach ($h in @($script:MinHeight, 50)) {
     $nmap = $null
     $lf = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height $h -Limits $narrowLimits -Restored @('Model') -RestoredAge '12 min' -RowMap ([ref]$nmap))
     $lfText = $lf -join "`n"
-    foreach ($hint in @('enter start', 'u maintenance', 'esc quit', 'up/down row', 'left/right value')) {
+    # Clickable tokens are bracketed here (no -Color): '[enter] start', not 'enter start'.
+    foreach ($hint in @('[enter] start', '[u] maintenance', '[esc] quit', 'up/down row', 'left/right value')) {
         Assert-Equal $true $lfText.Contains($hint) "50x${h} launch: the hint '$hint' is readable"
     }
     Assert-Equal $true ($lf.Count -le ($h - 1)) "50x${h} launch: $($lf.Count) lines leave the headroom row"
@@ -1453,14 +1550,14 @@ foreach ($h in @($script:MinHeight, 50)) {
 
     $pf = @(Get-PickerFrame -Sessions $narrowSessions -Index 2 -Width 50 -Height $h)
     $pfText = $pf -join "`n"
-    foreach ($hint in @('/ filter', 'enter open', 'f fork', 'esc back')) {
+    foreach ($hint in @('[/] filter', '[enter] open', '[f] fork', '[esc] back')) {
         Assert-Equal $true $pfText.Contains($hint) "50x${h} picker: the hint '$hint' is readable"
     }
     Assert-Equal $true ($pf.Count -le ($h - 1)) "50x${h} picker: $($pf.Count) lines leave the headroom row"
 
     $mf = @(Get-MaintenanceFrame -Info $narrowInfo -Width 50 -Height $h -Status $longStatus -Actions $cfgActions)
     $mfText = $mf -join "`n"
-    foreach ($hint in @('u update', 'r rename swap', 'd doctor', 'm mcp list', 'p prune', 'i full reindex', 'esc back')) {
+    foreach ($hint in @('[u] update', '[r] rename swap', '[d] doctor', '[m] mcp list', '[p] prune', '[i] full reindex', '[esc] back')) {
         Assert-Equal $true $mfText.Contains($hint) "50x${h} maintenance: the hint '$hint' is readable"
     }
     Assert-Equal $true ($mf.Count -le ($h - 1)) "50x${h} maintenance: $($mf.Count) lines with a long status leave the headroom row"
@@ -1488,7 +1585,7 @@ Assert-Equal 0 $script:reindexRuns 'the same column on the FIRST footer line is 
 $noActions = Get-MaintenanceFrame -Info $narrowInfo -Width 78 -Height 24
 Assert-Equal $false (($noActions | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match 'full reindex') 'no action, no hint'
 $withAction = Get-MaintenanceFrame -Info $narrowInfo -Width 78 -Height 24 -Actions $cfgActions
-Assert-Equal $true (($withAction | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match 'i\s+full reindex') 'a configured action is a footer hint'
+Assert-Equal $true (($withAction | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match '\[i\]\s+full reindex') 'a configured action is a footer hint'
 $w = New-EventReader @($iKey, $esc)
 Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions @() -Runner { throw 'must not run' }
 Assert-Equal $false ($script:lastStatus -match 'confirm') 'a key with no action does nothing'
@@ -1592,9 +1689,9 @@ $wrapped = New-HintFooter -Glyphs (Get-Glyphs) -Width 20 -Hints @(
     @{ Token = 'u'; Label = 'update'; Clickable = $true; Key = ''; Char = 'u' }
     @{ Token = 'r'; Label = 'rename swap'; Clickable = $true; Key = ''; Char = 'r' }
     @{ Token = 'i'; Label = 'full reindex'; Clickable = $true; Key = ''; Char = 'i' })
-Assert-Equal 3 @($wrapped.Lines).Count 'width 20: three hints of 8-13 characters take three lines'
+Assert-Equal 3 @($wrapped.Lines).Count 'width 20: three padded hints of 10-16 characters take three lines'
 Assert-Equal 0 (@($wrapped.Lines | Where-Object { $_.Text.Length -gt 20 }).Count) 'width 20: no footer line exceeds the width'
-Assert-Equal '  r rename swap' $wrapped.Lines[1].Text 'each wrapped line is indented like the first'
+Assert-Equal '   r  rename swap' $wrapped.Lines[1].Text 'each wrapped line is indented like the first'
 
 # --- roster is configurable; the Remote row is optional ------------------------------------------
 # Only .Count is trustworthy off this capture: Get-LaunchRows returns the SAME row hashtables
@@ -1641,7 +1738,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 731) { Write-Host "COULD NOT RUN: expected 731 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 748) { Write-Host "COULD NOT RUN: expected 748 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

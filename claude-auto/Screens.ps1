@@ -80,6 +80,11 @@ function Set-LaunchRoster {
 # asserts this constant is the count plus one, so it re-measures itself on every run.
 # The "8 rows" above assumes the Remote row is present (remote: true in the config): with
 # remote: false the frame is one row shorter and this minimum has headroom to spare.
+# ZERO MARGIN on the footer since the key caps became buttons (2026-09-09): the two wrapped footer
+# lines measure 34 and 50 - the second one fills all 50 columns exactly. One more character in any
+# launch hint label, or a fourth clickable hint, wraps to a THIRD footer line and this constant
+# must become 22 - the self-measuring assertion above will fail loudly and say so, but there is no
+# spare width left to absorb it silently.
 $script:MinWidth = 50
 $script:MinHeight = 21
 $script:TwoPaneWidth = 100
@@ -284,13 +289,21 @@ function New-HintFooter {
     # hints that are not arrows - and their click spans with them. Returns Lines (Text + Spans per
     # line, every span carrying its Line index) and, for the callers that never wrap, Text/Spans of
     # the FIRST line. Without -Width everything lands on one line, as before.
-    param([Parameter(Mandatory)][array]$Hints, [Parameter(Mandatory)][hashtable]$Glyphs, [int]$Width = 0)
+    param([Parameter(Mandatory)][array]$Hints, [Parameter(Mandatory)][hashtable]$Glyphs, [int]$Width = 0, [switch]$Plain)
     $sep = "  $($Glyphs.HintSep)  "
     $lines = @()
     $text = '  '
     $spans = @()
     foreach ($h in $Hints) {
-        $piece = $h.Token
+        # A clickable hint is a BUTTON: the key gets a cell of its own so reverse video paints an
+        # even block around it. With colour off that block is invisible, so -Plain brackets the
+        # token instead - the structure has to survive NO_COLOR and a dumb terminal. Both forms are
+        # the same width (1 + token + 1), which is what keeps wrapping identical either way.
+        $token =
+            if (-not $h.Clickable) { $h.Token }
+            elseif ($Plain) { "[$($h.Token)]" }
+            else { " $($h.Token) " }
+        $piece = $token
         if ($h.Label) { $piece += ' ' + $h.Label }
         $hasContent = $text.Length -gt 2
         if ($Width -gt 0 -and $hasContent -and ($text.Length + $sep.Length + $piece.Length) -gt $Width) {
@@ -301,22 +314,19 @@ function New-HintFooter {
         }
         if ($hasContent) { $text += $sep }
         $start = $text.Length
-        $tokenEnd = $start + $h.Token.Length - 1
+        $tokenEnd = $start + $token.Length - 1
         $text += $piece
-        if ($h.Clickable) {
-            $spans += [pscustomobject]@{
-                Start = $start; End = $text.Length - 1
-                KeyStart = $start; KeyEnd = $tokenEnd
-                Key = $h.Key; Char = $h.Char; Line = $lines.Count
-            }
-        } else {
-            # Not clickable, but still worth painting: the arrow hints are how the keyboard is
-            # discovered, and dimming them uniformly is what makes the actions stand out.
-            $spans += [pscustomobject]@{
-                Start = -1; End = -1
-                KeyStart = $start; KeyEnd = $tokenEnd
-                Key = ''; Char = ''; Line = $lines.Count
-            }
+        # One shape for both cases: a non-clickable hint is still worth painting - the arrow hints
+        # are how the keyboard is discovered, and dimming them uniformly is what makes the actions
+        # stand out - so it gets the same span with Start/End sentinelled to -1 rather than a whole
+        # separate object literal.
+        $spans += [pscustomobject]@{
+            Start = if ($h.Clickable) { $start } else { -1 }
+            End = if ($h.Clickable) { $text.Length - 1 } else { -1 }
+            KeyStart = $start; KeyEnd = $tokenEnd
+            Key = if ($h.Clickable) { $h.Key } else { '' }
+            Char = if ($h.Clickable) { $h.Char } else { '' }
+            Line = $lines.Count
         }
     }
     $lines += [pscustomobject]@{ Text = $text; Spans = @($spans) }
@@ -336,7 +346,7 @@ function Add-HintColor {
     foreach ($s in ($Spans | Sort-Object KeyStart)) {
         if ($s.KeyStart -lt $cursor -or $s.KeyEnd -ge $Line.Length) { continue }
         $out += $c.Dim + $Line.Substring($cursor, $s.KeyStart - $cursor) + $c.Reset
-        $tint = if ($s.Start -ge 0) { $c.BrightCyan } else { $c.Dim }
+        $tint = if ($s.Start -ge 0) { $c.Reverse + $c.Bold } else { $c.Dim }
         $out += $tint + $Line.Substring($s.KeyStart, $s.KeyEnd - $s.KeyStart + 1) + $c.Reset
         $cursor = $s.KeyEnd + 1
     }
@@ -563,7 +573,7 @@ function Get-LaunchFrame {
     }
     # Arrows are deliberately NOT clickable: "up/down" names two directions, and a click on it
     # cannot mean one of them. Everything that IS a single action is.
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Hints @(
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
         @{ Token = 'up/down';    Label = 'row';         Clickable = $false }
         @{ Token = 'left/right'; Label = 'value';       Clickable = $false }
         @{ Token = 'enter';      Label = 'start';       Clickable = $true; Key = 'Enter';  Char = '' }
@@ -729,7 +739,7 @@ function Get-PickerFrame {
     if ($Filter) { $title += " $($g.H) filter: $Filter" }
     # Same rule as the launch screen: the arrow hint names two directions and cannot be clicked
     # into one of them; every single action can.
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Hints @(
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
         @{ Token = 'up/down'; Label = 'move';   Clickable = $false }
         @{ Token = '/';       Label = 'filter'; Clickable = $true; Key = ''; Char = '/' }
         @{ Token = 'enter';   Label = 'open';   Clickable = $true; Key = 'Enter'; Char = '' }
@@ -896,7 +906,7 @@ function Get-MaintenanceFrame {
         $hints += @{ Token = $a.Key; Label = $a.Label; Clickable = $true; Key = ''; Char = $a.Key }
     }
     $hints += @{ Token = 'esc'; Label = 'back'; Clickable = $true; Key = 'Escape'; Char = '' }
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Hints $hints
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints $hints
 
     $body = @(
         "  installed   $($Info.BinPath)",

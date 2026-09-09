@@ -9,6 +9,7 @@ $script:C = @{
     Reset        = "$([char]27)[0m"
     Bold         = "$([char]27)[1m"
     Dim          = "$([char]27)[2m"
+    Reverse      = "$([char]27)[7m"
     Red          = "$([char]27)[31m"
     Green        = "$([char]27)[32m"
     Yellow       = "$([char]27)[33m"
