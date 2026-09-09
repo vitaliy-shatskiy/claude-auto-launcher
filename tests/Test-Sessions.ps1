@@ -1,5 +1,8 @@
 # Assertions for Sessions.ps1. Run: pwsh -File Test-Sessions.ps1
-try { . "$PSScriptRoot\..\claude-auto\Sessions.ps1" } catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
+try {
+    . "$PSScriptRoot\..\claude-auto\Sessions.ps1"
+    . "$PSScriptRoot\..\claude-auto\Projects.ps1"   # Get-ProjectPathFromTranscript - the real-cwd authority
+} catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
 
 $script:Failed = 0
 $script:Ran = 0
@@ -225,7 +228,140 @@ Assert-Equal 'tail line' $tailLines[-1] 'the real last line still comes back wit
 Assert-Equal $true ($longest -gt 0 -and $longest -le 70000) "the walk stops at the byte budget instead of reading the whole file (longest line returned: $longest)"
 Remove-Item -LiteralPath $tailPath -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 58) { Write-Host "COULD NOT RUN: expected 58 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# 17. ConvertFrom-ClaudeProjectSlug's 'Projects-' heuristic renders a repo not
+#     living under a folder called Projects wrong (e.g. 'my-cool-app' as just 'app'). The
+#     transcript's own cwd is the reversible authority - Get-ClaudeSessionSummary must resolve the
+#     name from it and carry the raw Slug alongside, and Get-ClaudeSessions must be filterable by
+#     that slug. Called WITHOUT -ProjectPath, so the standalone (no-cache) path is covered too.
+#     (Review round 2: the resolved cwd is kept only as the -ProjectPath PARAMETER used to compute
+#     the name - it is not returned as a field. A path is a machine value: sanitising it corrupts a
+#     genuine one - e.g. two consecutive spaces, or U+00AD, are legal in an NTFS path component and
+#     not in $ctrl's pattern's complement - while a raw one is an injection vector with no consumer
+#     to justify the risk. Get-ProjectRegistry is the one place that hands out a validated path.)
+$sroot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$sdir  = Join-Path $sroot 'C--src-my-cool-app'
+New-Item -ItemType Directory -Force -Path $sdir | Out-Null
+Set-Content -LiteralPath (Join-Path $sdir 'x.jsonl') -Encoding utf8 -Value (
+    @{ type='user'; cwd='C:\src\my-cool-app'; message=@{ role='user'; content='hello' } } | ConvertTo-Json -Compress)
+
+$s = Get-ClaudeSessionSummary -Path (Join-Path $sdir 'x.jsonl')
+Assert-Equal 'my-cool-app' $s.Project 'the project name is the real folder, not the last dash token'
+Assert-Equal 'C--src-my-cool-app' $s.Slug 'the slug travels with the session'
+
+$all = @(Get-ClaudeSessions -ProjectsRoot $sroot -CachePath (Join-Path $sroot 'c.json'))
+Assert-Equal 1 $all.Count 'the fixture has exactly one session, pinned independently of the filter under test'
+$one = @(Get-ClaudeSessions -ProjectsRoot $sroot -CachePath (Join-Path $sroot 'c.json') -ProjectSlug 'C--src-my-cool-app')
+Assert-Equal $all.Count $one.Count 'filtering by the only slug returns everything'
+$none = @(Get-ClaudeSessions -ProjectsRoot $sroot -CachePath (Join-Path $sroot 'c.json') -ProjectSlug 'C--other')
+Assert-Equal 0 $none.Count 'filtering by an absent slug returns nothing'
+Remove-Item -LiteralPath $sroot -Recurse -Force -ErrorAction SilentlyContinue
+
+# 17b. Review round 1, CRITICAL: Project is now sourced from the transcript's own cwd (untrusted
+#      input), and the protection it had before this task was structural (an NTFS directory name
+#      cannot carry 0x00-0x1F) - a cwd taken from JSON has no such guarantee. It must be sanitised
+#      exactly like Title/LastUser/LastAssistant. (Round 2 dropped the ProjectPath FIELD entirely -
+#      see the section-17 comment - so only Project is asserted here now.)
+$escProjRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-escproj-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$escProjDir  = Join-Path $escProjRoot 'C--src-esc-app'
+New-Item -ItemType Directory -Force -Path $escProjDir | Out-Null
+$escP = [char]27
+Set-Content -LiteralPath (Join-Path $escProjDir 'x.jsonl') -Encoding utf8 -Value (
+    @{ type='user'; cwd=("C:\src\pwn" + $escP + "ed"); message=@{ role='user'; content='hello' } } | ConvertTo-Json -Compress)
+$sEsc = Get-ClaudeSessionSummary -Path (Join-Path $escProjDir 'x.jsonl')
+Assert-Equal $false ($sEsc.Project -match $ctrl) 'no control character survives into Project'
+Remove-Item -LiteralPath $escProjRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# 17c. Review round 1, IMPORTANT: a cached summary must not keep serving a project name the
+#      directory has since moved on from. The resolved cwd is decided by whichever transcript is
+#      newest in the directory RIGHT NOW - a different file than the one a given cache key names.
+#      Session 'aaa' is cached with no cwd (heuristic fallback); a newer sibling then arrives with a
+#      real cwd, and both must report the real name on the next listing, not just the fresh one.
+$stRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-stale-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$stDir  = Join-Path $stRoot 'C--src-stale-app'
+New-Item -ItemType Directory -Force -Path $stDir | Out-Null
+Set-Content -LiteralPath (Join-Path $stDir 'aaa.jsonl') -Encoding utf8 -Value (
+    @{ type='user'; message=@{ role='user'; content='first' } } | ConvertTo-Json -Compress)   # no cwd
+$stCache = Join-Path $stRoot 'c.json'
+$b1 = @(Get-ClaudeSessions -ProjectsRoot $stRoot -CachePath $stCache)
+Assert-Equal 'app' $b1[0].Project 'before a real cwd exists anywhere in the directory, the lone session falls back to the slug heuristic'
+
+Start-Sleep -Milliseconds 20   # aaa.jsonl must not become the newest transcript by mtime tie
+Set-Content -LiteralPath (Join-Path $stDir 'bbb.jsonl') -Encoding utf8 -Value (
+    @{ type='user'; cwd='C:\src\new-name'; message=@{ role='user'; content='second' } } | ConvertTo-Json -Compress)
+$b2 = @(Get-ClaudeSessions -ProjectsRoot $stRoot -CachePath $stCache)
+$aaaSummary = $b2 | Where-Object { $_.SessionId -eq 'aaa' }
+$bbbSummary = $b2 | Where-Object { $_.SessionId -eq 'bbb' }
+Assert-Equal 'new-name' $aaaSummary.Project 'a CACHED session refreshes its project name from the directory, not the value baked in at first summarisation'
+Assert-Equal 'new-name' $bbbSummary.Project 'the freshly summarised sibling reports the same real name'
+Remove-Item -LiteralPath $stRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# 17d. Review round 1, IMPORTANT: a -ProjectSlug call only ever enumerates one project's files, so
+#      writing $fresh alone as the cache would evict every other project's entry from the shared
+#      file on the very next launch.
+$mgRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-merge-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$mgA = Join-Path $mgRoot 'C--src-proj-a'; $mgB = Join-Path $mgRoot 'C--src-proj-b'
+New-Item -ItemType Directory -Force -Path $mgA | Out-Null
+New-Item -ItemType Directory -Force -Path $mgB | Out-Null
+Set-Content -LiteralPath (Join-Path $mgA 'a1.jsonl') -Encoding utf8 -Value (@{ type='user'; message=@{ role='user'; content='a' } } | ConvertTo-Json -Compress)
+Set-Content -LiteralPath (Join-Path $mgB 'b1.jsonl') -Encoding utf8 -Value (@{ type='user'; message=@{ role='user'; content='b' } } | ConvertTo-Json -Compress)
+$mgCache = Join-Path $mgRoot 'c.json'
+$null = @(Get-ClaudeSessions -ProjectsRoot $mgRoot -CachePath $mgCache)
+$before = @((Get-Content -LiteralPath $mgCache -Raw | ConvertFrom-Json).PSObject.Properties).Count
+Assert-Equal 2 $before 'both projects are cached after an unfiltered call'
+$null = @(Get-ClaudeSessions -ProjectsRoot $mgRoot -CachePath $mgCache -ProjectSlug 'C--src-proj-a')
+$after = @((Get-Content -LiteralPath $mgCache -Raw | ConvertFrom-Json).PSObject.Properties).Count
+Assert-Equal 2 $after 'a scoped call merges onto the existing cache instead of evicting the other project'
+Remove-Item -LiteralPath $mgRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# 17e. Review round 1, MINOR: the once-per-directory design point has no coverage without counting
+#      actual resolver calls - a single-file fixture cannot tell one resolution from N. Wrap the
+#      resolver to count invocations across three sibling session files in one directory.
+$origResolve = ${function:Get-ProjectPathFromTranscript}
+$script:ResolveCalls = 0
+function Get-ProjectPathFromTranscript {
+    param([string]$Directory)
+    $script:ResolveCalls++
+    & $origResolve -Directory $Directory
+}
+$mdRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-md-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$mdDir  = Join-Path $mdRoot 'C--src-multi-dir'
+New-Item -ItemType Directory -Force -Path $mdDir | Out-Null
+1..3 | ForEach-Object {
+    Set-Content -LiteralPath (Join-Path $mdDir "s$_.jsonl") -Encoding utf8 -Value (
+        @{ type='user'; cwd='C:\src\multi-dir'; message=@{ role='user'; content="hello $_" } } | ConvertTo-Json -Compress)
+}
+$mdSessions = @(Get-ClaudeSessions -ProjectsRoot $mdRoot -CachePath (Join-Path $mdRoot 'c.json'))
+Assert-Equal 3 $mdSessions.Count 'three sibling sessions in one directory are all listed'
+Assert-Equal 1 $script:ResolveCalls 'the directory resolves its project path exactly once on a cold cache, not once per session'
+${function:Get-ProjectPathFromTranscript} = $origResolve
+Remove-Item -LiteralPath $mdRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# 17f. Review round 2, IMPORTANT: a FAILING directory resolution must also memoise, not just a
+#      successful one - otherwise a throwing resolver is retried once per file in that directory,
+#      undoing the once-per-directory guarantee from 17e under exactly the condition it exists to
+#      protect against (measured before this fix: 3 files -> 3 invocations AND 0 rows returned,
+#      because the unmemoised throw took the whole per-file try down with it).
+$origResolve2 = ${function:Get-ProjectPathFromTranscript}
+$script:ResolveCalls = 0
+function Get-ProjectPathFromTranscript {
+    param([string]$Directory)
+    $script:ResolveCalls++
+    throw 'resolver unavailable'
+}
+$failRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-fail-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$failDir  = Join-Path $failRoot 'C--src-failing-dir'
+New-Item -ItemType Directory -Force -Path $failDir | Out-Null
+1..3 | ForEach-Object {
+    Set-Content -LiteralPath (Join-Path $failDir "f$_.jsonl") -Encoding utf8 -Value (
+        @{ type='user'; message=@{ role='user'; content="hello $_" } } | ConvertTo-Json -Compress)
+}
+$failSessions = @(Get-ClaudeSessions -ProjectsRoot $failRoot -CachePath (Join-Path $failRoot 'c.json'))
+Assert-Equal 1 $script:ResolveCalls 'a throwing resolver is invoked once per directory, not once per session, even on failure'
+Assert-Equal 3 $failSessions.Count 'a directory whose resolver fails still lists every session in it, falling back to the slug heuristic'
+${function:Get-ProjectPathFromTranscript} = $origResolve2
+Remove-Item -LiteralPath $failRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 73) { Write-Host "COULD NOT RUN: expected 73 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

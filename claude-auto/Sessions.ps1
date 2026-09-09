@@ -207,6 +207,21 @@ function Get-FileTailLines {
     }
 }
 
+function Get-CleanTranscriptText {
+    # Transcript text is UNTRUSTED: these files routinely hold fetched web pages, other people's
+    # repository text and command output. Every field that reaches the terminal through Write-Frame
+    # -> [Console]::Write must go through this, so a transcript carrying ESC ] 0 ; ... BEL, ESC [ 2 J
+    # or an OSC 52 clipboard write cannot drive the reader's terminal instead of being displayed.
+    # '\s' in .NET does NOT match ESC (0x1B) or BEL (0x07), so whitespace normalisation alone lets
+    # all of it through. Control and format characters become spaces FIRST, so the collapse that
+    # follows also closes the gaps they leave. Extracted to a function (was a local scriptblock in
+    # Get-ClaudeSessionSummary) so Get-ClaudeSessions can apply the same rule when it refreshes
+    # Project on a cache hit, without duplicating the regex.
+    param([string]$Text)
+    if ($Text) { return (($Text -replace '[\p{Cc}\p{Cf}]', ' ' -replace '\s+', ' ').Trim()) }
+    return ''
+}
+
 function Get-ClaudeSessionSummary {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -215,11 +230,23 @@ function Get-ClaudeSessionSummary {
         # machine fell back to the session id. Get-Content stops at the limit, so a high value
         # costs nothing on short files.
         [int]$HeadLines = 400,
-        [int]$TailLines = 120
+        [int]$TailLines = 120,
+        # Resolved once per project DIRECTORY by the caller (Get-ClaudeSessions) so N sessions in
+        # the same folder do not each repeat the same directory listing and transcript read. Left
+        # optional so this function stays callable standalone - every existing test call keeps
+        # working, and resolves it itself when not supplied.
+        [string]$ProjectPath = $null
     )
     $file = Get-Item -LiteralPath $Path
     $slug = Split-Path (Split-Path $Path -Parent) -Leaf
     $names = ConvertFrom-ClaudeProjectSlug -Slug $slug
+
+    # The slug is not reversible (Projects.ps1). The transcript's own cwd is, so the name comes from
+    # the real folder and the dash heuristic is only the fallback for a transcript with no cwd.
+    if (-not $PSBoundParameters.ContainsKey('ProjectPath')) {
+        $ProjectPath = Get-ProjectPathFromTranscript -Directory (Split-Path -LiteralPath $Path)
+    }
+    $projectName = if ($ProjectPath) { Split-Path -Path $ProjectPath -Leaf } else { $names.Project }
 
     $title = $null
     foreach ($line in (Get-Content -LiteralPath $Path -TotalCount $HeadLines -ErrorAction SilentlyContinue)) {
@@ -263,27 +290,35 @@ function Get-ClaudeSessionSummary {
     # a bare hex id in the title column reads like the parser failed.
     if (-not $title) { $title = "(no prompt) " + $file.BaseName.Substring(0, [Math]::Min(8, $file.BaseName.Length)) }
 
-    # Transcript text is UNTRUSTED: these files routinely hold fetched web pages, other people's
-    # repository text and command output. Every field below reaches the terminal through Write-Frame
-    # -> [Console]::Write, so a transcript carrying ESC ] 0 ; ... BEL, ESC [ 2 J or an OSC 52
-    # clipboard write would drive the reader's terminal instead of being displayed. '\s' in .NET
-    # does NOT match ESC (0x1B) or BEL (0x07), so whitespace normalisation alone let all of it
-    # through. Control and format characters become spaces FIRST, so the collapse that follows also
-    # closes the gaps they leave. Sanitising here rather than in each renderer keeps it with the
-    # reader: anything that reads a transcript gets it, and a new renderer cannot forget it.
-    $clean = { param($s) if ($s) { ($s -replace '[\p{Cc}\p{Cf}]', ' ' -replace '\s+', ' ').Trim() } else { '' } }
+    # Transcript text is UNTRUSTED (see Get-CleanTranscriptText): every field below that can carry
+    # transcript content goes through it before it reaches the terminal. Project now comes from the
+    # transcript's own cwd (Projects.ps1) and needs it exactly as much as Title/LastUser/
+    # LastAssistant do - the protection Project had before this task was structural (an NTFS
+    # directory name cannot contain 0x00-0x1F), not deliberate, and a cwd sourced from JSON has no
+    # such guarantee. Worktree alone is left unsanitised on purpose: it still comes from the slug
+    # (Split on a directory NAME), never from transcript content, so it stays structurally safe.
+    #
+    # The resolved path itself (-ProjectPath, the parameter) is deliberately NOT in this object.
+    # Review round 2: sanitising it corrupts genuine paths (two consecutive spaces, U+00AD, a ZWSP -
+    # all legal in an NTFS path component, none of them survive Get-CleanTranscriptText) while a raw
+    # cwd carrying \p{Cc} never named a real directory in the first place - so sanitising bought
+    # safety only against a value that was already fake, at the cost of breaking real ones. There is
+    # no consumer for a path here: the picker filters on Slug (exact) and displays Project; whatever
+    # later needs to Set-Location asks Get-ProjectRegistry, which resolves AND validates with
+    # Test-Path. A path is a machine value - it must not be corrupted to make it renderable.
     return [pscustomobject]@{
         SessionId       = $file.BaseName
         Path            = $file.FullName
-        Project         = $names.Project
+        Slug            = $slug
+        Project         = (Get-CleanTranscriptText -Text $projectName)
         Worktree        = $names.Worktree
         Modified        = $file.LastWriteTime
         SizeBytes       = $file.Length
         PromptCount     = (Measure-ClaudePrompts -Path $Path)
-        Title           = (& $clean $title)
-        LastUser        = (& $clean $lastUser)
-        LastAssistant   = (& $clean $lastAssistant)
-        RecentMessages  = @($recent | ForEach-Object { [pscustomobject]@{ Speaker = $_.Speaker; Text = (& $clean (Get-CodeFenceCollapsedText -Text $_.Text)) } })
+        Title           = (Get-CleanTranscriptText -Text $title)
+        LastUser        = (Get-CleanTranscriptText -Text $lastUser)
+        LastAssistant   = (Get-CleanTranscriptText -Text $lastAssistant)
+        RecentMessages  = @($recent | ForEach-Object { [pscustomobject]@{ Speaker = $_.Speaker; Text = (Get-CleanTranscriptText -Text (Get-CodeFenceCollapsedText -Text $_.Text)) } })
     }
 }
 
@@ -311,7 +346,8 @@ function Get-ClaudeSessions {
     param(
         [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
         [int]$Limit = 40,
-        [string]$CachePath = (Join-Path (Split-Path $ProjectsRoot -Parent) 'claude-auto-sessions.json')
+        [string]$CachePath = (Join-Path (Split-Path $ProjectsRoot -Parent) 'claude-auto-sessions.json'),
+        [string]$ProjectSlug = ''
     )
     if (-not (Test-Path $ProjectsRoot)) { return @() }
 
@@ -330,10 +366,18 @@ function Get-ClaudeSessions {
     # Test-ClaudeSessionFile's two Resolve-Path calls per file cost 1.19 s of the 1.62 s spent
     # just getting to the shortlist. Test-ClaudeSessionFile stays: it is the written form of the
     # same rule and the suites pin it.
-    $files = Get-ChildItem -LiteralPath $ProjectsRoot -Directory -Force -ErrorAction SilentlyContinue |
+    $dirs = Get-ChildItem -LiteralPath $ProjectsRoot -Directory -Force -ErrorAction SilentlyContinue
+    # Filtering the DIRECTORY list, not the summaries: with the filter on, only that project's
+    # transcripts are ever opened, so scoping the picker makes it cheaper rather than slower.
+    if ($ProjectSlug) { $dirs = @($dirs | Where-Object { $_.Name -eq $ProjectSlug }) }
+    $files = $dirs |
         ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue } |
         Sort-Object LastWriteTime -Descending | Select-Object -First $Limit
 
+    # Resolved once per project DIRECTORY, not once per session file: on a cold cache, N sessions
+    # under the same slug would otherwise repeat the same directory listing and the same read of
+    # the newest transcript N times to compute the identical answer.
+    $projectPaths = @{}
     $out = @(); $fresh = @{}
     foreach ($f in $files) {
         # The cache key carries the mtime of THIS module, not a hand-written version literal.
@@ -341,15 +385,52 @@ function Get-ClaudeSessions {
         # kept serving pre-fix numbers under an unchanged "v2|" key, and the stale value was
         # briefly reported as a verification result.
         $key = "$script:SummaryVersion|$($f.FullName)|$($f.LastWriteTimeUtc.Ticks)|$($f.Length)"
-        if ($cache.ContainsKey($key)) { $summary = $cache[$key] }
-        else {
-            try { $summary = Get-ClaudeSessionSummary -Path $f.FullName } catch { continue }
-        }
+        try {
+            $dirName = Split-Path -LiteralPath $f.FullName
+            if (-not $projectPaths.ContainsKey($dirName)) {
+                # Memoise a FAILED resolution too, not only a successful one: both Get-ChildItem and
+                # Get-Content inside Get-ProjectPathFromTranscript already run with
+                # -ErrorAction SilentlyContinue, so this is latent today, but an unmemoised throw
+                # would be retried once per file in the directory - exactly undoing the once-per-
+                # directory guarantee above, and under the one condition (a failing resolver) it
+                # exists to protect against. $null memoises the same as "no cwd found".
+                try { $projectPaths[$dirName] = Get-ProjectPathFromTranscript -Directory $dirName }
+                catch { $projectPaths[$dirName] = $null }
+            }
+            $projectPath = $projectPaths[$dirName]
+            if ($cache.ContainsKey($key)) {
+                $summary = $cache[$key]
+                # The resolved cwd is decided by whichever transcript is newest in the DIRECTORY
+                # right now, a different file than the one this cache key names - a session cached
+                # before a newer sibling arrived (or before that sibling ever had a cwd) must not
+                # keep serving a stale or heuristic name forever. The expensive fields (title, tail
+                # walk, prompt count) stay cached; only this cheap, memo-backed field is refreshed,
+                # through the same sanitiser Get-ClaudeSessionSummary uses (both are transcript-
+                # sourced, cache or not).
+                $slugNames = ConvertFrom-ClaudeProjectSlug -Slug "$($summary.Slug)"
+                $projectName = if ($projectPath) { Split-Path -Path $projectPath -Leaf } else { $slugNames.Project }
+                $summary.Project = Get-CleanTranscriptText -Text $projectName
+            } else {
+                $summary = Get-ClaudeSessionSummary -Path $f.FullName -ProjectPath $projectPath
+            }
+        } catch { continue }   # one unreadable file or directory is skipped, never fatal to the listing
         $fresh[$key] = $summary
         $out += $summary
     }
 
-    try { $fresh | ConvertTo-Json -Depth 6 | Set-Content $CachePath -Encoding utf8 } catch { }
+    if ($ProjectSlug) {
+        # A scoped call only ever enumerated ONE project's files. Writing $fresh alone would evict
+        # every other project's cached entry from the shared file on the next launch (measured: 3
+        # keys before a filtered call, 2 after) - the param comment above already records the
+        # sibling incident of a shared cache file getting thrashed. Merge onto what was already
+        # there instead. An UNFILTERED call still replaces the file wholesale - that is what prunes
+        # entries for sessions that no longer exist, so that path is left alone on purpose.
+        $merged = $cache.Clone()
+        foreach ($k in $fresh.Keys) { $merged[$k] = $fresh[$k] }
+        try { $merged | ConvertTo-Json -Depth 6 | Set-Content $CachePath -Encoding utf8 } catch { }
+    } else {
+        try { $fresh | ConvertTo-Json -Depth 6 | Set-Content $CachePath -Encoding utf8 } catch { }
+    }
     return $out
 }
 
