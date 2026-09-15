@@ -235,7 +235,11 @@ function Get-ClaudeSessionSummary {
         # the same folder do not each repeat the same directory listing and transcript read. Left
         # optional so this function stays callable standalone - every existing test call keeps
         # working, and resolves it itself when not supplied.
-        [string]$ProjectPath = $null
+        [string]$ProjectPath = $null,
+        # Turns the substring pre-filter below OFF, so the unfiltered walk that parsed every line
+        # stays runnable. It exists for the suite: the filter must change how MANY lines are
+        # parsed and nothing else, and that is only assertable against the old path side by side.
+        [switch]$NoPreFilter
     )
     $file = Get-Item -LiteralPath $Path
     $slug = Split-Path (Split-Path $Path -Parent) -Leaf
@@ -250,6 +254,12 @@ function Get-ClaudeSessionSummary {
 
     $title = $null
     foreach ($line in (Get-Content -LiteralPath $Path -TotalCount $HeadLines -ErrorAction SilentlyContinue)) {
+        # ConvertFrom-Json on a line that cannot become a title is pure cost, and it was 69% of a
+        # cold listing. Get-ClaudeUserPrompt returns $null for any record whose type is not 'user',
+        # so a line not carrying that field verbatim is rejected either way - the filter changes how
+        # many lines are parsed, never which are accepted (pinned by Test-Sessions 18). Anchored on
+        # the same substring Measure-ClaudePrompts has always used, so the two cannot drift apart.
+        if (-not $NoPreFilter -and -not $line.Contains('"type":"user"')) { continue }
         $rec = ConvertFrom-JsonlLine -Line $line
         if (-not $rec) { continue }
         $prompt = Get-ClaudeUserPrompt -Record $rec
@@ -264,6 +274,10 @@ function Get-ClaudeSessionSummary {
     $recent = @()
     $tail = @(Get-FileTailLines -Path $Path -Count $TailLines)
     for ($i = $tail.Count - 1; $i -ge 0; $i--) {
+        # Same rule as the head loop: this walk reads only 'user' records (Get-ClaudeUserPrompt) and
+        # 'assistant' ones (Get-ClaudeRecordText), so a line carrying neither type contributes to
+        # nothing and does not need parsing.
+        if (-not $NoPreFilter -and -not ($tail[$i].Contains('"type":"user"') -or $tail[$i].Contains('"type":"assistant"'))) { continue }
         $rec = ConvertFrom-JsonlLine -Line $tail[$i]
         if (-not $rec) { continue }
         if (-not $lastAssistant -and $rec.type -eq 'assistant' -and -not $rec.isSidechain) {

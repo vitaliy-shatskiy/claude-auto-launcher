@@ -361,7 +361,70 @@ Assert-Equal 3 $failSessions.Count 'a directory whose resolver fails still lists
 ${function:Get-ProjectPathFromTranscript} = $origResolve2
 Remove-Item -LiteralPath $failRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 73) { Write-Host "COULD NOT RUN: expected 73 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# 18. The summary parsed every head and tail line with ConvertFrom-Json, which was 69% of a cold
+#     listing. A line that does not carry '"type":"user"' can never produce a title or a LastUser
+#     (Get-ClaudeUserPrompt returns $null on any other type), and a tail line carrying neither
+#     '"type":"user"' nor '"type":"assistant"' can contribute to nothing at all - so those parses
+#     are pure cost. Skipping them must change how MANY lines are parsed and nothing else, which is
+#     only assertable while the unfiltered walk is still runnable: -NoPreFilter keeps it.
+function Get-SummaryFingerprint {
+    param($S)
+    $recent = @($S.RecentMessages | ForEach-Object { "$($_.Speaker)=$($_.Text)" }) -join '|'
+    return (@(
+        "SessionId=$($S.SessionId)", "Path=$($S.Path)", "Slug=$($S.Slug)", "Project=$($S.Project)",
+        "Worktree=$($S.Worktree)", "Modified=$($S.Modified.Ticks)", "SizeBytes=$($S.SizeBytes)",
+        "PromptCount=$($S.PromptCount)", "Title=$($S.Title)", "LastUser=$($S.LastUser)",
+        "LastAssistant=$($S.LastAssistant)", "Recent=$recent"
+    ) -join "`n")
+}
+$fixtureFiles = @(Get-ChildItem -LiteralPath $fx -Recurse -Filter *.jsonl -File)
+# A comparison over an empty set passes for the wrong reason.
+Assert-Equal $true ($fixtureFiles.Count -ge 9) "the fixture tree carries transcripts to compare ($($fixtureFiles.Count) found)"
+$drifted = @()
+foreach ($ff in $fixtureFiles) {
+    $unfiltered = Get-SummaryFingerprint (Get-ClaudeSessionSummary -Path $ff.FullName -NoPreFilter)
+    $filtered   = Get-SummaryFingerprint (Get-ClaudeSessionSummary -Path $ff.FullName)
+    if ($unfiltered -ne $filtered) { $drifted += $ff.Name }
+}
+Assert-Equal 0 $drifted.Count "every summary field is identical with and without the line pre-filter (differing: $($drifted -join ', '))"
+
+# And it really does skip parses - otherwise the assertion above passes on a filter that does
+# nothing. None of the fixtures above can show it: every one of them is user and assistant records
+# only, which is exactly the set the filter keeps. What a real transcript is full of - system,
+# summary and hook records between the prompts - needs its own fixture, written here so the shape
+# under test is visible beside the assertion.
+$pfRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-prefilter-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$pfDir  = Join-Path $pfRoot 'C--src-prefilter'
+New-Item -ItemType Directory -Force -Path $pfDir | Out-Null
+$pfFile = Join-Path $pfDir 'pppp4444.jsonl'
+$pfLines = @(
+    '{"type":"system","subtype":"init","content":"boot"}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"noise before the prompt"}]}}',
+    '{"type":"summary","summary":"an earlier session"}',
+    '{"type":"user","message":{"content":"the real prompt"}}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}',
+    '{"type":"system","subtype":"hook","content":"post"}'
+)
+[IO.File]::WriteAllText($pfFile, (($pfLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+
+$origConvert = ${function:ConvertFrom-JsonlLine}
+$script:ParseCalls = 0
+function ConvertFrom-JsonlLine {
+    param([string]$Line)
+    $script:ParseCalls++
+    & $origConvert -Line $Line
+}
+$script:ParseCalls = 0; $sUnfiltered = Get-ClaudeSessionSummary -Path $pfFile -NoPreFilter
+$parsesUnfiltered = $script:ParseCalls
+$script:ParseCalls = 0; $sFiltered = Get-ClaudeSessionSummary -Path $pfFile
+$parsesFiltered = $script:ParseCalls
+${function:ConvertFrom-JsonlLine} = $origConvert
+Assert-Equal $true ($parsesFiltered -gt 0 -and $parsesFiltered -lt $parsesUnfiltered) "the pre-filter parses fewer lines than the unfiltered walk ($parsesFiltered vs $parsesUnfiltered)"
+Assert-Equal 'the real prompt' $sFiltered.Title 'and the filtered walk still finds the same title past the system and summary records'
+Assert-Equal (Get-SummaryFingerprint $sUnfiltered) (Get-SummaryFingerprint $sFiltered) 'a transcript carrying system and summary records summarises identically either way'
+Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 78) { Write-Host "COULD NOT RUN: expected 78 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
