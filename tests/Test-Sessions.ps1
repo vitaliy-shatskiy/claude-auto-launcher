@@ -502,7 +502,55 @@ Remove-Item -LiteralPath $jAProjects -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $jBProjects -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $jRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 88) { Write-Host "COULD NOT RUN: expected 88 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# 23. Paging. Summarising 40 transcripts before the picker can draw anything is what a cold launch
+#     pays for; the picker now draws its first page and asks for the next only when the cursor
+#     reaches the last row, so this function has to hand out a WINDOW of the same newest-first
+#     order. The pages laid end to end must be exactly the unpaged listing - a duplicate row would
+#     offer the same session twice, a gap would hide one - and -Skip has to compose with the
+#     project scope, which is the only way the picker is ever called from the project screen.
+$pgRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-page-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$pgA = Join-Path $pgRoot 'C--src-page-a'; $pgB = Join-Path $pgRoot 'C--src-page-b'
+New-Item -ItemType Directory -Force -Path $pgA | Out-Null
+New-Item -ItemType Directory -Force -Path $pgB | Out-Null
+# Distinct mtimes, set explicitly: the order under test IS the mtime order, and files written in a
+# loop can share a timestamp, which would make the page boundaries arbitrary.
+$pgBase = Get-Date '2026-09-01 12:00:00'
+foreach ($n in 1..5) {
+    $p = Join-Path $pgA "a$n.jsonl"
+    Set-Content -LiteralPath $p -Encoding utf8 -Value (@{ type='user'; cwd='C:\src\page-a'; message=@{ role='user'; content="prompt a$n" } } | ConvertTo-Json -Compress)
+    (Get-Item -LiteralPath $p).LastWriteTime = $pgBase.AddMinutes($n)
+}
+foreach ($n in 1..3) {
+    $p = Join-Path $pgB "b$n.jsonl"
+    Set-Content -LiteralPath $p -Encoding utf8 -Value (@{ type='user'; cwd='C:\src\page-b'; message=@{ role='user'; content="prompt b$n" } } | ConvertTo-Json -Compress)
+    (Get-Item -LiteralPath $p).LastWriteTime = $pgBase.AddMinutes(10 + $n)
+}
+$pgCache = Join-Path $pgRoot 'c.json'
+$pgAll = @(Get-ClaudeSessions -ProjectsRoot $pgRoot -CachePath $pgCache -Limit 100 -ProjectSlug 'C--src-page-a')
+Assert-Equal 5 $pgAll.Count 'the scoped project has five sessions when nothing is paged'
+$pg1 = @(Get-ClaudeSessions -ProjectsRoot $pgRoot -CachePath $pgCache -Limit 2 -Skip 0 -ProjectSlug 'C--src-page-a')
+$pg2 = @(Get-ClaudeSessions -ProjectsRoot $pgRoot -CachePath $pgCache -Limit 2 -Skip 2 -ProjectSlug 'C--src-page-a')
+$pg3 = @(Get-ClaudeSessions -ProjectsRoot $pgRoot -CachePath $pgCache -Limit 2 -Skip 4 -ProjectSlug 'C--src-page-a')
+$pg4 = @(Get-ClaudeSessions -ProjectsRoot $pgRoot -CachePath $pgCache -Limit 2 -Skip 6 -ProjectSlug 'C--src-page-a')
+Assert-Equal 2 $pg1.Count 'the first page is one -Limit worth'
+Assert-Equal 2 $pg2.Count 'and so is the second'
+Assert-Equal 1 $pg3.Count 'the last page is whatever is left'
+Assert-Equal 0 $pg4.Count 'and past the end there is nothing, rather than a wrap back to the start'
+$pgPaged = @(@($pg1) + @($pg2) + @($pg3))
+Assert-Equal (@($pgAll | ForEach-Object { $_.SessionId }) -join ',') (@($pgPaged | ForEach-Object { $_.SessionId }) -join ',') 'the pages laid end to end are exactly the unpaged listing - same order, no row twice, none missed'
+Assert-Equal 'C--src-page-a' ((@($pgPaged | ForEach-Object { $_.Slug }) | Select-Object -Unique) -join ',') 'every paged row is still inside the scoped project'
+
+# A paged call has only LOOKED at a window, so it must not prune the cache down to that window -
+# the unfiltered whole-file replace is what prunes vanished sessions, and a page is not a survey.
+$null = @(Get-ClaudeSessions -ProjectsRoot $pgRoot -CachePath $pgCache -Limit 100)
+$pgKeysBefore = @((Get-Content -LiteralPath $pgCache -Raw | ConvertFrom-Json).PSObject.Properties).Count
+Assert-Equal 8 $pgKeysBefore 'an unpaged unscoped call caches every session in the root'
+$null = @(Get-ClaudeSessions -ProjectsRoot $pgRoot -CachePath $pgCache -Limit 2 -Skip 4)
+$pgKeysAfter = @((Get-Content -LiteralPath $pgCache -Raw | ConvertFrom-Json).PSObject.Properties).Count
+Assert-Equal $pgKeysBefore $pgKeysAfter 'a paged call merges onto the cache instead of evicting everything it did not look at'
+Remove-Item -LiteralPath $pgRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 97) { Write-Host "COULD NOT RUN: expected 97 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

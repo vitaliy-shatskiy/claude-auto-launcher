@@ -308,7 +308,14 @@ if ($UseUi) {
             # UNFILTERED on purpose (no -ProjectSlug here): scoping happens INSIDE the picker
             # (-ProjectSlug/-ProjectName below), so Tab can widen to every session without a second
             # read of disk.
-            $picked = Invoke-SessionPicker -Sessions @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit 40) `
+            # PAGED: the first frame costs one page of summarising, not forty. Measured on this
+            # machine over the live projects root, cold: 40 sessions 1 333 ms, 10 sessions ~240 ms.
+            # The picker asks for the next page when the cursor reaches the last row, so the rest is
+            # paid for by whoever actually scrolls that far.
+            $sessionPageSize = 10
+            $fetchNextPage = { param($have) @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize -Skip $have) }.GetNewClosure()
+            $picked = Invoke-SessionPicker -Sessions @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize) `
+                      -FetchMore $fetchNextPage `
                       -ProjectSlug $state.ProjectSlug -ProjectName $projectName -ReadKey $KeySource -Wait $wait -Draw $pdraw
             if ($picked) { $resumeId = $picked.Session.SessionId; $forkSession = [bool]$picked.Fork; break }
             # Escape at the picker returns $null (cancel) and, in a real session, this loop goes back

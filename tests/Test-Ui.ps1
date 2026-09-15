@@ -1,4 +1,4 @@
-# Assertions for Ui.ps1. Run: pwsh -File Test-Ui.ps1
+﻿# Assertions for Ui.ps1. Run: pwsh -File Test-Ui.ps1
 # Every screen is driven through the injectable key reader, so none of this needs a terminal.
 $env:CLAUDE_AUTO_CONFIG = "$PSScriptRoot\fixtures\config-four.json"   # BEFORE the dot-sources
 try {
@@ -2521,8 +2521,56 @@ try {
     Remove-Item -LiteralPath $tmpCwd -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# --- picker paging ------------------------------------------------------------------------------
+# A cold listing of 40 transcripts is what the launcher pays before the picker can draw anything.
+# The picker now takes a FIRST PAGE plus a way to ask for the next one, and asks only when the
+# cursor reaches the last row - so the frame appears after one page's worth of work and the rest is
+# paid for by whoever actually scrolls that far.
+$pgPage1 = @(
+    [pscustomobject]@{ SessionId='p1a'; Path='X:\p\p1a.jsonl'; Slug='S'; Project='Paged'; Worktree=$null; Modified=(Get-Date '2026-09-01 10:00'); SizeBytes=100; PromptCount=3; Title='page one first'; LastUser='u'; LastAssistant='a' }
+    [pscustomobject]@{ SessionId='p1b'; Path='X:\p\p1b.jsonl'; Slug='S'; Project='Paged'; Worktree=$null; Modified=(Get-Date '2026-09-01 09:00'); SizeBytes=100; PromptCount=3; Title='page one second'; LastUser='u'; LastAssistant='a' }
+)
+$pgPage2 = @(
+    [pscustomobject]@{ SessionId='p2a'; Path='X:\p\p2a.jsonl'; Slug='S'; Project='Paged'; Worktree=$null; Modified=(Get-Date '2026-09-01 08:00'); SizeBytes=100; PromptCount=3; Title='page two first'; LastUser='u'; LastAssistant='a' }
+    [pscustomobject]@{ SessionId='p2b'; Path='X:\p\p2b.jsonl'; Slug='S'; Project='Paged'; Worktree=$null; Modified=(Get-Date '2026-09-01 07:00'); SizeBytes=100; PromptCount=3; Title='page two second'; LastUser='u'; LastAssistant='a' }
+)
+
+# Down to the last row of page one, Down again to grow, Enter. The fetcher records what it was
+# asked for, so "asked once, for the rows it already had" is asserted rather than assumed.
+$script:pgAsked = @()
+# No .GetNewClosure() and no leading comma: a closure's $script: writes land in the closure's own
+# scope and never reach this file, and ',$array' returns the array as ONE element, which the picker
+# would then append as a single nested row.
+$pgFetch = { param($have) $script:pgAsked += $have; $pgPage2 }
+$pgSel = Invoke-SessionPicker -Sessions $pgPage1 -FetchMore $pgFetch -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','Enter')) -Draw {}
+Assert-Equal 'p2a' $pgSel.Session.SessionId 'reaching the last row fetches the next page and the cursor lands on its first row'
+Assert-Equal '2' ($script:pgAsked -join ',') 'the fetcher is asked exactly once, for the number of rows already on the list'
+
+# An empty page means the end. The picker must stop asking - otherwise every further Down hits disk
+# for nothing - and must still open the row the cursor is on.
+$script:pgAsked = @()
+$pgEmptyFetch = { param($have) $script:pgAsked += $have; @() }
+$pgSelEnd = Invoke-SessionPicker -Sessions $pgPage1 -FetchMore $pgEmptyFetch -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','DownArrow','Enter')) -Draw {}
+Assert-Equal '2' ($script:pgAsked -join ',') 'an empty page ends the paging - the fetcher is not asked again on the next Down'
+Assert-Equal 'p1b' $pgSelEnd.Session.SessionId 'and Enter still opens the row the cursor is on'
+
+# The window moves when a session is written while the picker is open, so the next page can overlap
+# the last one. A row already on the list must not appear twice.
+$script:pgAsked = @()
+$pgOverlapFetch = { param($have) $script:pgAsked += $have; @(@($pgPage1[1]) + @($pgPage2[0])) }
+$script:pgDrawn = 0
+$pgOverlapDraw = { param($s, $i, $f, $sc, $pn) $script:pgDrawn = @($s).Count; $null }
+$pgSelOverlap = Invoke-SessionPicker -Sessions $pgPage1 -FetchMore $pgOverlapFetch -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','Enter')) -Draw $pgOverlapDraw
+Assert-Equal 3 $script:pgDrawn 'a page that overlaps the previous one adds only the row that was not already there'
+Assert-Equal 'p2a' $pgSelOverlap.Session.SessionId 'and the cursor still lands on the genuinely new row'
+
+# No fetcher at all is every existing caller: the picker behaves exactly as it always has, and Down
+# at the last row does nothing rather than throwing on a $null scriptblock.
+$pgNoFetch = Invoke-SessionPicker -Sessions $pgPage1 -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','Enter')) -Draw {}
+Assert-Equal 'p1b' $pgNoFetch.Session.SessionId 'without a fetcher the cursor stops at the last row, exactly as before'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 915) { Write-Host "COULD NOT RUN: expected 915 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 922) { Write-Host "COULD NOT RUN: expected 922 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

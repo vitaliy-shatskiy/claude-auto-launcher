@@ -427,6 +427,11 @@ function Get-ClaudeSessions {
     param(
         [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
         [int]$Limit = 40,
+        # Paging. Summarising 40 transcripts is what a cold launch pays before the picker can draw
+        # anything; the picker takes a first page and asks for the next only when the cursor reaches
+        # the last row (Invoke-SessionPicker -FetchMore). -Skip is applied to the SORTED list, so
+        # -Limit N with -Skip 0, N, 2N walks exactly the order an unpaged call returns.
+        [int]$Skip = 0,
         [string]$CachePath = (Get-SessionsCachePath -ProjectsRoot $ProjectsRoot),
         [string]$ProjectSlug = ''
     )
@@ -453,7 +458,7 @@ function Get-ClaudeSessions {
     if ($ProjectSlug) { $dirs = @($dirs | Where-Object { $_.Name -eq $ProjectSlug }) }
     $files = $dirs |
         ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue } |
-        Sort-Object LastWriteTime -Descending | Select-Object -First $Limit
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip $Skip -First $Limit
 
     # Resolved once per project DIRECTORY, not once per session file: on a cold cache, N sessions
     # under the same slug would otherwise repeat the same directory listing and the same read of
@@ -516,7 +521,14 @@ function Get-ClaudeSessions {
         $out += $summary
     }
 
-    if ($ProjectSlug) {
+    if ($ProjectSlug -or $Skip -gt 0) {
+        # A PAGED call is the same case as a scoped one and for the same reason: it only ever looked
+        # at a window. Pruning is a survey's privilege - an unfiltered, unpaged call knows every
+        # session that exists, so what it did not find is gone - and page 2 knows nothing about page
+        # 1. (Consequence, deliberate: the first page is what an unpaged launch prunes down to, so
+        # later pages go cold again on the next launch. That is the window the acceptance number
+        # measures, and keeping every page warm would mean never pruning at all.)
+        #
         # A scoped call only ever enumerated ONE project's files. Writing $fresh alone would evict
         # every other project's cached entry from the shared file on the next launch (measured: 3
         # keys before a filtered call, 2 after) - the param comment above already records the

@@ -433,6 +433,34 @@ function Invoke-ProjectScreen {
     }
 }
 
+function Expand-SessionPage {
+    # Appends the next page of sessions to a picker's list. Pulled out of Invoke-SessionPicker so
+    # the keyboard and the wheel grow the list through the SAME rule, and so that rule is assertable
+    # without driving a picker loop.
+    #
+    # A row already on the list is never added again: the newest-first window moves whenever a
+    # session is written while the picker is open, so the next page can overlap the last one and the
+    # same session would otherwise be offered twice.
+    #
+    # Adding nothing means the end - either the fetcher returned nothing or it returned only rows
+    # already held, and asking again with the same count would return the same answer. A fetcher
+    # that throws (a root that vanished mid-session) ends the paging rather than the picker.
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions,
+        [Parameter(Mandatory)][scriptblock]$FetchMore
+    )
+    $page = @()
+    try { $page = @(& $FetchMore $Sessions.Count) } catch { $page = @() }
+    $seen = @{}
+    foreach ($s in $Sessions) { $seen["$($s.SessionId)|$($s.Path)"] = $true }
+    $added = @($page | Where-Object { $_ -and -not $seen["$($_.SessionId)|$($_.Path)"] })
+    return [pscustomobject]@{
+        Sessions  = @(@($Sessions) + $added)
+        Added     = $added.Count
+        Exhausted = ($added.Count -eq 0)
+    }
+}
+
 function Invoke-SessionPicker {
     # Returns the chosen session object, or $null when the user pressed Esc at the list level.
     param(
@@ -458,12 +486,19 @@ function Invoke-SessionPicker {
         [scriptblock]$Wait = { & $ReadKey },
         # Mouse coordinates are SCREEN-BUFFER rows; the frame is drawn relative to the visible
         # window. Injected so the mapping is assertable without a console.
-        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } }
+        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
+        # Paging. Called with the number of rows already on the list, whenever the cursor reaches
+        # the last row, and expected to return the next page. The launcher hands the picker one
+        # page instead of every session so the first frame costs one page's worth of summarising
+        # rather than forty. $null for a caller that already holds the whole list - the picker then
+        # behaves exactly as it did, and the cursor simply stops at the last row.
+        [scriptblock]$FetchMore = $null
     )
     $index = 0
     $filter = ''
     $typing = $false
     $rowMap = $null
+    $exhausted = $false
     # No slug AND no name means there is nothing to scope to (an unrecognised cwd, or a caller that
     # never learned a project at all) - the picker then behaves exactly as it always has, and Tab
     # does nothing (guarded below), because there is no "other" scope to widen from or narrow to.
@@ -509,7 +544,15 @@ function Invoke-SessionPicker {
         if ($key -and $key.Kind -eq 'mouse') {
             $synthetic = $null
             if ($key.WheelUp) { if ($index -gt 0) { $index-- } ; continue }
-            if ($key.WheelDown) { if ($index -lt $items.Count - 1) { $index++ } ; continue }
+            if ($key.WheelDown) {
+                if ($index -lt $items.Count - 1) { $index++ }
+                elseif ($FetchMore -and -not $exhausted) {
+                    $grown = Expand-SessionPage -Sessions $Sessions -FetchMore $FetchMore
+                    $Sessions = $grown.Sessions; $exhausted = $grown.Exhausted
+                    if ($grown.Added -gt 0) { $index++ }
+                }
+                continue
+            }
             # Act on the PRESS: the release carries the same position with no button set, and a drag
             # arrives as MOVE-with-button. Both are ignored, or one click would fire twice.
             if ($key.Left -and -not $key.IsMove -and $rowMap) {
@@ -555,7 +598,18 @@ function Invoke-SessionPicker {
         # WASD alongside the arrows here too - reached only outside the $typing branch above, so
         # letters typed into an open filter are never read as navigation.
         if ($name -eq 'UpArrow' -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
-        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($index -lt $items.Count - 1) { $index++ } }
+        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) {
+            if ($index -lt $items.Count - 1) { $index++ }
+            elseif ($FetchMore -and -not $exhausted) {
+                # The cursor is on the last row and there may be more behind it. $index is bumped
+                # past the end on purpose: the appended rows still have to pass the scope and the
+                # filter, and the loop re-clamps $index against $items before drawing, so this lands
+                # on the first NEW visible row or stays put when the page added nothing visible.
+                $grown = Expand-SessionPage -Sessions $Sessions -FetchMore $FetchMore
+                $Sessions = $grown.Sessions; $exhausted = $grown.Exhausted
+                if ($grown.Added -gt 0) { $index++ }
+            }
+        }
         # Tab, not a letter: Test-ClaudeHotkey is for the Latin letters a footer hint advertises via
         # -Char, and every named key on this screen (Enter, Escape) is already matched on $name the
         # same way this is - never -eq alone, but through the SAME $name string every other named key
