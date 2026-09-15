@@ -1,4 +1,4 @@
-﻿# Assertions for Ui.ps1. Run: pwsh -File Test-Ui.ps1
+# Assertions for Ui.ps1. Run: pwsh -File Test-Ui.ps1
 # Every screen is driven through the injectable key reader, so none of this needs a terminal.
 $env:CLAUDE_AUTO_CONFIG = "$PSScriptRoot\fixtures\config-four.json"   # BEFORE the dot-sources
 try {
@@ -2575,8 +2575,74 @@ Assert-Equal 'p1b' $pgNoFetch.Session.SessionId 'without a fetcher the cursor st
 # bound - so the capped form is pinned here, where Screens.ps1 is actually loaded.
 Assert-Equal 1 (Select-ResumableSessions -Sessions @([pscustomobject]@{ SessionId='big'; PromptCount='120+' })).Count 'a capped prompt count still reads as a resumable session'
 
+# --- paging: the offset, what "the end" means, and the SCOPE ---------------------------------------
+$pgRow = {
+    param([string]$Id, [string]$Slug = 'S', [string]$Project = 'Paged')
+    [pscustomobject]@{ SessionId = $Id; Path = "X:\p\$Id.jsonl"; Slug = $Slug; Project = $Project; Worktree = $null
+                       Modified = (Get-Date '2026-09-01 10:00'); SizeBytes = 100; PromptCount = 3
+                       Title = "title $Id"; LastUser = 'u'; LastAssistant = 'a'; RecentMessages = @() }
+}
+# An all-overlap page is the exact case the dedup exists for - one page's worth of appends while the
+# picker is open. Equating "added nothing" with "the end" ended the paging permanently there.
+$ovHeld = @((& $pgRow 'o1'), (& $pgRow 'o2'))
+$ovGrown = Expand-SessionPage -Sessions $ovHeld -FetchMore { param($have, $scope) @($ovHeld) } -Fetched 2
+Assert-Equal 0 $ovGrown.Added 'a page that is entirely overlap adds no row'
+Assert-Equal $false $ovGrown.Exhausted 'but an overlapping page is not the end - unseen rows can still be behind it'
+Assert-Equal $true (Expand-SessionPage -Sessions $ovHeld -FetchMore { param($have, $scope) @() } -Fetched 2).Exhausted 'an EMPTY page is the end'
+Assert-Equal 4 $ovGrown.Fetched 'the fetched offset counts what the fetcher returned, not what survived the dedup'
+$script:ovAsked = @()
+$ovFetch = { param($have, $scope) $script:ovAsked += $have; @((& $pgRow 'o2'), (& $pgRow 'o3')) }
+$ovG1 = Expand-SessionPage -Sessions $ovHeld -FetchMore $ovFetch -Fetched 2
+$ovG2 = Expand-SessionPage -Sessions $ovG1.Sessions -FetchMore $ovFetch -Fetched $ovG1.Fetched
+Assert-Equal 3 $ovG1.Sessions.Count 'an overlapping page leaves fewer rows held than were read'
+Assert-Equal '2,4' ($script:ovAsked -join ',') 'and the next page is asked for from the FETCHED offset, not from the deduped row count'
+Assert-Equal 6 $ovG2.Fetched 'the offset keeps advancing past an overlap rather than re-reading it forever'
+
+# An empty first page: one Down must land on the FIRST fetched row, not step over it.
+$script:emptyAsked = @()
+$emptyFetch = { param($have, $scope) $script:emptyAsked += $have; @((& $pgRow 'e1'), (& $pgRow 'e2')) }
+$emptySel = Invoke-SessionPicker -Sessions @() -FetchMore $emptyFetch -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Enter')) -Draw {}
+Assert-Equal '0' ($script:emptyAsked -join ',') 'an empty first page asks the fetcher from offset 0'
+Assert-Equal 'e1' $emptySel.Session.SessionId 'and the cursor lands on the first fetched row, not the second'
+
+# A filter that hides every loaded row: Down must not become a synchronous cold disk page.
+$script:filterAsked = 0
+$filterFetch = { param($have, $scope) $script:filterAsked++; @((& $pgRow 'f9')) }
+$null = Invoke-SessionPicker -Sessions $ovHeld -FetchMore $filterFetch -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'z', 'z', 'Enter', 'DownArrow', 'DownArrow', 'DownArrow', 'DownArrow', 'Escape'))
+Assert-Equal 0 $script:filterAsked 'a filter that matches nothing turns Down into no disk page at all'
+
+# THE SCOPE. The picker pages the project it is scoped to, and Tab asks for page 1 of the account.
+$mineRows = @((& $pgRow 'm1' 'MINE' 'Mine'), (& $pgRow 'm2' 'MINE' 'Mine'), (& $pgRow 'm3' 'MINE' 'Mine'))
+$otherRows = @((& $pgRow 'x1' 'OTHER' 'Other'), (& $pgRow 'x2' 'OTHER' 'Other'))
+$script:scopeAsks = @()
+$scopeFetch = {
+    param($have, $scope)
+    $script:scopeAsks += ('{0}:{1}' -f $have, (@($scope) -join '+'))
+    if (@($scope) -contains 'MINE') { @($mineRows | Select-Object -Skip $have -First 2) }
+    else { @((@($mineRows) + @($otherRows)) | Select-Object -Skip $have -First 2) }
+}
+$scopedSel = Invoke-SessionPicker -Sessions @($mineRows[0], $mineRows[1]) -FetchMore $scopeFetch -ProjectSlug @('MINE') -ProjectName 'Mine' `
+             -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal '2:MINE' ($script:scopeAsks -join ',') 'a scoped picker pages with its own slug, so the rows it fetches can actually be shown'
+Assert-Equal 'm3' $scopedSel.Session.SessionId 'and the page it fetched is reachable with one more Down'
+$script:scopeAsks = @()
+$tabSel = Invoke-SessionPicker -Sessions @($mineRows[0]) -FetchMore $scopeFetch -ProjectSlug @('MINE') -ProjectName 'Mine' `
+          -ReadKey (New-ScriptedKeyReader -Keys @('Tab', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal '0:' ($script:scopeAsks -join ',') 'Tab widens to the whole account by asking the same fetcher for page 1 with NO scope'
+Assert-Equal 'm2' $tabSel.Session.SessionId 'and the widened page is what the cursor then moves through'
+
+# One real directory, two slug folders: a picker scoped to the merged project reaches both.
+$twoSlug = @((& $pgRow 'a1' 'C--tmp-Shared' 'Shared'), (& $pgRow 'b1' 'C--tmp-Shared-alt' 'Shared'))
+$twoMap = $null
+$twoFrame = @(Get-PickerFrame -Sessions $twoSlug -Index 0 -Width 100 -Height 30 -RowMap ([ref]$twoMap))
+Assert-Equal 2 $twoMap.RowCount 'both slug folders of one directory are rows'
+$twoSel = Invoke-SessionPicker -Sessions $twoSlug -ProjectSlug @('C--tmp-Shared', 'C--tmp-Shared-alt') -ProjectName 'Shared' `
+          -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'b1' $twoSel.Session.SessionId 'a picker scoped to a merged project reaches the sibling slug''s sessions too'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 923) { Write-Host "COULD NOT RUN: expected 923 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 939) { Write-Host "COULD NOT RUN: expected 939 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

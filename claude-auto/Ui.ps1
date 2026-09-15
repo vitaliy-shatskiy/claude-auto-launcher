@@ -442,22 +442,33 @@ function Expand-SessionPage {
     # session is written while the picker is open, so the next page can overlap the last one and the
     # same session would otherwise be offered twice.
     #
-    # Adding nothing means the end - either the fetcher returned nothing or it returned only rows
-    # already held, and asking again with the same count would return the same answer. A fetcher
-    # that throws (a root that vanished mid-session) ends the paging rather than the picker.
+    # An EMPTY page means the end. "Added nothing" does not: a page that is entirely overlap - the
+    # exact case the dedup exists for - would then end the paging permanently with sessions still
+    # behind it (adversarial review 2026-09-16, D1). A fetcher that throws (a root that vanished
+    # mid-session) ends the paging rather than the picker.
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions,
-        [Parameter(Mandatory)][scriptblock]$FetchMore
+        [Parameter(Mandatory)][scriptblock]$FetchMore,
+        # How many rows have been FETCHED so far - the offset into the caller's snapshot. This is
+        # NOT $Sessions.Count once a page has overlapped: the dedup drops rows, and an offset taken
+        # from the deduped count re-reads the same window forever. -1 keeps the old behaviour for a
+        # caller that does not thread it.
+        [int]$Fetched = -1,
+        # Which scope the page is for, handed to the fetcher beside the offset so a scoped picker
+        # pages its OWN project instead of the whole account.
+        [string[]]$Scope = @()
     )
+    $offset = if ($Fetched -ge 0) { $Fetched } else { @($Sessions).Count }
     $page = @()
-    try { $page = @(& $FetchMore $Sessions.Count) } catch { $page = @() }
+    try { $page = @(& $FetchMore $offset $Scope) } catch { $page = @() }
     $seen = @{}
     foreach ($s in $Sessions) { $seen["$($s.SessionId)|$($s.Path)"] = $true }
     $added = @($page | Where-Object { $_ -and -not $seen["$($_.SessionId)|$($_.Path)"] })
     return [pscustomobject]@{
         Sessions  = @(@($Sessions) + $added)
         Added     = $added.Count
-        Exhausted = ($added.Count -eq 0)
+        Fetched   = $offset + $page.Count
+        Exhausted = ($page.Count -eq 0)
     }
 }
 
@@ -472,7 +483,11 @@ function Invoke-SessionPicker {
         # unrecognised cwd has none). Two repositories can share a folder name, so scoping by name
         # alone would silently mix their sessions together - slug never does, because it comes from
         # the transcript path itself, not from a display string.
-        [string]$ProjectSlug = '',
+        # A LIST: one real directory can own several slug folders (a cwd recorded with different
+        # separators, a folder renamed and renamed back). Get-ProjectRegistry merges those into one
+        # row and keeps every slug on it, and the picker must reach all of them or half the project's
+        # sessions are unreachable from the screen that just named it.
+        [string[]]$ProjectSlug = @(),
         [string]$ProjectName = '',
         # $Draw RETURNS the row map when it can - where the session rows landed on screen - so a
         # click can be turned into an index by the same arithmetic that drew them. A Draw that
@@ -498,7 +513,6 @@ function Invoke-SessionPicker {
     $filter = ''
     $typing = $false
     $rowMap = $null
-    $exhausted = $false
     # No slug AND no name means there is nothing to scope to (an unrecognised cwd, or a caller that
     # never learned a project at all) - the picker then behaves exactly as it always has, and Tab
     # does nothing (guarded below), because there is no "other" scope to widen from or narrow to.
@@ -506,10 +520,30 @@ function Invoke-SessionPicker {
     # at all, where 'all' would show one labelled "this project" that Tab could never act on - a
     # button that always does nothing, wrapping the footer at 80 columns for every user who has
     # never even seen the project screen.
-    $hasScope = [bool]$ProjectSlug -or [bool]$ProjectName
+    $hasScope = (@($ProjectSlug).Count -gt 0) -or [bool]$ProjectName
     $scope = if ($hasScope) { 'project' } else { 'none' }
 
+    # One page bucket PER SCOPE. The page the launcher handed in was fetched for the scope the
+    # picker opens in; Tab is a different question of disk ("every session of this account", not
+    # "the next ten of this project") and gets its own page 1 and its own paging offset. Keeping
+    # both means Tab back and forth costs one fetch each way, not one per press.
+    $slugsFor = { param([string]$S) if ($S -eq 'project') { @($ProjectSlug) } else { @() } }
+    $newBucket = {
+        param([string]$S)
+        $b = [pscustomobject]@{ Sessions = @($Sessions); Fetched = @($Sessions).Count; Exhausted = $true }
+        if ($FetchMore) {
+            $b = [pscustomobject]@{ Sessions = @(); Fetched = 0; Exhausted = $false }
+            $g = Expand-SessionPage -Sessions @() -FetchMore $FetchMore -Fetched 0 -Scope (& $slugsFor $S)
+            $b.Sessions = $g.Sessions; $b.Fetched = $g.Fetched; $b.Exhausted = $g.Exhausted
+        }
+        return $b
+    }
+    $pages = @{}
+    $pages[$scope] = [pscustomobject]@{ Sessions = @($Sessions); Fetched = @($Sessions).Count; Exhausted = (-not $FetchMore) }
+
     while ($true) {
+        if (-not $pages.ContainsKey($scope)) { $pages[$scope] = & $newBucket $scope }
+        $bucket = $pages[$scope]
         # Scoped BEFORE Select-ResumableSessions/Select-SessionMatch run, so $items - and therefore
         # $index - only ever ranges over the sessions the current scope actually shows. $pool (not
         # $Sessions) is what gets handed to $Draw too, so Get-PickerFrame's own hiddenCount and "N
@@ -519,9 +553,9 @@ function Invoke-SessionPicker {
         # it - the exact trap the comment below already warns about, now one line earlier.
         $pool = @(
             if ($scope -eq 'project' -and $hasScope) {
-                if ($ProjectSlug) { $Sessions | Where-Object { $_.Slug -eq $ProjectSlug } }
-                else { $Sessions | Where-Object { $_.Project -eq $ProjectName } }
-            } else { $Sessions }
+                if (@($ProjectSlug).Count -gt 0) { $bucket.Sessions | Where-Object { $_.Slug -in $ProjectSlug } }
+                else { $bucket.Sessions | Where-Object { $_.Project -eq $ProjectName } }
+            } else { $bucket.Sessions }
         )
         # Select-ResumableSessions drops empty (zero-prompt) sessions before the filter runs, and
         # Get-PickerFrame does the exact same thing before rendering - the two must never disagree
@@ -531,7 +565,12 @@ function Invoke-SessionPicker {
         # built that array internally, and Select-SessionMatch's -Sessions is Mandatory - an account
         # with every session filtered out (or none at all) crashed the picker here with a raw
         # PowerShell binding error. Found via tests\check-preview.ps1's empty-fixture-account run.
-        $items = Select-SessionMatch -Sessions @(Select-ResumableSessions -Sessions $pool) -Filter $filter
+        $resumable = @(Select-ResumableSessions -Sessions $pool)
+        $items = Select-SessionMatch -Sessions $resumable -Filter $filter
+        # Paging is for "I have seen everything loaded and want more", never for "the filter hides
+        # what is loaded": with a filter that matches nothing, every Down was a synchronous cold
+        # disk page that could not change the frame (adversarial review 2026-09-16, D4).
+        $canPage = [bool]$FetchMore -and -not $bucket.Exhausted -and $items.Count -ge $resumable.Count
         if ($index -ge $items.Count) { $index = [Math]::Max(0, $items.Count - 1) }
         $rowMap = & $Draw $pool $index $filter $scope $ProjectName
         $key = & $Wait
@@ -546,10 +585,10 @@ function Invoke-SessionPicker {
             if ($key.WheelUp) { if ($index -gt 0) { $index-- } ; continue }
             if ($key.WheelDown) {
                 if ($index -lt $items.Count - 1) { $index++ }
-                elseif ($FetchMore -and -not $exhausted) {
-                    $grown = Expand-SessionPage -Sessions $Sessions -FetchMore $FetchMore
-                    $Sessions = $grown.Sessions; $exhausted = $grown.Exhausted
-                    if ($grown.Added -gt 0) { $index++ }
+                elseif ($canPage) {
+                    $grown = Expand-SessionPage -Sessions $bucket.Sessions -FetchMore $FetchMore -Fetched $bucket.Fetched -Scope (& $slugsFor $scope)
+                    $bucket.Sessions = $grown.Sessions; $bucket.Fetched = $grown.Fetched; $bucket.Exhausted = $grown.Exhausted
+                    if ($grown.Added -gt 0 -and $items.Count -gt 0) { $index++ }
                 }
                 continue
             }
@@ -600,14 +639,16 @@ function Invoke-SessionPicker {
         if ($name -eq 'UpArrow' -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
         elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) {
             if ($index -lt $items.Count - 1) { $index++ }
-            elseif ($FetchMore -and -not $exhausted) {
+            elseif ($canPage) {
                 # The cursor is on the last row and there may be more behind it. $index is bumped
                 # past the end on purpose: the appended rows still have to pass the scope and the
                 # filter, and the loop re-clamps $index against $items before drawing, so this lands
                 # on the first NEW visible row or stays put when the page added nothing visible.
-                $grown = Expand-SessionPage -Sessions $Sessions -FetchMore $FetchMore
-                $Sessions = $grown.Sessions; $exhausted = $grown.Exhausted
-                if ($grown.Added -gt 0) { $index++ }
+                # Not bumped when the list was EMPTY: there was no row under the cursor to step off,
+                # so the first fetched row would be skipped over (adversarial review 2026-09-16, D3).
+                $grown = Expand-SessionPage -Sessions $bucket.Sessions -FetchMore $FetchMore -Fetched $bucket.Fetched -Scope (& $slugsFor $scope)
+                $bucket.Sessions = $grown.Sessions; $bucket.Fetched = $grown.Fetched; $bucket.Exhausted = $grown.Exhausted
+                if ($grown.Added -gt 0 -and $items.Count -gt 0) { $index++ }
             }
         }
         # Tab, not a letter: Test-ClaudeHotkey is for the Latin letters a footer hint advertises via

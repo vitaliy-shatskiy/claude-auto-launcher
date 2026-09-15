@@ -414,6 +414,42 @@ function Write-SessionsCache {
     }
 }
 
+function Read-SessionsCache {
+    # The cache file as a hashtable, or an empty one. Extracted from Get-ClaudeSessions so the read
+    # side of the shared file has the same single home as the write side (Write-SessionsCache).
+    param([Parameter(Mandatory)][string]$Path)
+    $cache = @{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $cache }
+    try {
+        (Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json).PSObject.Properties |
+            ForEach-Object { $cache[$_.Name] = $_.Value }
+    } catch { $cache = @{} }   # a corrupt cache is rebuilt, never fatal
+    return $cache
+}
+
+function Get-ClaudeSessionFile {
+    # The ordered enumeration a paging caller walks: every transcript under the root (or under one
+    # slug), newest first, as full paths. Taken ONCE when a picker opens and handed back to
+    # Get-ClaudeSessions -Files for every page.
+    #
+    # Why a snapshot rather than -Skip over a fresh listing: the listing is sorted by mtime, and a
+    # live session appends to its own transcript while the picker is open. One append between page 1
+    # and page 2 shifts the whole window down by one - the duplicate is caught by the picker's dedup,
+    # but the GAP is not, and the session that fell through it is unreachable for the rest of the run
+    # (adversarial review 2026-09-16, C4). Metadata only: no transcript is opened here.
+    param(
+        [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
+        [string]$ProjectSlug = ''
+    )
+    if (-not (Test-Path -LiteralPath $ProjectsRoot)) { return @() }
+    $dirs = Get-ChildItem -LiteralPath $ProjectsRoot -Directory -Force -ErrorAction SilentlyContinue
+    if ($ProjectSlug) { $dirs = @($dirs | Where-Object { $_.Name -eq $ProjectSlug }) }
+    return @($dirs |
+        ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue } |
+        Sort-Object LastWriteTime -Descending |
+        ForEach-Object { $_.FullName })
+}
+
 function Get-ClaudeSessions {
     # Newest $Limit transcripts, summarised. Over 2000 files and more than a gigabyte live under
     # the projects root, so the sort touches filesystem metadata only and just the survivors are
@@ -433,17 +469,19 @@ function Get-ClaudeSessions {
         # -Limit N with -Skip 0, N, 2N walks exactly the order an unpaged call returns.
         [int]$Skip = 0,
         [string]$CachePath = (Get-SessionsCachePath -ProjectsRoot $ProjectsRoot),
-        [string]$ProjectSlug = ''
+        [string]$ProjectSlug = '',
+        # A SNAPSHOT of transcript paths, newest first, taken once by the caller
+        # (Get-ClaudeSessionFile) when a picker opens; -Skip then indexes THIS list instead of a
+        # listing re-sorted on every call. See Get-ClaudeSessionFile for why the difference matters.
+        # $null (the default) keeps the standalone behaviour: enumerate the root on every call.
+        [string[]]$Files = $null
     )
-    if (-not (Test-Path $ProjectsRoot)) { return @() }
+    # -LiteralPath, matching the sibling reader Get-ProjectRegistry: the wildcard PATH set reads a
+    # root spelled 'C:\Users\J\Projects\[old]\projects' as a PATTERN and matches nothing, so the
+    # project screen lists the project and pressing `r` on it shows an empty picker.
+    if (-not (Test-Path -LiteralPath $ProjectsRoot)) { return @() }
 
-    $cache = @{}
-    if (Test-Path $CachePath) {
-        try {
-            (Get-Content $CachePath -Raw | ConvertFrom-Json).PSObject.Properties |
-                ForEach-Object { $cache[$_.Name] = $_.Value }
-        } catch { $cache = @{} }   # a corrupt cache is rebuilt, never fatal
-    }
+    $cache = Read-SessionsCache -Path $CachePath
 
     # Enumerate ONE level down instead of recursing the whole tree and filtering afterwards. The
     # rule is unchanged - a transcript sits directly inside its project slug folder, everything
@@ -452,13 +490,22 @@ function Get-ClaudeSessions {
     # Test-ClaudeSessionFile's two Resolve-Path calls per file cost 1.19 s of the 1.62 s spent
     # just getting to the shortlist. Test-ClaudeSessionFile stays: it is the written form of the
     # same rule and the suites pin it.
-    $dirs = Get-ChildItem -LiteralPath $ProjectsRoot -Directory -Force -ErrorAction SilentlyContinue
-    # Filtering the DIRECTORY list, not the summaries: with the filter on, only that project's
-    # transcripts are ever opened, so scoping the picker makes it cheaper rather than slower.
-    if ($ProjectSlug) { $dirs = @($dirs | Where-Object { $_.Name -eq $ProjectSlug }) }
-    $files = $dirs |
-        ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue } |
-        Sort-Object LastWriteTime -Descending | Select-Object -Skip $Skip -First $Limit
+    $all = if ($null -ne $Files) {
+        # The caller's snapshot, in the caller's order - deliberately NOT re-sorted. A transcript
+        # deleted since the snapshot was taken is dropped here rather than throwing.
+        @($Files | ForEach-Object { try { Get-Item -LiteralPath $_ -Force -ErrorAction Stop } catch { } })
+    } else {
+        $dirs = Get-ChildItem -LiteralPath $ProjectsRoot -Directory -Force -ErrorAction SilentlyContinue
+        # Filtering the DIRECTORY list, not the summaries: with the filter on, only that project's
+        # transcripts are ever opened, so scoping the picker makes it cheaper rather than slower.
+        if ($ProjectSlug) { $dirs = @($dirs | Where-Object { $_.Name -eq $ProjectSlug }) }
+        @($dirs |
+            ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue } |
+            Sort-Object LastWriteTime -Descending)
+    }
+    # NOT named $files: PowerShell variable names are case-insensitive, so a local $files IS the
+    # [string[]]$Files parameter, and the coercion turns every FileInfo into its path string.
+    $window = @($all | Select-Object -Skip $Skip -First $Limit)
 
     # Resolved once per project DIRECTORY, not once per session file: on a cold cache, N sessions
     # under the same slug would otherwise repeat the same directory listing and the same read of
@@ -473,7 +520,7 @@ function Get-ClaudeSessions {
     $namedRoot = if ($ProjectsRoot.Length -gt 3) { $ProjectsRoot.TrimEnd([char]92, [char]47) } else { $ProjectsRoot }
     $physicalRoot = Get-PhysicalDirectoryPath -Path $ProjectsRoot
     $out = @(); $fresh = @{}
-    foreach ($f in $files) {
+    foreach ($f in $window) {
         # The cache key carries the mtime of THIS module, not a hand-written version literal.
         # A literal guards the schema but not the logic: on 2026-08-10 a corrected prompt counter
         # kept serving pre-fix numbers under an unchanged "v2|" key, and the stale value was

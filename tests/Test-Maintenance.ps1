@@ -503,7 +503,18 @@ Remove-Item -Recurse -Force $tmp
 # Invoke-ClaudeCommandText (Ui.ps1) is still not asserted: beyond try/catch its only logic is
 # ConvertTo-StatusText, which Test-Ui.ps1 asserts, and exercising it means shelling out to the real
 # binary.
-if ($script:Ran -ne 99) { Write-Host "COULD NOT RUN: expected 99 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the launcher's own wiring, pinned as SOURCE ---------------------------------------------------
+# The decision loop in claude-auto.ps1 has no console and cannot be driven by a suite; these are the
+# two lines whose being wrong opened a scoped picker on an unscoped page (adversarial review
+# 2026-09-16, G1/F6). A positive control sits beside each: the anchor text must exist at all.
+$launcherSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
+$fetchLine = @($launcherSrc -split "`n" | Where-Object { $_ -match '\$fetchNextPage\s*=' })
+Assert-Equal 1 $fetchLine.Count 'claude-auto.ps1 builds its page fetcher on exactly one line'
+Assert-True ([bool]($fetchLine -match 'ProjectSlug')) 'and that fetcher carries the picker''s project scope'
+Assert-True ([bool]($fetchLine -match '-Files ')) 'and pages a snapshot rather than a re-sorted listing'
+Assert-True ($launcherSrc -match '-Sessions @\(&\s*\$fetchNextPage 0 \$pickerSlugs\)') 'the picker''s FIRST page comes from the same scoped fetcher, so it cannot open empty on the chosen project'
+
+if ($script:Ran -ne 103) { Write-Host "COULD NOT RUN: expected 103 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

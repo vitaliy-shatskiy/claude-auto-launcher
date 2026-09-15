@@ -19,6 +19,14 @@ function Assert-Equal {
     }
 }
 
+function Assert-True {
+    # Assert-Equal $null $x stringifies both sides, so it passes for '' and @() too. Use this for a
+    # real type-aware comparison.
+    param([bool]$Actual, [string]$Because)
+    $script:Ran++
+    if (-not $Actual) { Write-Host "FAIL  $Because"; $script:Failed++ } else { Write-Host "ok    $Because" }
+}
+
 $fx = "$PSScriptRoot\fixtures"
 
 # 1. The first four user records are the known noise forms; the title is the fifth.
@@ -582,7 +590,40 @@ $sCap = Get-ClaudeSessionSummary -Path $capBig
 Assert-Equal '3+' $sCap.PromptCount 'and the summary carries the capped form through to the picker'
 Remove-Item -LiteralPath $capRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 101) { Write-Host "COULD NOT RUN: expected 101 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the paging SNAPSHOT --------------------------------------------------------------------------
+# -Skip over a listing re-sorted by mtime on every call loses a row the moment a live session
+# appends between two pages: the window slides down, the duplicate is caught by the picker's dedup
+# and the GAP is not. Get-ClaudeSessionFile takes the order ONCE and -Files pages exactly that.
+$snapRoot = Join-Path $env:TEMP ('claude-auto-snap-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$snapDir = Join-Path $snapRoot 'C--src-shift'
+New-Item -ItemType Directory -Force -Path $snapDir | Out-Null
+$snapBase = Get-Date '2026-09-01 12:00:00'
+foreach ($n in 1..6) {
+    $sp = Join-Path $snapDir "s$n.jsonl"
+    [IO.File]::WriteAllText($sp, '{"type":"user","cwd":"C:\\src\\shift","message":{"role":"user","content":"prompt s' + $n + '"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    (Get-Item -LiteralPath $sp).LastWriteTime = $snapBase.AddMinutes($n)
+}
+$snapCache = Join-Path $snapRoot 'c.json'
+$snapExpected = @(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Limit 100 | ForEach-Object SessionId)
+Assert-Equal 's6,s5,s4,s3,s2,s1' ($snapExpected -join ',') 'the unpaged listing is newest-first'
+$snapshot = @(Get-ClaudeSessionFile -ProjectsRoot $snapRoot)
+Assert-Equal 6 $snapshot.Count 'the snapshot lists every transcript under the root'
+Assert-Equal 's6.jsonl' (Split-Path -Path $snapshot[0] -Leaf) 'and hands them back newest-first, as paths'
+Assert-Equal 6 (@(Get-ClaudeSessionFile -ProjectsRoot $snapRoot -ProjectSlug 'C--src-shift')).Count 'a scoped snapshot lists that project'
+Assert-Equal 0 (@(Get-ClaudeSessionFile -ProjectsRoot $snapRoot -ProjectSlug 'C--src-absent')).Count 'a slug with no directory snapshots nothing'
+Assert-Equal 0 (@(Get-ClaudeSessionFile -ProjectsRoot (Join-Path $snapRoot 'no-such-root'))).Count 'a missing root snapshots nothing rather than throwing'
+$snapP1 = @(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Files $snapshot -Limit 2 -Skip 0)
+# a live session appends between page 1 and page 2: the OLDEST transcript becomes the newest
+(Get-Item -LiteralPath (Join-Path $snapDir 's1.jsonl')).LastWriteTime = $snapBase.AddMinutes(99)
+$snapP2 = @(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Files $snapshot -Limit 2 -Skip 2)
+$snapP3 = @(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Files $snapshot -Limit 2 -Skip 4)
+$snapWalk = @(@($snapP1) + @($snapP2) + @($snapP3) | ForEach-Object SessionId)
+Assert-Equal ($snapExpected -join ',') ($snapWalk -join ',') 'pages over the snapshot compose with no gap and no repeat, although a transcript was appended between two of them'
+$snapGone = @($snapshot) + @(Join-Path $snapDir 'never-existed.jsonl')
+Assert-Equal 6 (@(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Files $snapGone -Limit 100)).Count 'a transcript deleted since the snapshot was taken is dropped from the page, never fatal'
+Remove-Item -LiteralPath $snapRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 109) { Write-Host "COULD NOT RUN: expected 109 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

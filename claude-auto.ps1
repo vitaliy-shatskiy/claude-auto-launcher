@@ -305,18 +305,35 @@ if ($UseUi) {
             # Mandatory - an account with no sessions yet (a fresh secondary root, or any account
             # once the root fix above actually scopes to it) crashed here with a raw PowerShell
             # binding error instead of showing an empty picker. Found via tests\check-preview.ps1.
-            # UNFILTERED on purpose (no -ProjectSlug here): scoping happens INSIDE the picker
-            # (-ProjectSlug/-ProjectName below), so Tab can widen to every session without a second
-            # read of disk.
+            # SCOPED, both halves. The picker shows the project the owner just chose, so the page it
+            # is handed - and every page it later asks for - must be that project's. Handing a
+            # scoped picker an unscoped page of ten opened it EMPTY whenever the chosen project's
+            # newest session was not among the ten newest of the whole account, and each Down then
+            # paged other projects' transcripts that the scope threw away (adversarial review
+            # 2026-09-16, G1/G2/D5). Tab asks the fetcher again with an empty scope, so widening to
+            # the whole account is one page of disk, not a second read of everything.
+            #
+            # SNAPSHOT: the file list is enumerated once per scope and every page is -Skip over THAT
+            # list, so a transcript appended while the picker is open cannot shift the window and
+            # hide a session behind the gap (C4).
+            #
             # PAGED: the first frame costs one page of summarising, not forty. Measured on this
             # machine over the live projects root, cold: 40 sessions 1 333 ms, 10 sessions ~240 ms.
             # The picker asks for the next page when the cursor reaches the last row, so the rest is
             # paid for by whoever actually scrolls that far.
             $sessionPageSize = 10
-            $fetchNextPage = { param($have) @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize -Skip $have) }.GetNewClosure()
-            $picked = Invoke-SessionPicker -Sessions @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize) `
+            $sessionSnapshots = @{}
+            $sessionSnapshot = { param([string[]]$ProjectSlug)
+                $k = (@($ProjectSlug) -join '|')
+                if (-not $sessionSnapshots.ContainsKey($k)) { $sessionSnapshots[$k] = @(Get-ClaudeSessionFile -ProjectsRoot $sessionsRoot -ProjectSlug $ProjectSlug) }
+                return $sessionSnapshots[$k]
+            }.GetNewClosure()
+            $fetchNextPage = { param($have, $slug) @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize -Skip $have -Files (& $sessionSnapshot -ProjectSlug $slug)) }.GetNewClosure()
+            $pickerSlugs = @($state.ProjectSlugs | Where-Object { $_ })
+            if ($pickerSlugs.Count -eq 0 -and $state.ProjectSlug) { $pickerSlugs = @("$($state.ProjectSlug)") }
+            $picked = Invoke-SessionPicker -Sessions @(& $fetchNextPage 0 $pickerSlugs) `
                       -FetchMore $fetchNextPage `
-                      -ProjectSlug $state.ProjectSlug -ProjectName $projectName -ReadKey $KeySource -Wait $wait -Draw $pdraw
+                      -ProjectSlug $pickerSlugs -ProjectName $projectName -ReadKey $KeySource -Wait $wait -Draw $pdraw
             if ($picked) { $resumeId = $picked.Session.SessionId; $forkSession = [bool]$picked.Fork; break }
             # Escape at the picker returns $null (cancel) and, in a real session, this loop goes back
             # to the launch screen. Preview cannot loop - the scripted key list is finite - so it must
