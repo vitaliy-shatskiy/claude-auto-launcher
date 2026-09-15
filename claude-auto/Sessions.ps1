@@ -15,10 +15,21 @@ $script:NoisePrefixes = @(
 # unless its tag name ends in one of these.
 $script:NoiseTagPattern = '^<[a-z][a-z0-9-]*(-notification|-hook|-reminder|-caveat|-stdout)>'
 
-# Resolved at load time so the per-file loop does not stat this module 40 times. A failure falls
+# Resolved at load time so the per-file loop does not hash this module 40 times. A failure falls
 # back to a constant rather than throwing: a cache that never invalidates is bad, a launcher that
 # will not start is worse.
-$script:SummaryVersion = try { (Get-Item -LiteralPath $PSCommandPath).LastWriteTimeUtc.Ticks } catch { 'v2' }
+#
+# The module's CONTENT, not its mtime. A hand-written literal guards the schema but not the logic
+# (on 2026-08-10 a corrected prompt counter kept serving pre-fix numbers under an unchanged "v2|"
+# key), which is why this is derived from the module at all - but a TIMESTAMP moves without a byte
+# changing: a clone, a git checkout, a profile relink and a copy between the four account roots all
+# rewrite it, and every cached summary on the machine is discarded for nothing. Since the four roots
+# now share one cache file (Get-SessionsCachePath), an mtime that differs per copy would also have
+# them invalidating each other's entries on every switch. A hash invalidates on an edit and on
+# nothing else.
+$script:SummaryVersion = try {
+    [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($PSCommandPath))).Substring(0, 16)
+} catch { 'v2' }
 
 function Get-ClaudeRecordText {
     # Content is either a plain string or an array of blocks; only 'text' blocks carry anything
@@ -347,6 +358,62 @@ function Get-SessionsRootForAccount {
     return (Join-Path $ProfileRoots[$Account] 'projects')
 }
 
+function Get-PhysicalDirectoryPath {
+    # The directory a path really names, with any junction or symlink in it resolved to its final
+    # target, and no trailing separator. Best-effort: anything unresolvable comes back as given.
+    param([Parameter(Mandatory)][string]$Path)
+    $p = $Path
+    try {
+        # $true = resolve the FINAL target: a chain of links must land on the real directory, not on
+        # the next link in it, or two roots reaching the same place through different hops would
+        # still be treated as two places.
+        $target = [IO.Directory]::ResolveLinkTarget($Path, $true)
+        if ($target) { $p = $target.FullName }
+    } catch { }
+    # A drive root is 'C:\' and trimming it to 'C:' changes what it means; nothing else needs its
+    # trailing separator.
+    if ($p.Length -gt 3) { $p = $p.TrimEnd([char]92, [char]47) }
+    return $p
+}
+
+function Get-SessionsCachePath {
+    # Where a projects root's summary cache lives. Keyed on the PHYSICAL directory, not on the path
+    # the caller happened to name: on this machine the four account roots reach one projects
+    # directory through a junction, so a cache keyed on the named root is built cold once per
+    # account over the identical files, and each account's whole-file write is invisible to the
+    # other three. Resolving the link first makes all four share one warm file.
+    #
+    # Best-effort by construction: a root that is not a link, or one that cannot be resolved,
+    # falls back to the path as given - which is exactly the behaviour this replaces, so a
+    # filesystem that has no reparse points loses nothing.
+    param([Parameter(Mandatory)][string]$ProjectsRoot)
+    $physical = Get-PhysicalDirectoryPath -Path $ProjectsRoot
+    $parent = try { Split-Path -Path $physical } catch { $null }
+    if (-not $parent) { $parent = $physical }
+    return (Join-Path $parent 'claude-auto-sessions.json')
+}
+
+function Write-SessionsCache {
+    # Set-Content truncates in place, and this file is now SHARED by every account root that reaches
+    # the same projects directory while up to four launcher instances run at once - so a reader can
+    # see a half-written file where before it could only see its own account's. Write a sibling temp
+    # and move it over: the rename is atomic on NTFS, the last writer wins (all four are computing
+    # the same rows from the same files, so there is nothing to merge), and a reader sees either the
+    # whole old file or the whole new one. The temp is a SIBLING so the move is a rename rather than
+    # a cross-volume copy, which would not be atomic.
+    #
+    # A failure here is swallowed, as the Set-Content it replaces was: the cache is an optimisation
+    # and a launcher that will not start is worse than one that re-summarises.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)]$Entries)
+    $tmp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [IO.File]::WriteAllText($tmp, ($Entries | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+        [IO.File]::Move($tmp, $Path, $true)
+    } catch {
+        try { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } catch { }
+    }
+}
+
 function Get-ClaudeSessions {
     # Newest $Limit transcripts, summarised. Over 2000 files and more than a gigabyte live under
     # the projects root, so the sort touches filesystem metadata only and just the survivors are
@@ -360,7 +427,7 @@ function Get-ClaudeSessions {
     param(
         [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
         [int]$Limit = 40,
-        [string]$CachePath = (Join-Path (Split-Path $ProjectsRoot -Parent) 'claude-auto-sessions.json'),
+        [string]$CachePath = (Get-SessionsCachePath -ProjectsRoot $ProjectsRoot),
         [string]$ProjectSlug = ''
     )
     if (-not (Test-Path $ProjectsRoot)) { return @() }
@@ -392,13 +459,25 @@ function Get-ClaudeSessions {
     # under the same slug would otherwise repeat the same directory listing and the same read of
     # the newest transcript N times to compute the identical answer.
     $projectPaths = @{}
+    # The cache FILE is shared by every root that reaches this physical directory
+    # (Get-SessionsCachePath), so the cache KEY has to be shared too. Keyed on $f.FullName the four
+    # account roots write four disjoint key sets into one file, and because an unfiltered call
+    # replaces that file wholesale, each account switch would delete the other three's rows - a
+    # shared file with unshared keys is strictly worse than four files. Rewriting the named root's
+    # prefix to the physical one makes the same transcript one key however it was reached.
+    $namedRoot = if ($ProjectsRoot.Length -gt 3) { $ProjectsRoot.TrimEnd([char]92, [char]47) } else { $ProjectsRoot }
+    $physicalRoot = Get-PhysicalDirectoryPath -Path $ProjectsRoot
     $out = @(); $fresh = @{}
     foreach ($f in $files) {
         # The cache key carries the mtime of THIS module, not a hand-written version literal.
         # A literal guards the schema but not the logic: on 2026-08-10 a corrected prompt counter
         # kept serving pre-fix numbers under an unchanged "v2|" key, and the stale value was
         # briefly reported as a verification result.
-        $key = "$script:SummaryVersion|$($f.FullName)|$($f.LastWriteTimeUtc.Ticks)|$($f.Length)"
+        $keyPath = $f.FullName
+        if ($namedRoot -ne $physicalRoot -and $keyPath.StartsWith($namedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            $keyPath = $physicalRoot + $keyPath.Substring($namedRoot.Length)
+        }
+        $key = "$script:SummaryVersion|$keyPath|$($f.LastWriteTimeUtc.Ticks)|$($f.Length)"
         try {
             $dirName = Split-Path -LiteralPath $f.FullName
             if (-not $projectPaths.ContainsKey($dirName)) {
@@ -421,6 +500,11 @@ function Get-ClaudeSessions {
                 # walk, prompt count) stay cached; only this cheap, memo-backed field is refreshed,
                 # through the same sanitiser Get-ClaudeSessionSummary uses (both are transcript-
                 # sourced, cache or not).
+                # Path is refreshed for the same reason and at the same cost: the row may have been
+                # cached by a DIFFERENT account root reaching this transcript through its own
+                # junction, and a consumer must get the path it asked about, not the one whoever
+                # filled the cache happened to use.
+                $summary.Path = $f.FullName
                 $slugNames = ConvertFrom-ClaudeProjectSlug -Slug "$($summary.Slug)"
                 $projectName = if ($projectPath) { Split-Path -Path $projectPath -Leaf } else { $slugNames.Project }
                 $summary.Project = Get-CleanTranscriptText -Text $projectName
@@ -441,9 +525,9 @@ function Get-ClaudeSessions {
         # entries for sessions that no longer exist, so that path is left alone on purpose.
         $merged = $cache.Clone()
         foreach ($k in $fresh.Keys) { $merged[$k] = $fresh[$k] }
-        try { $merged | ConvertTo-Json -Depth 6 | Set-Content $CachePath -Encoding utf8 } catch { }
+        Write-SessionsCache -Path $CachePath -Entries $merged
     } else {
-        try { $fresh | ConvertTo-Json -Depth 6 | Set-Content $CachePath -Encoding utf8 } catch { }
+        Write-SessionsCache -Path $CachePath -Entries $fresh
     }
     return $out
 }

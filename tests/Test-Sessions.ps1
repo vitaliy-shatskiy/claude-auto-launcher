@@ -424,7 +424,85 @@ Assert-Equal 'the real prompt' $sFiltered.Title 'and the filtered walk still fin
 Assert-Equal (Get-SummaryFingerprint $sUnfiltered) (Get-SummaryFingerprint $sFiltered) 'a transcript carrying system and summary records summarises identically either way'
 Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 78) { Write-Host "COULD NOT RUN: expected 78 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# 19. The cache version was the module's own LAST WRITE TIME, which moves without a byte of the
+#     module changing: a clone, a checkout, a profile relink or a copy between the four account
+#     roots all rewrite the stamp, and every cached summary on the machine is thrown away for
+#     nothing. The module's CONTENT hash invalidates on exactly the thing that matters - an edit to
+#     the summarising logic - and on nothing else.
+$modPath = "$PSScriptRoot\..\claude-auto\Sessions.ps1"
+function Get-ModuleContentVersion {
+    param([string]$P)
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($P))).Substring(0, 16)
+}
+Assert-Equal (Get-ModuleContentVersion $modPath) $script:SummaryVersion 'the cache version is the module CONTENT hash, not a timestamp'
+
+$vRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-ver-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+New-Item -ItemType Directory -Force -Path $vRoot | Out-Null
+$vCopy = Join-Path $vRoot 'Sessions.ps1'
+Copy-Item -LiteralPath $modPath -Destination $vCopy
+$vBefore = Get-ModuleContentVersion $vCopy
+(Get-Item -LiteralPath $vCopy).LastWriteTimeUtc = (Get-Date).AddDays(1).ToUniversalTime()
+Assert-Equal $vBefore (Get-ModuleContentVersion $vCopy) 'touching the module - a checkout, a relink - leaves the version alone'
+[IO.File]::AppendAllText($vCopy, "`n# a real edit`n")
+Assert-Equal $false ($vBefore -eq (Get-ModuleContentVersion $vCopy)) 'and an actual edit to the module still changes it'
+Remove-Item -LiteralPath $vRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# 20. The four account roots on this machine reach ONE projects directory through a junction, so a
+#     cache keyed on whichever root the caller named is built cold four times over the same
+#     physical files. Key it on the resolved physical directory instead.
+$jRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-junc-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$jPhysicalHome = Join-Path $jRoot 'physical'
+$jPhysical = Join-Path $jPhysicalHome 'projects'
+New-Item -ItemType Directory -Force -Path $jPhysical | Out-Null
+$jA = Join-Path $jRoot 'accountA'; $jB = Join-Path $jRoot 'accountB'
+New-Item -ItemType Directory -Force -Path $jA | Out-Null
+New-Item -ItemType Directory -Force -Path $jB | Out-Null
+$jAProjects = Join-Path $jA 'projects'; $jBProjects = Join-Path $jB 'projects'
+New-Item -ItemType Junction -Path $jAProjects -Target $jPhysical | Out-Null
+New-Item -ItemType Junction -Path $jBProjects -Target $jPhysical | Out-Null
+
+Assert-Equal (Join-Path $jPhysicalHome 'claude-auto-sessions.json') (Get-SessionsCachePath -ProjectsRoot $jAProjects) 'a junctioned root caches beside the PHYSICAL projects directory, not beside the junction'
+Assert-Equal (Get-SessionsCachePath -ProjectsRoot $jAProjects) (Get-SessionsCachePath -ProjectsRoot $jBProjects) 'two account roots junctioned to one projects directory resolve to ONE cache path'
+# A root that is not a link keeps exactly the behaviour this replaces - section 14 pins that each
+# real account root still gets its own file.
+$plainProjects = Join-Path $jRoot 'plain\projects'
+New-Item -ItemType Directory -Force -Path $plainProjects | Out-Null
+Assert-Equal (Join-Path $jRoot 'plain\claude-auto-sessions.json') (Get-SessionsCachePath -ProjectsRoot $plainProjects) 'a root that is not a junction still caches beside itself'
+
+# 21. End to end: the second account must READ what the first one wrote instead of summarising the
+#     same files again. Counting summarisations is the only way to tell a shared cache from two
+#     caches that happen to hold the same rows.
+New-Item -ItemType Directory -Force -Path (Join-Path $jPhysical 'C--src-shared-app') | Out-Null
+Set-Content -LiteralPath (Join-Path $jPhysical 'C--src-shared-app\ssss5555.jsonl') -Encoding utf8 -Value (
+    @{ type='user'; cwd='C:\src\shared-app'; message=@{ role='user'; content='shared prompt' } } | ConvertTo-Json -Compress)
+
+$origSummary = ${function:Get-ClaudeSessionSummary}
+$script:SummaryCalls = 0
+function Get-ClaudeSessionSummary {
+    param([Parameter(Mandatory)][string]$Path, [int]$HeadLines = 400, [int]$TailLines = 120,
+          [string]$ProjectPath = $null, [switch]$NoPreFilter)
+    $script:SummaryCalls++
+    & $origSummary @PSBoundParameters
+}
+$jFirst = @(Get-ClaudeSessions -ProjectsRoot $jAProjects)
+$callsAfterFirst = $script:SummaryCalls
+$jSecond = @(Get-ClaudeSessions -ProjectsRoot $jBProjects)
+$callsAfterSecond = $script:SummaryCalls
+${function:Get-ClaudeSessionSummary} = $origSummary
+Assert-Equal 1 $callsAfterFirst 'the first account summarises the one transcript cold'
+Assert-Equal $callsAfterFirst $callsAfterSecond 'the second account root reads the first one''s cache instead of summarising again'
+Assert-Equal $jFirst[0].Title $jSecond[0].Title 'and gets the same row back'
+
+# 22. That shared file is now written by up to four launcher instances at once, so a truncate-in-
+#     place write can hand a concurrent reader half a file. The write goes to a sibling temp and is
+#     moved over, which is atomic on NTFS and leaves nothing behind.
+$jArtefacts = @(Get-ChildItem -LiteralPath $jPhysicalHome -File | Where-Object { $_.Name -like 'claude-auto-sessions*' })
+Assert-Equal 'claude-auto-sessions.json' (@($jArtefacts | ForEach-Object { $_.Name }) -join ',') 'the cache write leaves exactly the cache file - no temp sibling stranded beside it'
+Remove-Item -LiteralPath $jAProjects -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $jBProjects -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $jRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 88) { Write-Host "COULD NOT RUN: expected 88 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
