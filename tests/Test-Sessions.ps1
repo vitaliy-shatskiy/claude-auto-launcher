@@ -550,7 +550,39 @@ $pgKeysAfter = @((Get-Content -LiteralPath $pgCache -Raw | ConvertFrom-Json).PSO
 Assert-Equal $pgKeysBefore $pgKeysAfter 'a paged call merges onto the cache instead of evicting everything it did not look at'
 Remove-Item -LiteralPath $pgRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 97) { Write-Host "COULD NOT RUN: expected 97 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# 24. The prompt count streamed the WHOLE file, and the largest transcript on this machine is
+#     48 MB - measured at a quarter of a cold listing. Same bound and same reason as
+#     Get-FileTailLines: a walk must be limited by BYTES, not by what it is looking for. A file
+#     inside the budget keeps its exact count, because "25 msgs" is the number the picker shows;
+#     past it the count is reported as "N+", which is true, where a silently short number is a lie.
+$capRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-count-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$capDir  = Join-Path $capRoot 'C--src-big-app'
+New-Item -ItemType Directory -Force -Path $capDir | Out-Null
+$capHead = @(
+    '{"type":"user","message":{"content":"prompt one"}}',
+    '{"type":"user","message":{"content":"prompt two"}}',
+    '{"type":"user","message":{"content":"prompt three"}}'
+)
+# Five megabytes of assistant padding, past the shipped 4 MB budget, with two more real prompts
+# behind it - so a bound that is not in force is visible as a different number, not as a pass.
+$capPad = '{"type":"assistant","message":{"content":[{"type":"text","text":"' + ('p' * 1MB) + '"}]}}'
+$capTail = @(
+    '{"type":"user","message":{"content":"prompt four"}}',
+    '{"type":"user","message":{"content":"prompt five"}}'
+)
+$capBig = Join-Path $capDir 'gggg7777.jsonl'
+[IO.File]::WriteAllText($capBig, ((@($capHead) + @($capPad, $capPad, $capPad, $capPad, $capPad) + @($capTail)) -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+$capSmall = Join-Path $capDir 'hhhh8888.jsonl'
+[IO.File]::WriteAllText($capSmall, (($capHead -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+
+Assert-Equal '3+' (Measure-ClaudePrompts -Path $capBig) 'past the SHIPPED byte budget the count stops and reports N+'
+Assert-Equal 5 (Measure-ClaudePrompts -Path $capBig -MaxBytes 16MB) 'given room for the whole file the count is exact again - the bound is what stopped it, not a miscount'
+Assert-Equal 3 (Measure-ClaudePrompts -Path $capSmall) 'a file inside the budget keeps its exact count, which is what the picker displays'
+$sCap = Get-ClaudeSessionSummary -Path $capBig
+Assert-Equal '3+' $sCap.PromptCount 'and the summary carries the capped form through to the picker'
+Remove-Item -LiteralPath $capRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 101) { Write-Host "COULD NOT RUN: expected 101 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

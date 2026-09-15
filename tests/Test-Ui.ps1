@@ -2569,8 +2569,14 @@ Assert-Equal 'p2a' $pgSelOverlap.Session.SessionId 'and the cursor still lands o
 $pgNoFetch = Invoke-SessionPicker -Sessions $pgPage1 -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','Enter')) -Draw {}
 Assert-Equal 'p1b' $pgNoFetch.Session.SessionId 'without a fetcher the cursor stops at the last row, exactly as before'
 
+# A transcript past the prompt counter's byte budget reports "N+" instead of a number (Sessions.ps1,
+# Measure-ClaudePrompts). Select-ResumableSessions drops a session on PromptCount -gt 0, and dropping
+# the machine's biggest sessions from the picker would be the worst possible way to pay for that
+# bound - so the capped form is pinned here, where Screens.ps1 is actually loaded.
+Assert-Equal 1 (Select-ResumableSessions -Sessions @([pscustomobject]@{ SessionId='big'; PromptCount='120+' })).Count 'a capped prompt count still reads as a resumable session'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 922) { Write-Host "COULD NOT RUN: expected 922 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 923) { Write-Host "COULD NOT RUN: expected 923 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

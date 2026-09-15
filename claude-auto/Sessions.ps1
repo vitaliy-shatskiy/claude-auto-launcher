@@ -580,10 +580,35 @@ function Measure-ClaudePrompts {
     # over-counted in 6 of 7058 real records on this machine on 2026-08-10, while Get-ClaudeUserPrompt
     # correctly rejected it via $script:NoiseTagPattern's '-stdout' suffix rule. Anchoring on
     # '"content":"<' instead reached exact agreement (0 over-count, 0 dropped) over the same data.
-    param([Parameter(Mandatory)][string]$Path)
+    #
+    # Bounded by BYTES, the same rule and the same 4 MB budget as Get-FileTailLines, and for the same
+    # reason: a walk limited only by what it is looking for is not limited at all. This one streams
+    # from the START, so an exact count means reading the whole transcript - measured at 24% of a
+    # cold listing, and the largest transcript on this machine is 48 MB. A file INSIDE the budget
+    # keeps its exact count, because "25 msgs" is the number the picker shows and a wrong one there
+    # is worse than a slow launcher. Past it the answer is the string "N+", which is what the picker
+    # then displays: it is the truth, where a silently short number would be a lie. Callers that
+    # test it (Select-ResumableSessions' PromptCount -gt 0) still read it as more than zero.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$MaxBytes = 4MB
+    )
     $n = 0
     try {
+        # One stat, so a small file - the common case - pays nothing per line for a budget it cannot
+        # reach. A file that cannot be stat'ed is treated as bounded: the pessimistic choice.
+        $bounded = $true
+        try { $bounded = ($MaxBytes -gt 0 -and [IO.FileInfo]::new($Path).Length -gt $MaxBytes) } catch { $bounded = $true }
+        $read = 0
+        $capped = $false
         foreach ($line in [System.IO.File]::ReadLines($Path)) {
+            if ($bounded) {
+                # +1 for the newline ReadLines strips. Characters, not bytes: for JSONL this is
+                # within a few percent, and the direction of the error is to read a little more
+                # than the budget on non-ASCII text, never to cut a small file short.
+                $read += $line.Length + 1
+                if ($read -ge $MaxBytes) { $capped = $true; break }
+            }
             if (-not $line.Contains('"type":"user"')) { continue }
             if ($line.Contains('"isSidechain":true')) { continue }
             if ($line.Contains('"tool_result"')) { continue }
@@ -596,6 +621,7 @@ function Measure-ClaudePrompts {
             $n++
         }
     } catch { return 0 }
+    if ($capped) { return "$n+" }
     return $n
 }
 
