@@ -533,7 +533,34 @@ $echoOut = @(& pwsh -NoProfile -File $echoLive @cpVal 2>&1 | ForEach-Object { "$
 Assert-True ([bool](($echoOut -join ' ') -match 'Live=True')) 'and splatting that exact value sets -Live on the child, instead of spelling it out as - | L | i | v | e'
 Remove-Item -LiteralPath $cpTmp -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 107) { Write-Host "COULD NOT RUN: expected 107 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the cd happens BEFORE the secrets import, and neither happens under -Preview -------------------
+# Import-ProjectSecrets derives its slug from $PWD, so a switch after it loads the launch directory's
+# secrets into another project's session. The order is pinned as SOURCE because the decision loop has
+# no console; the positive control is that both statements are found at all. Both are guarded on
+# -Preview now - the secrets import was not, so a preview run had a side effect on a path documented
+# as side-effect-free and no preview-driven check could exercise the ordering (adversarial review
+# 2026-09-16, B13).
+$launcherAst = [System.Management.Automation.Language.Parser]::ParseFile("$PSScriptRoot\..\claude-auto.ps1", [ref]$null, [ref]$null)
+$cdCall = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+    "$($n.GetCommandName())" -eq 'Set-ClaudeProjectDirectory' }, $true))
+$secretsCall = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+    "$($n.GetCommandName())" -eq 'Import-ProjectSecrets' }, $true))
+Assert-Equal 1 $cdCall.Count 'claude-auto.ps1 switches the project directory in exactly one place'
+Assert-Equal 1 $secretsCall.Count 'and imports the project secrets in exactly one place'
+Assert-True ($cdCall[0].Extent.StartOffset -lt $secretsCall[0].Extent.StartOffset) 'and the cd comes FIRST, because Import-ProjectSecrets derives its slug from $PWD'
+$guardOf = {
+    param($node)
+    $p = $node.Parent
+    while ($p) {
+        if ($p -is [System.Management.Automation.Language.IfStatementAst]) { return "$($p.Clauses[0].Item1.Extent.Text)" }
+        $p = $p.Parent
+    }
+    return ''
+}
+Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
+Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
+
+if ($script:Ran -ne 112) { Write-Host "COULD NOT RUN: expected 112 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

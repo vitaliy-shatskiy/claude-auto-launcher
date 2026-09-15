@@ -685,6 +685,21 @@ try {
     Assert 'and the switcher receives that exact path'  ($script:switchedTo -eq $realProject)
 } finally { Remove-Item -LiteralPath $realProject -Recurse -Force -ErrorAction SilentlyContinue }
 
+# A plain FILE is not a directory. Test-Path without -PathType Container says $true for one, and
+# Set-Location then throws ItemNotFoundException and takes the launcher down after everything else
+# has already succeeded - which is what the guard's -PathType is for. Nothing in the whole checkpoint
+# noticed when that switch was removed (adversarial review 2026-09-16, B7: mutant M6 survived).
+$fileProject = Join-Path $env:TEMP ("cct-file-project-" + [guid]::NewGuid().ToString('N'))
+[IO.File]::WriteAllText($fileProject, 'not a directory', (New-Object System.Text.UTF8Encoding($false)))
+try {
+    $script:switchedTo = $null
+    $fileResult = $null
+    try { $fileResult = Set-ClaudeProjectDirectory -Project $fileProject -Switcher $switcherSpy 6>$null }
+    catch { $fileResult = 'THREW' }
+    Assert 'a plain FILE is refused as the project directory' ($fileResult -eq $false)
+    Assert 'and the switcher is never called with it'         ($null -eq $script:switchedTo)
+} finally { Remove-Item -LiteralPath $fileProject -Force -ErrorAction SilentlyContinue }
+
 # --- Get-RateLimitSummary: a machine with no records (a fresh install) gets an empty table ---------
 $emptyLimits = Join-Path $env:TEMP ("cal-limits-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $emptyLimits | Out-Null
 try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSummary -Directory $emptyLimits).Count -eq 0) } finally { Remove-Item $emptyLimits -Recurse -Force }
@@ -709,7 +724,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 147 } else { 143 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 149 } else { 145 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

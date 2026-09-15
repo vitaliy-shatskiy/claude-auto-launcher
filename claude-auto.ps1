@@ -436,10 +436,18 @@ Set-ClaudeProfile -Account $choice -Preview:$Preview
 # than throwing - Set-Location -LiteralPath on a bad path would otherwise take the whole launcher
 # down after everything else already succeeded. Set-ClaudeProjectDirectory (Env.ps1) is the guard
 # itself, pulled out so it has a unit seam - Test-Env.ps1 drives it directly.
+#
+# BOTH halves are guarded on -Preview, not just the cd. Import-ProjectSecrets was unguarded, so a
+# preview run imported the LAUNCH directory's secrets into its own process without ever performing
+# the cd - process-local and harmless, but a side effect on a path documented as side-effect-free,
+# and it meant no preview-driven check could ever exercise this ordering at all (adversarial review
+# 2026-09-16, B13). The ORDER itself is pinned as source by Test-Maintenance.
 if ($UseUi -and $state -and -not $Preview) {
     $null = Set-ClaudeProjectDirectory -Project $state.Project
 }
-$null = Import-ProjectSecrets -WorkingDirectory $PWD.Path -Root $LauncherConfig.SecretsRoot
+if (-not $Preview) {
+    $null = Import-ProjectSecrets -WorkingDirectory $PWD.Path -Root $LauncherConfig.SecretsRoot
+}
 
 # Profile sharing only when the config asks for it: a single-account machine has nothing to link.
 # Preview must be side-effect-free - Repair-SharedProfiles (Env.ps1) guards every step on it.
