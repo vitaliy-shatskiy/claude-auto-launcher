@@ -583,11 +583,94 @@ $capBig = Join-Path $capDir 'gggg7777.jsonl'
 $capSmall = Join-Path $capDir 'hhhh8888.jsonl'
 [IO.File]::WriteAllText($capSmall, (($capHead -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 
-Assert-Equal '3+' (Measure-ClaudePrompts -Path $capBig) 'past the SHIPPED byte budget the count stops and reports N+'
+Assert-Equal 3 (Measure-ClaudePrompts -Path $capBig) 'past the SHIPPED byte budget the count stops'
+Assert-Equal $true (Measure-ClaudePromptDetail -Path $capBig).Capped 'and says so through a FLAG, not by turning the number into a string'
+Assert-Equal $true ((Measure-ClaudePrompts -Path $capBig) -is [int]) 'the count is always an int, so a threshold or an ordering on it is numeric'
 Assert-Equal 5 (Measure-ClaudePrompts -Path $capBig -MaxBytes 16MB) 'given room for the whole file the count is exact again - the bound is what stopped it, not a miscount'
 Assert-Equal 3 (Measure-ClaudePrompts -Path $capSmall) 'a file inside the budget keeps its exact count, which is what the picker displays'
+Assert-Equal $false (Measure-ClaudePromptDetail -Path $capSmall).Capped 'and is not marked capped'
 $sCap = Get-ClaudeSessionSummary -Path $capBig
-Assert-Equal '3+' $sCap.PromptCount 'and the summary carries the capped form through to the picker'
+Assert-Equal 3 $sCap.PromptCount 'the summary carries the number'
+Assert-Equal $true $sCap.PromptCountCapped 'and the capped flag beside it'
+Assert-Equal '3+' (Format-PromptCount -Session $sCap) 'which is what the picker renders as "N+"'
+Assert-Equal '3' (Format-PromptCount -Session (Get-ClaudeSessionSummary -Path $capSmall)) 'an uncapped count renders as a plain number'
+
+# --- the cap BOUNDARY, both ends of it -------------------------------------------------------------
+# Test 24 above uses a ~5 MB file against a 4 MB budget: it cannot tell -gt from -ge at either end.
+# These fixtures sit exactly ON the boundary. Each prompt line below is exactly 50 bytes with its
+# newline, so four of them are exactly 200.
+$bnDir = Join-Path $env:TEMP ('claude-auto-bound-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $bnDir | Out-Null
+$bnLine = { param([int]$I) '{"type":"user","message":{"content":"prompt-' + ('{0:00}' -f $I) + '"}}' }
+$bnWrite = { param([string]$Name, [int]$Count)
+    $p = Join-Path $bnDir $Name
+    [IO.File]::WriteAllText($p, (@(1..$Count | ForEach-Object { & $bnLine $_ }) -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    return $p
+}
+$bnExact = & $bnWrite 'exact.jsonl' 4
+Assert-Equal 200 (Get-Item -LiteralPath $bnExact).Length 'the boundary fixture is exactly the budget, to the byte'
+$bnExactR = Measure-ClaudePromptDetail -Path $bnExact -MaxBytes 200
+Assert-Equal 4 $bnExactR.Count 'a file exactly the size of the budget is read whole'
+Assert-Equal $false $bnExactR.Capped 'and is not reported as capped - the bound engages ABOVE the budget, not at it'
+$bnOver = & $bnWrite 'over.jsonl' 5
+$bnOverR = Measure-ClaudePromptDetail -Path $bnOver -MaxBytes 200
+Assert-Equal $true $bnOverR.Capped 'one byte over the budget and the bound does engage'
+Assert-Equal 4 $bnOverR.Count 'and it stops on the line that reaches the budget exactly, not one line later'
+# A record that BEGINS inside the budget and ends past it is counted: the budget is spent after the
+# line is examined, not charged blind before it.
+$bnStr = Join-Path $bnDir 'straddle.jsonl'
+[IO.File]::WriteAllText($bnStr,
+    ('{"type":"assistant","message":{"content":[{"type":"text","text":"' + ('p' * 84) + '"}]}}' + "`n" +
+     '{"type":"user","message":{"content":"' + ('q' * 60) + '"}}' + "`n"),
+    (New-Object System.Text.UTF8Encoding($false)))
+$bnStrR = Measure-ClaudePromptDetail -Path $bnStr -MaxBytes 200
+Assert-Equal 1 $bnStrR.Count 'a prompt whose line begins inside the budget is counted even though it ends past it'
+Assert-Equal $true $bnStrR.Capped 'and the walk stops there'
+# BYTES, not characters: the same prompt text in Cyrillic must stop at the same BYTE count.
+$bnRu = [char]0x043F
+$bnCyr = Join-Path $bnDir 'cyr.jsonl'
+[IO.File]::WriteAllText($bnCyr, (@(1..40 | ForEach-Object { '{"type":"user","message":{"content":"' + ([string]$bnRu * 50) + '"}}' }) -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+$bnCyrR = Measure-ClaudePromptDetail -Path $bnCyr -MaxBytes 1000
+# Each line is 141 bytes and 91 characters, so a BYTE budget of 1000 stops after 8 records where a
+# CHARACTER budget reads 11 - 1.55x the bytes it promised, and 1.94x was measured on real text.
+Assert-Equal 8 $bnCyrR.Count 'the budget is counted in BYTES: a Cyrillic transcript stops after 8 records, not the 11 a character count would have read'
+Remove-Item -LiteralPath $bnDir -Recurse -Force -ErrorAction SilentlyContinue
+
+# --- the count agrees with its own authority -------------------------------------------------------
+# Every rejection rule lives in Get-ClaudeUserPrompt. A private set of substrings beside it drifted:
+# a wrapper delivered as a content ARRAY was counted as a human prompt while the title column said
+# "(no prompt)" about the same session, and a prompt written as '{"type": "user"' was dropped
+# (adversarial review 2026-09-16, A3).
+$auDir = Join-Path $env:TEMP ('claude-auto-authority-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $auDir | Out-Null
+$auCases = [ordered]@{
+    'a plain string prompt'                   = '{"type":"user","message":{"role":"user","content":"fix the build"}}'
+    'a tool result wearing the user role'     = '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'
+    'a sidechain user record'                 = '{"type":"user","isSidechain":true,"message":{"role":"user","content":"subagent chatter"}}'
+    'a meta user record'                      = '{"type":"user","isMeta":true,"message":{"role":"user","content":"meta"}}'
+    'a system-reminder as string content'     = '{"type":"user","message":{"role":"user","content":"<system-reminder>noise</system-reminder>"}}'
+    'a system-reminder as a text BLOCK'       = '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>noise</system-reminder>"}]}}'
+    'a local-command-stdout as a text BLOCK'  = '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<local-command-stdout>build output</local-command-stdout>"}]}}'
+    'a bare /clear as a text BLOCK'           = '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<command-name>/clear</command-name><command-args></command-args>"}]}}'
+    'a real prompt in non-compact JSON'       = '{"type": "user", "message": {"role": "user", "content": "a real prompt"}}'
+    'an empty text block array'               = '{"type":"user","message":{"role":"user","content":[]}}'
+    'an assistant record'                     = '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}'
+}
+$auI = 0
+foreach ($auName in $auCases.Keys) {
+    $auI++
+    $auFile = Join-Path $auDir "case$auI.jsonl"
+    [IO.File]::WriteAllText($auFile, $auCases[$auName] + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    $auRec = ConvertFrom-JsonlLine -Line $auCases[$auName]
+    $auAuthority = if ($auRec -and (Get-ClaudeUserPrompt -Record $auRec)) { 1 } else { 0 }
+    Assert-Equal $auAuthority (Measure-ClaudePrompts -Path $auFile) "the count agrees with Get-ClaudeUserPrompt - $auName"
+}
+# A prompt that QUOTES the counter's own rejection substrings in its text is still a prompt: the
+# structural patterns only match a quote that is not escaped.
+$auQuote = Join-Path $auDir 'quoting.jsonl'
+[IO.File]::WriteAllText($auQuote, '{"type":"user","message":{"role":"user","content":"why is ' + [char]92 + '"tool_result' + [char]92 + '" in the docs"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+Assert-Equal 1 (Measure-ClaudePrompts -Path $auQuote) 'a prompt quoting "tool_result" in its own text is still counted'
+Remove-Item -LiteralPath $auDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $capRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- the paging SNAPSHOT --------------------------------------------------------------------------
@@ -785,7 +868,7 @@ $pfEsc = Join-Path $pfDir 'eeee3333.jsonl'
 Assert-Equal 'escaped key prompt' (Get-ClaudeSessionSummary -Path $pfEsc -ProjectPath 'C:\src\pf').Title 'a \u-escaped type key is decoded by the parser, so the pre-filter must not skip the line on a literal miss'
 Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 135) { Write-Host "COULD NOT RUN: expected 135 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 159) { Write-Host "COULD NOT RUN: expected 159 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

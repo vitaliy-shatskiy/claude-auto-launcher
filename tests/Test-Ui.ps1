@@ -2575,6 +2575,16 @@ Assert-Equal 'p1b' $pgNoFetch.Session.SessionId 'without a fetcher the cursor st
 # bound - so the capped form is pinned here, where Screens.ps1 is actually loaded.
 Assert-Equal 1 (Select-ResumableSessions -Sessions @([pscustomobject]@{ SessionId='big'; PromptCount='120+' })).Count 'a capped prompt count still reads as a resumable session'
 
+# PromptCount is an INT and PromptCountCapped is the marker; the picker renders the '+' from the
+# flag. The old single string was compared with -gt, and PowerShell coerces the other operand to the
+# LEFT one's type: '0+' -gt 0 is TRUE, so a >4 MB transcript whose first 4 MB holds nothing a human
+# typed was offered as resumable (adversarial review 2026-09-16, E4a/E4b/E4c).
+Assert-Equal '3+' (Format-PromptCount -Session ([pscustomobject]@{ PromptCount = 3; PromptCountCapped = $true })) 'a capped count renders as N+'
+Assert-Equal '3' (Format-PromptCount -Session ([pscustomobject]@{ PromptCount = 3; PromptCountCapped = $false })) 'an exact count renders as a plain number'
+Assert-Equal '120+' (Format-PromptCount -Session ([pscustomobject]@{ PromptCount = '120+' })) 'a row cached by an older build, carrying the string form, still renders'
+Assert-Equal 0 (Select-ResumableSessions -Sessions @([pscustomobject]@{ SessionId = 'zerocap'; PromptCount = 0; PromptCountCapped = $true })).Count 'a capped ZERO has nothing to resume into and is dropped, exactly as an exact zero is'
+Assert-Equal 0 (Select-ResumableSessions -Sessions @([pscustomobject]@{ SessionId = 'zerocapstr'; PromptCount = '0+' })).Count 'and so is the old string form of the same row, where ''0+'' -gt 0 used to be TRUE'
+
 # --- paging: the offset, what "the end" means, and the SCOPE ---------------------------------------
 $pgRow = {
     param([string]$Id, [string]$Slug = 'S', [string]$Project = 'Paged')
@@ -2642,7 +2652,7 @@ $twoSel = Invoke-SessionPicker -Sessions $twoSlug -ProjectSlug @('C--tmp-Shared'
 Assert-Equal 'b1' $twoSel.Session.SessionId 'a picker scoped to a merged project reaches the sibling slug''s sessions too'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 939) { Write-Host "COULD NOT RUN: expected 939 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 944) { Write-Host "COULD NOT RUN: expected 944 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

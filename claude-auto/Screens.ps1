@@ -800,8 +800,33 @@ function Select-ResumableSessions {
     # stays an honest reader of what is actually on disk and any other caller still sees everything.
     # Shared by Invoke-SessionPicker (navigation) and Get-PickerFrame (rendering) so the two can never
     # disagree about which index points at which session.
+    #
+    # Read as an INT. PromptCount used to be the string "N+" past the counter's byte budget, and
+    # PowerShell coerces the other operand to the left one's type - so '0+' -gt 0 was TRUE and a
+    # >4 MB transcript whose first 4 MB holds nothing a human typed was offered as resumable
+    # (adversarial review 2026-09-16, E4b). The trailing '+' is still stripped so a cache written by
+    # an older build stays readable.
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions)
-    return @($Sessions | Where-Object { $_.PromptCount -gt 0 })
+    return @($Sessions | Where-Object { (Get-PromptCountValue -Session $_) -gt 0 })
+}
+
+function Get-PromptCountValue {
+    # The prompt count as an int, whatever shape the row carries it in.
+    param($Session)
+    $n = 0
+    [void][int]::TryParse(("$($Session.PromptCount)" -replace '\+$', ''), [ref]$n)
+    return $n
+}
+
+function Format-PromptCount {
+    # What the picker shows: the number, plus the '+' that says the transcript ran past the
+    # counter's byte budget. The marker is rendered from the FLAG, never stored in the number.
+    param($Session)
+    $capped = if ($null -ne $Session.PSObject.Properties['PromptCountCapped']) { [bool]$Session.PromptCountCapped }
+              else { "$($Session.PromptCount)".EndsWith('+') }
+    $n = Get-PromptCountValue -Session $Session
+    if ($capped) { return "$n+" }
+    return "$n"
 }
 
 function Select-SessionMatch {
@@ -986,7 +1011,7 @@ function Get-PickerFrame {
         $s = $items[$Index]
         $head = "$($s.Project)"
         if ($s.Worktree) { $head += "  $($g.Worktree) $($s.Worktree)" }
-        $head += "  $($g.H)  $($s.PromptCount) msgs  $($g.H)  $($s.Modified.ToString('dd MMM HH:mm'))"
+        $head += "  $($g.H)  $(Format-PromptCount -Session $s) msgs  $($g.H)  $($s.Modified.ToString('dd MMM HH:mm'))"
         $body = @($list)
         $body += '  ' + (Limit-Line -Text $head -Max ($Width - 4))
         $body += '  ' + ([string]$g.H * ($Width - 6))
@@ -1041,7 +1066,7 @@ function Get-PickerFrame {
 
     $detail = @()
     $detail += ' ' + (Limit-Line -Text $where -Max ($rightWidth - 2))
-    $detail += ' ' + $s.Modified.ToString('dd MMM HH:mm') + "  $($g.H)  $($s.PromptCount) msgs  $($g.H)  $('{0:N0}' -f ($s.SizeBytes / 1KB)) KB"
+    $detail += ' ' + $s.Modified.ToString('dd MMM HH:mm') + "  $($g.H)  $(Format-PromptCount -Session $s) msgs  $($g.H)  $('{0:N0}' -f ($s.SizeBytes / 1KB)) KB"
     $detail += ' ' + ([string]$g.H * ($rightWidth - 2))
     # Budget against the body height, not the number of list rows: with three sessions on a 40-row
     # terminal the old arithmetic gave the preview two lines while 30 sat empty. As many recent,

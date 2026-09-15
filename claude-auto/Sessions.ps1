@@ -19,11 +19,25 @@ $script:NoiseTagPattern = '^<[a-z][a-z0-9-]*(-notification|-hook|-reminder|-cave
 # '"type":"user"' misses while ConvertFrom-Json accepts them, and both made a real prompt invisible
 # to the title, the last-message and the recent-messages walks alike (adversarial review 2026-09-16,
 # A1/A2): one space after the colon - JSON-legal, and what any non-compact serialiser emits - and a
-# \u-escaped key ('"type"'), which the parser decodes and no substring can see. The escaped
+# \u-escaped key ('"\u0074ype"'), which the parser decodes and no substring can see. The escaped
 # case is covered by the second half of the rule: a line carrying no structural "type" key AT ALL is
 # parsed rather than skipped, which costs nothing because every record Claude Code writes has one.
 $script:UserTypeLine = '"type"\s*:\s*"user"'
 $script:ChatTypeLine = '"type"\s*:\s*"(user|assistant)"'
+
+# The prompt counter's rules, as STRUCTURAL matches. A '"' that is not preceded by a backslash is a
+# JSON structural quote; one that is belongs to string CONTENT. Without the lookbehind a prompt that
+# quotes "tool_result" or "isSidechain":true in its own text is silently dropped from the count - the
+# same class of drift the byte-literal filters above were carrying.
+$script:StructUserType   = '(?<!\\)"type"\s*:\s*"user"'
+$script:StructToolResult = '(?<!\\)"type"\s*:\s*"tool_result"'
+$script:StructSidechain  = '(?<!\\)"isSidechain"\s*:\s*true'
+$script:StructMeta       = '(?<!\\)"isMeta"\s*:\s*true'
+# Content that is a plain string opening with an ordinary character: no rejection rule in
+# Get-ClaudeUserPrompt can apply to it (every one of them is anchored to the start of the content),
+# so it is a human prompt and needs no parse. Anything else - a content ARRAY, a wrapper tag, an
+# escape - goes to the authority itself.
+$script:PlainPromptContent = '(?<!\\)"content"\s*:\s*"[^<"\\]'
 
 # Resolved at load time so the per-file loop does not hash this module 40 times. A failure falls
 # back to a constant rather than throwing: a cache that never invalidates is bad, a launcher that
@@ -317,6 +331,7 @@ function Get-ClaudeSessionSummary {
         if ($lastUser -and $lastAssistant -and $recent.Count -ge $maxRecent) { break }
     }
     [array]::Reverse($recent)
+    $promptCount = Measure-ClaudePromptDetail -Path $Path
 
     # Fall back to the last prompt before the session id: "c47c2bc1" identifies nothing, whereas
     # the most recent thing asked usually does.
@@ -349,7 +364,9 @@ function Get-ClaudeSessionSummary {
         Worktree        = $names.Worktree
         Modified        = $file.LastWriteTime
         SizeBytes       = $file.Length
-        PromptCount     = (Measure-ClaudePrompts -Path $Path)
+        # An INT plus a flag, never the string "N+": see Measure-ClaudePromptDetail.
+        PromptCount     = $promptCount.Count
+        PromptCountCapped = $promptCount.Capped
         Title           = (Get-CleanTranscriptText -Text $title)
         LastUser        = (Get-CleanTranscriptText -Text $lastUser)
         LastAssistant   = (Get-CleanTranscriptText -Text $lastAssistant)
@@ -732,36 +749,119 @@ function Measure-ClaudePrompts {
         [Parameter(Mandatory)][string]$Path,
         [int]$MaxBytes = 4MB
     )
+    return (Measure-ClaudePromptDetail -Path $Path -MaxBytes $MaxBytes).Count
+}
+
+function Measure-ClaudePromptDetail {
+    # The count AND whether the byte budget cut it short: @{ Count = [int]; Capped = [bool] }.
+    #
+    # Two values, never one string. "N+" carried both and was a STRING, and PowerShell coerces the
+    # other operand to the left one's type: '0+' -gt 0 is TRUE, so a >4 MB transcript whose first
+    # 4 MB holds nothing a human typed was offered as resumable, and '9+' -gt 10 is TRUE, so any
+    # future ordering on this field would silently be lexicographic (adversarial review 2026-09-16,
+    # E4a/E4b/E4c). The picker renders the "+" from the flag (Format-PromptCount, Screens.ps1).
+    #
+    # ACCEPTANCE is the authority's, not a private set of substrings. The old escape hatch fired only
+    # on the literal '"content":"<', which a content ARRAY never produces, so every wrapper delivered
+    # as a text block - a system-reminder, a local-command-stdout, a bare slash command - was counted
+    # as a human prompt while the title column said "(no prompt)" about the same session; and the
+    # byte-literal '"type":"user"' dropped a genuine prompt written as '{"type": "user"'
+    # (adversarial review, A3). The substring tests below are PRE-TESTS for the structural patterns
+    # behind them, and anything ambiguous is parsed and handed to Get-ClaudeUserPrompt itself. A
+    # tool-heavy transcript still costs no parses: a tool_result line is rejected structurally.
+    #
+    # Bounded by BYTES, the same rule and the same 4 MB budget as Get-FileTailLines. Counting
+    # CHARACTERS read 1.94x the budget on Cyrillic text - which this owner writes - on a function
+    # measured at 24% of a cold listing. The budget is spent AFTER the line is examined, so the
+    # record that straddles the boundary is counted rather than lost.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$MaxBytes = 4MB
+    )
     $n = 0
+    $capped = $false
     try {
-        # One stat, so a small file - the common case - pays nothing per line for a budget it cannot
-        # reach. A file that cannot be stat'ed is treated as bounded: the pessimistic choice.
+        # One stat, so a small file - the common case - pays nothing for a budget it cannot reach.
+        # A file that cannot be stat'ed is treated as bounded: the pessimistic choice.
         $bounded = $true
         try { $bounded = ($MaxBytes -gt 0 -and [IO.FileInfo]::new($Path).Length -gt $MaxBytes) } catch { $bounded = $true }
-        $read = 0
-        $capped = $false
-        foreach ($line in [System.IO.File]::ReadLines($Path)) {
-            if ($bounded) {
-                # +1 for the newline ReadLines strips. Characters, not bytes: for JSONL this is
-                # within a few percent, and the direction of the error is to read a little more
-                # than the budget on non-ASCII text, never to cut a small file short.
-                $read += $line.Length + 1
-                if ($read -ge $MaxBytes) { $capped = $true; break }
+        # The budget is taken off the FILE, in one read, rather than added up per line. Per-line
+        # [Text.Encoding]::UTF8.GetByteCount is exact but costs a marshalled call per line: measured
+        # on this machine 2026-09-16 over the ten newest transcripts (26 MB), 397 ms against 38 ms
+        # for the character count it replaced - it alone took a cold -Limit 10 listing from 420 ms to
+        # 747 ms. Reading the window as bytes is exact AND free: the file offset IS the byte count.
+        $lines = if ($bounded) { Read-BoundedFileLines -Path $Path -MaxBytes $MaxBytes } else { [System.IO.File]::ReadLines($Path) }
+        if ($bounded) { $capped = $true }
+        foreach ($line in $lines) {
+            if ($line.Contains('"user"')) {
+                if (-not ($line.Contains('"tool_result"') -and $line -match $script:StructToolResult) -and
+                    -not ($line.Contains('"isSidechain"') -and $line -match $script:StructSidechain) -and
+                    -not ($line.Contains('"isMeta"') -and $line -match $script:StructMeta) -and
+                    -not ($line.Contains('"type"') -and $line -notmatch $script:StructUserType)) {
+                    if ($line -match $script:PlainPromptContent) { $n++ }
+                    else {
+                        $rec = ConvertFrom-JsonlLine -Line $line
+                        if ($rec -and (Get-ClaudeUserPrompt -Record $rec)) { $n++ }
+                    }
+                }
             }
-            if (-not $line.Contains('"type":"user"')) { continue }
-            if ($line.Contains('"isSidechain":true')) { continue }
-            if ($line.Contains('"tool_result"')) { continue }
-            if ($line.Contains('"isMeta":true')) { continue }
-            if ($line.Contains('"content":"<')) {
-                $rec = ConvertFrom-JsonlLine -Line $line
-                if ($rec -and (Get-ClaudeUserPrompt -Record $rec)) { $n++ }
-                continue
-            }
-            $n++
         }
-    } catch { return 0 }
-    if ($capped) { return "$n+" }
-    return $n
+    } catch { return [pscustomobject]@{ Count = 0; Capped = $false } }
+    return [pscustomobject]@{ Count = $n; Capped = $capped }
+}
+
+function Read-BoundedFileLines {
+    # The first $MaxBytes of a file, as lines, plus the rest of whatever record straddles that
+    # boundary. Counting the budget off the file OFFSET is what makes it exact in bytes at no cost:
+    # the alternative, adding up a per-line byte count, is a marshalled call per line and was
+    # measured at 10x the character count it replaced.
+    #
+    # The straddling record is INCLUDED. The budget is charged for a line before the line is
+    # examined either way, and a caller that stops one record short of what began inside its budget
+    # is reporting a number it did not have to be wrong about.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][int]$MaxBytes)
+    $fs = $null
+    try {
+        # ReadWrite sharing: a live session is appending to its own transcript while this reads it.
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        $buf = [byte[]]::new($MaxBytes)
+        $got = 0
+        while ($got -lt $MaxBytes) {
+            $r = $fs.Read($buf, $got, $MaxBytes - $got)
+            if ($r -le 0) { break }
+            $got += $r
+        }
+        $text = [Text.Encoding]::UTF8.GetString($buf, 0, $got)
+        # Only when the window cut a line in half: a window ending exactly on a newline is complete.
+        if ($got -gt 0 -and $buf[$got - 1] -ne 10) {
+            $tail = [System.Collections.Generic.List[byte]]::new()
+            $chunk = [byte[]]::new(4096)
+            $done = $false
+            while (-not $done) {
+                $r = $fs.Read($chunk, 0, $chunk.Length)
+                if ($r -le 0) { break }
+                $nl = [Array]::IndexOf($chunk, [byte]10, 0, $r)
+                $take = if ($nl -ge 0) { $nl } else { $r }
+                # Array.Copy into a sized byte[], not $chunk[0..($take-1)]: the range operator
+                # produces an Object[] and AddRange refuses it, and 0..($take-1) with $take = 0 is
+                # @(0, -1) in PowerShell rather than an empty range.
+                if ($take -gt 0) {
+                    $piece = [byte[]]::new($take)
+                    [Array]::Copy($chunk, 0, $piece, 0, $take)
+                    $tail.AddRange($piece)
+                }
+                if ($nl -ge 0) { $done = $true }
+            }
+            if ($tail.Count -gt 0) { $text += [Text.Encoding]::UTF8.GetString($tail.ToArray()) }
+        }
+        # One regex split, not a per-line pipeline: at 30 000 lines a ForEach-Object costs more than
+        # the read this function exists to bound.
+        return @($text -split "`r?`n")
+    } catch {
+        return @()
+    } finally {
+        if ($fs) { $fs.Dispose() }
+    }
 }
 
 function Format-RelativeAge {
