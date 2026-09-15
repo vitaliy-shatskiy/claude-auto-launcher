@@ -171,6 +171,12 @@ function Set-LaunchStartProject {
         [string]$Cwd,
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects
     )
+    # Recorded so the rule can be RE-APPLIED on a tab switch (Switch-LaunchAccount, Prefs.ps1). The
+    # launched account is whichever tab the owner ends on, so rule 2's input changes with every
+    # switch and rule 1 has to be weighed against it again; applied once before the screen loop, the
+    # cwd preselection was silently overridden by the arriving account's remembered project, and
+    # dropped altogether by an account that had none (adversarial review 2026-09-16, A5/A5b).
+    $script:LaunchStartContext = @{ Cwd = "$Cwd"; Projects = @($Projects) }
     $startInfo = Resolve-StartProject -Cwd $Cwd -Remembered "$($State.Project)" -Projects $Projects
     $State.Project = $startInfo.Path
     $State.ProjectSlug = ''
@@ -180,4 +186,20 @@ function Set-LaunchStartProject {
         if ($hit.Count -gt 0) { $State.ProjectSlug = $hit[0].Slug }
     }
     return $startInfo.Source
+}
+
+function Update-LaunchStartSelection {
+    # Re-applies the start-selection rule after the launched account changed. Rule 1 (cwd, when it is
+    # a real project) outranks rule 2 (the remembered project of the launched account), and rule 2's
+    # input is exactly what a tab switch replaces - so the ordering has to be decided again, with
+    # $State.Project now holding whatever the arriving account remembered.
+    #
+    # The launch context comes from what Set-LaunchStartProject recorded rather than from new
+    # parameters: this runs inside Switch-LaunchAccount, whose caller is the screen loop, and a tab
+    # switch has no business being handed a project registry. Without a recorded context - any
+    # caller that never ran the start selection at all - it is a no-op.
+    param([Parameter(Mandatory)]$State)
+    if ($null -eq $script:LaunchStartContext) { return $State }
+    $null = Set-LaunchStartProject -State $State -Cwd $script:LaunchStartContext.Cwd -Projects $script:LaunchStartContext.Projects
+    return $State
 }

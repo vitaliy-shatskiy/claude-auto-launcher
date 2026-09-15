@@ -5,6 +5,7 @@ try {
     . "$PSScriptRoot\..\claude-auto\Layout.ps1"
     . "$PSScriptRoot\..\claude-auto\Sessions.ps1"
     . "$PSScriptRoot\..\claude-auto\Screens.ps1"
+    . "$PSScriptRoot\..\claude-auto\Projects.ps1"   # Switch-LaunchAccount re-applies the start selection
     . "$PSScriptRoot\..\claude-auto\Prefs.ps1"
     . "$PSScriptRoot\..\claude-auto\Config.ps1"   # Test-Prefs does not load Env.ps1; Config must be explicit there
     Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
@@ -12,6 +13,7 @@ try {
 
 $script:Failed = 0
 $script:Ran = 0
+$script:LaunchStartContext = $null   # no launch context here: the start-selection re-apply is a no-op
 function Assert-Equal {
     param($Expected, $Actual, [string]$Because)
     $script:Ran++
@@ -525,7 +527,41 @@ for (`$i = 0; `$i -lt `$Count; `$i++) { `$null = Save-LaunchPrefs -State `$state
 
 foreach ($f in $paths) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 126) { Write-Host "COULD NOT RUN: expected 126 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the start selection is re-decided on every tab switch -----------------------------------------
+# Spec ordering: 1. cwd when it is a real project, 2. the remembered project of the LAUNCHED account,
+# 3. unresolved. The launched account is whichever tab the owner ends on, so rule 2's input changes
+# with every switch - and applied once before the screen loop, rule 1 silently stopped applying from
+# the first switch on (adversarial review 2026-09-16, A5/A5b).
+$ssRoot = Join-Path $env:TEMP ('claude-auto-start-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$ssCwd = Join-Path $ssRoot 'the-cwd-project'
+$ssRem = Join-Path $ssRoot 'remembered-elsewhere'
+New-Item -ItemType Directory -Force -Path $ssCwd | Out-Null
+New-Item -ItemType Directory -Force -Path $ssRem | Out-Null
+$ssReg = @([pscustomobject]@{ Slug = 'CWD'; Path = $ssCwd; Name = 'the-cwd-project'; Worktree = $null; LastActivity = (Get-Date) })
+$ssRows = Get-LaunchRows
+$ssPrefs = @{ Version = 2; Account = 'work'; Profiles = @{ personal = @{ Project = $ssRem } } }
+
+$ss1 = New-LaunchState; $ss1.Account = 'work'
+$null = Set-LaunchStartProject -State $ss1 -Cwd $ssCwd -Projects $ssReg
+Assert-Equal $ssCwd $ss1.Project 'rule 1 on the opening tab: a cwd that is a known project is preselected'
+$ss1 = Switch-LaunchAccount -State $ss1 -To 'personal' -Prefs $ssPrefs -Rows $ssRows
+Assert-Equal $ssCwd $ss1.Project 'and it still outranks the ARRIVING account''s remembered project after a tab switch'
+Assert-Equal 'CWD' $ss1.ProjectSlug 'with the slug that belongs to it, not the one left over from the tab before'
+
+$ss2 = New-LaunchState; $ss2.Account = 'work'
+$null = Set-LaunchStartProject -State $ss2 -Cwd $ssCwd -Projects $ssReg
+$ss2 = Switch-LaunchAccount -State $ss2 -To 'personal' -Prefs @{} -Rows $ssRows
+Assert-Equal $ssCwd $ss2.Project 'an account with nothing remembered keeps the cwd preselection instead of opening at row 0'
+
+# A neutral cwd - neither a known project nor a .git directory - falls through to rule 2.
+$ss3 = New-LaunchState; $ss3.Account = 'work'
+$null = Set-LaunchStartProject -State $ss3 -Cwd $ssRoot -Projects $ssReg
+$ss3 = Switch-LaunchAccount -State $ss3 -To 'personal' -Prefs $ssPrefs -Rows $ssRows
+Assert-Equal $ssRem $ss3.Project 'a neutral cwd falls through to rule 2 - the arriving account''s remembered project'
+$script:LaunchStartContext = $null
+Remove-Item -LiteralPath $ssRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 131) { Write-Host "COULD NOT RUN: expected 131 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

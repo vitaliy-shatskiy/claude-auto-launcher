@@ -342,7 +342,9 @@ function Switch-LaunchAccount {
             $State.Project = $rp
             $State.ProjectSlug = "$($entry['ProjectSlug'])"
         }
-        return $State
+        # The spec's start selection is re-decided here, not only before the loop: see
+        # Update-LaunchStartSelection (Projects.ps1).
+        return (Update-LaunchStartSelection -State $State)
     }
 
     $profiles = if ($Prefs -and $Prefs['Profiles']) { $Prefs['Profiles'] } else { @{} }
@@ -366,7 +368,7 @@ function Switch-LaunchAccount {
             $State.ProjectSlug = "$($entry['ProjectSlug'])"
         }
     }
-    return $State
+    return (Update-LaunchStartSelection -State $State)
 }
 
 function Reset-LaunchTab {
