@@ -514,7 +514,26 @@ Assert-True ([bool]($fetchLine -match 'ProjectSlug')) 'and that fetcher carries 
 Assert-True ([bool]($fetchLine -match '-Files ')) 'and pages a snapshot rather than a re-sorted listing'
 Assert-True ($launcherSrc -match '-Sessions @\(&\s*\$fetchNextPage 0 \$pickerSlugs\)') 'the picker''s FIRST page comes from the same scoped fetcher, so it cannot open empty on the chosen project'
 
-if ($script:Ran -ne 103) { Write-Host "COULD NOT RUN: expected 103 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the gate must really run what its rows claim ---------------------------------------------------
+# checkpoint.ps1 printed "Test-Input  0 pass" for a run it never made: a one-element array from an
+# if EXPRESSION unrolls to the scalar '-Live', and `@extraArgs` splats a STRING to a native command
+# character by character (adversarial review 2026-09-16, B1). Built from checkpoint's OWN source
+# text, so the assertion cannot drift away from the file it is about.
+$cpSrc = Get-Content -LiteralPath "$PSScriptRoot\checkpoint.ps1" -Raw
+$cpAssign = @($cpSrc -split "`r?`n" | Where-Object { $_ -match '\$extraArgs\s*=' -and $_ -notmatch '^\s*#' })
+Assert-Equal 2 $cpAssign.Count 'checkpoint builds $extraArgs in two statements, not as one if expression'
+$cpVal = & ([scriptblock]::Create((@("`$name = 'Input'") + $cpAssign + @(',$extraArgs')) -join "`n"))
+Assert-True ($cpVal -is [array]) 'and what it builds for the Input suite is an ARRAY, not a scalar'
+Assert-Equal '-Live' ($cpVal -join ',') 'carrying exactly -Live'
+$cpTmp = Join-Path $env:TEMP ('claude-auto-cp-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $cpTmp | Out-Null
+$echoLive = Join-Path $cpTmp 'echo-live.ps1'
+[IO.File]::WriteAllText($echoLive, "param([switch]`$Live)`r`nWrite-Output (`"Live=`" + `$Live)`r`nWrite-Output (`"ARGV=`" + (`$args -join '|'))`r`n", (New-Object System.Text.UTF8Encoding($false)))
+$echoOut = @(& pwsh -NoProfile -File $echoLive @cpVal 2>&1 | ForEach-Object { "$_" })
+Assert-True ([bool](($echoOut -join ' ') -match 'Live=True')) 'and splatting that exact value sets -Live on the child, instead of spelling it out as - | L | i | v | e'
+Remove-Item -LiteralPath $cpTmp -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 107) { Write-Host "COULD NOT RUN: expected 107 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

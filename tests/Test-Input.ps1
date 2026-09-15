@@ -14,6 +14,9 @@ try { . "$PSScriptRoot\..\claude-auto\Input.ps1" } catch { Write-Host "COULD NOT
 
 $script:Failed = 0
 $script:Ran = 0
+# Three outcomes, not two. A half that could not run at all is neither a pass nor a failure, and
+# rendering it as either is the mistake this repository's exit-code contract exists to prevent.
+$script:Unverified = 0
 function Assert-Equal {
     param($Expected, $Actual, [string]$Because)
     $script:Ran++
@@ -344,6 +347,14 @@ if ($Live -and -not $LiveOnly) {
     if ($liveCode -eq 0) {
         $note = if ($liveAttempts -gt 1) { " (on attempt $liveAttempts - the first one was a flake)" } else { '' }
         Write-Host "ok    the live console path passed in a child process with its own console$note"
+    } elseif ($liveCode -eq 2) {
+        # The child could not run the half at all - no console to attach to, or an assertion whose
+        # argument threw. Three outcomes, not two: DID NOT RUN is never a pass and never a failure,
+        # and it must not be rendered as either. checkpoint.ps1 prints it as its own verdict and the
+        # owner runs the real-terminal half by hand.
+        Write-Host "DID NOT RUN  the live console half could not run in the child process (exit 2)"
+        Write-Host "      re-run to see it: pwsh -NoProfile -File `"$PSCommandPath`" -LiveOnly"
+        $script:Unverified++
     } else {
         Write-Host "FAIL  the live console path failed in the child process twice (exit $liveCode)"
         Write-Host "      re-run to see it: pwsh -NoProfile -File `"$PSCommandPath`" -LiveOnly"
@@ -377,6 +388,14 @@ if ($Live -and -not $LiveOnly) {
 
         # Inject a click and read it back: the only way to exercise the real reader without a hand
         # on the mouse. It proves the struct marshalling and the wait/read loop together.
+        # DRAIN FIRST. A console this process did not create - and a HIDDEN one especially - has
+        # records of its own waiting: measured 2026-09-16, a hidden child console queues a
+        # WINDOW_BUFFER_SIZE_EVENT as the buffer scrolls under the 89 lines this suite prints before
+        # it gets here. Read-ClaudeInputEvent correctly returns that as 'resize', the read loop below
+        # stops on the first non-null event, and the injected record then arrives exactly one read
+        # late - which is the whole of the "live half is red" report (branch pass B2). The reader was
+        # never at fault; the injection was being made into a queue that was not empty.
+        $null = Clear-ClaudeInputQueue -State $state
         $rec = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
         $rec[0] = New-MouseRec 42 9 ([ClaudeAuto.ConsoleInput]::FROM_LEFT_1ST_BUTTON_PRESSED) 0
         [uint32]$written = 0
@@ -406,6 +425,7 @@ if ($Live -and -not $LiveOnly) {
         # state must return the event rather than fall through to [Console]::KeyAvailable, which
         # would eat it. Everything else here tests the reader; this tests the seam the menu uses.
         . "$PSScriptRoot\..\claude-auto\Ui.ps1"
+        $null = Clear-ClaudeInputQueue -State $state       # same rule as the injection above
         $rec2 = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
         $rec2[0] = New-MouseRec 7 3 ([ClaudeAuto.ConsoleInput]::FROM_LEFT_1ST_BUTTON_PRESSED) 0
         [uint32]$w2 = 0
@@ -794,6 +814,7 @@ if ($Live -and -not $LiveOnly) {
             'with TreatControlCAsInput set first, the armed mode has PROCESSED_INPUT cleared — so Ctrl+C arrives as a KEY and the launch screen can treat it as Escape'
 
         # And prove it end to end: a real Ctrl+C key record must survive the seam with its modifier.
+        $null = Clear-ClaudeInputQueue -State $armed2      # same rule as the injections above
         $ctrlRec = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
         $ctrlRec[0] = New-KeyRec 1 0x43 0x03 ([ClaudeAuto.ConsoleInput]::LEFT_CTRL_PRESSED)
         [uint32]$cw = 0
@@ -853,5 +874,6 @@ if ($LiveOnly) {
     Write-Host "COULD NOT RUN: expected 81 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
+if ($script:Unverified) { Write-Host ""; Write-Host "$script:Unverified check(s) DID NOT RUN - this is NOT a pass"; exit 2 }
 Write-Host ""; Write-Host "all passed"
 exit 0
