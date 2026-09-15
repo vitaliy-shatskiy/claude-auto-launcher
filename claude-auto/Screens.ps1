@@ -127,6 +127,12 @@ function New-LaunchState {
         # rides along so the session picker can scope by slug (exact) rather than by name (which two
         # repositories can share) without looking the path up in the registry a second time.
         ProjectSlug = ''
+        # EVERY slug of that directory, not just the primary one. One real directory can own several
+        # slug folders (a cwd recorded with different separators, a folder renamed and renamed back);
+        # Get-ProjectRegistry merges those into one row and keeps them all here, and the session
+        # picker scopes on the whole set - otherwise half a project's sessions are unreachable from
+        # the screen that just named it (adversarial review 2026-09-16, A12).
+        ProjectSlugs = @()
     }
 }
 
@@ -653,8 +659,13 @@ function Get-ProjectFrame {
     $title = "project $($g.H) $($items.Count) known"
     # -Typing shows the filter box the moment '/' is pressed, before any character narrows it, and
     # the trailing '_' is the only cursor this plain-text title has room for.
-    if ($Filter -or $Typing) { $title += " $($g.H) filter: $Filter"; if ($Typing) { $title += '_' } }
-    if ($Notice) { $title += " $($g.H) $Notice" }
+    # Through the same sanitiser every other transcript-sourced field on this screen goes through.
+    # Today the loop's own keystroke whitelist is what keeps an escape out of -Filter, and -Notice is
+    # only ever set to a literal - so this is defence in depth, not a live hole; but every other
+    # field here is protected structurally and these two were the exception (adversarial review
+    # 2026-09-16, A12). A future caller passing text should not have to know.
+    if ($Filter -or $Typing) { $title += " $($g.H) filter: $(Get-CleanTranscriptText -Text $Filter)"; if ($Typing) { $title += '_' } }
+    if ($Notice) { $title += " $($g.H) $(Get-CleanTranscriptText -Text $Notice)" }
 
     $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
         @{ Token = 'w/s';   Label = 'move';     Clickable = $false }
@@ -835,7 +846,9 @@ function Select-SessionMatch {
     # Select-ProjectMatch (Projects.ps1) already carries the fix for. Escaping the filter text is
     # the fix: someone who typed '[' is looking for a literal '[', and Escape gives them that.
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions, [string]$Filter)
-    if ([string]::IsNullOrWhiteSpace($Filter)) { return $Sessions }
+    # @() for the same reason as Select-ProjectMatch: an unfiltered one-element answer must not
+    # unroll to a bare object where the filtered answer is an array.
+    if ([string]::IsNullOrWhiteSpace($Filter)) { return @($Sessions) }
     $f = [Management.Automation.WildcardPattern]::Escape($Filter.Trim())
     return @($Sessions | Where-Object {
         "$($_.Project) $($_.Worktree) $($_.Title) $($_.LastUser) $($_.LastAssistant)" -like "*$f*"

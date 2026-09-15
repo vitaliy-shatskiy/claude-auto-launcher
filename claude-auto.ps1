@@ -281,6 +281,7 @@ if ($UseUi) {
             if (-not $chosen) { if ($Preview) { $previewPickerCancelled = $true; break }; continue }
             $state.Project = $chosen.Path
             $state.ProjectSlug = $chosen.Slug
+            $state.ProjectSlugs = @($chosen.Slugs)
             $state.Action = $chosen.Action
             if ($state.Action -ne 'resume') { break }
 

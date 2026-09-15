@@ -240,7 +240,66 @@ try {
     Assert-Equal '' $slsState3.ProjectSlug 'but it carries no slug - it is not in the registry'
 } finally { Remove-Item -LiteralPath $gitCwd -Recurse -Force -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 40) { Write-Host "COULD NOT RUN: expected 40 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- one real directory is ONE row -----------------------------------------------------------------
+# Two slug folders can name the same directory: a cwd recorded with different separators, a folder
+# renamed and renamed back. A row per SLUG put two rows with identical Name and indistinguishable
+# Path columns on the screen, and every slug lookup took $hit[0] - so half of that project's sessions
+# could not be reached from the screen that had just named it (adversarial review 2026-09-16, A12).
+$mgRoot = Join-Path $env:TEMP ('claude-auto-merge-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$mgReal = Join-Path $mgRoot 'Shared'
+$mgProjects = Join-Path $mgRoot 'projects'
+New-Item -ItemType Directory -Force -Path $mgReal | Out-Null
+$mgWrite = {
+    param([string]$Slug, [string]$Cwd, [datetime]$When)
+    $d = Join-Path $mgProjects $Slug
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+    $f = Join-Path $d "$Slug.jsonl"
+    [IO.File]::WriteAllText($f, '{"type":"user","cwd":' + (ConvertTo-Json $Cwd) + ',"message":{"role":"user","content":"a prompt"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    (Get-Item -LiteralPath $f).LastWriteTime = $When
+}
+& $mgWrite 'C--tmp-Shared' $mgReal (Get-Date '2026-09-01 12:00')
+& $mgWrite 'C--tmp-Shared-alt' ($mgReal.Replace('\', '/')) (Get-Date '2026-09-01 11:00')
+$mgReg = @(Get-ProjectRegistry -ProjectsRoot $mgProjects -CachePath (Join-Path $mgRoot 'c.json'))
+Assert-Equal 1 $mgReg.Count 'two slug folders naming one directory are ONE row on the project screen'
+Assert-Equal 'C--tmp-Shared' $mgReg[0].Slug 'whose primary slug is the one with the newest activity'
+Assert-Equal 'C--tmp-Shared,C--tmp-Shared-alt' ((@($mgReg[0].Slugs) | Sort-Object) -join ',') 'and which keeps EVERY slug of that directory, because that is what the session picker scopes on'
+Assert-Equal (Get-Date '2026-09-01 12:00') $mgReg[0].LastActivity 'with the newest activity of the two'
+$mgState = [pscustomobject]@{ Project = ''; ProjectSlug = ''; ProjectSlugs = @() }
+$null = Set-LaunchStartProject -State $mgState -Cwd $mgReal -Projects $mgReg
+Assert-Equal 'C--tmp-Shared,C--tmp-Shared-alt' ((@($mgState.ProjectSlugs) | Sort-Object) -join ',') 'and the launch state carries the whole set into the session picker, not just the first slug'
+$script:LaunchStartContext = $null
+Remove-Item -LiteralPath $mgRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# --- a project at a drive root ----------------------------------------------------------------------
+# Split-Path -Leaf 'C:\' returns 'C:\', so the Name and Path columns rendered the identical string
+# (adversarial review 2026-09-16, A1). Asserted through the same helper the registry uses, against a
+# fixture drive-root SHAPE rather than the real C:\.
+$drRoot = Join-Path $env:TEMP ('claude-auto-drive-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$drProjects = Join-Path $drRoot 'projects'
+$drSlug = Join-Path $drProjects 'C--'
+New-Item -ItemType Directory -Force -Path $drSlug | Out-Null
+$drDrive = (Split-Path -Path $drRoot -Qualifier) + '\'
+[IO.File]::WriteAllText((Join-Path $drSlug 'd1.jsonl'), '{"type":"user","cwd":' + (ConvertTo-Json $drDrive) + ',"message":{"role":"user","content":"a prompt"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+$drReg = @(Get-ProjectRegistry -ProjectsRoot $drProjects -CachePath (Join-Path $drRoot 'c.json'))
+Assert-Equal 1 $drReg.Count 'a drive-root cwd is still a project row'
+Assert-Equal $drDrive $drReg[0].Path 'whose Path is the drive root exactly as it was recorded'
+Assert-Equal ($drDrive.TrimEnd('\')) $drReg[0].Name 'and whose NAME is a name, not the whole path again'
+Remove-Item -LiteralPath $drRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# --- a cwd carrying a NUL is dropped QUIETLY ---------------------------------------------------------
+# Test-Path raises a non-terminating ArgumentException for an embedded NUL instead of answering
+# $false, and at the default $ErrorActionPreference that is a four-line red dump over the screen.
+$nulRoot = Join-Path $env:TEMP ('claude-auto-nul-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$nulProjects = Join-Path $nulRoot 'projects'
+$nulSlug = Join-Path $nulProjects 'C--src-nul'
+New-Item -ItemType Directory -Force -Path $nulSlug | Out-Null
+[IO.File]::WriteAllText((Join-Path $nulSlug 'n1.jsonl'), '{"type":"user","cwd":"C:\\src\\' + [char]92 + 'u0000bad","message":{"role":"user","content":"a prompt"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+$nulOut = @(Get-ProjectRegistry -ProjectsRoot $nulProjects -CachePath (Join-Path $nulRoot 'c.json') 2>&1)
+Assert-Equal 0 @($nulOut | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }).Count 'a cwd carrying a NUL produces no PowerShell error record on the screen'
+Assert-Equal 0 @($nulOut | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }).Count 'and the row it could never have entered is dropped'
+Remove-Item -LiteralPath $nulRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 50) { Write-Host "COULD NOT RUN: expected 50 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -67,19 +67,31 @@ function Get-ProjectRegistry {
         } else {
             $path = Get-ProjectPathFromTranscript -Directory $d.FullName
         }
-        if (-not $path) { continue }
+        # A cwd is transcript content, so it can be anything. An embedded NUL makes Test-Path raise a
+        # non-terminating ArgumentException rather than answering $false, and the launcher runs at
+        # the default $ErrorActionPreference - so a four-line red dump reached the terminal for a row
+        # that was correctly dropped anyway (adversarial review 2026-09-16, A1). Checked before the
+        # guard rather than suppressed inside it: a path that cannot name a file is not found, and
+        # saying so quietly is the whole of the fix.
+        if (-not $path -or $path.IndexOf([char]0) -ge 0) { continue }
         $fresh[$key] = @{ Path = $path }
         # Checked every run, never cached: a folder can be deleted between two launches, and a row
         # that cannot be entered is worse than a missing one.
         if (-not (Test-Path -LiteralPath $path)) { continue }
         $names = ConvertFrom-ClaudeProjectSlug -Slug $d.Name
+        # -LiteralPath has no -Leaf parameter set (same trap noted in Sessions.ps1's
+        # Test-ClaudeSessionFile: -LiteralPath alone returns the PARENT, no -Leaf switch exists
+        # for it at all) - Split-Path -Path here, matching this codebase's existing convention.
+        $leaf = Split-Path -Path $path -Leaf
+        # A drive root has no leaf: Split-Path -Leaf 'C:\' returns 'C:\', so the Name and Path columns
+        # rendered the identical string (adversarial review 2026-09-16, A1). 'C:' is a name; 'C:\' is
+        # the path, and the spec lists a drive root among the directories it expects to meet.
+        if ($leaf -eq $path) { $leaf = $path.TrimEnd([char]92, [char]47) }
+        if (-not $leaf) { $leaf = $path }
         $out += [pscustomobject]@{
             Slug         = $d.Name
             Path         = $path
-            # -LiteralPath has no -Leaf parameter set (same trap noted in Sessions.ps1's
-            # Test-ClaudeSessionFile: -LiteralPath alone returns the PARENT, no -Leaf switch exists
-            # for it at all) - Split-Path -Path here, matching this codebase's existing convention.
-            Name         = (Split-Path -Path $path -Leaf)
+            Name         = $leaf
             Worktree     = $names.Worktree
             LastActivity = $newest.LastWriteTime
         }
@@ -94,7 +106,27 @@ function Get-ProjectRegistry {
     } catch { Write-Verbose "Get-ProjectRegistry: could not write cache '$CachePath': $($_.Exception.Message)" }
     finally { if ($tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } }
 
-    return @($out | Sort-Object LastActivity -Descending)
+    # One real DIRECTORY is one row. Two slug folders can name the same directory - a cwd recorded
+    # with different separators, a folder renamed and renamed back - and a row per SLUG put two rows
+    # with identical Name and indistinguishable Path columns on the screen, with every slug lookup
+    # taking $hit[0] so half of that project's sessions could not be reached from the screen that had
+    # just named it (adversarial review 2026-09-16, A12). ConvertTo-ProjectKey already proves the two
+    # are one directory; here the same normaliser decides the rows, rather than a second, ad-hoc one.
+    # The row keeps EVERY slug, because that is what the session picker has to scope on.
+    $merged = @()
+    foreach ($g in ($out | Group-Object { ConvertTo-ProjectKey $_.Path })) {
+        $group = @($g.Group | Sort-Object LastActivity -Descending)
+        $top = $group[0]
+        $merged += [pscustomobject]@{
+            Slug         = $top.Slug
+            Slugs        = @($group | ForEach-Object { $_.Slug })
+            Path         = $top.Path
+            Name         = $top.Name
+            Worktree     = $top.Worktree
+            LastActivity = $top.LastActivity
+        }
+    }
+    return @($merged | Sort-Object LastActivity -Descending)
 }
 
 function Select-ProjectMatch {
@@ -109,7 +141,11 @@ function Select-ProjectMatch {
     # fix: someone who typed '[' is looking for a literal '[', and Escape gives them that, where a
     # catch would return an empty list with no reason shown.
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects, [string]$Filter)
-    if ([string]::IsNullOrWhiteSpace($Filter)) { return $Projects }
+    # @() on the way out too: `return $Projects` unrolls a one-element array on the pipeline, so the
+    # empty-filter branch answered with a bare object where the filtering branch answers with an
+    # array. Both call sites wrap the call themselves today; the next one would not know to
+    # (adversarial review 2026-09-16, A4).
+    if ([string]::IsNullOrWhiteSpace($Filter)) { return @($Projects) }
     $f = [Management.Automation.WildcardPattern]::Escape($Filter.Trim())
     return @($Projects | Where-Object { "$($_.Name) $($_.Path) $($_.Worktree)" -like "*$f*" })
 }
@@ -180,10 +216,17 @@ function Set-LaunchStartProject {
     $startInfo = Resolve-StartProject -Cwd $Cwd -Remembered "$($State.Project)" -Projects $Projects
     $State.Project = $startInfo.Path
     $State.ProjectSlug = ''
+    if ($null -ne $State.PSObject.Properties['ProjectSlugs']) { $State.ProjectSlugs = @() }
     if ($State.Project) {
         $key = ConvertTo-ProjectKey $State.Project
         $hit = @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $key })
-        if ($hit.Count -gt 0) { $State.ProjectSlug = $hit[0].Slug }
+        if ($hit.Count -gt 0) {
+            $State.ProjectSlug = $hit[0].Slug
+            # EVERY slug of that directory: one row can carry several (Get-ProjectRegistry).
+            if ($null -ne $State.PSObject.Properties['ProjectSlugs']) {
+                $State.ProjectSlugs = @($hit | ForEach-Object { if ($_.Slugs) { $_.Slugs } else { $_.Slug } })
+            }
+        }
     }
     return $startInfo.Source
 }

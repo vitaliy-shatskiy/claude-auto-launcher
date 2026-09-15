@@ -289,9 +289,9 @@ function Invoke-ProjectScreen {
     $rowsOf = {
         param($f)
         $items = @(Select-ProjectMatch -Projects $Projects -Filter $f)
-        $r = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug } })
-        $r += [pscustomobject]@{ Kind = 'cwd';  Path = $Cwd; Slug = '' }
-        $r += [pscustomobject]@{ Kind = 'path'; Path = '';   Slug = '' }
+        $r = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug; Slugs = @(if ($_.Slugs) { $_.Slugs } else { $_.Slug }) } })
+        $r += [pscustomobject]@{ Kind = 'cwd';  Path = $Cwd; Slug = ''; Slugs = @() }
+        $r += [pscustomobject]@{ Kind = 'path'; Path = '';   Slug = ''; Slugs = @() }
         return @($r)
     }
 
@@ -299,13 +299,15 @@ function Invoke-ProjectScreen {
     # known project (the cwd IS one, or a typed path resolves to one), and the session picker needs
     # to know that exactly. ConvertTo-ProjectKey (Projects.ps1) is the one shared normaliser - see
     # its own comment for why a second, ad-hoc one here would eventually drift from it.
+    # Returns EVERY slug of that directory: Get-ProjectRegistry merges the slug folders of one real
+    # directory onto one row, and the picker must reach all of them.
     $slugOf = {
         param([string]$Path)
-        if (-not $Path) { return '' }
+        if (-not $Path) { return @() }
         $key = ConvertTo-ProjectKey $Path
         $hit = @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $key })
-        if ($hit.Count -gt 0) { return $hit[0].Slug }
-        return ''
+        if ($hit.Count -gt 0) { return @($hit | ForEach-Object { if ($_.Slugs) { $_.Slugs } else { $_.Slug } }) }
+        return @()
     }
 
     # Resolves the current row into the result the caller returns. Hoisted out of the loop (fix
@@ -324,16 +326,21 @@ function Invoke-ProjectScreen {
         param([string]$Action)
         $r = $rows[$index]
         $path = $r.Path
-        $slug = $r.Slug
+        $slugs = @($r.Slugs)
         if ($r.Kind -eq 'path') { $path = ("$(& $ReadPath)").Trim('"', ' ') }
-        if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Container)) { return $null }
+        # A NUL in a typed path makes Test-Path raise a non-terminating ArgumentException instead of
+        # answering $false, and at the default $ErrorActionPreference a four-line red dump lands on
+        # the screen in place of this loop's own "path not found" notice (adversarial review
+        # 2026-09-16, A6). The decision was always right; only the output was wrong.
+        if (-not $path -or $path.IndexOf([char]0) -ge 0) { return $null }
+        if (-not (Test-Path -LiteralPath $path -PathType Container)) { return $null }
         if ($r.Kind -eq 'path') {
             $path = (Resolve-Path -LiteralPath $path).Path
-            $slug = & $slugOf $path
+            $slugs = @(& $slugOf $path)
         } elseif ($r.Kind -eq 'cwd') {
-            $slug = & $slugOf $path
+            $slugs = @(& $slugOf $path)
         }
-        return [pscustomobject]@{ Path = $path; Action = $Action; Slug = $slug }
+        return [pscustomobject]@{ Path = $path; Action = $Action; Slug = $(if ($slugs.Count -gt 0) { $slugs[0] } else { '' }); Slugs = $slugs }
     }
 
     # Hover is a REDUCTION, not a cost: a plain top-of-loop draw (as every mouse move already forces
@@ -520,14 +527,17 @@ function Invoke-SessionPicker {
     # at all, where 'all' would show one labelled "this project" that Tab could never act on - a
     # button that always does nothing, wrapping the footer at 80 columns for every user who has
     # never even seen the project screen.
-    $hasScope = (@($ProjectSlug).Count -gt 0) -or [bool]$ProjectName
+    # Empties filtered out: a caller passing -ProjectSlug '' means "no slug", and a one-element array
+    # holding '' would otherwise read as a scope that matches nothing.
+    $slugSet = @($ProjectSlug | Where-Object { $_ })
+    $hasScope = ($slugSet.Count -gt 0) -or [bool]$ProjectName
     $scope = if ($hasScope) { 'project' } else { 'none' }
 
     # One page bucket PER SCOPE. The page the launcher handed in was fetched for the scope the
     # picker opens in; Tab is a different question of disk ("every session of this account", not
     # "the next ten of this project") and gets its own page 1 and its own paging offset. Keeping
     # both means Tab back and forth costs one fetch each way, not one per press.
-    $slugsFor = { param([string]$S) if ($S -eq 'project') { @($ProjectSlug) } else { @() } }
+    $slugsFor = { param([string]$S) if ($S -eq 'project') { $slugSet } else { @() } }
     $newBucket = {
         param([string]$S)
         $b = [pscustomobject]@{ Sessions = @($Sessions); Fetched = @($Sessions).Count; Exhausted = $true }
@@ -553,7 +563,7 @@ function Invoke-SessionPicker {
         # it - the exact trap the comment below already warns about, now one line earlier.
         $pool = @(
             if ($scope -eq 'project' -and $hasScope) {
-                if (@($ProjectSlug).Count -gt 0) { $bucket.Sessions | Where-Object { $_.Slug -in $ProjectSlug } }
+                if ($slugSet.Count -gt 0) { $bucket.Sessions | Where-Object { $_.Slug -in $slugSet } }
                 else { $bucket.Sessions | Where-Object { $_.Project -eq $ProjectName } }
             } else { $bucket.Sessions }
         )
