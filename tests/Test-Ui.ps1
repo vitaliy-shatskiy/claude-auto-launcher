@@ -5,6 +5,7 @@ try {
     . "$PSScriptRoot\..\claude-auto\Theme.ps1"
     . "$PSScriptRoot\..\claude-auto\Layout.ps1"
     . "$PSScriptRoot\..\claude-auto\Sessions.ps1"   # Get-PickerFrame calls Format-RelativeAge at render time
+    . "$PSScriptRoot\..\claude-auto\Projects.ps1"   # Get-ProjectFrame calls Select-ProjectMatch at render time
     . "$PSScriptRoot\..\claude-auto\Screens.ps1"
     . "$PSScriptRoot\..\claude-auto\Prefs.ps1"   # Invoke-LaunchScreen calls Switch-LaunchAccount / Reset-LaunchTab
     . "$PSScriptRoot\..\claude-auto\Input.ps1"   # Invoke-SessionPicker maps a click through Get-ClaudeMouseRow
@@ -1329,6 +1330,11 @@ $painted4 = Add-HintColor -Line $f4.Text -Spans $f4.Spans -Enabled
 # empty pattern matches ANY string - a missing Reverse code would pass this check by accident.
 Assert-True ((-not [string]::IsNullOrEmpty($script:C.Reverse)) -and $painted4.Contains($script:C.Reverse)) 'the cap is painted reverse video'
 Assert-Equal $f4.Text (Remove-AnsiColor $painted4) 'painting stays reversible'
+# Task 6 correction 4: nothing above pins WHERE the reverse-video escape lands - moving the tint
+# (Add-HintColor, Screens.ps1) off the key cap onto the preceding gap text survives every assertion
+# above (both still find the escape and both still strip back to plain text). Pin it directly: the
+# Reverse+Bold escape must be followed immediately by the cap text itself (' enter '), not the gap.
+Assert-True ($painted4.Contains($script:C.Reverse + $script:C.Bold + ' enter ' + $script:C.Reset)) 'the reverse-video escape paints the key cap itself, not the gap before it'
 
 # The width fact the padded and bracketed forms share (1 + token + 1, either way): they cannot
 # wrap to a different number of lines, so $script:MinHeight cannot diverge between colour and
@@ -1783,8 +1789,108 @@ $sw = @($script:typedDrawCalls | Where-Object { $_.Filter -eq 'sw' })
 Assert-Equal 1 $sw.Count 'w and s typed into an open filter reach it as characters - the filter becomes "sw"'
 Assert-Equal 0 $sw[0].Index 'and the index never moved while those letters were being typed'
 
+# --- Task 6: the project screen frame ------------------------------------------------------
+$projs6 = @(
+    [pscustomobject]@{ Slug = 'A'; Path = 'C:\w\alpha'; Name = 'alpha'; Worktree = $null; LastActivity = (Get-Date).AddMinutes(-2) }
+    [pscustomobject]@{ Slug = 'B'; Path = 'C:\w\beta';  Name = 'beta';  Worktree = $null; LastActivity = (Get-Date).AddDays(-1) }
+)
+$map6 = $null
+$f6 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 78 -Height 24 -RowMap ([ref]$map6))
+$f6Text = $f6 -join "`n"
+Assert-True ($f6Text -match 'alpha') 'the newest project is listed'
+Assert-True ($f6Text -match 'current directory') 'the pinned cwd row is there'
+Assert-True ($f6Text -match 'enter a path') 'the pinned free-path row is there'
+Assert-Equal 4 $map6.RowCount 'two projects plus two pinned rows are hit-testable'
+# "Hit-testable like a project row" means the SAME map fields a project row would get, not merely
+# a count: FirstRowY is always 1 (one row below the box's own top border, whatever the body holds)
+# and Start is the viewport's first visible index - both computed once and shared by every row,
+# pinned or not.
+Assert-Equal 1 $map6.FirstRowY "the row map's FirstRowY sits just under the box top border"
+Assert-Equal 0 $map6.Start 'the row map start is the first visible row'
+# Fix round 2 (reviewer correction): with only 2 projects the list never scrolls, so Start is
+# always the degenerate 0 above - a mutant that hardcodes Start to 0 survives every assertion in
+# this file. Start is what the next task adds to a clicked row's offset, and a scrolled list is
+# exactly where that bites. 30 projects, selecting the LAST one, forces the viewport to scroll.
+$scroll30 = @(1..30 | ForEach-Object { [pscustomobject]@{ Slug = "S$_"; Path = "C:\w\s$_"; Name = "scrollproj-$_"; Worktree = $null; LastActivity = (Get-Date).AddMinutes(-$_) } })
+$mapScroll = $null
+$null = @(Get-ProjectFrame -Projects $scroll30 -Index 29 -Cwd 'C:\somewhere' -Width 78 -Height 24 -RowMap ([ref]$mapScroll))
+Assert-Equal 1 $mapScroll.FirstRowY 'the scrolled row map still sits just under the box top border'
+Assert-Equal 19 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
+Assert-Equal 13 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
+Assert-True ($f6Text -match 'continue') 'the footer advertises continue'
+# Plain (no -Color) hints are bracketed like every other screen's footer - '[t] worktree',
+# never ' t worktree' - see the picker's '[f] fork' etc. at 50 columns. The brief's own sample
+# checked for ' t ', which only the -Color form of New-HintFooter ever renders; against the -Plain
+# contract this call actually takes, that sample is wrong, so the check is against the bracketed
+# form - which is exactly what also proves the hotkey is 't' and not 'w': a reverted 'w' prints
+# '[w] worktree' here instead.
+Assert-True ($f6Text.Contains('[t] worktree')) 'worktree is on t, not w'
+# Fix round 1, owner ruling: the current-directory row must show WHICH directory it means, exactly
+# like a project row shows its path - '-Cwd' is otherwise accepted and never reaches the page.
+Assert-True ($f6Text.Contains('C:\somewhere')) 'the current-directory row shows the actual cwd path'
+
+# Fix round 1, mutation coverage (Select-ProjectMatch -> @($Projects), the filter silently ignored):
+# filtering to one match must both shrink the row count (one match + the two pinned rows, not
+# both projects + two pinned) and show in the title - the title's own count word ('1 known') is
+# what a filter-bypassing mutant cannot fake, because it is driven by $items.Count, not by $Filter.
+$mapF6 = $null
+$fF6 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Filter 'alpha' -Cwd 'C:\somewhere' -Width 78 -Height 24 -RowMap ([ref]$mapF6))
+$fF6Text = $fF6 -join "`n"
+Assert-Equal 3 $mapF6.RowCount 'filtering to one match still offers both pinned rows (the match plus current directory plus enter a path)'
+Assert-True ($fF6Text -match '1 known') 'the title counts only the matched project'
+Assert-True ($fF6Text -match 'filter: alpha') 'the title states the active filter'
+
+# Fix round 1, CRITICAL 1 (reviewer correction): the previous version of this check rendered at
+# Width 50 x (MinHeight-1) - one row BELOW the minimum, which hits the too-small gate
+# (Screens.ps1) and returns the 4-line stub, not the real frame; the "Count -le 20" comparison was
+# then 4 -le 20, true no matter what the real layout math does. Split into the two things that
+# check actually differently distinguishes:
+#
+# 1) the too-small gate itself, still worth its own assertion, same contract as every other builder.
+$f6TooSmall = Get-ProjectFrame -Projects $projs6 -Cwd 'C:\somewhere' -Width 50 -Height ($script:MinHeight - 1)
+Assert-Equal 1 (@($f6TooSmall | Where-Object { $_ -match [regex]::Escape("need $($script:MinWidth)x$($script:MinHeight)") }).Count) 'a too-short terminal states the required size'
+#
+# 2) the real overflow check, rendered AT $script:MinHeight (not one row short of it) with a FULL
+# registry: with only two projects the viewport is capped at 4 rows (rows.Count) regardless of
+# bodyRows, so a bodyRows miscalculation ($Height - 3 mutated to $Height - 1, or the size gate's
+# -lt $script:MinHeight widened to -lt ($script:MinHeight + 3)) cannot be observed - 30 projects
+# make the viewport big enough that both mutants change what actually renders.
+$many30 = @(1..30 | ForEach-Object { [pscustomobject]@{ Slug = "P$_"; Path = "C:\w\p$_"; Name = "project-$_"; Worktree = $null; LastActivity = (Get-Date).AddMinutes(-$_) } })
+$wide30 = @(Get-ProjectFrame -Projects $many30 -Index 0 -Cwd 'C:\somewhere' -Width 50 -Height $script:MinHeight)
+$wide30Text = $wide30 -join "`n"
+Assert-True ($wide30Text -match 'known') 'the frame at MinHeight is the real render, not the too-small stub (catches the widened size gate)'
+Assert-True ($wide30.Count -le ($script:MinHeight - 1)) 'the worst-case 50-column project frame leaves the headroom row (catches the $Height-3 miscalculation)'
+
+# Empty registry still renders and still offers the pinned rows.
+$empty6 = @(Get-ProjectFrame -Projects @() -Index 0 -Cwd 'C:\somewhere' -Width 78 -Height 24)
+Assert-True (($empty6 -join "`n") -match 'current directory') 'an empty registry still offers the cwd'
+
+# Mutation coverage - viewport reachability: with 2 projects + 2 pinned rows, a viewport sized off
+# $items.Count (2) instead of $rows.Count (4) renders only the two projects and the pinned rows
+# never appear at all. The three 'is there'/'RowCount' assertions above already catch that by
+# absence; this one pins it directly by counting how many of the four expected rows are painted.
+Assert-Equal 4 (@($f6 | Where-Object { $_ -match 'alpha|beta|current directory|enter a path' })).Count 'all four rows - two projects, two pinned - are actually painted, not just hit-testable'
+
+# Mutation coverage - path-column Limit-Line: New-Box Limit-Lines every row to the box width
+# regardless, so an overflowing raw line proves nothing on its own (see the launch screen's
+# 120-column note above) - the age text surviving at the END of the row is what a missing inner
+# clamp on the path actually breaks, because New-Box's own clamp then cuts into the overflowing
+# tail instead and the trailing ' 5 min' never reaches the page. (Fix round 1, MINOR 4: the raw
+# per-line width foreach loops that used to sit here are gone - they ran on the builder's already
+# Complete-PickerFrame-clamped return and could never fail regardless of what the layout math did.)
+$longNow6 = Get-Date
+$longProjs6 = @([pscustomobject]@{ Slug = 'L'; Path = ('C:\' + ('deepfolder\' * 30) + 'end'); Name = 'longname'; Worktree = $null; LastActivity = $longNow6.AddMinutes(-5) })
+$lf6 = @(Get-ProjectFrame -Projects $longProjs6 -Index 0 -Cwd 'C:\x' -Width 78 -Height 24 -Now $longNow6)
+Assert-True ((($lf6 -join "`n")).Contains('5 min')) 'a long project path is capped so the age at the end of the row survives'
+
+# Fix round 1, MINOR 3: a long NAME must not itself push the age off the row either - same failure
+# mode as the long path above, different column.
+$longNameProjs6 = @([pscustomobject]@{ Slug = 'N'; Path = 'C:\p'; Name = ('n' * 60); Worktree = $null; LastActivity = (Get-Date).AddMinutes(-5) })
+$lnFrame6 = @(Get-ProjectFrame -Projects $longNameProjs6 -Index 0 -Cwd 'C:\x' -Width 50 -Height 24)
+Assert-True ((($lnFrame6 -join "`n")).Contains('5 min')) 'a long project name is clamped so the age survives at 50 columns'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 759) { Write-Host "COULD NOT RUN: expected 759 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 782) { Write-Host "COULD NOT RUN: expected 782 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

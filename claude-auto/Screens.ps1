@@ -587,6 +587,99 @@ function Get-LaunchFrame {
     return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch)
 }
 
+function Get-ProjectFrame {
+    # Where the session will run, and what it will do there. Pure like every builder in this file.
+    # The pinned rows (current directory, enter a path) sit after the registry so the common case -
+    # the project you were just in - is the first row and one Enter away.
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects,
+        [int]$Index = 0,
+        [string]$Filter = '',
+        [switch]$Typing,
+        [string]$Cwd = '',
+        [int]$Width = 78,
+        [int]$Height = 24,
+        [datetime]$Now = (Get-Date),
+        [switch]$Color,
+        [switch]$Ascii,
+        # -Hover and -Typing are accepted and unread here - the input loop (a later task) wires them.
+        [int]$Hover = -1,
+        [ref]$RowMap
+    )
+    if ($RowMap) { $RowMap.Value = [pscustomobject]@{ FirstRowY = 0; RowCount = 0; Start = 0 } }
+    if ($Width -lt $script:MinWidth -or $Height -lt $script:MinHeight) {
+        return (Get-TooSmallFrame -Width $Width -Height $Height)
+    }
+    $g = Get-Glyphs -Ascii:$Ascii
+    $items = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
+    # The pinned rows are rows: they are selected, hit-tested and entered exactly like a project, so
+    # the loop below never needs to know which kind it is looking at.
+    $rows = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Item = $_ } })
+    $rows += [pscustomobject]@{ Kind = 'cwd';  Item = [pscustomobject]@{ Name = 'current directory'; Path = $Cwd; LastActivity = $null } }
+    $rows += [pscustomobject]@{ Kind = 'path'; Item = [pscustomobject]@{ Name = 'enter a path...';   Path = '';   LastActivity = $null } }
+
+    $title = "project $($g.H) $($items.Count) known"
+    if ($Filter) { $title += " $($g.H) filter: $Filter" }
+
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
+        @{ Token = 'w/s';   Label = 'move';     Clickable = $false }
+        @{ Token = 'enter'; Label = 'new';      Clickable = $true; Key = 'Enter';  Char = '' }
+        @{ Token = 'c';     Label = 'continue'; Clickable = $true; Key = '';       Char = 'c' }
+        @{ Token = 'r';     Label = 'resume';   Clickable = $true; Key = '';       Char = 'r' }
+        @{ Token = 't';     Label = 'worktree'; Clickable = $true; Key = '';       Char = 't' }
+        @{ Token = '/';     Label = 'filter';   Clickable = $true; Key = '';       Char = '/' }
+        @{ Token = 'esc';   Label = 'back';     Clickable = $true; Key = 'Escape'; Char = '' }
+    )
+
+    # Box top + box bottom + headroom + the footer's own lines, exactly like Get-PickerFrame.
+    $bodyRows = [Math]::Max(3, $Height - 3 - @($footer.Lines).Count)
+    if ($Index -ge $rows.Count) { $Index = [Math]::Max(0, $rows.Count - 1) }
+    $vp = Get-Viewport -Count $rows.Count -Index $Index -Visible $bodyRows
+    $inner = $Width - 2
+
+    $body = @()
+    for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
+        $r = $rows[$i]
+        $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
+        if ($r.Kind -eq 'project') {
+            $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
+            $name = $r.Item.Name
+            if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
+            # A very long name must not itself push the age column off the row: clamped BEFORE the
+            # path gets whatever room is left, so a 60-character project name at 50 columns still
+            # shows how recently the project was used instead of New-Box's own clamp cutting the
+            # age off the end of an overlong raw line.
+            $name = Limit-Line -Text $name -Max ([Math]::Max(1, $inner - $mark.Length - $age.Length - 2))
+            # The path is what disambiguates two folders of the same name, so it is the column that
+            # gets cut, never the name.
+            $room = $inner - $mark.Length - $name.Length - $age.Length - 4
+            $tail = if ($room -gt 8) { (Limit-Line -Text $r.Item.Path -Max $room) } else { '' }
+            $pad = [Math]::Max(1, $inner - $mark.Length - $name.Length - $tail.Length - $age.Length - 1)
+            $body += $mark + $name + (' ' * $pad) + $tail + ' ' + $age
+        } elseif ($r.Kind -eq 'cwd') {
+            # The reader must see which directory the row means - rendered like a project row's
+            # name+path columns, minus the age no pinned row has a real LastActivity for.
+            $name = $r.Item.Name
+            $room = $inner - $mark.Length - $name.Length - 3
+            $tail = if ($room -gt 8) { (Limit-Line -Text $r.Item.Path -Max $room) } else { '' }
+            $pad = [Math]::Max(1, $inner - $mark.Length - $name.Length - $tail.Length - 1)
+            $body += $mark + $name + (' ' * $pad) + $tail
+        } else {
+            $body += $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
+        }
+    }
+
+    $lines = New-Box -Lines $body -Width $Width -Title $title -Ascii:$Ascii
+    if ($RowMap) {
+        $RowMap.Value = [pscustomobject]@{
+            FirstRowY = $lines.Count - $body.Count - 1
+            RowCount  = $vp.Visible
+            Start     = $vp.Start
+        }
+    }
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap)
+}
+
 function Get-SessionExchange {
     # Falls back to LastUser/LastAssistant (in that order) for a session object that carries no
     # RecentMessages - the shape every hand-built fixture in the test suite still uses, and the
