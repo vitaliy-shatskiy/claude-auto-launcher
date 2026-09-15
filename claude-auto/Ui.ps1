@@ -241,6 +241,198 @@ function Invoke-LaunchScreen {
     }
 }
 
+function Invoke-ProjectScreen {
+    # Where the session runs and what it does there. Returns @{ Path; Action; Slug } or $null on
+    # Escape. Escape at this screen means "back to the launch screen", never "start anyway".
+    #
+    # Slug rides along because two repositories can share a folder name: the session picker (a
+    # later task) scopes sessions by slug, never by path, so an ambiguous name must never silently
+    # fall back to the wrong project's sessions.
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects,
+        [string]$Cwd = '',
+        [string]$Initial = '',
+        [Parameter(Mandatory)][scriptblock]$ReadKey,
+        [scriptblock]$Draw = {
+            param($p, $i, $f, $t, $h, $n)
+            $map = $null
+            Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Cwd $Cwd -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
+            $map
+        },
+        [scriptblock]$Wait = { & $ReadKey },
+        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
+        # Reading a free path is I/O, so it is injected: the suites pass a scriptblock and never
+        # block on a console prompt.
+        [scriptblock]$ReadPath = { Read-Host '  path' }
+    )
+    $filter = ''
+    $typing = $false
+    $hover = -1
+    $notice = ''
+    $rowMap = $null
+    $rows = @()
+    $index = 0
+    # The remembered project starts under the cursor rather than at the top: arriving at this screen
+    # and pressing Enter must reproduce the last launch. Compared through ConvertTo-ProjectKey, not
+    # raw string equality: -Initial is whatever the caller last stored, which may differ from the
+    # registry's own spelling by case or slash direction (fix round 2, reviewer: 'c:/w/beta/' silently
+    # preselected the wrong row under a bare [Array]::IndexOf).
+    if ($Initial) {
+        $initialKey = ConvertTo-ProjectKey $Initial
+        $at = [Array]::IndexOf(@($Projects | ForEach-Object { ConvertTo-ProjectKey $_.Path }), $initialKey)
+        if ($at -ge 0) { $index = $at }
+    }
+
+    # Mirrors Get-ProjectFrame's row assembly. Kept here rather than exported so the frame stays
+    # pure; the two are pinned against each other by the RowCount assertion in Test-Ui. Slug rides
+    # along on a project row so a pick never has to look the project back up by (ambiguous) name.
+    $rowsOf = {
+        param($f)
+        $items = @(Select-ProjectMatch -Projects $Projects -Filter $f)
+        $r = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug } })
+        $r += [pscustomobject]@{ Kind = 'cwd';  Path = $Cwd; Slug = '' }
+        $r += [pscustomobject]@{ Kind = 'path'; Path = '';   Slug = '' }
+        return @($r)
+    }
+
+    # The pinned rows carry no slug of their own - the directory they resolve to may still be a
+    # known project (the cwd IS one, or a typed path resolves to one), and the session picker needs
+    # to know that exactly. ConvertTo-ProjectKey (Projects.ps1) is the one shared normaliser - see
+    # its own comment for why a second, ad-hoc one here would eventually drift from it.
+    $slugOf = {
+        param([string]$Path)
+        if (-not $Path) { return '' }
+        $key = ConvertTo-ProjectKey $Path
+        $hit = @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $key })
+        if ($hit.Count -gt 0) { return $hit[0].Slug }
+        return ''
+    }
+
+    # Resolves the current row into the result the caller returns. Hoisted out of the loop (fix
+    # round 2, minor: it does not close over anything the loop body does not already hold, and a
+    # scriptblock literal re-evaluated every iteration was pointless allocation) - $rows/$index still
+    # resolve to whatever the loop most recently set, since this is an ordinary scriptblock, not a
+    # closure snapshot.
+    #
+    # EVERY row kind is checked for existence now (fix round 2, IMPORTANT 1): Prefs.ps1's remembered-
+    # project guard makes the identical call the other way ("this value becomes a Set-Location
+    # target"), and this screen's lifetime is a second window on top of that - long enough for
+    # `git worktree remove` in another terminal to invalidate a row the registry still lists. Only
+    # the free-path row additionally resolves the path: a registry or cwd path is already in its
+    # canonical form, and resolving it here would be pointless.
+    $pick = {
+        param([string]$Action)
+        $r = $rows[$index]
+        $path = $r.Path
+        $slug = $r.Slug
+        if ($r.Kind -eq 'path') { $path = ("$(& $ReadPath)").Trim('"', ' ') }
+        if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Container)) { return $null }
+        if ($r.Kind -eq 'path') {
+            $path = (Resolve-Path -LiteralPath $path).Path
+            $slug = & $slugOf $path
+        } elseif ($r.Kind -eq 'cwd') {
+            $slug = & $slugOf $path
+        }
+        return [pscustomobject]@{ Path = $path; Action = $Action; Slug = $slug }
+    }
+
+    # Hover is a REDUCTION, not a cost: a plain top-of-loop draw (as every mouse move already forces
+    # on the launch and session screens) would redraw on every motion event regardless of this flag,
+    # so the flag has to gate the draw call itself. $true means "the coming top-of-loop draw may
+    # run"; only a mouse move that lands on the SAME footer button as last time ever clears it -
+    # every other path (including a move that changes the hovered button) leaves it set, so a real
+    # hover change still redraws exactly once.
+    $needDraw = $true
+
+    while ($true) {
+        $rows = & $rowsOf $filter
+        if ($index -ge $rows.Count) { $index = [Math]::Max(0, $rows.Count - 1) }
+        if ($needDraw) { $rowMap = & $Draw $Projects $index $filter $typing $hover $notice }
+        $needDraw = $true
+        $key = & $Wait
+        if ("$key" -eq 'resize') { continue }
+
+        if ($key -and $key.Kind -eq 'mouse') {
+            $synthetic = $null
+            if ($key.WheelUp)   { if ($index -gt 0) { $index-- } ; continue }
+            if ($key.WheelDown) { if ($index -lt $rows.Count - 1) { $index++ } ; continue }
+            $top = & $GetWindowTop
+            # Hover: only a CHANGE of the hovered button is worth a frame. A move inside the same
+            # button - the overwhelming majority of motion events - skips the NEXT draw entirely,
+            # which is strictly less work than this loop did before hover existed.
+            if ($key.IsMove) {
+                $hit = Get-ClaudeFooterHit -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop $top
+                $now = if ($hit) { [Array]::IndexOf(@($rowMap.Footer), $hit) } else { -1 }
+                if ($now -eq $hover) { $needDraw = $false; continue }
+                $hover = $now
+                continue
+            }
+            # -not IsMove (fix round 2, IMPORTANT 2): a drag is Left set WITH IsMove, and without
+            # this guard it fell through as a press on every position it passed over. IsDoubleClick
+            # is excluded from the FOOTER-hit branch only (mirrors Invoke-MaintenanceScreen: a
+            # physical double click reaches this loop as TWO records, a plain press then one flagged
+            # IsDoubleClick, and treating the second one as a second footer press fired the action -
+            # and, if it read the free-path row, called -ReadPath - a second time).
+            if ($key.Left -and -not $key.IsMove -and $rowMap) {
+                $hint = if ($key.IsDoubleClick) { $null } else { Get-ClaudeFooterHit -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop $top }
+                if ($hint) { $synthetic = New-SyntheticKey -Key $hint.Key -Char $hint.Char }
+                else {
+                    $row = Get-ClaudeMouseRow -Y $key.Y -FirstRowY $rowMap.FirstRowY -RowCount $rowMap.RowCount -WindowTop $top
+                    if ($null -ne $row) {
+                        $target = $rowMap.Start + $row
+                        # A single click only MOVES. Starting a session on a stray click is the one
+                        # mistake nobody forgives - the same rule the session picker follows. A
+                        # DOUBLE click is the session picker's own exception to that rule: two
+                        # presses close enough to register as one gesture are unambiguous intent.
+                        if ($target -ge 0 -and $target -lt $rows.Count) {
+                            $index = $target
+                            if ($key.IsDoubleClick) {
+                                $r = & $pick 'new'
+                                if ($r) { return $r } else { $notice = 'path not found' }
+                            }
+                        }
+                    }
+                }
+            }
+            if (-not $synthetic) { continue }
+            $key = $synthetic
+        }
+
+        # A new KEY event retires the previous rejection notice - it explains the press that just
+        # happened, not every press after it. Set again below if THIS key also fails a pick. This
+        # point is reached only by a genuine keyboard event or a mouse click that just became a
+        # synthetic one (a footer hit): every purely mouse path above it - a move, the wheel, a
+        # plain row-select click, a double click handled inline - already `continue`d without
+        # passing through here, so hovering away from a shown notice cannot wipe it before it is
+        # read (fix round 3, coordinator ruling).
+        $notice = ''
+        $name = "$($key.Key)"
+
+        if ($typing) {
+            if ($name -eq 'Enter') { $typing = $false }
+            elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { $typing = $false; $filter = ''; $index = 0 }
+            elseif ($name -eq 'Backspace') { if ($filter.Length -gt 0) { $filter = $filter.Substring(0, $filter.Length - 1) } }
+            # \ / : added (fix round 2, minor): Select-ProjectMatch's documented purpose is matching
+            # a PASTED path literally, and a path is not a path without its separators and drive
+            # colon.
+            elseif ($key.KeyChar -and ([char]::IsLetterOrDigit($key.KeyChar) -or $key.KeyChar -in @(' ', '-', '.', '_', '\', '/', ':'))) {
+                $filter += $key.KeyChar
+                $index = 0
+            }
+            continue
+        }
+
+        if ($name -eq 'UpArrow'   -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
+        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($index -lt $rows.Count - 1) { $index++ } }
+        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return $null }
+        elseif ($name -eq 'Enter') { $r = & $pick 'new';      if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char 'c') { $r = & $pick 'continue'; if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char 'r') { $r = & $pick 'resume';   if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char 't') { $r = & $pick 'worktree'; if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char '/') { $typing = $true }
+    }
+}
+
 function Invoke-SessionPicker {
     # Returns the chosen session object, or $null when the user pressed Esc at the list level.
     param(

@@ -99,6 +99,20 @@ function Select-ProjectMatch {
     return @($Projects | Where-Object { "$($_.Name) $($_.Path) $($_.Worktree)" -like "*$f*" })
 }
 
+function ConvertTo-ProjectKey {
+    # The one place two paths are compared for "is this the same directory". Three sources feed a
+    # comparison against a registry path - a raw cwd string, a prefs file value nobody has
+    # validated, and whatever a user typed or a -Initial caller passed - and none of them agree on
+    # trailing separator or slash direction. Without this shared normaliser each caller grew its own
+    # ad-hoc TrimEnd/ToLower (Resolve-StartProject had one; Invoke-ProjectScreen had a second,
+    # slightly different one) and a caller passing 'C:/w/beta/' where the registry has 'C:\w\beta'
+    # silently failed to match in exactly one of them - the failure mode is not "no match anywhere",
+    # it is "matches in some callers and not others", which is worse to debug.
+    param([string]$Path)
+    if (-not $Path) { return '' }
+    return $Path.TrimEnd('\', '/').Replace('/', '\').ToLowerInvariant()
+}
+
 function Resolve-StartProject {
     # cwd wins when it is a project the machine already knows, or any directory holding a .git -
     # 'the folder I am standing in' is the launcher's existing behaviour and must not change. A
@@ -109,10 +123,9 @@ function Resolve-StartProject {
         [string]$Remembered,
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects
     )
-    $norm = { param($p) if ($p) { "$p".TrimEnd('\', '/').ToLowerInvariant() } else { '' } }
-    $c = & $norm $Cwd
+    $c = ConvertTo-ProjectKey $Cwd
     if ($c) {
-        $known = @($Projects | Where-Object { (& $norm $_.Path) -eq $c })
+        $known = @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $c })
         if ($known.Count -gt 0) { return [pscustomobject]@{ Path = $Cwd; Source = 'cwd' } }
         if (Test-Path -LiteralPath (Join-Path $Cwd '.git')) { return [pscustomobject]@{ Path = $Cwd; Source = 'cwd' } }
     }

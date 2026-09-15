@@ -691,6 +691,11 @@ $script:HotkeyLayoutChars = @{
     'w' = [char]0x0446   # CYRILLIC SMALL LETTER TSE
     'a' = [char]0x0444   # CYRILLIC SMALL LETTER EF
     's' = [char]0x044B   # CYRILLIC SMALL LETTER YERU
+    # Project-screen actions (2026-09-15): continue/worktree lost the VK_PACKET route (an RDP soft
+    # keyboard, a paste) without these - the character-only match above only covers a genuine
+    # Latin-layout press.
+    'c' = [char]0x0441   # CYRILLIC SMALL LETTER ES
+    't' = [char]0x0435   # CYRILLIC SMALL LETTER IE
 }
 # Hotkeys whose virtual key is not the uppercase Latin letter.
 $script:HotkeyVirtualKeys = @{ '/' = [System.ConsoleKey]::Oem2 }

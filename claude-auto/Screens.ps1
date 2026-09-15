@@ -340,7 +340,13 @@ function Add-HintColor {
     # index rather than by pattern is what keeps this reversible - stripping the colour returns the
     # original line exactly, which the suite asserts - and it cannot mis-fire on a label that
     # happens to contain the same word as a key.
-    param([string]$Line, [array]$Spans, [switch]$Enabled)
+    #
+    # -HasHover singles out ONE clickable span for the Claude-accent tint instead of the ordinary
+    # reverse-video block, so a hovered footer button visibly differs from every other one. Matched
+    # by (Key, Char) rather than position: those two fields are what New-HintFooter gives every hint
+    # to keep it unique, and they survive a footer that wraps onto a second line where a plain
+    # column offset would not.
+    param([string]$Line, [array]$Spans, [switch]$Enabled, [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '')
     if (-not $Enabled -or -not $Line -or -not $Spans) { return $Line }
     $c = $script:C
     $out = ''
@@ -348,7 +354,11 @@ function Add-HintColor {
     foreach ($s in ($Spans | Sort-Object KeyStart)) {
         if ($s.KeyStart -lt $cursor -or $s.KeyEnd -ge $Line.Length) { continue }
         $out += $c.Dim + $Line.Substring($cursor, $s.KeyStart - $cursor) + $c.Reset
-        $tint = if ($s.Start -ge 0) { $c.Reverse + $c.Bold } else { $c.Dim }
+        $isHovered = $HasHover -and $s.Start -ge 0 -and $s.Key -eq $HoverKey -and $s.Char -eq $HoverChar
+        $tint =
+            if ($isHovered) { $c.Accent + $c.Bold }
+            elseif ($s.Start -ge 0) { $c.Reverse + $c.Bold }
+            else { $c.Dim }
         $out += $tint + $Line.Substring($s.KeyStart, $s.KeyEnd - $s.KeyStart + 1) + $c.Reset
         $cursor = $s.KeyEnd + 1
     }
@@ -366,7 +376,11 @@ function Complete-PickerFrame {
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Lines,
         [Parameter(Mandatory)]$Footer,
         [int]$Width, [hashtable]$Glyphs, [switch]$Color, $RowMap,
-        [ValidateSet('picker', 'launch')][string]$Body = 'picker'
+        [ValidateSet('picker', 'launch')][string]$Body = 'picker',
+        # Forwarded to Add-HintColor untouched. Every existing caller omits these, so every existing
+        # frame paints exactly as before - only a caller that names a hovered (Key, Char) pair
+        # changes what comes out.
+        [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = ''
     )
     $footerLines = @($Footer.Lines)
     if ($footerLines.Count -eq 0) { $footerLines = @([pscustomobject]@{ Text = $Footer.Text; Spans = @($Footer.Spans) }) }
@@ -391,7 +405,7 @@ function Complete-PickerFrame {
         $l = Limit-Line -Text $all[$i] -Max $Width
         # The footer is painted by column span, not by pattern: its words ('row', 'value', 'start')
         # are ordinary English and a pattern-based rule would tint them wherever else they appear.
-        if ($i -ge $footerIndex) { $painted += Add-HintColor -Line $l -Spans $footerLines[$i - $footerIndex].Spans -Enabled:$Color }
+        if ($i -ge $footerIndex) { $painted += Add-HintColor -Line $l -Spans $footerLines[$i - $footerIndex].Spans -Enabled:$Color -HasHover:$HasHover -HoverKey $HoverKey -HoverChar $HoverChar }
         elseif ($Body -eq 'launch') { $painted += Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
         else { $painted += Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
     }
@@ -602,8 +616,13 @@ function Get-ProjectFrame {
         [datetime]$Now = (Get-Date),
         [switch]$Color,
         [switch]$Ascii,
-        # -Hover and -Typing are accepted and unread here - the input loop (a later task) wires them.
+        # -Hover names a clickable footer-button INDEX (matching the order Get-ClaudeFooterHit and
+        # the input loop use: [Array]::IndexOf into the RowMap's flattened Footer list), -1 for none.
         [int]$Hover = -1,
+        # A rejected pick (a vanished directory, a free path that does not exist) - shown once in the
+        # title and cleared by the loop on the next key, so the reason a press did nothing is never
+        # silent.
+        [string]$Notice = '',
         [ref]$RowMap
     )
     if ($RowMap) { $RowMap.Value = [pscustomobject]@{ FirstRowY = 0; RowCount = 0; Start = 0 } }
@@ -619,7 +638,10 @@ function Get-ProjectFrame {
     $rows += [pscustomobject]@{ Kind = 'path'; Item = [pscustomobject]@{ Name = 'enter a path...';   Path = '';   LastActivity = $null } }
 
     $title = "project $($g.H) $($items.Count) known"
-    if ($Filter) { $title += " $($g.H) filter: $Filter" }
+    # -Typing shows the filter box the moment '/' is pressed, before any character narrows it, and
+    # the trailing '_' is the only cursor this plain-text title has room for.
+    if ($Filter -or $Typing) { $title += " $($g.H) filter: $Filter"; if ($Typing) { $title += '_' } }
+    if ($Notice) { $title += " $($g.H) $Notice" }
 
     $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
         @{ Token = 'w/s';   Label = 'move';     Clickable = $false }
@@ -630,6 +652,19 @@ function Get-ProjectFrame {
         @{ Token = '/';     Label = 'filter';   Clickable = $true; Key = '';       Char = '/' }
         @{ Token = 'esc';   Label = 'back';     Clickable = $true; Key = 'Escape'; Char = '' }
     )
+    # Which (Key, Char) pair -Hover names, if any - looked up on the SAME clickable-span order that
+    # Complete-PickerFrame will later flatten into RowMap.Footer, so index N here is index N there.
+    $hoverKey = ''
+    $hoverChar = ''
+    $hasHover = $false
+    if ($Hover -ge 0) {
+        $clickable = @($footer.Lines | ForEach-Object { $_.Spans } | Where-Object { $_.Start -ge 0 })
+        if ($Hover -lt $clickable.Count) {
+            $hoverKey = $clickable[$Hover].Key
+            $hoverChar = $clickable[$Hover].Char
+            $hasHover = $true
+        }
+    }
 
     # Box top + box bottom + headroom + the footer's own lines, exactly like Get-PickerFrame.
     $bodyRows = [Math]::Max(3, $Height - 3 - @($footer.Lines).Count)
@@ -677,7 +712,7 @@ function Get-ProjectFrame {
             Start     = $vp.Start
         }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap)
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar)
 }
 
 function Get-SessionExchange {

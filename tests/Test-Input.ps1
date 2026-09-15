@@ -205,7 +205,8 @@ Assert-Equal $true  (Test-ClaudeHotkey -Key ([System.ConsoleKeyInfo]::new([char]
 # VK_PACKET input (an RDP soft keyboard, the owner's actual case) carries no virtual key at all, so
 # the physical-key match cannot see it - only the character the Russian/Ukrainian layout produces
 # on that key does. Table entries added for w/a/s; 'd' already existed for the maintenance screen.
-foreach ($pair in @(@('w', 0x0446), @('a', 0x0444), @('s', 0x044B))) {
+# c/t added (fix round 2, project-screen minor): continue/worktree lost the same VK_PACKET route.
+foreach ($pair in @(@('w', 0x0446), @('a', 0x0444), @('s', 0x044B), @('c', 0x0441), @('t', 0x0435))) {
     $ch = [char]$pair[1]
     $k = [System.ConsoleKeyInfo]::new($ch, [System.ConsoleKey]0, $false, $false, $false)
     Assert-Equal $true (Test-ClaudeHotkey -Key $k -Char $pair[0] -CapsLock $false) "$($pair[0]) matches its Cyrillic layout letter"
@@ -741,13 +742,14 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # (arming a SECOND time after TreatControlCAsInput can fail, in which case only 1 assertion runs
 # there instead of 4 - see 'arming after TreatControlCAsInput should still work'), so its count is
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
-# genuine hidden console, never guessed. The bare count (57, since the WASD Cyrillic-layout block
-# added 4) IS exact - checkpoint.ps1 only ever runs this suite bare, and that path has no such
-# branching.
+# genuine hidden console, never guessed. The bare count (59, since the WASD Cyrillic-layout block
+# added 4 then fix round 2 added c/t for 2 more) IS exact - checkpoint.ps1 only ever runs this
+# suite bare, and that path has no such branching. The LiveOnly floor of 115 is untouched: it was
+# already a lower bound, not a guess of the branching total, and the 2 new assertions run there too.
 if ($LiveOnly) {
     if ($script:Ran -lt 115) { Write-Host "COULD NOT RUN: expected at least 115 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
-} elseif ($script:Ran -ne 57) {
-    Write-Host "COULD NOT RUN: expected 57 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
+} elseif ($script:Ran -ne 59) {
+    Write-Host "COULD NOT RUN: expected 59 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

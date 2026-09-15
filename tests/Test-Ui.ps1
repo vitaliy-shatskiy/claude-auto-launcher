@@ -1889,8 +1889,327 @@ $longNameProjs6 = @([pscustomobject]@{ Slug = 'N'; Path = 'C:\p'; Name = ('n' * 
 $lnFrame6 = @(Get-ProjectFrame -Projects $longNameProjs6 -Index 0 -Cwd 'C:\x' -Width 50 -Height 24)
 Assert-True ((($lnFrame6 -join "`n")).Contains('5 min')) 'a long project name is clamped so the age survives at 50 columns'
 
+# --- Invoke-ProjectScreen (Task 7, fix round 2): the project screen input loop, with throttled
+# hover. Driven entirely through injected seams - none of this needs a terminal.
+#
+# The existence guard now covers every row kind (fix round 2, IMPORTANT 1), so the fixtures below
+# are REAL temporary directories - not the fictional 'C:\w\alpha'-style paths round 1 used - and
+# are cleaned up in the `finally` at the bottom of this section.
+#
+# The randomness lives in ONE root directory; alpha/beta are FIXED leaf names under it (fix round
+# 3, IMPORTANT). A per-project random leaf (`pp-proj-alpha-<32 hex>`) put the GUID in the very
+# string a filter test matches against - filtering on 'be' matched beta's Name by design, but ALSO
+# matched alpha's PATH whenever its hex GUID happened to contain the substring 'be' (P=11.41%,
+# 22825/200000 measured), a flake reproducible on demand and load-bearing on any machine whose own
+# %TEMP% contains 'be'. A shared root does not reintroduce the bug: the filter tests below match on
+# 'eta' (from "beta"), and a 32-HEX-digit GUID (`[0-9a-f]` only) can never contain 't' - the
+# substring is categorically unreachable from the random component, on either fixture, forever.
+$tmpRoot  = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-proj-$([Guid]::NewGuid().ToString('N'))")
+$tmpAlpha = Join-Path $tmpRoot 'alpha'
+$tmpBeta  = Join-Path $tmpRoot 'beta'
+$tmpCwd   = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-proj-cwd-$([Guid]::NewGuid().ToString('N'))")
+New-Item -ItemType Directory -Path $tmpAlpha -Force | Out-Null
+New-Item -ItemType Directory -Path $tmpBeta -Force | Out-Null
+New-Item -ItemType Directory -Path $tmpCwd | Out-Null
+try {
+    $pProjs = @(
+        [pscustomobject]@{ Slug = 'A'; Path = $tmpAlpha; Name = 'alpha'; Worktree = $null; LastActivity = (Get-Date) }
+        [pscustomobject]@{ Slug = 'B'; Path = $tmpBeta;  Name = 'beta';  Worktree = $null; LastActivity = (Get-Date).AddDays(-1) }
+    )
+
+    $p1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal $tmpAlpha $p1.Path 'Enter on the first row picks it'
+    Assert-Equal 'new' $p1.Action 'and Enter means a new session'
+    Assert-Equal 'A' $p1.Slug "and returns the row's slug"
+
+    $p2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'c')) -Draw {}
+    Assert-Equal $tmpBeta $p2.Path 's moves down'
+    Assert-Equal 'continue' $p2.Action 'c means continue'
+    Assert-Equal 'B' $p2.Slug "and the second row's slug travels with it"
+
+    $p3 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('r')) -Draw {}
+    Assert-Equal 'resume' $p3.Action 'r means resume'
+    $p4 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('t')) -Draw {}
+    Assert-Equal 'worktree' $p4.Action 't means worktree'
+
+    Assert-Equal $null (Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {}) 'Escape cancels'
+
+    # The cwd pinned row is two rows past the last project.
+    $p5 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
+    Assert-Equal $tmpCwd $p5.Path 'the pinned current-directory row launches the cwd'
+    Assert-Equal '' $p5.Slug 'an unknown cwd carries no slug'
+
+    # The cwd row's slug lookup is case-insensitive and ignores a trailing separator - the session
+    # picker (next task) scopes by slug, exact, because two repositories can share a folder name.
+    # Still a REAL directory (alpha's own), just spelled with a different case, slash direction and
+    # a trailing one - Test-Path resolves all of that natively, so the existence guard is not what
+    # this assertion is pinning.
+    $alphaVariant = ($tmpAlpha -replace '\\', '/').ToUpperInvariant() + '/'
+    $p5b = Invoke-ProjectScreen -Projects $pProjs -Cwd $alphaVariant -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
+    Assert-Equal 'A' $p5b.Slug 'a cwd matching a known project (case/trailing-slash/slash-direction insensitive) carries its slug'
+
+    # Filter mode: '/' then letters must not fire the action hotkeys. Filters on 'eta' (from
+    # "beta"), not 'be': 'be' is entirely hex digits and can match a 32-hex-digit GUID by chance
+    # (measured P=11.41% here) - 't' cannot occur in a hex GUID at all, so 'eta' is reachable only
+    # through the literal word "beta" (the Name AND now the fixed leaf of the Path).
+    $p6 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'e', 't', 'a', 'Enter', 'Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p6.Path 'typing in filter mode narrows instead of acting'
+
+    # A letter that IS a hotkey, typed while filtering, must only edit the filter text - never fire
+    # the action. Proven by the run needing a further Escape to leave rather than acting on 'c'.
+    $p6b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'c', 'Escape', 'Escape')) -Draw {}
+    Assert-Equal $null $p6b 'typing the "c" hotkey while filtering only edits the filter text, then Escape leaves'
+
+    # Escape in filter mode clears the filter (first Escape) rather than leaving; a second Escape
+    # leaves the screen. Both asserted: the first by what Enter picks afterwards, the second by $null.
+    $p6c = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Enter')) -Draw {}
+    Assert-Equal $tmpAlpha $p6c.Path 'the first Escape clears the filter text rather than leaving, so Enter picks the unfiltered first row'
+    $p6d = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Escape')) -Draw {}
+    Assert-Equal $null $p6d 'the second Escape leaves the screen'
+
+    # -Initial puts the cursor on a remembered project.
+    $p7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p7.Path 'the initial project is preselected'
+
+    # -Initial through ConvertTo-ProjectKey (fix round 2, IMPORTANT 3): a caller passing a
+    # differently-cased, forward-slashed, trailing-slashed spelling of the SAME directory must still
+    # preselect it - a raw [Array]::IndexOf silently preselected the wrong row (or none) here.
+    $betaVariant = ($tmpBeta -replace '\\', '/').ToUpperInvariant() + '/'
+    $p7b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $betaVariant -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p7b.Path '-Initial matches by normalised key, not exact string - a case/slash variant still preselects beta'
+
+    # The free-path row reads through -ReadPath. A path that does not exist must not be returned -
+    # the loop stays open, proven by needing a further Escape to leave rather than returning on Enter.
+    $p8 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'Enter', 'Escape')) -Draw {} -ReadPath { 'C:\this-path-does-not-really-exist-9f3a' }
+    Assert-Equal $null $p8 'a free path that does not exist keeps the loop open; Escape then cancels'
+
+    # A real directory typed into the free-path row IS returned, resolved, and its slug looked up the
+    # same way the cwd row's is.
+    $scratchDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-free-$([Guid]::NewGuid().ToString('N'))")
+    New-Item -ItemType Directory -Path $scratchDir | Out-Null
+    try {
+        # The trailing Escape is never reached when the pick succeeds (the function returns on Enter);
+        # it is there so a broken existence guard that wrongly rejects a real directory fails this
+        # assertion cleanly instead of exhausting the scripted reader with an uncaught exception.
+        $p8b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'Enter', 'Escape')) -Draw {} -ReadPath { "`"$scratchDir`"" }
+        Assert-Equal (Resolve-Path -LiteralPath $scratchDir).Path $p8b.Path 'a real free path is resolved and returned'
+        Assert-Equal '' $p8b.Slug 'a free path outside the registry carries no slug'
+    } finally { Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+    # --- IMPORTANT 1: the existence guard now covers registry rows too. A project the registry still
+    # lists but whose directory vanished between launch and this keypress (git worktree remove in
+    # another terminal fits) must not be returned - the same call Prefs.ps1 already makes for a
+    # remembered project ("this value becomes a Set-Location target"), extended to this screen's own,
+    # longer, lifetime. ---
+    $vanishedDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-proj-vanished-$([Guid]::NewGuid().ToString('N'))")
+    New-Item -ItemType Directory -Path $vanishedDir | Out-Null
+    Remove-Item -LiteralPath $vanishedDir -Recurse -Force
+    $vanishedProjs = @([pscustomobject]@{ Slug = 'V'; Path = $vanishedDir; Name = 'vanished'; Worktree = $null; LastActivity = (Get-Date) })
+    $pVanished = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter', 'Escape')) -Draw {}
+    Assert-Equal $null $pVanished 'Enter on a registry row whose directory has vanished does not return - the loop stays open'
+
+    # --- Mouse: a single click only moves the selection; nothing but a double click or a hotkey may
+    # start a session. ---
+    $pRowMap = [pscustomobject]@{ FirstRowY = 4; RowCount = 4; Start = 0; FooterY = 20; Footer = @(
+        [pscustomobject]@{ Key = 'Enter'; Char = '';  Start = 10; End = 14 }
+        [pscustomobject]@{ Key = '';      Char = 'c'; Start = 16; End = 23 }
+        [pscustomobject]@{ Key = '';      Char = 'r'; Start = 25; End = 30 }
+        [pscustomobject]@{ Key = '';      Char = 't'; Start = 32; End = 40 }
+    ) }
+    $pDraw = { param($p, $i, $f, $t, $h) $pRowMap }.GetNewClosure()
+
+    $w10 = New-EventReader @((New-MouseEvent -Y 5 -Left), $esc)
+    $p10 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w10 -Draw $pDraw -Wait $w10 -GetWindowTop { 0 }
+    Assert-Equal $null $p10 'a single click on a project row does not start anything - Escape still cancels'
+
+    $w11 = New-EventReader @((New-MouseEvent -Y 5 -Left), $enterKey)
+    $p11 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w11 -Draw $pDraw -Wait $w11 -GetWindowTop { 0 }
+    Assert-Equal $tmpBeta $p11.Path 'the click DID move the selection - Enter afterwards commits the row the click moved to'
+
+    # --- IMPORTANT 2: a double click on a ROW commits, the way Invoke-SessionPicker's does - no
+    # further key needed. ---
+    # The trailing Escape is never reached when the double click commits (the function returns
+    # immediately); it is there so a regression that stops the double click from committing fails
+    # this assertion cleanly instead of exhausting the scripted reader with an uncaught exception
+    # (fix round 3, SMALL 2).
+    $w14 = New-EventReader @((New-MouseEvent -Y 5 -Left -Double), $esc)
+    $p14 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w14 -Draw $pDraw -Wait $w14 -GetWindowTop { 0 }
+    Assert-Equal $tmpBeta $p14.Path 'a double click on a row commits it immediately'
+    Assert-Equal 'new' $p14.Action 'as a new session, with no further key pressed'
+
+    # A double click landing on a FOOTER button, unlike one landing on a row, does nothing - it
+    # mirrors Invoke-MaintenanceScreen excluding IsDoubleClick from its footer-hit guard. The probe:
+    # a physical double click over 'c' reaches this loop as two records (a plain press, then one
+    # flagged IsDoubleClick) - before the -not IsMove / IsDoubleClick guard, both walked through as
+    # a press and the free-path row's -ReadPath fired twice for one gesture.
+    $script:dblReadPathCalls = 0
+    $dblReadPath = { $script:dblReadPathCalls++; 'C:\this-bogus-path-for-doubleclick-test-9f3a' }
+    $sKey = [System.ConsoleKeyInfo]::new([char]'s', 0, $false, $false, $false)
+    $w15 = New-EventReader @(
+        $sKey, $sKey, $sKey,                        # navigate down to the free-path row (index 3)
+        (New-MouseEvent -X 17 -Y 20 -Left),          # the plain press - fires 'c' once
+        (New-MouseEvent -X 17 -Y 20 -Left -Double),  # the doubleclick-flagged record - must do nothing
+        $esc
+    )
+    $p15 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w15 -Draw $pDraw -Wait $w15 -GetWindowTop { 0 } -ReadPath $dblReadPath
+    Assert-Equal $null $p15 'the double-click-over-footer run still ends with Escape (the bogus path was never returned)'
+    Assert-True ($script:dblReadPathCalls -le 1) 'a double click over a footer button invokes -ReadPath at most once, not once per record'
+
+    # --- Hover: a move inside the same footer button must not redraw. Counting $Draw proves the
+    # reduction; a clamp that always passes (e.g. an upper bound with no lower one) would not. ---
+    # No .GetNewClosure() here: it wraps the scriptblock in its own private scope, and $script: inside
+    # THAT scope binds to the closure's own bubble rather than this file's - $script:pDraws would
+    # silently increment a copy nobody ever reads. An ordinary scriptblock resolves $script: against
+    # this file's scope, which is what the assertions below actually check.
+    $script:pDraws = 0
+    $pDrawCounting = { param($p, $i, $f, $t, $h) $script:pDraws++; $pRowMap }
+    $w12 = New-EventReader @(
+        (New-MouseEvent -X 17 -Y 20 -Move),
+        (New-MouseEvent -X 18 -Y 20 -Move),
+        $esc
+    )
+    $p12 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w12 -Draw $pDrawCounting -Wait $w12 -GetWindowTop { 0 }
+    Assert-Equal $null $p12 'the hover run ends with Escape as usual'
+    Assert-True ($script:pDraws -le 2) 'two moves inside the same footer button draw at most twice: the initial frame plus one hover change'
+    Assert-True ($script:pDraws -ge 1) 'and it did draw at least once, so the upper bound is not trivially satisfied by zero'
+
+    # A move that crosses INTO a different footer button must still redraw each time - the throttle is
+    # keyed on the hovered button changing, not on "any move after the first".
+    $script:pDraws2 = 0
+    $pDrawCounting2 = { param($p, $i, $f, $t, $h) $script:pDraws2++; $pRowMap }
+    $w13 = New-EventReader @(
+        (New-MouseEvent -X 17 -Y 20 -Move),   # enters the 'c' button - hover changes, redraws
+        (New-MouseEvent -X 26 -Y 20 -Move),   # enters the 'r' button - hover changes again, redraws
+        $esc
+    )
+    $p13 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w13 -Draw $pDrawCounting2 -Wait $w13 -GetWindowTop { 0 }
+    Assert-Equal 3 $script:pDraws2 'moving between two DIFFERENT buttons draws for each change: initial + two hover changes'
+
+    # --- IMPORTANT 4: -Hover and -Typing actually change what Get-ProjectFrame paints - round 1's
+    # throttle only proved the DRAW COUNT changed, never that a redraw was worth having. ---
+    $hoverMap0 = $null
+    $frameNoHover = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -Color -RowMap ([ref]$hoverMap0))
+    $cIndex = [Array]::IndexOf(@($hoverMap0.Footer | ForEach-Object { $_.Char }), 'c')
+    $rIndex = [Array]::IndexOf(@($hoverMap0.Footer | ForEach-Object { $_.Char }), 'r')
+    $hoverMapC = $null
+    $frameHoverC = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -Color -Hover $cIndex -RowMap ([ref]$hoverMapC))
+    $hoverMapR = $null
+    $frameHoverR = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -Color -Hover $rIndex -RowMap ([ref]$hoverMapR))
+    $footerLineNoHover = $frameNoHover[$hoverMap0.FooterY]
+    $footerLineHoverC = $frameHoverC[$hoverMapC.FooterY]
+    $footerLineHoverR = $frameHoverR[$hoverMapR.FooterY]
+    Assert-Equal (Remove-AnsiColor $footerLineNoHover) (Remove-AnsiColor $footerLineHoverC) 'hovering repaints the footer line without changing its plain text'
+    Assert-True ($footerLineHoverC.Contains($script:C.Accent)) 'hovering the c footer button paints its cap with the accent colour'
+    Assert-True (-not $footerLineNoHover.Contains($script:C.Accent)) 'no button is accent-tinted when nothing is hovered'
+    Assert-True ($footerLineHoverC -ne $footerLineHoverR) 'hovering a different button paints a different frame - the accent follows the hover index, not a fixed spot'
+    $typingFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Filter 'al' -Typing -Cwd $tmpCwd -Width 100 -Height 24)
+    Assert-True (($typingFrame -join "`n").Contains('filter: al_')) 'typing shows the filter text with a trailing cursor'
+
+    # -Notice's title suffix, pinned directly at the frame level (fix round 3, SMALL 1): a mutation
+    # to `if ($false) { ... }` at the call site left every existing assertion green, because nothing
+    # checked the RENDERED text - the loop-level notice tests only ever inspected the argument
+    # $Draw was called with, never what Get-ProjectFrame did with it.
+    $noticeFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Notice 'path not found' -Width 100 -Height 24)
+    Assert-True (($noticeFrame -join "`n").Contains('path not found')) '-Notice appears in the rendered title'
+    $noNoticeFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24)
+    Assert-True (-not (($noNoticeFrame -join "`n").Contains('path not found'))) 'without -Notice, nothing says "path not found"'
+
+    # --- Loop-level tie-in: the throttle is only worth having if the two hover-changed draws in the
+    # LOOP actually paint different frames, not merely that $Draw was called a different number of
+    # times (round 1's gap - a reverted hover paint would still pass a bare draw-count assertion). ---
+    $probeMap = $null
+    $null = Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -Color -RowMap ([ref]$probeMap)
+    $cSpan = @($probeMap.Footer | Where-Object { $_.Char -eq 'c' })[0]
+    $rSpan = @($probeMap.Footer | Where-Object { $_.Char -eq 'r' })[0]
+    $cY = $probeMap.FooterY + $cSpan.Line
+    $rY = $probeMap.FooterY + $rSpan.Line
+    $script:capturedFrames = New-Object System.Collections.Generic.List[string]
+    $realDraw = {
+        param($p, $i, $f, $t, $h, $n)
+        $map = $null
+        $lines = Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Cwd $tmpCwd -Width 100 -Height 24 -Color -RowMap ([ref]$map)
+        $script:capturedFrames.Add(($lines -join "`n"))
+        $map
+    }
+    $wReal = New-EventReader @(
+        (New-MouseEvent -X $cSpan.Start -Y $cY -Move),
+        (New-MouseEvent -X $rSpan.Start -Y $rY -Move),
+        $esc
+    )
+    $pRealHover = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wReal -Draw $realDraw -Wait $wReal -GetWindowTop { 0 }
+    Assert-Equal $null $pRealHover 'the real-render hover run also ends with Escape'
+    Assert-Equal 3 $script:capturedFrames.Count 'three real frames were drawn: initial, hover-c, hover-r'
+    Assert-True ($script:capturedFrames[0] -ne $script:capturedFrames[1]) 'hovering c changes the rendered frame from the unhovered one'
+    Assert-True ($script:capturedFrames[1] -ne $script:capturedFrames[2]) 'hovering r changes the rendered frame from hovering c'
+
+    # --- Silent rejection now leaves a notice (minor): a bogus free path shows up in the title the
+    # NEXT time the frame draws, and the loop clears it again on the following key. ---
+    $script:capturedNotice = $null
+    $noticeDraw = { param($p, $i, $f, $t, $h, $n) $script:capturedNotice = $n }
+    $pNotice = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'Enter', 'Escape')) -Draw $noticeDraw -ReadPath { 'C:\bogus-notice-test-9f3a' }
+    Assert-Equal $null $pNotice 'the bogus free path run still ends with Escape'
+    Assert-Equal 'path not found' $script:capturedNotice 'a rejected pick leaves a notice for the frame to show'
+
+    # --- Fix round 3 (coordinator ruling): the notice clears on the next KEY only, never on a mouse
+    # move/wheel/hover change - a hover that wiped "path not found" before the owner could read it
+    # would defeat the notice. Sequence: bogus free path -> Enter (notice shown) -> a mouse move onto
+    # a DIFFERENT footer button (a real hover change, so it does draw again) -> the draw right after
+    # that move must STILL carry the notice -> then a real key -> the draw after THAT is empty. ---
+    $script:noticeSequence = New-Object System.Collections.Generic.List[string]
+    $noticeSeqDraw = { param($p, $i, $f, $t, $h, $n) $script:noticeSequence.Add($n); $pRowMap }
+    $sKey3 = [System.ConsoleKeyInfo]::new([char]'s', 0, $false, $false, $false)
+    $wKey3 = [System.ConsoleKeyInfo]::new([char]'w', 0, $false, $false, $false)
+    $w17 = New-EventReader @(
+        $sKey3, $sKey3, $sKey3,               # navigate to the free-path row (index 3)
+        $enterKey,                             # Enter -> bogus path -> pick fails -> notice set
+        (New-MouseEvent -X 17 -Y 20 -Move),    # hovers onto the 'c' footer button - a REAL hover
+                                                # change, so this DOES force another draw - but must
+                                                # not clear the notice
+        $wKey3,                                # a real key: moves the cursor up AND clears the notice
+        $esc
+    )
+    $p17 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w17 -Draw $noticeSeqDraw -Wait $w17 -GetWindowTop { 0 } -ReadPath { 'C:\bogus-notice-persists-9f3a' }
+    Assert-Equal $null $p17 'the notice-persistence run still ends with Escape'
+    Assert-Equal 7 $script:noticeSequence.Count 'one draw per event handled: 3 navigation, the failed Enter, the hover move, the clearing key, and the one after it'
+    Assert-Equal 'path not found' $script:noticeSequence[4] 'the notice appears in the draw right after the rejected Enter'
+    Assert-Equal 'path not found' $script:noticeSequence[5] 'a mouse move (even one that changes the hover) leaves the notice standing'
+    Assert-Equal '' $script:noticeSequence[6] 'the next KEY event clears it'
+
+    # --- Minor: \ / : are now accepted filter characters, so a pasted path matches literally
+    # end to end - typing alpha's own full path (colon and backslashes included) as the filter, then
+    # Enter, picks alpha. ---
+    $pathChars = @($tmpAlpha.ToCharArray() | ForEach-Object { "$_" })
+    $pFilterPath = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys (@('/') + $pathChars + @('Enter', 'Enter'))) -Draw {}
+    Assert-Equal $tmpAlpha $pFilterPath.Path 'typing a full path (colon and backslashes included) as the filter matches it literally'
+
+    # --- Coverage: the wheel moves the selection like w/s; Ctrl+C leaves like Escape; an uppercase C
+    # does not fire continue - Test-ClaudeHotkey's case guard, proven on THIS screen's own hotkeys too.
+    $wWheel = New-EventReader @((New-MouseEvent -Wheel -128), $enterKey)
+    $pWheelDown = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWheel -Draw {} -Wait $wWheel -GetWindowTop { 0 }
+    Assert-Equal $tmpBeta $pWheelDown.Path 'the wheel moves the selection down, like s'
+
+    $wWheel2 = New-EventReader @((New-MouseEvent -Wheel -128), (New-MouseEvent -Wheel 128), $enterKey)
+    $pWheelBack = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWheel2 -Draw {} -Wait $wWheel2 -GetWindowTop { 0 }
+    Assert-Equal $tmpAlpha $pWheelBack.Path 'down then up on the wheel comes back'
+
+    $pCtrlC = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-MixedKeyReader -Keys @($CtrlC)) -Draw {}
+    Assert-Equal $null $pCtrlC 'Ctrl+C leaves like Escape'
+
+    # Built with the REAL virtual key (fix round 3, SMALL 3): New-ScriptedKeyReader's single-char
+    # entries carry ConsoleKey 0, so the virtual-key branch of Test-ClaudeHotkey never matches
+    # regardless of the case guard, and lifting that guard left this assertion green for the wrong
+    # reason. With Key = [ConsoleKey]::C, removing the IsUpper guard WOULD make the virtual-key
+    # match succeed - this is what makes the case guard itself the thing under test.
+    $upperCKey = [System.ConsoleKeyInfo]::new([char]'C', [System.ConsoleKey]::C, $false, $false, $false)
+    $pUpperC = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-MixedKeyReader -Keys @($upperCKey, 'Escape')) -Draw {}
+    Assert-Equal $null $pUpperC 'an uppercase C does not fire continue - the same case guard every hotkey has'
+} finally {
+    Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmpCwd -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 782) { Write-Host "COULD NOT RUN: expected 782 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 837) { Write-Host "COULD NOT RUN: expected 837 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

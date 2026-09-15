@@ -143,6 +143,18 @@ $r = Resolve-StartProject -Cwd 'C:\w\alpha' -Remembered 'C:\w\beta' -Projects $p
 Assert-Equal $r.Source 'cwd' 'a cwd that is a known project wins'
 Assert-Equal $r.Path 'C:\w\alpha' 'and it is the chosen path'
 
+# ConvertTo-ProjectKey (fix round 2, IMPORTANT 3): the one shared normaliser Resolve-StartProject,
+# Invoke-ProjectScreen's slug lookup and its -Initial match all now go through.
+Assert-Equal 'c:\w\alpha' (ConvertTo-ProjectKey 'C:\W\Alpha\') 'ConvertTo-ProjectKey trims a trailing separator and lowercases'
+Assert-Equal (ConvertTo-ProjectKey 'C:\w\alpha') (ConvertTo-ProjectKey 'c:/w/alpha/') 'a forward-slash, trailing-slash spelling normalises to the same key'
+Assert-Equal '' (ConvertTo-ProjectKey '') 'an empty path normalises to an empty key, not a lone separator'
+
+# Resolve-StartProject inherits the slash-direction fix for free: it used to compare with its own
+# inline TrimEnd/ToLower, which never translated '/' to '\' - a forward-slash cwd spelling silently
+# fell through to the 'none'/'remembered' branch. It now goes through ConvertTo-ProjectKey too.
+$r5 = Resolve-StartProject -Cwd 'c:/w/alpha/' -Remembered '' -Projects $ps
+Assert-Equal 'cwd' $r5.Source 'a forward-slash, trailing-slash cwd spelling still matches the known project'
+
 # The remembered branch now checks disk, so it needs a REAL directory - a raw prefs string that
 # never passed through the registry must not be handed back if it no longer exists.
 $rememberedDir = Join-Path ([IO.Path]::GetTempPath()) ("cap-proj-remembered-" + [guid]::NewGuid().ToString('N').Substring(0,8))
@@ -161,7 +173,7 @@ $r4 = Resolve-StartProject -Cwd 'C:\Users\someone\Desktop' -Remembered $vanished
 Assert-Equal $r4.Source 'none' 'a remembered project that has vanished from disk is not offered'
 Remove-Item -LiteralPath $rememberedDir -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 23) { Write-Host "COULD NOT RUN: expected 23 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 27) { Write-Host "COULD NOT RUN: expected 27 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
