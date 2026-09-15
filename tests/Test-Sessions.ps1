@@ -738,7 +738,54 @@ Assert-Equal $phProjects (Get-PhysicalDirectoryPath -Path (Join-Path $phAccB 'pr
 Assert-Equal (Get-SessionsCachePath -ProjectsRoot $phProjects) (Get-SessionsCachePath -ProjectsRoot (Join-Path $phAccB 'projects')) 'so a root reached through a junctioned profile root shares the one cache file'
 Remove-Item -LiteralPath $phRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 127) { Write-Host "COULD NOT RUN: expected 127 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the pre-filter: each half pinned on its own, and what it may not change -----------------------
+# Test 18 counts parses over the WHOLE summary, which either filter alone satisfies - so neither was
+# individually pinned and deleting either one reddened nothing (adversarial review 2026-09-16, M8/M12).
+# This fixture separates them: the noise before the first prompt is seen only by the HEAD walk, the
+# noise after it only by the TAIL walk (the tail window is the last 120 lines).
+$pfRoot = Join-Path $env:TEMP ('claude-auto-prefilter-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$pfDir = Join-Path $pfRoot 'C--src-pf'
+New-Item -ItemType Directory -Force -Path $pfDir | Out-Null
+$pfLines = @()
+foreach ($n in 1..200) { $pfLines += ('{"type":"summary","summary":"head noise ' + $n + '"}') }
+$pfLines += '{"type":"user","message":{"content":"the head prompt"}}'
+foreach ($n in 1..119) { $pfLines += ('{"type":"summary","summary":"tail noise ' + $n + '"}') }
+$pfFile = Join-Path $pfDir 'pppp1111.jsonl'
+[IO.File]::WriteAllText($pfFile, ($pfLines -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+
+$pfOrig = ${function:ConvertFrom-JsonlLine}
+function ConvertFrom-JsonlLine { param([string]$Line) $script:pfSeen = @($script:pfSeen) + @($Line); & $pfOrig -Line $Line }
+$script:pfSeen = @()
+$pfFiltered = Get-ClaudeSessionSummary -Path $pfFile -ProjectPath 'C:\src\pf'
+$pfHead = @($script:pfSeen | Where-Object { $_ -match 'head noise' }).Count
+$pfTail = @($script:pfSeen | Where-Object { $_ -match 'tail noise' }).Count
+$script:pfSeen = @()
+$pfPlain = Get-ClaudeSessionSummary -Path $pfFile -ProjectPath 'C:\src\pf' -NoPreFilter
+$pfHeadU = @($script:pfSeen | Where-Object { $_ -match 'head noise' }).Count
+$pfTailU = @($script:pfSeen | Where-Object { $_ -match 'tail noise' }).Count
+${function:ConvertFrom-JsonlLine} = $pfOrig
+Assert-Equal 0 $pfHead 'the HEAD pre-filter alone: not one summary record before the first prompt is parsed'
+Assert-Equal 0 $pfTail 'the TAIL pre-filter alone: not one summary record inside the tail window is parsed'
+Assert-True ($pfHeadU -gt 0) 'control: without the filter the head walk really does parse them'
+Assert-True ($pfTailU -gt 0) 'control: without the filter the tail walk really does parse them'
+Assert-Equal $pfPlain.Title $pfFiltered.Title 'and the filter changes only HOW MANY lines are parsed, never which are accepted'
+
+# The two shapes a byte-literal '"type":"user"' misses while ConvertFrom-Json accepts them.
+$pfSpaced = Join-Path $pfDir 'ssss2222.jsonl'
+[IO.File]::WriteAllText($pfSpaced, '{"type": "user", "message": {"content": "spaced key prompt"}}' + "`n" +
+                                   '{"type": "assistant", "message": {"content": [{"type": "text", "text": "spaced key reply"}]}}' + "`n",
+                        (New-Object System.Text.UTF8Encoding($false)))
+$pfS = Get-ClaudeSessionSummary -Path $pfSpaced -ProjectPath 'C:\src\pf'
+Assert-Equal 'spaced key prompt' $pfS.Title 'one space after the colon is JSON-legal and must not hide a prompt from the pre-filter'
+Assert-Equal 'spaced key reply' $pfS.LastAssistant 'nor an assistant reply from the tail walk'
+$bs = [char]92   # built from its code point: written literally, whatever writes the file decodes it
+$pfEsc = Join-Path $pfDir 'eeee3333.jsonl'
+[IO.File]::WriteAllText($pfEsc, '{"' + $bs + 'u0074ype":"user","message":{"content":"escaped key prompt"}}' + "`n",
+                        (New-Object System.Text.UTF8Encoding($false)))
+Assert-Equal 'escaped key prompt' (Get-ClaudeSessionSummary -Path $pfEsc -ProjectPath 'C:\src\pf').Title 'a \u-escaped type key is decoded by the parser, so the pre-filter must not skip the line on a literal miss'
+Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 135) { Write-Host "COULD NOT RUN: expected 135 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

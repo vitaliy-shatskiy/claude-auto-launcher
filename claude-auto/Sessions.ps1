@@ -15,6 +15,16 @@ $script:NoisePrefixes = @(
 # unless its tag name ends in one of these.
 $script:NoiseTagPattern = '^<[a-z][a-z0-9-]*(-notification|-hook|-reminder|-caveat|-stdout)>'
 
+# The summary walks' pre-filter, as a PATTERN rather than a byte-literal. Two shapes a literal
+# '"type":"user"' misses while ConvertFrom-Json accepts them, and both made a real prompt invisible
+# to the title, the last-message and the recent-messages walks alike (adversarial review 2026-09-16,
+# A1/A2): one space after the colon - JSON-legal, and what any non-compact serialiser emits - and a
+# \u-escaped key ('"type"'), which the parser decodes and no substring can see. The escaped
+# case is covered by the second half of the rule: a line carrying no structural "type" key AT ALL is
+# parsed rather than skipped, which costs nothing because every record Claude Code writes has one.
+$script:UserTypeLine = '"type"\s*:\s*"user"'
+$script:ChatTypeLine = '"type"\s*:\s*"(user|assistant)"'
+
 # Resolved at load time so the per-file loop does not hash this module 40 times. A failure falls
 # back to a constant rather than throwing: a cache that never invalidates is bad, a launcher that
 # will not start is worse.
@@ -269,8 +279,8 @@ function Get-ClaudeSessionSummary {
         # cold listing. Get-ClaudeUserPrompt returns $null for any record whose type is not 'user',
         # so a line not carrying that field verbatim is rejected either way - the filter changes how
         # many lines are parsed, never which are accepted (pinned by Test-Sessions 18). Anchored on
-        # the same substring Measure-ClaudePrompts has always used, so the two cannot drift apart.
-        if (-not $NoPreFilter -and -not $line.Contains('"type":"user"')) { continue }
+        # the same rule Measure-ClaudePrompts uses, so the two cannot drift apart.
+        if (-not $NoPreFilter -and $line.Contains('"type"') -and $line -notmatch $script:UserTypeLine) { continue }
         $rec = ConvertFrom-JsonlLine -Line $line
         if (-not $rec) { continue }
         $prompt = Get-ClaudeUserPrompt -Record $rec
@@ -288,7 +298,7 @@ function Get-ClaudeSessionSummary {
         # Same rule as the head loop: this walk reads only 'user' records (Get-ClaudeUserPrompt) and
         # 'assistant' ones (Get-ClaudeRecordText), so a line carrying neither type contributes to
         # nothing and does not need parsing.
-        if (-not $NoPreFilter -and -not ($tail[$i].Contains('"type":"user"') -or $tail[$i].Contains('"type":"assistant"'))) { continue }
+        if (-not $NoPreFilter -and $tail[$i].Contains('"type"') -and $tail[$i] -notmatch $script:ChatTypeLine) { continue }
         $rec = ConvertFrom-JsonlLine -Line $tail[$i]
         if (-not $rec) { continue }
         if (-not $lastAssistant -and $rec.type -eq 'assistant' -and -not $rec.isSidechain) {
