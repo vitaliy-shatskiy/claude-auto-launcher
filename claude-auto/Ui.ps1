@@ -438,13 +438,21 @@ function Invoke-SessionPicker {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions,
         [Parameter(Mandatory)][scriptblock]$ReadKey,
+        # Scopes the picker to one project. -ProjectSlug is the exact key (a session's transcript
+        # directory name) and is what actually filters; -ProjectName is kept ONLY as the display
+        # label for the title/footer, except as a fallback filter when no slug is known at all (an
+        # unrecognised cwd has none). Two repositories can share a folder name, so scoping by name
+        # alone would silently mix their sessions together - slug never does, because it comes from
+        # the transcript path itself, not from a display string.
+        [string]$ProjectSlug = '',
+        [string]$ProjectName = '',
         # $Draw RETURNS the row map when it can - where the session rows landed on screen - so a
         # click can be turned into an index by the same arithmetic that drew them. A Draw that
         # returns nothing (every existing test injects one) simply leaves the mouse inert.
         [scriptblock]$Draw = {
-            param($s, $i, $f)
+            param($s, $i, $f, $sc, $pn)
             $map = $null
-            Get-PickerFrame -Sessions $s -Index $i -Filter $f -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
+            Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
             $map
         },
         [scriptblock]$Wait = { & $ReadKey },
@@ -456,8 +464,30 @@ function Invoke-SessionPicker {
     $filter = ''
     $typing = $false
     $rowMap = $null
+    # No slug AND no name means there is nothing to scope to (an unrecognised cwd, or a caller that
+    # never learned a project at all) - the picker then behaves exactly as it always has, and Tab
+    # does nothing (guarded below), because there is no "other" scope to widen from or narrow to.
+    # 'none' (fix round 1, IMPORTANT 1), not 'all': Get-PickerFrame renders 'none' with NO tab hint
+    # at all, where 'all' would show one labelled "this project" that Tab could never act on - a
+    # button that always does nothing, wrapping the footer at 80 columns for every user who has
+    # never even seen the project screen.
+    $hasScope = [bool]$ProjectSlug -or [bool]$ProjectName
+    $scope = if ($hasScope) { 'project' } else { 'none' }
 
     while ($true) {
+        # Scoped BEFORE Select-ResumableSessions/Select-SessionMatch run, so $items - and therefore
+        # $index - only ever ranges over the sessions the current scope actually shows. $pool (not
+        # $Sessions) is what gets handed to $Draw too, so Get-PickerFrame's own hiddenCount and "N
+        # sessions" title reflect the scoped pool, never the full account.
+        # @() wraps the WHOLE if/else, not just its branches: `$x = if (...) {...} else { @() }`
+        # unwraps an empty-array branch to $null on assignment regardless of how that branch built
+        # it - the exact trap the comment below already warns about, now one line earlier.
+        $pool = @(
+            if ($scope -eq 'project' -and $hasScope) {
+                if ($ProjectSlug) { $Sessions | Where-Object { $_.Slug -eq $ProjectSlug } }
+                else { $Sessions | Where-Object { $_.Project -eq $ProjectName } }
+            } else { $Sessions }
+        )
         # Select-ResumableSessions drops empty (zero-prompt) sessions before the filter runs, and
         # Get-PickerFrame does the exact same thing before rendering - the two must never disagree
         # about which index points at which session.
@@ -466,9 +496,9 @@ function Invoke-SessionPicker {
         # built that array internally, and Select-SessionMatch's -Sessions is Mandatory - an account
         # with every session filtered out (or none at all) crashed the picker here with a raw
         # PowerShell binding error. Found via tests\check-preview.ps1's empty-fixture-account run.
-        $items = Select-SessionMatch -Sessions @(Select-ResumableSessions -Sessions $Sessions) -Filter $filter
+        $items = Select-SessionMatch -Sessions @(Select-ResumableSessions -Sessions $pool) -Filter $filter
         if ($index -ge $items.Count) { $index = [Math]::Max(0, $items.Count - 1) }
-        $rowMap = & $Draw $Sessions $index $filter
+        $rowMap = & $Draw $pool $index $filter $scope $ProjectName
         $key = & $Wait
         if ("$key" -eq 'resize') { continue }
 
@@ -526,6 +556,16 @@ function Invoke-SessionPicker {
         # letters typed into an open filter are never read as navigation.
         if ($name -eq 'UpArrow' -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
         elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($index -lt $items.Count - 1) { $index++ } }
+        # Tab, not a letter: Test-ClaudeHotkey is for the Latin letters a footer hint advertises via
+        # -Char, and every named key on this screen (Enter, Escape) is already matched on $name the
+        # same way this is - never -eq alone, but through the SAME $name string every other named key
+        # here uses. Guarded on $hasScope: with nothing to scope to, there is no "other" scope to
+        # widen from or narrow to, so the key does nothing rather than toggling between two labels
+        # that would both mean "everything".
+        elseif ($name -eq 'Tab' -and $hasScope) {
+            $scope = if ($scope -eq 'project') { 'all' } else { 'project' }
+            $index = 0
+        }
         elseif ($name -eq 'Enter') { if ($items.Count -gt 0) { return [pscustomobject]@{ Session = $items[$index]; Fork = $false } } }
         elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return $null }
         # Test-ClaudeHotkey (Input.ps1): the character, the virtual key or the Cyrillic letter on

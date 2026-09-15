@@ -792,9 +792,13 @@ function Select-ResumableSessions {
 }
 
 function Select-SessionMatch {
+    # -like reads '[' as the start of a character class, and an unmatched one is a TERMINATING
+    # WildcardPatternException that escapes Where-Object into the render loop - the same defect
+    # Select-ProjectMatch (Projects.ps1) already carries the fix for. Escaping the filter text is
+    # the fix: someone who typed '[' is looking for a literal '[', and Escape gives them that.
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions, [string]$Filter)
     if ([string]::IsNullOrWhiteSpace($Filter)) { return $Sessions }
-    $f = $Filter.Trim()
+    $f = [Management.Automation.WildcardPattern]::Escape($Filter.Trim())
     return @($Sessions | Where-Object {
         "$($_.Project) $($_.Worktree) $($_.Title) $($_.LastUser) $($_.LastAssistant)" -like "*$f*"
     })
@@ -848,6 +852,19 @@ function Get-PickerFrame {
         [datetime]$Now = (Get-Date),
         [switch]$Color,
         [switch]$Ascii,
+        # 'none' | 'project' | 'all'. 'none' is the picker's original, pre-Task-8 shape exactly -
+        # no tab hint, no title suffix, project column shown - for the caller that has no project
+        # context at all (fix round 1, IMPORTANT 1: a hint that always does nothing, because the
+        # launcher never had a slug or name to scope by in the first place, is dead weight that
+        # costs a wrapped footer line at 80 columns for every user, not a feature). 'project': the
+        # caller has already narrowed -Sessions to the scoped pool - every row here is then the same
+        # project, so its own name is dropped from the list column (pure noise) - and the tab hint
+        # offers to widen. 'all': every session is shown and the tab hint offers to narrow back.
+        [ValidateSet('none', 'project', 'all')]
+        [string]$Scope = 'none',
+        # Display label for the title under -Scope project ONLY (fix round 1, IMPORTANT 3) - falls
+        # back to the generic "this project" when the caller knows a slug but not a display name.
+        [string]$ProjectName = '',
         # Where the session rows landed, for hit-testing a mouse click. Filled by the SAME code that
         # renders them - the alternative is a second copy of the viewport arithmetic, and the two
         # would eventually disagree about which index sits on which line, which is precisely the
@@ -865,19 +882,37 @@ function Get-PickerFrame {
     $resumable = @(Select-ResumableSessions -Sessions $Sessions)
     $hiddenCount = @($Sessions).Count - $resumable.Count
     $items = @(Select-SessionMatch -Sessions $resumable -Filter $Filter)
+    # Fix round 2, item 4: a filter can shrink $items below whatever -Index the caller passed - the
+    # loop in Invoke-SessionPicker always re-clamps its own $index before drawing, so production
+    # never hits this, but a caller that renders a frame directly (a test, a future screen) does not
+    # get that shield for free. Same clamp Get-ProjectFrame already carries for its own rows.
+    if ($Index -ge $items.Count) { $Index = [Math]::Max(0, $items.Count - 1) }
 
     $title = "resume $($g.H) $($items.Count) sessions"
+    # IMPORTANT 3: the comment on Invoke-SessionPicker's -ProjectName always said this was the
+    # display label - it never actually reached the title until now. Falls back to the generic
+    # phrase only when the caller knows a slug but never learned a display name for it.
+    if ($Scope -eq 'project') { $title += " $($g.H) " + $(if ($ProjectName) { $ProjectName } else { 'this project' }) }
     if ($hiddenCount -gt 0) { $title += " $($g.H) $hiddenCount empty hidden" }
     if ($Filter) { $title += " $($g.H) filter: $Filter" }
     # Same rule as the launch screen: the arrow hint names two directions and cannot be clicked
     # into one of them; every single action can. w/s, not up/down (2026-09-09) - see Get-LaunchFrame.
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
+    # The tab hint's label names the scope a press LANDS ON, not the one showing now - the same
+    # convention Tab uses everywhere else in this codebase (a toggle names its destination).
+    # -Scope none gets NO tab hint at all (IMPORTANT 1): it would be permanently dead (Tab does
+    # nothing without a project to scope by - Invoke-SessionPicker never even reaches the Tab
+    # branch) and costs a wrapped footer line at 80 columns for a click that can never do anything.
+    $hints = @(
         @{ Token = 'w/s'; Label = 'move';   Clickable = $false }
         @{ Token = '/';       Label = 'filter'; Clickable = $true; Key = ''; Char = '/' }
         @{ Token = 'enter';   Label = 'open';   Clickable = $true; Key = 'Enter'; Char = '' }
         @{ Token = 'f';       Label = 'fork';   Clickable = $true; Key = ''; Char = 'f' }
-        @{ Token = 'esc';     Label = 'back';   Clickable = $true; Key = 'Escape'; Char = '' }
     )
+    if ($Scope -ne 'none') {
+        $hints += @{ Token = 'tab'; Label = $(if ($Scope -eq 'project') { 'all projects' } else { 'this project' }); Clickable = $true; Key = 'Tab'; Char = '' }
+    }
+    $hints += @{ Token = 'esc'; Label = 'back'; Clickable = $true; Key = 'Escape'; Char = '' }
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints $hints
 
     if ($items.Count -eq 0) {
         $emptyMsg =
@@ -911,7 +946,9 @@ function Get-PickerFrame {
         for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
             $s = $items[$i]
             $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
-            $where = $s.Project
+            # Under -Scope project every row IS the same project - naming it on each one is pure
+            # noise, so it is dropped here and the room it frees goes to the snippet below.
+            $where = if ($Scope -eq 'project') { '' } else { $s.Project }
             if ($s.Worktree) { $where = "$($g.Worktree) $($s.Worktree)" }
             $age = Format-RelativeAge -From $s.Modified -Now $Now
             $what = if ($s.LastUser) { $s.LastUser } elseif ($s.Title) { $s.Title } else { '' }
@@ -919,8 +956,13 @@ function Get-PickerFrame {
             # are all the same repository. The snippet is what makes the list scannable.
             $room = $leftWidth - $mark.Length - $age.Length - 2
             $label = $where
+            # Minor (fix round 1): with $where dropped to '' under -Scope project, the old fixed
+            # '  ' separator left the label starting with two dead spaces nobody could read anything
+            # into. Built from only the non-empty parts, and the freed width goes to the snippet -
+            # reclaiming, not just hiding, the columns -Scope project frees.
             if ($what -and $room -gt ($where.Length + 4)) {
-                $label = $where + '  ' + (Limit-Line -Text $what -Max ($room - $where.Length - 2))
+                $sep = if ($where) { '  ' } else { '' }
+                $label = $where + $sep + (Limit-Line -Text $what -Max ($room - $where.Length - $sep.Length))
             }
             $pad = [Math]::Max(1, $leftWidth - $mark.Length - $label.Length - $age.Length - 1)
             $list += $mark + (Limit-Line -Text $label -Max ($leftWidth - $mark.Length - $age.Length - 2)) +
@@ -961,7 +1003,8 @@ function Get-PickerFrame {
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
         $s = $items[$i]
         $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
-        $where = $s.Project
+        # Same drop as the narrow branch above - every row is the same project under -Scope project.
+        $where = if ($Scope -eq 'project') { '' } else { $s.Project }
         if ($s.Worktree) { $where = "$($g.Worktree) $($s.Worktree)" }
         $age = Format-RelativeAge -From $s.Modified -Now $Now
         $what = if ($s.LastUser) { $s.LastUser } elseif ($s.Title) { $s.Title } else { '' }
@@ -969,8 +1012,10 @@ function Get-PickerFrame {
         # are all the same repository. The snippet is what makes the list scannable.
         $room = $leftWidth - $mark.Length - $age.Length - 2
         $label = $where
+        # Same reclaim as the narrow branch above.
         if ($what -and $room -gt ($where.Length + 4)) {
-            $label = $where + '  ' + (Limit-Line -Text $what -Max ($room - $where.Length - 2))
+            $sep = if ($where) { '  ' } else { '' }
+            $label = $where + $sep + (Limit-Line -Text $what -Max ($room - $where.Length - $sep.Length))
         }
         $pad = [Math]::Max(1, $leftWidth - $mark.Length - $label.Length - $age.Length - 1)
         $list += $mark + (Limit-Line -Text $label -Max ($leftWidth - $mark.Length - $age.Length - 2)) +

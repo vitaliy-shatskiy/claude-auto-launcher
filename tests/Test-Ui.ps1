@@ -787,6 +787,228 @@ Assert-Equal $false ($pickerFooter -match [regex]::Escape($doubledCursor)) 'the 
 $launchFooter = @(Get-LaunchFrame -State (New-LaunchState) -Width 120 -Height 24)[-1]
 Assert-Equal $false ($launchFooter -match [regex]::Escape($doubledCursor)) 'the launch footer contains no doubled cursor glyph'
 
+# --- Task 8: the session picker scoped to the chosen project -------------------------------
+
+# Correction 2: Select-SessionMatch was `-like` with no escaping, exactly the defect
+# Select-ProjectMatch (Projects.ps1) already carries the fix for - a bare '[' in the filter is an
+# unmatched character class and raises a terminating WildcardPatternException through the render
+# loop. Proven the same way check-hooks-fire proves a gate: the call must not throw AND must
+# return zero matches (no session text here contains a literal '[').
+$bracketThrew = $false
+try { $bracketMatches = @(Select-SessionMatch -Sessions $fake -Filter '[') }
+catch { $bracketThrew = $true }
+Assert-Equal $false $bracketThrew 'Select-SessionMatch does not throw on a filter of a single ['
+Assert-Equal 0 $bracketMatches.Count 'and a lone [ matches nothing, since no fixture session contains one literally'
+
+# Correction 1: two sessions can share a Project NAME (not unique) while living in different
+# repositories - only Slug (the transcript directory name) is exact. Scoping by slug must show
+# only the matching one, never fall back to name matching just because a name collided.
+$sharedNameA = [pscustomobject]@{ SessionId='sn000001'; Slug='SlugA'; Project='Shared'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='a'; LastUser='session a text'; LastAssistant='reply a' }
+$sharedNameB = [pscustomobject]@{ SessionId='sn000002'; Slug='SlugB'; Project='Shared'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='b'; LastUser='session b text'; LastAssistant='reply b' }
+$sharedName = @($sharedNameA, $sharedNameB)
+
+$slugSel = Invoke-SessionPicker -Sessions $sharedName -ProjectSlug 'SlugA' -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+Assert-Equal 'sn000001' $slugSel.Session.SessionId 'scoping by slug shows only the matching session, even though both share a Project name'
+
+# Tab widens from the scoped project to every session, and back.
+$slugTabSel = Invoke-SessionPicker -Sessions $sharedName -ProjectSlug 'SlugA' -ReadKey (New-ScriptedKeyReader -Keys @('Tab', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'sn000002' $slugTabSel.Session.SessionId 'Tab widens the scope to all projects, so the second (same-name, different-slug) session becomes reachable'
+
+# With no slug known at all (an unrecognised cwd), scoping falls back to Project by name.
+$nameFallbackSel = Invoke-SessionPicker -Sessions $fake -ProjectName 'Workbench' -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+Assert-Equal 'aaaa1111' $nameFallbackSel.Session.SessionId 'with no slug known, scoping falls back to matching Project by name'
+
+# Fix round 1, MINOR: the Tab key is built the way a real terminal actually sends it (KeyChar TAB,
+# ConsoleKey.Tab), not New-ScriptedKeyReader's synthetic zero-char stand-in for a multi-letter key
+# name - so this assertion exercises the real character path through the $typing branch's KeyChar
+# guard, not merely a $key.Key match. Tab inside typing mode is not a toggle (global constraint):
+# scoped to SlugA (one session visible); if Tab secretly widened the scope while typing, DownArrow
+# after Escape would have a second session to move to and Enter would return it instead.
+$RealTabKey = [System.ConsoleKeyInfo]::new([char]9, [System.ConsoleKey]::Tab, $false, $false, $false)
+$typingTabSel = Invoke-SessionPicker -Sessions $sharedName -ProjectSlug 'SlugA' -ReadKey (New-MixedKeyReader -Keys @('/', $RealTabKey, 'Escape', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'sn000001' $typingTabSel.Session.SessionId 'a real Tab keystroke while typing a filter does not toggle the scope - DownArrow afterwards has nothing else to move to'
+
+# With no slug AND no name at all, there is no "other" scope - Tab does nothing (proven by the
+# session count never changing: only one of the two sessions is reachable either way is wrong here,
+# so instead this proves Tab is simply inert by getting the same, unscoped result before and after).
+$noScopeSel = Invoke-SessionPicker -Sessions $sharedName -ReadKey (New-ScriptedKeyReader -Keys @('Tab', 'Enter')) -Draw {}
+Assert-Equal 'sn000001' $noScopeSel.Session.SessionId 'with neither -ProjectSlug nor -ProjectName, Tab does nothing and the picker behaves exactly as before this task'
+
+# Fix round 1, IMPORTANT 4a: with BOTH -ProjectSlug and -ProjectName given, slug alone decides the
+# scope - a session that matches only by NAME under a FOREIGN slug must stay excluded, or an
+# implementation that silently ORs the two together (`Slug -eq X -or (Name -and Project -eq Name)`)
+# would pass every assertion above (none of them supply both parameters at once). The scoped pool
+# must be exactly one session (sn000001), proven by two DownArrows still landing on it.
+$foreignSlugSameName = [pscustomobject]@{ SessionId='sn000003'; Slug='SlugC'; Project='Shared'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='c'; LastUser='session c text'; LastAssistant='reply c' }
+$bothParamsSessions = @($sharedNameA, $sharedNameB, $foreignSlugSameName)
+$bothParamsSel = Invoke-SessionPicker -Sessions $bothParamsSessions -ProjectSlug 'SlugA' -ProjectName 'Shared' -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'sn000001' $bothParamsSel.Session.SessionId 'with both -ProjectSlug and -ProjectName given, slug alone decides scope - a session matching only by name under a foreign slug is excluded, so two DownArrows past the one visible session still land on it'
+
+# Fix round 1, IMPORTANT 4b: the name-FALLBACK branch (no slug at all) is an EXACT match, not a
+# substring - a session whose Project merely CONTAINS the name ('api-legacy' contains 'api') must
+# stay excluded, or a `-like "*$ProjectName*"` mutant would pass every fallback assertion above
+# (none of them have a superstring collision).
+$exactNameA = [pscustomobject]@{ SessionId='api00001'; Project='api'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='a'; LastUser='api session text'; LastAssistant='reply' }
+$exactNameB = [pscustomobject]@{ SessionId='api00002'; Project='api-legacy'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='b'; LastUser='legacy session text'; LastAssistant='reply' }
+$exactNameSel = Invoke-SessionPicker -Sessions @($exactNameA, $exactNameB) -ProjectName 'api' -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'api00001' $exactNameSel.Session.SessionId 'the name fallback is an exact match - a session whose Project only CONTAINS the name (api-legacy) stays out of the scoped pool, so DownArrow has nowhere else to go'
+
+# Fix round 1, IMPORTANT 5: Tab must reset the index, not merely change the scope - every Tab test
+# above starts at index 0, so deleting the reset would survive all of them. Scoped by NAME (both
+# sessions are in the initial pool), DownArrow selects the second, Tab widens to 'all' (still both
+# sessions, same order): without the reset Enter would return the second (carried-over index); with
+# it, the first.
+$tabResetSel = Invoke-SessionPicker -Sessions $sharedName -ProjectName 'Shared' -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Tab', 'Enter')) -Draw {}
+Assert-Equal 'sn000001' $tabResetSel.Session.SessionId 'Tab resets the index to 0 - otherwise the second session (selected by DownArrow before the toggle) would still be current after it'
+
+# Fix round 1, IMPORTANT 1: -Scope 'none' (and the default, now 'none' rather than 'all') renders
+# NO tab hint at all - Invoke-SessionPicker only ever reaches Tab's $hasScope guard when it has a
+# project to scope by, so a hint that always does nothing would be permanently dead weight, and at
+# HEAD it was costing a wrapped footer line (2, not the pre-task 1) at 80 columns for every user.
+$noneScopeText = (@(Get-PickerFrame -Sessions $sharedName -Index 0 -Width 78 -Height 24) -join "`n")
+Assert-True ($noneScopeText -notmatch 'tab') 'the default scope (none) has no tab hint at all'
+$noneScopeExplicitText = (@(Get-PickerFrame -Sessions $sharedName -Index 0 -Scope 'none' -Width 78 -Height 24) -join "`n")
+Assert-True ($noneScopeExplicitText -notmatch 'tab') 'an explicit -Scope none has no tab hint either'
+$noneMap = $null
+$null = Get-PickerFrame -Sessions $sharedName -Index 0 -Width 78 -Height 24 -RowMap ([ref]$noneMap)
+Assert-Equal 1 $noneMap.FooterLines 'the default (none) scope footer is exactly 1 line at width 78 - the pre-Task-8 count, tab hint or not'
+$noneMapExplicit = $null
+$null = Get-PickerFrame -Sessions $sharedName -Index 0 -Scope 'none' -Width 78 -Height 24 -RowMap ([ref]$noneMapExplicit)
+Assert-Equal 1 $noneMapExplicit.FooterLines 'an explicit -Scope none footer is exactly 1 line at width 78 too'
+
+# Get-PickerFrame -Scope 'project'/'all': the footer advertises the toggle, and its label names the
+# OTHER scope. Two separate .Contains-shaped checks rather than one 'tab.*all projects' regex:
+# -Plain (colour off, the default here) renders the token bracketed ('[tab]'), not padded ('tab '),
+# so a pattern assuming a literal space right after "tab" would fail on the very form this produces.
+$fProjectScopeText = (@(Get-PickerFrame -Sessions $sharedName -Index 0 -Scope 'project' -Width 78 -Height 24) -join "`n")
+Assert-True ($fProjectScopeText -match 'tab') 'in project scope the footer advertises a tab hint'
+Assert-True ($fProjectScopeText -match 'all projects') 'in project scope the tab hint offers to widen to all projects'
+$fAllScopeText = (@(Get-PickerFrame -Sessions $sharedName -Index 0 -Scope 'all' -Width 78 -Height 24) -join "`n")
+Assert-True ($fAllScopeText -match 'tab') 'in all scope the footer advertises a tab hint'
+Assert-True ($fAllScopeText -match 'this project') 'in all scope the tab hint offers to narrow to this project'
+
+# -Index 1 selects session B in every scope-frame check below, so the wide layout's own
+# detail/preview header (unchanged by this task - it names ONE selected session, not a repeated
+# list column) only ever prints session B's project name - it can never be the source of a
+# 'FirstProj' match, which isolates every check to session A's LIST row, the thing this task
+# actually changes.
+$scopeFixtureA = [pscustomobject]@{ SessionId='scp0001'; Project='FirstProj'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='a'; LastUser='alpha snippet text'; LastAssistant='reply a' }
+$scopeFixtureB = [pscustomobject]@{ SessionId='scp0002'; Project='SecondProj'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='b'; LastUser='beta snippet text'; LastAssistant='reply b' }
+$scopeFixture = @($scopeFixtureA, $scopeFixtureB)
+
+# Fix round 1, IMPORTANT 3: -ProjectName is the display label the comment on Invoke-SessionPicker's
+# parameter always claimed it was - it must actually reach the title under -Scope project, and
+# never appear at all under -Scope all (where there is no single project to name). A sentinel name
+# that matches none of the fixture sessions' own Project fields, so a hit can only come from the
+# title itself, never a list row.
+$titleFrameProject = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'project' -ProjectName 'MyNamedProject' -Width 120 -Height 24)
+Assert-True ($titleFrameProject[0] -match 'MyNamedProject') 'under -Scope project, -ProjectName appears in the title'
+$titleFrameAll = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'all' -ProjectName 'MyNamedProject' -Width 120 -Height 24)
+Assert-Equal 0 (@($titleFrameAll | Where-Object { $_ -match 'MyNamedProject' }).Count) 'under -Scope all, -ProjectName does not appear anywhere in the frame'
+
+# Get-PickerFrame -Scope 'project' drops the project-name column from the list rows (every row is
+# assumed to be the same project); -Scope 'all' (and the default 'none', unchanged from before this
+# task) still shows it.
+$scopeAllFrame = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Scope 'all' -Width 120 -Height 24 -Now $now
+Assert-Equal 1 (@($scopeAllFrame | Where-Object { $_ -match 'FirstProj' }).Count) 'scope all: the non-selected session''s project name is visible in its own list row'
+$scopeProjectFrame = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Scope 'project' -Width 120 -Height 24 -Now $now
+Assert-Equal 0 (@($scopeProjectFrame | Where-Object { $_ -match 'FirstProj' }).Count) 'scope project: the project-name column is dropped from the list row'
+$scopeDefaultFrame = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Width 120 -Height 24 -Now $now
+Assert-Equal 1 (@($scopeDefaultFrame | Where-Object { $_ -match 'FirstProj' }).Count) '-Scope defaults to none, unchanged from before this task'
+
+# Fix round 1, IMPORTANT 2: the mutant `Screens.ps1:929` (narrow branch) -> `$where = $s.Project`
+# survived because both scope-frame assertions above only ever used -Width 120 (the wide branch).
+# Repeat the same FirstProj absence/presence check at 78 and at 50 (the minimum), which force the
+# NARROW branch's own, separately-coded `$where` line.
+foreach ($narrowWidth in @(78, 50)) {
+    $narrowHeight = if ($narrowWidth -eq 50) { 21 } else { 24 }
+    $scopeAllNarrow = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Scope 'all' -Width $narrowWidth -Height $narrowHeight -Now $now
+    Assert-Equal 1 (@($scopeAllNarrow | Where-Object { $_ -match 'FirstProj' }).Count) "width ${narrowWidth} (narrow branch): scope all shows the non-selected session's project name"
+    $scopeProjectNarrow = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Scope 'project' -Width $narrowWidth -Height $narrowHeight -Now $now
+    Assert-Equal 0 (@($scopeProjectNarrow | Where-Object { $_ -match 'FirstProj' }).Count) "width ${narrowWidth} (narrow branch): scope project drops the project-name column from the list row"
+}
+
+# Fix round 2, item 1: -ProjectName forwarding through the LOOP's own $Draw call (Ui.ps1:501) was
+# unpinned end to end - deleting the argument there left every earlier -ProjectName assertion green,
+# because they all called Get-PickerFrame directly. A capturing 5-parameter -Draw proves the loop
+# itself hands the name through as the 5th positional argument, under -Scope project.
+$script:capturedDrawProjectName = 'not called'
+$capturingNameDraw = { param($s, $i, $f, $sc, $pn) $script:capturedDrawProjectName = $pn; $null }
+$null = Invoke-SessionPicker -Sessions $sharedName -ProjectSlug 'SlugA' -ProjectName 'Shared' -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw $capturingNameDraw
+Assert-Equal 'Shared' $script:capturedDrawProjectName 'Invoke-SessionPicker forwards -ProjectName to $Draw as its 5th argument'
+
+# Fix round 2, item 2: the separator reclaim (Screens.ps1, both list branches) was unpinned -
+# reverting either branch's `$sep` back to a fixed '  ' left every earlier assertion green, because
+# none of them checked WHERE the snippet actually starts, only whether the project name text was
+# present or absent. Pinned on the raw measurable: the column index of the snippet's own first word
+# ('alpha', from scopeFixtureA's LastUser) within its row. Measured, not guessed: scope all puts it
+# at column 15 (1 border + 3 mark + 'FirstProj' (9) + '  ' (2) separator); scope project puts it at
+# column 4 (1 border + 3 mark, no separator at all - the whole 11-cell gap this task frees over to
+# the snippet). Same numbers hold at both a narrow (78) and a wide, two-pane (120) width, since both
+# branches share the identical mark+where+sep composition.
+foreach ($sepWidth in @(78, 120)) {
+    $allSepRow = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'all' -Width $sepWidth -Height 24 -Now $now | Where-Object { $_ -match 'alpha' })[0]
+    Assert-Equal 15 $allSepRow.IndexOf('alpha') "width ${sepWidth}: scope all - the snippet starts after mark + project name + the two-space separator"
+    $projectSepRow = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'project' -Width $sepWidth -Height 24 -Now $now | Where-Object { $_ -match 'alpha' })[0]
+    Assert-Equal 4 $projectSepRow.IndexOf('alpha') "width ${sepWidth}: scope project - the snippet starts immediately after the mark; the separator itself is reclaimed, not just the project name"
+}
+
+# Fix round 2, item 3: -ProjectName in the title was only ever asserted at width 120, where a name
+# always fits whole. -ProjectName is appended LAST in the title string, so at the 50-column minimum
+# a long (34-character) name may be cut by Limit-Line - what must survive is the session COUNT,
+# which sits earlier in the same string and is the one thing an owner glancing at a truncated title
+# still needs to see.
+$longProjectName34 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ12345678'
+Assert-Equal 34 $longProjectName34.Length 'sanity: the fixture name really is 34 characters'
+$narrowTitleFrame = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height 21 -Now $now)
+Assert-True ($narrowTitleFrame[0] -match '2 sessions') 'at width 50 with a 34-character -ProjectName, the session count still survives in the (truncated) title'
+
+# Fix round 2, item 4: Get-PickerFrame never clamped -Index to the FILTERED item count the way
+# Get-ProjectFrame already clamps its own -Index to -Rows.Count - a caller passing an -Index that a
+# -Filter has since made too large (production is shielded by Invoke-SessionPicker's own re-clamp
+# every loop iteration; a direct caller, including a future screen or a test, is not) threw "You
+# cannot call a method on a null-valued expression" building the narrow branch's single-session
+# preview header ($items[$Index].Modified.ToString(...) on a null $items[$Index]).
+$clampThrew = $false
+try { $clampedFrame = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter 'FirstProj' -Width 120 -Height 24 -Now $now) }
+catch { $clampThrew = $true }
+Assert-Equal $false $clampThrew 'an -Index past the filtered item count is clamped, not left to throw'
+Assert-True (($clampedFrame -join "`n") -match 'FirstProj') 'and the clamped frame still renders the one session the filter actually matched'
+
+# Global constraint 3: the scrolled Start must be the ACTUAL first visible index, never the
+# degenerate 0 a mutant substituting a hardcoded value would leave in place. Measured, not guessed,
+# by rendering 30 sessions at the last row (Index 29) and reading the row map back - once for the
+# narrow branch at 78x24 and at the 50x21 minimum, and once for the wide (two-pane) branch at
+# 120x24, since both branches carry their own `Start = $vp.Start` assignment. Re-measured after fix
+# round 1 (the default scope's footer lost the always-dead tab hint, changing $bodyRows at 78x24).
+$scrollSessions = 1..30 | ForEach-Object {
+    [pscustomobject]@{
+        SessionId = 'scr{0:00}' -f $_; Project = "ScrollProject$_"; Worktree = $null
+        Modified = $now.AddHours(-$_); SizeBytes = 1024 * $_; PromptCount = $_
+        Title = "session $_"; LastUser = "case $_"; LastAssistant = "answer $_"
+    }
+}
+$mapWide78 = $null
+$fWide78 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 78 -Height 24 -Now $now -RowMap ([ref]$mapWide78))
+Assert-Equal 1 $mapWide78.FirstRowY 'measured at 78x24, index 29 of 30 (narrow branch): FirstRowY'
+Assert-Equal 14 $mapWide78.RowCount 'measured at 78x24, index 29 of 30 (narrow branch): RowCount'
+Assert-Equal 16 $mapWide78.Start 'measured at 78x24, index 29 of 30 (narrow branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
+Assert-Equal $true ($fWide78.Count -le 24) 'the 78x24 scrolled frame still fits the terminal'
+
+$mapMin50 = $null
+$fMin50 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 50 -Height 21 -Now $now -RowMap ([ref]$mapMin50))
+Assert-Equal 1 $mapMin50.FirstRowY 'measured at 50x21 (the minimum size), index 29 of 30 (narrow branch): FirstRowY'
+Assert-Equal 10 $mapMin50.RowCount 'measured at 50x21, index 29 of 30 (narrow branch): RowCount'
+Assert-Equal 20 $mapMin50.Start 'measured at 50x21, index 29 of 30 (narrow branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
+Assert-Equal $true ($fMin50.Count -le 21) 'the 50x21 scrolled frame still fits the minimum terminal size'
+
+$mapPane120 = $null
+$fPane120 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 120 -Height 24 -Now $now -RowMap ([ref]$mapPane120))
+Assert-Equal 1 $mapPane120.FirstRowY 'measured at 120x24, index 29 of 30 (wide branch): FirstRowY'
+Assert-Equal 20 $mapPane120.RowCount 'measured at 120x24, index 29 of 30 (wide branch): RowCount'
+Assert-Equal 10 $mapPane120.Start 'measured at 120x24, index 29 of 30 (wide branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
+Assert-Equal $true ($fPane120.Count -le 24) 'the 120x24 scrolled frame still fits the terminal'
+
 # Colour identity for the picker, at both layouts. The footer's key caps are the one deliberate
 # exception (Task 4): bracketed with colour off, padded with it on - same WIDTH either way, never
 # the same characters - so those lines are compared normalised (brackets -> padding) rather than
@@ -800,7 +1022,10 @@ foreach ($w in @(80, 120)) {
     # Pin the window before trusting it: an unpinned FooterY/FooterLines that ever drifted WIDE
     # would make the skip loop swallow the whole frame and index $plainP[$i] past the end, where
     # $null -replace ... is '' and Remove-AnsiColor $null is '' - both loops below would then pass
-    # on an empty comparison instead of a real one. Measured at width $w: one footer line.
+    # on an empty comparison instead of a real one.
+    # Measured at width $w: one footer line. This call passes no -Scope, so Get-PickerFrame's
+    # default ('none' - fix round 1, IMPORTANT 1) renders exactly the pre-Task-8 five hints; the
+    # tab hint only ever appears under -Scope project/all, which is covered separately above.
     Assert-Equal 1 $pMapPlain.FooterLines "width ${w}: the picker footer is exactly one line"
     Assert-Equal $true ($footerTo -lt $plainP.Count) "width ${w}: the footer window stays inside the frame"
     $mismatch = 0
@@ -2209,7 +2434,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 837) { Write-Host "COULD NOT RUN: expected 837 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 885) { Write-Host "COULD NOT RUN: expected 885 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
