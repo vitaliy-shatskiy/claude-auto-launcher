@@ -26,7 +26,14 @@ function Get-ProjectRegistry {
     # and never correctness. Atomic temp+move, last writer wins: up to four launchers run at once and
     # a mutex here would buy nothing a rebuild does not already give.
     param(
-        [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
+        # CLAUDE_AUTO_PROJECTS_ROOT overrides, same shape as Get-LaunchPrefsPath's CLAUDE_AUTO_PREFS
+        # (Prefs.ps1): a test (or check-preview.ps1's fixture) points this at a throwaway tree so
+        # driving the project screen never depends on - or is defeated by - the owner's real
+        # ~/.claude/projects. Fix round 1 (SURVIVING MUTANT): without this, check-preview.ps1 could
+        # only ever prove the project screen renders SOMETHING, never that a specific argument
+        # (like -ProjectSlug) reached a specific downstream call, because the real registry's
+        # content is neither controlled nor known ahead of time.
+        [string]$ProjectsRoot = $(if ($env:CLAUDE_AUTO_PROJECTS_ROOT) { $env:CLAUDE_AUTO_PROJECTS_ROOT } else { Join-Path $HOME '.claude\projects' }),
         [string]$CachePath = (Join-Path (Split-Path $ProjectsRoot -Parent) 'claude-auto-projects.json')
     )
     if (-not (Test-Path -LiteralPath $ProjectsRoot)) { return @() }
@@ -137,4 +144,32 @@ function Resolve-StartProject {
         return [pscustomobject]@{ Path = $Remembered; Source = 'remembered' }
     }
     return [pscustomobject]@{ Path = $null; Source = 'none' }
+}
+
+function Set-LaunchStartProject {
+    # Applies Resolve-StartProject's pick onto $State.Project/$State.ProjectSlug in one place
+    # (claude-auto.ps1, Task 9) - the registry lookup for the slug uses the same ConvertTo-ProjectKey
+    # normaliser Resolve-StartProject and Invoke-ProjectScreen already share, so a raw path never
+    # gets compared against the registry a third, ad-hoc way.
+    #
+    # Pulled out as its own function so this wiring has a UNIT SEAM: the decision loop in
+    # claude-auto.ps1 has no console and cannot be driven by a test directly - Test-Ui.ps1's seams
+    # cover the screens, not the top-level script that builds the registry and calls this.
+    #
+    # Returns the Source ('cwd'|'remembered'|'none') for the launch log - claude-auto.ps1 answers
+    # "why did the project screen open where it did" from it.
+    param(
+        [Parameter(Mandatory)]$State,
+        [string]$Cwd,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects
+    )
+    $startInfo = Resolve-StartProject -Cwd $Cwd -Remembered "$($State.Project)" -Projects $Projects
+    $State.Project = $startInfo.Path
+    $State.ProjectSlug = ''
+    if ($State.Project) {
+        $key = ConvertTo-ProjectKey $State.Project
+        $hit = @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $key })
+        if ($hit.Count -gt 0) { $State.ProjectSlug = $hit[0].Slug }
+    }
+    return $startInfo.Source
 }

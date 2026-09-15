@@ -34,17 +34,75 @@ $ErrorActionPreference = 'Stop'
 
 # One run at the default (Enter alone) and one that CHANGES THE ACCOUNT - the exact shape of the
 # scenario finding 1 needed and nothing exercised. Named so a failing line names its own run.
+#
+# Task 9: the project screen now sits between the launch screen and everything else, so every run
+# needs one more Enter (or, for the resume run, its own hotkey) to get past it.
 $script:Runs = [ordered]@{
-    'default-enter'     = 'Enter'
-    'switch-account'    = 'RightArrow,Enter'
-    # Account, then Action row (new -> continue -> resume), Enter opens the picker, Escape cancels
-    # it. The fixture's 'second' account root has no projects directory at all, so a CORRECT
-    # session picker shows nothing and Escape returns 'picker cancelled'. A regression of finding 1
-    # (Get-ClaudeSessions called with no root) would instead read the CANONICAL account's real
-    # sessions - non-empty on any machine that has used Claude Code - and Enter picks the first one,
-    # printing a real --resume id in launch args instead of cancelling. That divergence is the guard.
-    'switch-and-resume' = 'RightArrow,DownArrow,RightArrow,RightArrow,Enter,Escape'
+    'default-enter'     = 'Enter,Enter'
+    'switch-account'    = 'RightArrow,Enter,Enter'
+    # Account, then Enter through the launch screen, then 'r' on the project screen resumes the
+    # fixture project sorted first (fixture-slug-a) and opens the picker scoped to its slug; Escape
+    # cancels it. See Initialize-ProjectSlugFixture below for why the session COUNT this prints is
+    # the actual regression guard, not merely "picker cancelled" (which reads identically whichever
+    # way the scoping went).
+    'switch-and-resume' = 'RightArrow,Enter,r,Escape'
 }
+
+# Fix round 1 (SURVIVING MUTANT, closed the reviewer's way): the project screen used to read the
+# REAL ~/.claude/projects registry with no fixture override at all, so this check could only ever
+# prove the screen renders SOMETHING - never that -ProjectSlug specifically reached
+# Invoke-SessionPicker, because a lost -ProjectSlug and a kept one produced the IDENTICAL "0
+# sessions" text against the fixture 'second' account's empty session root. CLAUDE_AUTO_PROJECTS_ROOT
+# (Get-ProjectRegistry, Projects.ps1) now lets this point the registry at an isolated fixture tree -
+# never the owner's real registry, never the real machine's session history - and that same tree
+# doubles as the fixture 'second' account's own session root (Get-SessionsRootForAccount already
+# resolves ~/.claude-preview-fixture/projects for it), exactly as a real launch keeps them the same
+# kind of directory for the account actually selected.
+#
+# Two sessions, two DIFFERENT slugs, the SAME display Project name ("Shared", two different real
+# repos both named that on disk) - the exact shape Invoke-SessionPicker's own Test-Ui.ps1 coverage
+# already proves distinguishes slug-scoping from the name-fallback branch. With -ProjectSlug kept,
+# scoping to fixture-slug-a's session shows "1 sessions"; drop it and the call falls back to
+# matching by Project name alone, which BOTH sessions share, so the same run prints "2 sessions"
+# instead - a REGRESSION line this check's own diff catches, deterministically, on any machine.
+function Initialize-ProjectSlugFixture {
+    param([string]$Root = (Join-Path $HOME '.claude-preview-fixture'))
+    $projectsRoot = Join-Path $Root 'projects'
+    $reposRoot = Join-Path $Root 'fixture-repos'
+    # Wiped and rebuilt every run - idempotent, so a stale run can never leave a third session lying
+    # around to confuse a later one, and a machine running this for the first time gets a clean tree.
+    foreach ($p in @($projectsRoot, $reposRoot)) {
+        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $p | Out-Null
+    }
+    $repoA = Join-Path $reposRoot 'repo-a\Shared'
+    $repoB = Join-Path $reposRoot 'repo-b\Shared'
+    New-Item -ItemType Directory -Force -Path $repoA | Out-Null
+    New-Item -ItemType Directory -Force -Path $repoB | Out-Null
+
+    $slugADir = Join-Path $projectsRoot 'fixture-slug-a'
+    $slugBDir = Join-Path $projectsRoot 'fixture-slug-b'
+    New-Item -ItemType Directory -Force -Path $slugADir | Out-Null
+    New-Item -ItemType Directory -Force -Path $slugBDir | Out-Null
+
+    # A real message body, not a bare {type;cwd} record: Get-ClaudeSessions needs a genuine user
+    # prompt to count PromptCount > 0, or Select-ResumableSessions drops the session and both slugs
+    # would print "0 sessions" regardless of the mutation under test.
+    $recA = @{ type = 'user'; cwd = $repoA; sessionId = 'fixture-a'; timestamp = '2026-01-01T00:00:00Z'
+               message = @{ role = 'user'; content = 'fixture prompt for slug A' } } | ConvertTo-Json -Compress -Depth 5
+    $recB = @{ type = 'user'; cwd = $repoB; sessionId = 'fixture-b'; timestamp = '2026-01-01T00:00:00Z'
+               message = @{ role = 'user'; content = 'fixture prompt for slug B' } } | ConvertTo-Json -Compress -Depth 5
+    Set-Content -LiteralPath (Join-Path $slugADir 'fixture-a.jsonl') -Value $recA -Encoding utf8 -NoNewline
+    Set-Content -LiteralPath (Join-Path $slugBDir 'fixture-b.jsonl') -Value $recB -Encoding utf8 -NoNewline
+    # fixture-slug-a sorts first (Get-ProjectRegistry orders by LastActivity descending) - the
+    # scripted keys press 'r' at row 0 without navigating, so which one sorts first has to be
+    # pinned, not left to whatever order the filesystem happens to enumerate.
+    (Get-Item -LiteralPath (Join-Path $slugADir 'fixture-a.jsonl')).LastWriteTime = (Get-Date)
+    (Get-Item -LiteralPath (Join-Path $slugBDir 'fixture-b.jsonl')).LastWriteTime = (Get-Date).AddMinutes(-5)
+
+    return $projectsRoot
+}
+$script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
 
 # preview.ps1's own (non--Full) summary filter does not include CLAUDE_CONFIG_DIR or argv count -
 # both are named explicitly by the finding this check exists for (the session picker's account
@@ -62,8 +120,10 @@ $script:WantedPattern = 'launch args\s*:|command\s*:|remote\s*:|account\s*:|CLAU
 function Invoke-PreviewRun {
     param([Parameter(Mandatory)][string]$Keys)
     $savedConfig = $env:CLAUDE_AUTO_CONFIG
+    $savedProjectsRoot = $env:CLAUDE_AUTO_PROJECTS_ROOT
     try {
         $env:CLAUDE_AUTO_CONFIG = $FixtureConfig
+        $env:CLAUDE_AUTO_PROJECTS_ROOT = $script:ProjectsFixtureRoot
         $out = & pwsh -NoProfile -File $Preview -Keys $Keys -Launcher $Launcher -Full 2>&1
         $code = $LASTEXITCODE
         $filtered = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match $script:WantedPattern })
@@ -71,6 +131,8 @@ function Invoke-PreviewRun {
     } finally {
         if ($null -eq $savedConfig) { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
         else { $env:CLAUDE_AUTO_CONFIG = $savedConfig }
+        if ($null -eq $savedProjectsRoot) { Remove-Item Env:CLAUDE_AUTO_PROJECTS_ROOT -ErrorAction SilentlyContinue }
+        else { $env:CLAUDE_AUTO_PROJECTS_ROOT = $savedProjectsRoot }
     }
 }
 

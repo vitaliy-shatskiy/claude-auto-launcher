@@ -39,6 +39,65 @@ Assert-Equal ''   (Get-ClaudeMouseRow -Y 5  -FirstRowY 5 -RowCount 0) 'no rows m
 Assert-Equal 1    (Get-ClaudeMouseRow -Y 106 -FirstRowY 5 -RowCount 4 -WindowTop 100) 'the window top is subtracted before mapping'
 Assert-Equal ''   (Get-ClaudeMouseRow -Y 6   -FirstRowY 5 -RowCount 4 -WindowTop 100) 'a stale buffer coordinate does not wrap into range'
 
+# ---------------------------------------------------------------- Read-ClaudeFreePath (Task 9 fix
+# round 1, CRITICAL 1). Every dependency injected, so this never needs a console. The whole point:
+# the caller gets the re-armed state back through the RETURN VALUE, never through a scriptblock
+# reassigning a variable in its own child scope - the live defect this replaces re-armed into a
+# dead local, left the caller polling a CLOSED handle, and spun Wait-KeyOrResize's mouse branch at
+# 100% CPU with no sleep.
+
+$script:rcfpWrites = New-Object System.Collections.Generic.List[string]
+$rcfpWrite = { param([string]$Text) $script:rcfpWrites.Add($Text) }
+$script:rcfpCursor = $null
+$rcfpSetCursor = { param([int]$X, [int]$Y) $script:rcfpCursor = @($X, $Y) }
+$script:rcfpClosedWith = $null
+$rcfpClose = { param($s) $script:rcfpClosedWith = $s }
+$script:rcfpOpenCalls = 0
+$newMouseState = [pscustomobject]@{ Id = 'NEW'; Closed = $false }
+$rcfpOpen = { $script:rcfpOpenCalls++; $newMouseState }
+$oldMouseState = [pscustomobject]@{ Id = 'OLD'; Closed = $false }
+
+$script:rcfpWrites.Clear(); $script:rcfpCursor = $null; $script:rcfpClosedWith = $null; $script:rcfpOpenCalls = 0
+$r = Read-ClaudeFreePath -MouseState $oldMouseState -Rearm `
+     -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 50 } `
+     -Write $rcfpWrite -SetCursor $rcfpSetCursor -ReadLine { 'C:\typed\path' }
+Assert-Equal 'C:\typed\path' $r.Line 'the read line is returned'
+Assert-Equal 'NEW' $r.MouseState.Id 'the caller gets back the OPENED state through the return value, not the old one it passed in'
+Assert-Equal 'OLD' $script:rcfpClosedWith.Id 'the state passed in is the one that gets closed'
+Assert-Equal 1 $script:rcfpOpenCalls '-Rearm opens exactly once'
+Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25h") 'the cursor is shown before the read'
+Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25l") 'and hidden again afterwards'
+Assert-Equal $true (([array]::IndexOf($script:rcfpWrites, "$([char]27)[?25h")) -lt ([array]::IndexOf($script:rcfpWrites, "$([char]27)[?25l"))) 'show comes before hide'
+Assert-Equal '0,73' ($script:rcfpCursor -join ',') 'the row is WindowTop + height - 1, a BUFFER row - not just height - 1, which is wrong off the alternate buffer'
+
+# No mouse state at all (preview, or a console-less host): nothing to close, nothing re-armed
+# unless asked, and it still returns cleanly.
+$script:rcfpOpenCalls = 0; $script:rcfpClosedWith = $null
+$r2 = Read-ClaudeFreePath -MouseState $null -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write {} -SetCursor {} -ReadLine { 'x' }
+Assert-Equal $null $r2.MouseState 'with no mouse state and no -Rearm, none is returned'
+Assert-Equal $null $script:rcfpClosedWith 'and nothing was closed - there was nothing to close'
+Assert-Equal 0 $script:rcfpOpenCalls 'nor opened - -Rearm was not requested'
+
+# -Rearm not requested (the preview path, or any caller that never armed the console to begin with):
+# even with a real state to close, it must not re-open - matches claude-auto.ps1's own
+# `-Rearm:(-not $Preview)`.
+$script:rcfpOpenCalls = 0; $script:rcfpClosedWith = $null
+$r3 = Read-ClaudeFreePath -MouseState $oldMouseState -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write {} -SetCursor {} -ReadLine { 'x' }
+Assert-Equal 'OLD' $script:rcfpClosedWith.Id 'it still closes the state it was given'
+Assert-Equal 0 $script:rcfpOpenCalls 'but never re-opens without -Rearm'
+Assert-Equal 'OLD' $r3.MouseState.Id 'and reports the same (now-closed) state back rather than $null - Close-ClaudeConsoleInput marks .Closed on the shared object, it does not hand back a new one'
+
+# A throwing reader must not leak the console closed: the re-arm still happens (a `finally`), and
+# the line comes back empty rather than propagating the exception into the project screen's loop.
+$script:rcfpOpenCalls = 0
+$threwInside = $false
+$r4 = $null
+try { $r4 = Read-ClaudeFreePath -MouseState $oldMouseState -Rearm -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write {} -SetCursor {} -ReadLine { throw 'boom' } }
+catch { $threwInside = $true }
+Assert-Equal $false $threwInside 'a throwing reader does not escape the function'
+Assert-Equal '' "$($r4.Line)" 'and the line comes back empty'
+Assert-Equal 1 $script:rcfpOpenCalls 'the console is still re-armed even though the read failed - the whole reason this is a finally'
+
 # ---------------------------------------------------------------- record translation
 
 if (-not (Initialize-ClaudeConsoleInput)) {
@@ -742,14 +801,15 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # (arming a SECOND time after TreatControlCAsInput can fail, in which case only 1 assertion runs
 # there instead of 4 - see 'arming after TreatControlCAsInput should still work'), so its count is
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
-# genuine hidden console, never guessed. The bare count (59, since the WASD Cyrillic-layout block
-# added 4 then fix round 2 added c/t for 2 more) IS exact - checkpoint.ps1 only ever runs this
-# suite bare, and that path has no such branching. The LiveOnly floor of 115 is untouched: it was
-# already a lower bound, not a guess of the branching total, and the 2 new assertions run there too.
+# genuine hidden console, never guessed. The bare count (76: 59 before Task 9's fix round 1, plus
+# 17 for Read-ClaudeFreePath's own injected-dependency assertions) IS exact - checkpoint.ps1 only
+# ever runs this suite bare, and that path has no such branching. The LiveOnly floor of 115 is
+# untouched: it was already a lower bound, not a guess of the branching total, and the 17 new
+# assertions (pure, no console needed) run there too, just widening the margin.
 if ($LiveOnly) {
     if ($script:Ran -lt 115) { Write-Host "COULD NOT RUN: expected at least 115 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
-} elseif ($script:Ran -ne 59) {
-    Write-Host "COULD NOT RUN: expected 59 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
+} elseif ($script:Ran -ne 76) {
+    Write-Host "COULD NOT RUN: expected 76 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

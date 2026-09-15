@@ -638,14 +638,39 @@ Assert 'a resolver that finds nothing reports not Ok, never throws' (-not $missi
 Assert 'and carries no path'                                        ($null -eq $missing.Path)
 Assert 'and names the problem'                                      ($missing.Message -match 'not on PATH')
 
+# --- Set-ClaudeProjectDirectory (Task 9): the guard between the project screen and
+# Import-ProjectSecrets. -Switcher is injected so this never actually moves the test runner. ---------
+$script:switchedTo = $null
+$switcherSpy = { param($p) $script:switchedTo = $p }
+
+Assert 'an empty project does not switch'    (-not (Set-ClaudeProjectDirectory -Project '' -Switcher $switcherSpy))
+Assert 'and the switcher is never called'    ($null -eq $script:switchedTo)
+
+$bogusProject = Join-Path $env:TEMP ("cct-bogus-project-" + [guid]::NewGuid().ToString('N'))
+$script:switchedTo = $null
+$bogusResult = $null
+try { $bogusResult = Set-ClaudeProjectDirectory -Project $bogusProject -Switcher $switcherSpy 6>$null }
+catch { $bogusResult = 'THREW' }
+Assert 'a project directory that does not exist does not throw' ($bogusResult -eq $false)
+Assert 'and the switcher is never called for it'                ($null -eq $script:switchedTo)
+
+$realProject = Join-Path $env:TEMP ("cct-real-project-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $realProject | Out-Null
+try {
+    $script:switchedTo = $null
+    $realResult = Set-ClaudeProjectDirectory -Project $realProject -Switcher $switcherSpy
+    Assert 'a real project directory switches'          $realResult
+    Assert 'and the switcher receives that exact path'  ($script:switchedTo -eq $realProject)
+} finally { Remove-Item -LiteralPath $realProject -Recurse -Force -ErrorAction SilentlyContinue }
+
 # --- Get-RateLimitSummary: a machine with no records (a fresh install) gets an empty table ---------
 $emptyLimits = Join-Path $env:TEMP ("cal-limits-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $emptyLimits | Out-Null
 try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSummary -Directory $emptyLimits).Count -eq 0) } finally { Remove-Item $emptyLimits -Recurse -Force }
 
 } finally { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 141) {
-    Write-Host "COULD NOT RUN: expected 141 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
+if ($script:Ran -ne 147) {
+    Write-Host "COULD NOT RUN: expected 147 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
 }
 if ($script:fail -gt 0) {
@@ -654,5 +679,5 @@ if ($script:fail -gt 0) {
 }
 # Counted, not guessed: HEAD claimed 72 while running 75 (measured 2026-09-04 by counting the
 # ok/FAIL lines of a bare run). A banner nobody re-counts is a number that drifts silently.
-Write-Host '141 assertions, all pass' -ForegroundColor Green
+Write-Host '147 assertions, all pass' -ForegroundColor Green
 exit 0

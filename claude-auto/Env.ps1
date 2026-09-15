@@ -301,6 +301,30 @@ function Import-ProjectSecrets {
     return $loaded
 }
 
+function Set-ClaudeProjectDirectory {
+    # The guard between the project screen and Import-ProjectSecrets (claude-auto.ps1, Task 9):
+    # Import-ProjectSecrets derives its slug from the working directory, so the switch must happen
+    # BEFORE it runs, or the launch directory's secrets load into another project's session. A
+    # rejected path - gone since the screen closed (`git worktree remove` in another terminal), or
+    # never real to begin with - is logged and skipped rather than thrown: Set-Location -LiteralPath
+    # on a bad path raises ItemNotFoundException, which would take the whole launcher down after
+    # everything else already succeeded.
+    #
+    # Pulled out as its own function so this guard has a UNIT SEAM: the decision loop in
+    # claude-auto.ps1 has no console and cannot be driven by a test directly (Test-Ui.ps1's seams
+    # cover the screens, not the top-level script). -Switcher is injected for the same reason every
+    # other side effect in this file is - Set-ClaudeProfile's -Mirror, Resolve-ClaudeExecutable's
+    # -Resolver - so the guard is assertable without actually moving the test runner's own directory.
+    param([string]$Project, [scriptblock]$Switcher = { param($p) Set-Location -LiteralPath $p })
+    if (-not $Project) { return $false }
+    if (-not (Test-Path -LiteralPath $Project -PathType Container)) {
+        Write-Host "  project directory not found: $Project - staying put" -ForegroundColor DarkYellow
+        return $false
+    }
+    & $Switcher $Project
+    return $true
+}
+
 function Get-SharedFileId {
     # NTFS File ID = identity. Equal contents do NOT mean one file, and two paths listed by
     # `fsutil hardlink list` only prove that SOME pair shares an inode - see the comment in

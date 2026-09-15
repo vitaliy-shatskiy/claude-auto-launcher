@@ -312,7 +312,15 @@ function Switch-LaunchAccount {
         [Parameter(Mandatory)]$Rows,
         [long]$NowMs = ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
     )
-    $stash = @{ Restored = @($State.Restored); RestoredAge = "$($State.RestoredAge)"; Project = "$($State.Project)" }
+    # ProjectSlug travels WITH Project everywhere it does in this function (fix round 1, MINOR 5):
+    # it is derived, never persisted (Screens.ps1's New-LaunchState), so a session-stash restore
+    # correctly carries it (this is in-memory state from the same run, not a persisted file value),
+    # a file-based restore leaves it '' (the file never wrote one to begin with - $entry['ProjectSlug']
+    # is $null there, and "$null" stringifies to ''), and the reset-to-fresh line clears it exactly
+    # like Project. Previously only Project was handled - harmless only because Set-LaunchStartProject
+    # (Projects.ps1) or the project screen's own result always overwrites it again before the session
+    # picker ever reads it, but a latent inconsistency is still a bug waiting for its assumption to move.
+    $stash = @{ Restored = @($State.Restored); RestoredAge = "$($State.RestoredAge)"; Project = "$($State.Project)"; ProjectSlug = "$($State.ProjectSlug)" }
     foreach ($f in $script:ProfileFields) { $stash[$f] = $State.$f }
     $State.Profiles[$State.Account] = $stash
 
@@ -322,6 +330,7 @@ function Switch-LaunchAccount {
     $State.Restored = @()
     $State.RestoredAge = ''
     $State.Project = ''
+    $State.ProjectSlug = ''
 
     if ($State.Profiles.ContainsKey($To)) {
         $entry = $State.Profiles[$To]
@@ -329,7 +338,10 @@ function Switch-LaunchAccount {
         $State.Restored = @($entry['Restored'])
         $State.RestoredAge = "$($entry['RestoredAge'])"
         $rp = "$($entry['Project'])"
-        if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) { $State.Project = $rp }
+        if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) {
+            $State.Project = $rp
+            $State.ProjectSlug = "$($entry['ProjectSlug'])"
+        }
         return $State
     }
 
@@ -348,7 +360,11 @@ function Switch-LaunchAccount {
         $State.Restored = @($restored)
         $State.RestoredAge = Get-PrefsAgeText -SavedAtMs $entry['SavedAtMs'] -NowMs $NowMs
         $rp = "$($entry['Project'])"
-        if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) { $State.Project = $rp }
+        if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) {
+            $State.Project = $rp
+            # The FILE never wrote a slug (it is derived, never persisted) - '' here, correctly.
+            $State.ProjectSlug = "$($entry['ProjectSlug'])"
+        }
     }
     return $State
 }

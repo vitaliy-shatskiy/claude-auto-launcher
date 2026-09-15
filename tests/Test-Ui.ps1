@@ -71,7 +71,7 @@ function Get-RowIndex {
 # The navigation tests below all compute their DownArrow counts from Get-RowIndex, so they would
 # keep passing under ANY row order - they prove navigation works, not that the order is the one
 # the owner asked for. This is the one assertion that actually pins the order.
-Assert-Equal 'Account,Remote,Action,Model,Effort,Advisor,Permission,Mode' (((Get-LaunchRows) | ForEach-Object { $_.Name }) -join ',') 'the row order is account, remote, action, model, effort, advisor, permission, mode'
+Assert-Equal 'Account,Remote,Model,Effort,Advisor,Permission,Mode' (((Get-LaunchRows) | ForEach-Object { $_.Name }) -join ',') 'the row order is account, remote, model, effort, advisor, permission, mode - action left this screen for the project screen (Task 9)'
 
 # --- screen 1 -----------------------------------------------------------------------------
 
@@ -86,6 +86,9 @@ Assert-Equal 'normal'  $r.Mode    'Enter alone does not enable safe mode'
 
 # THE invariant: the default state adds no arguments at all.
 Assert-Equal 0 (@(Get-LaunchArgs -State (New-LaunchState))).Count 'a default state produces no launch arguments'
+# ProjectSlug (Task 9): derived, never a habit - a fresh state carries none until Resolve-StartProject
+# or the project screen fills it in.
+Assert-Equal '' (New-LaunchState).ProjectSlug 'a fresh state carries no project slug'
 
 $s = New-LaunchState; $s.Model = 'fable'
 Assert-Equal '--model fable' (@(Get-LaunchArgs -State $s) -join ' ') 'fable becomes --model fable'
@@ -960,8 +963,11 @@ foreach ($sepWidth in @(78, 120)) {
 # still needs to see.
 $longProjectName34 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ12345678'
 Assert-Equal 34 $longProjectName34.Length 'sanity: the fixture name really is 34 characters'
-$narrowTitleFrame = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height 21 -Now $now)
-Assert-True ($narrowTitleFrame[0] -match '2 sessions') 'at width 50 with a 34-character -ProjectName, the session count still survives in the (truncated) title'
+# $script:MinHeight, not a literal 21 (fix round 1, MINOR 2): the minimum dropped to 20 when the
+# Action row left the launch screen (Task 9) - a hardcoded 21 would still pass here but would have
+# quietly stopped being "the minimum" it claimed to be.
+$narrowTitleFrame = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height $script:MinHeight -Now $now)
+Assert-True ($narrowTitleFrame[0] -match '2 sessions') 'at width 50 (the minimum height) with a 34-character -ProjectName, the session count still survives in the (truncated) title'
 
 # Fix round 2, item 4: Get-PickerFrame never clamped -Index to the FILTERED item count the way
 # Get-ProjectFrame already clamps its own -Index to -Rows.Count - a caller passing an -Index that a
@@ -978,9 +984,11 @@ Assert-True (($clampedFrame -join "`n") -match 'FirstProj') 'and the clamped fra
 # Global constraint 3: the scrolled Start must be the ACTUAL first visible index, never the
 # degenerate 0 a mutant substituting a hardcoded value would leave in place. Measured, not guessed,
 # by rendering 30 sessions at the last row (Index 29) and reading the row map back - once for the
-# narrow branch at 78x24 and at the 50x21 minimum, and once for the wide (two-pane) branch at
+# narrow branch at 78x24 and at the 50-column minimum, and once for the wide (two-pane) branch at
 # 120x24, since both branches carry their own `Start = $vp.Start` assignment. Re-measured after fix
-# round 1 (the default scope's footer lost the always-dead tab hint, changing $bodyRows at 78x24).
+# round 1 (the default scope's footer lost the always-dead tab hint, changing $bodyRows at 78x24)
+# and again after Task 9 fix round 1, MINOR 2 (the minimum dropped 21 -> 20 with the Action row
+# gone) - $script:MinHeight throughout, never a literal, so this re-measures itself.
 $scrollSessions = 1..30 | ForEach-Object {
     [pscustomobject]@{
         SessionId = 'scr{0:00}' -f $_; Project = "ScrollProject$_"; Worktree = $null
@@ -996,11 +1004,11 @@ Assert-Equal 16 $mapWide78.Start 'measured at 78x24, index 29 of 30 (narrow bran
 Assert-Equal $true ($fWide78.Count -le 24) 'the 78x24 scrolled frame still fits the terminal'
 
 $mapMin50 = $null
-$fMin50 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 50 -Height 21 -Now $now -RowMap ([ref]$mapMin50))
-Assert-Equal 1 $mapMin50.FirstRowY 'measured at 50x21 (the minimum size), index 29 of 30 (narrow branch): FirstRowY'
-Assert-Equal 10 $mapMin50.RowCount 'measured at 50x21, index 29 of 30 (narrow branch): RowCount'
-Assert-Equal 20 $mapMin50.Start 'measured at 50x21, index 29 of 30 (narrow branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
-Assert-Equal $true ($fMin50.Count -le 21) 'the 50x21 scrolled frame still fits the minimum terminal size'
+$fMin50 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 50 -Height $script:MinHeight -Now $now -RowMap ([ref]$mapMin50))
+Assert-Equal 1 $mapMin50.FirstRowY 'measured at 50 columns, the minimum height, index 29 of 30 (narrow branch): FirstRowY'
+Assert-Equal 9 $mapMin50.RowCount 'measured at the minimum size, index 29 of 30 (narrow branch): RowCount'
+Assert-Equal 21 $mapMin50.Start 'measured at the minimum size, index 29 of 30 (narrow branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
+Assert-Equal $true ($fMin50.Count -le ($script:MinHeight - 1)) 'the 50-column scrolled frame still fits the minimum terminal size'
 
 $mapPane120 = $null
 $fPane120 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 120 -Height 24 -Now $now -RowMap ([ref]$mapPane120))
@@ -1334,37 +1342,37 @@ $null = Get-LaunchFrame -State $launchState -Width 100 -Height 30 -RowMap ([ref]
 Assert-Equal $true ($lmap.Rows.Count -gt 2) 'the launch frame reports a row map'
 
 $rowsDef = @(Get-LaunchRows)
-$actionIdx = [Array]::FindIndex($rowsDef, [Predicate[object]]{ param($r) $r.Name -eq 'Action' })
-$actionRow = $lmap.Rows[$actionIdx]
-$resumeCell = @($actionRow.Cells | Where-Object { $_.Value -eq 'resume' })[0]
-Assert-Equal $true ($null -ne $resumeCell) 'the Action row exposes a clickable cell for every option'
+$modelIdx = [Array]::FindIndex($rowsDef, [Predicate[object]]{ param($r) $r.Name -eq 'Model' })
+$modelRowMap = $lmap.Rows[$modelIdx]
+$fableCell = @($modelRowMap.Cells | Where-Object { $_.Value -eq 'fable' })[0]
+Assert-Equal $true ($null -ne $fableCell) 'the Model row exposes a clickable cell for every option'
 
 $ldraw = { param($s) $lmap }.GetNewClosure()
 $esc = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::Escape, $false, $false, $false)
 $enterKey = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::Enter, $false, $false, $false)
 
 # A click on the row selects it, and nothing else changes.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X 1 -Left), $enterKey)
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X 1 -Left), $enterKey)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal $actionIdx $out.Row 'a click on a row selects that row'
-Assert-Equal 'new' $out.Action 'and, away from the option cells, leaves the value alone'
+Assert-Equal $modelIdx $out.Row 'a click on a row selects that row'
+Assert-Equal 'default' $out.Model 'and, away from the option cells, leaves the value alone'
 
-# A click ON the 'resume' cell selects the row AND the value.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X $resumeCell.Start -Left), $enterKey)
+# A click ON the 'fable' cell selects the row AND the value.
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X $fableCell.Start -Left), $enterKey)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal 'resume' $out.Action 'a click on an option cell selects that option'
-Assert-Equal $actionIdx $out.Row 'and selects its row too'
+Assert-Equal 'fable' $out.Model 'a click on an option cell selects that option'
+Assert-Equal $modelIdx $out.Row 'and selects its row too'
 # The far edge of the span must hit as well - an off-by-one there makes the last option unclickable.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X $resumeCell.End -Left), $enterKey)
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X $fableCell.End -Left), $enterKey)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal 'resume' $out.Action 'the last column of an option cell still hits it'
+Assert-Equal 'fable' $out.Model 'the last column of an option cell still hits it'
 # One column past it must NOT.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X ($resumeCell.End + 1) -Left), $enterKey)
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X ($fableCell.End + 1) -Left), $enterKey)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal $false ($out.Action -eq 'resume') 'one column past the cell does not select it'
+Assert-Equal $false ($out.Model -eq 'fable') 'one column past the cell does not select it'
 
 # Nothing a mouse does may START a session: only Enter returns the state.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X $resumeCell.Start -Left -Double), $esc)
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X $fableCell.Start -Left -Double), $esc)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal '' "$out" 'even a double click does not start a session - Escape still cancels'
 
@@ -1457,13 +1465,12 @@ $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-MixedKeyReader
 Assert-Equal 'work' $out.Account 'back on the first tab'
 Assert-Equal 'max' $out.Effort 'a reset on another tab left this one alone'
 
-# Action and Mode are deliberately outside the reset: they are not habits, they already start at
-# their defaults, and clearing them would undo a choice made for THIS launch. A behaviour change
-# from the old ctrl+r, which flattened every row.
-$actionIdx2 = Get-RowIndex -Name 'Action'
-$keys = (@('DownArrow') * $actionIdx2) + @('RightArrow') + (@('UpArrow') * $actionIdx2) + @($CtrlR, 'Enter')
-$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-MixedKeyReader -Keys $keys) -Draw {}
-Assert-Equal 'continue' $out.Action 'ctrl+r leaves the action alone - it describes this launch, not a habit'
+# Action is deliberately outside the reset: since Task 9 it is not even a launch-screen row any
+# more (the project screen decides it) - Reset-LaunchTab never touches it regardless of how it got
+# set. Proven directly on the state, since there is no row left to navigate to and edit it through.
+$actionState = New-LaunchState; $actionState.Action = 'continue'
+$out = Invoke-LaunchScreen -State $actionState -ReadKey (New-MixedKeyReader -Keys @($CtrlR, 'Enter')) -Draw {}
+Assert-Equal 'continue' $out.Action 'ctrl+r leaves the action alone - it describes this launch, not a habit, and is not a row Reset-LaunchTab touches'
 
 # A tab with no stash falls back to the FILE, and the rows it restores are marked so a stale choice
 # is visible rather than silent.
@@ -1763,18 +1770,35 @@ $longStatus = (1..40 | ForEach-Object { "status line $_ with some words in it" }
 # row Write-Frame needs. Written this way the number re-measures itself on every run - a literal
 # would go stale the first time a row or a bar is added, which is exactly how the old 16 survived
 # being one short. Measured 2026-09-04: 20 lines (3 box + blank + 8 rows + 3 bars + blank +
-# separator + restored + 2 wrapped footer lines) -> 21.
+# separator + restored + 2 wrapped footer lines) -> 21. RE-MEASURED 2026-09-15 (Task 9) when the
+# Action row left this screen: 19 lines (one fewer row) -> 20. The project screen's own full-list
+# render at 50 columns was measured alongside this drop (12 known projects plus the two pinned
+# rows) and stays under this same minimum even at height 19 (18 lines, footer wrapping to three) -
+# it scrolls where the launch screen cannot, so it never pushes this constant higher.
 $worstCase = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height 200 -Limits $narrowLimits `
     -Restored @('Model') -RestoredAge '12 min' -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultAdvisorLabel 'default (fable)')
-Assert-Equal 20 $worstCase.Count 'the worst 50-column frame is 20 lines'
+Assert-Equal 19 $worstCase.Count 'the worst 50-column frame is 19 lines'
 Assert-Equal ($worstCase.Count + 1) $script:MinHeight 'MinHeight is that count plus the headroom row'
+
+# The project screen's own worst case at 50 columns: a full registry (more projects than the
+# minimum viewport shows) plus the two pinned rows, at the new minimum height itself - the case
+# that could have forced MinHeight back up had it not fit.
+$projWorstList = 1..12 | ForEach-Object {
+    [pscustomobject]@{
+        Slug = "wc$_"; Path = "C:\Users\sample-user\Projects\project-name-$_"
+        Name = "project-name-$_"; Worktree = $(if ($_ % 3 -eq 0) { 'feature-x' } else { $null })
+        LastActivity = (Get-Date).AddHours(-$_)
+    }
+}
+$projWorst = @(Get-ProjectFrame -Projects $projWorstList -Index 5 -Cwd 'C:\x' -Width 50 -Height $script:MinHeight)
+Assert-Equal $true ($projWorst.Count -le ($script:MinHeight - 1)) 'the project screen worst case at 50 columns still leaves the headroom row at MinHeight'
 
 foreach ($h in @($script:MinHeight, 50)) {
     $nmap = $null
     $lf = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height $h -Limits $narrowLimits -Restored @('Model') -RestoredAge '12 min' -RowMap ([ref]$nmap))
     $lfText = $lf -join "`n"
-    # Clickable tokens are bracketed here (no -Color): '[enter] start', not 'enter start'.
-    foreach ($hint in @('[enter] start', '[u] maintenance', '[esc] quit', 'w/s row', 'a/d value')) {
+    # Clickable tokens are bracketed here (no -Color): '[enter] next', not 'enter next'.
+    foreach ($hint in @('[enter] next', '[u] maintenance', '[esc] quit', 'w/s row', 'a/d value')) {
         Assert-Equal $true $lfText.Contains($hint) "50x${h} launch: the hint '$hint' is readable"
     }
     Assert-Equal $true ($lf.Count -le ($h - 1)) "50x${h} launch: $($lf.Count) lines leave the headroom row"
@@ -1790,12 +1814,27 @@ foreach ($h in @($script:MinHeight, 50)) {
     }
     Assert-Equal $true ($pf.Count -le ($h - 1)) "50x${h} picker: $($pf.Count) lines leave the headroom row"
 
+    # Fix round 1, MINOR 2: the SCOPED picker (Task 8's -Scope project, the tab hint and the
+    # ProjectName title suffix added on top of the plain picker above) was never rendered at 50
+    # columns at all - only the unscoped picker was. A 34-character -ProjectName is the worst case
+    # this took: it wrapped the title further than the plain "resume - N sessions" form.
+    $spf = @(Get-PickerFrame -Sessions $narrowSessions -Index 2 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height $h)
+    Assert-Equal $true ($spf.Count -le ($h - 1)) "50x${h} scoped picker: $($spf.Count) lines leave the headroom row"
+    Assert-True (($spf -join "`n") -match 'tab') "50x${h} scoped picker: the tab-widen hint is readable"
+
     $mf = @(Get-MaintenanceFrame -Info $narrowInfo -Width 50 -Height $h -Status $longStatus -Actions $cfgActions)
     $mfText = $mf -join "`n"
     foreach ($hint in @('[u] update', '[r] rename swap', '[d] doctor', '[m] mcp list', '[p] prune', '[i] full reindex', '[esc] back')) {
         Assert-Equal $true $mfText.Contains($hint) "50x${h} maintenance: the hint '$hint' is readable"
     }
     Assert-Equal $true ($mf.Count -le ($h - 1)) "50x${h} maintenance: $($mf.Count) lines with a long status leave the headroom row"
+
+    $pjf = @(Get-ProjectFrame -Projects $projWorstList -Index 5 -Cwd 'C:\x' -Width 50 -Height $h)
+    $pjfText = $pjf -join "`n"
+    foreach ($hint in @('w/s move', '[enter] new', '[c] continue', '[r] resume', '[t] worktree', '[/] filter', '[esc] back')) {
+        Assert-Equal $true $pjfText.Contains($hint) "50x${h} project: the hint '$hint' is readable"
+    }
+    Assert-Equal $true ($pjf.Count -le ($h - 1)) "50x${h} project: $($pjf.Count) lines leave the headroom row"
 }
 
 # A click on a hint that wrapped onto a LATER footer line reaches its key - the span's line offset
@@ -2434,7 +2473,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 885) { Write-Host "COULD NOT RUN: expected 885 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 907) { Write-Host "COULD NOT RUN: expected 907 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

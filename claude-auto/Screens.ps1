@@ -19,7 +19,12 @@ $script:Rows = @(
     # The box is capped at 100 columns (Get-LaunchFrame's $boxWidth) and this is the width-critical
     # row, which is why Config.ps1 limits an account key to 8 characters.
     @{ Name = 'Account';    Label = 'account';    Values = @('work') }
-    @{ Name = 'Action';     Label = 'action';     Values = @('new', 'continue', 'resume', 'worktree') }
+    # Action is no longer a launch-screen row (2026-09-15): the project screen between this one and
+    # the session picker decides new/continue/resume/worktree, since it is the one place that
+    # already knows WHICH project the action applies to. $State.Action still exists (New-LaunchState
+    # keeps it at 'new') - Get-LaunchArgs still reads it, and the project screen's own result
+    # (Invoke-ProjectScreen's -Action) sets it in claude-auto.ps1 - only the row that let this
+    # screen edit it directly is gone.
     @{ Name = 'Model';      Label = 'model';      Values = @('default', 'fable', 'opus1m', 'sonnet1m', 'haiku')
        Labels = @{ fable = 'Fable 5.1'; opus1m = 'Opus 5[1M]'; sonnet1m = 'Sonnet 5[1M]'; haiku = 'Haiku 4.5' }
        Args   = @{ fable = 'fable';   opus1m = 'opus[1m]';   sonnet1m = 'sonnet[1m]';   haiku = 'haiku' } }
@@ -72,23 +77,22 @@ function Set-LaunchRoster {
 # 50 columns since 2026-09-02: the owner launches over RDP from a phone, where 50x50 is what the
 # screen gives. Every frame must survive it - footers wrap (New-HintFooter -Width), option rows
 # collapse to the selected value, the maintenance verdicts fit 34 characters.
-# Height 21, RE-MEASURED 2026-09-04 when the account row became a tab strip and the bars moved off
-# it: at 50 columns the worst launch frame is 20 lines - 3 box + 1 blank + 8 rows + 3 bars (five
-# hour, seven day, model bucket) + 1 blank + 1 separator + 1 restored + 2 wrapped footer lines -
-# plus the headroom row Write-Frame needs. It was 18+1 before the advisor row and the third bar.
+# Height 20, RE-MEASURED 2026-09-15 when the Action row left the launch screen (Task 9: the project
+# screen decides new/continue/resume/worktree now) and the footer's 'enter' hint became 'next': at
+# 50 columns the worst launch frame is 19 lines - 3 box + 1 blank + 7 rows + 3 bars (five hour,
+# seven day, model bucket) + 1 blank + 1 separator + 1 restored + 2 wrapped footer lines - plus the
+# headroom row Write-Frame needs. It was 20+1 with the Action row still on this screen.
 # Never guess this number: Test-Ui renders that exact frame at an unrefusable height, counts it and
 # asserts this constant is the count plus one, so it re-measures itself on every run.
-# The "8 rows" above assumes the Remote row is present (remote: true in the config): with
+# The "7 rows" above assumes the Remote row is present (remote: true in the config): with
 # remote: false the frame is one row shorter and this minimum has headroom to spare.
-# RE-MEASURED 2026-09-09 when the arrow hints shrank from up/down and left/right to w/s and a/d
-# (WASD navigation): the frame is still 20 lines at 50 columns - the footer still wraps to two
-# lines (41 and 32 characters) - so $script:MinHeight did not move. The zero-margin note from when
-# the key caps became buttons no longer applies: there is 9 columns of slack on the wider wrapped
-# line now, not none. One more character in any launch hint label, or a fourth clickable hint,
-# could still wrap to a THIRD footer line - the self-measuring assertion above will fail loudly and
-# say so if it ever does, but this is no longer the zero-margin case it once was.
+# The project screen's own full-list render (Task 9, 50 columns, 12 known projects plus the two
+# pinned rows) was measured alongside this drop and stays well under the launch screen's own
+# requirement even at height 19 (18 lines, footer wrapping to three) - it scrolls where the launch
+# screen cannot, so it never pushes this constant higher than the launch screen's own worst case.
+# Re-measure both, not just the launch screen, before ever moving this constant again.
 $script:MinWidth = 50
-$script:MinHeight = 21
+$script:MinHeight = 20
 $script:TwoPaneWidth = 100
 
 function Get-LaunchRows { return $script:Rows }
@@ -114,6 +118,11 @@ function New-LaunchState {
         # it is a filesystem path, not a pick from a row's option list, so it is saved and merged by
         # its own explicit lines, validated by existence rather than membership.
         Project = ''
+        # The registry slug for Project, when it is a known project - '' for an unrecognised
+        # directory (a free path, or a cwd nothing has seen before). Derived, never persisted: it
+        # rides along so the session picker can scope by slug (exact) rather than by name (which two
+        # repositories can share) without looking the path up in the registry a second time.
+        ProjectSlug = ''
     }
 }
 
@@ -265,7 +274,7 @@ function Add-LaunchColor {
         param($m)
         (Get-PercentColor -Percent ([int]$m.Groups[1].Value)) + $m.Value + $script:C.Reset
     })
-    $out = $out -replace '\b(account|model|effort|advisor|permission|remote|action|mode)\b', ($c.Dim + '$1' + $c.Reset)
+    $out = $out -replace '\b(account|model|effort|advisor|permission|remote|mode)\b', ($c.Dim + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Cursor)])", ($c.BrightYellow + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Sparkle)])", ($c.Accent + '$1' + $c.Reset)
     $out = $out -replace '(\d+ (?:min|h|d) ago|just now)', ($c.Dim + '$1' + $c.Reset)
@@ -594,7 +603,7 @@ function Get-LaunchFrame {
     $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
         @{ Token = 'w/s'; Label = 'row';         Clickable = $false }
         @{ Token = 'a/d'; Label = 'value';       Clickable = $false }
-        @{ Token = 'enter';      Label = 'start';       Clickable = $true; Key = 'Enter';  Char = '' }
+        @{ Token = 'enter';      Label = 'next';        Clickable = $true; Key = 'Enter';  Char = '' }
         @{ Token = 'u';          Label = 'maintenance'; Clickable = $true; Key = '';       Char = 'u' }
         @{ Token = 'esc';        Label = 'quit';        Clickable = $true; Key = 'Escape'; Char = '' }
     )

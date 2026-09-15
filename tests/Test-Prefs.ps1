@@ -319,6 +319,30 @@ $sw = Switch-LaunchAccount -State $sw -To 'personal' -Prefs $swFile -Rows $rows 
 $sw = Switch-LaunchAccount -State $sw -To 'low' -Prefs $swFile -Rows $rows -NowMs 2000
 Assert-Equal '' "$($sw.Project)" 'a session-stashed project that is a FILE is rejected on reload too'
 
+# --- ProjectSlug rides alongside Project (fix round 1, MINOR 5) -------------------------------
+# It is derived, never persisted (New-LaunchState's own comment) - but a session-stash restore is
+# in-memory state from the SAME run, not a persisted file value, so it must still carry the slug
+# alongside the project; and every place Project resets to '' must reset ProjectSlug too, or a
+# stale slug from a different project could survive a switch (harmless today only because
+# Set-LaunchStartProject/the project screen's own result always overwrite it before the session
+# picker reads it - a latent bug waiting for that assumption to move).
+$slugRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\claude-auto')).Path
+$slugFile = @{ Version = 2; Account = 'work'; Profiles = @{ work = @{ Project = $slugRoot } } }
+$swSlug = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs $slugFile -Rows $rows -NowMs 2000).State
+$swSlug.ProjectSlug = 'work-slug'
+$swSlug = Switch-LaunchAccount -State $swSlug -To 'personal' -Prefs $slugFile -Rows $rows -NowMs 2000
+Assert-Equal '' $swSlug.ProjectSlug 'switching to an account with no remembered slug resets it - no leftover from the tab just left'
+Assert-Equal 'work-slug' $swSlug.Profiles['work']['ProjectSlug'] 'leaving work parked its slug in the stash alongside the project'
+$swSlug = Switch-LaunchAccount -State $swSlug -To 'work' -Prefs $slugFile -Rows $rows -NowMs 2000
+Assert-Equal 'work-slug' $swSlug.ProjectSlug 'and switching back restores the slug from the session stash, alongside the project'
+
+# A rejected project (the FILE-path guard above) clears the slug too - one must never outlive the
+# other.
+$swSlug.Project = $swFilePath; $swSlug.ProjectSlug = 'stale-slug'
+$swSlug = Switch-LaunchAccount -State $swSlug -To 'personal' -Prefs $slugFile -Rows $rows -NowMs 2000
+$swSlug = Switch-LaunchAccount -State $swSlug -To 'low' -Prefs $slugFile -Rows $rows -NowMs 2000
+Assert-Equal '' $swSlug.ProjectSlug 'a rejected (file, not directory) project reload also clears the stale slug'
+
 # The bug's real-world damage: a launch on the account switched TO must never overwrite the account
 # switched FROM, and must write its OWN project, never one leaked across the switch.
 $leakPath = New-PrefsPath; $paths += $leakPath
@@ -501,7 +525,7 @@ for (`$i = 0; `$i -lt `$Count; `$i++) { `$null = Save-LaunchPrefs -State `$state
 
 foreach ($f in $paths) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 122) { Write-Host "COULD NOT RUN: expected 122 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 126) { Write-Host "COULD NOT RUN: expected 126 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -418,6 +418,69 @@ function Get-ClaudeInputRecordTime {
     return $script:LastRecordMs
 }
 
+function Read-ClaudeFreePath {
+    # The free-path prompt (Invoke-ProjectScreen's -ReadPath) needs the OWNER's own keystrokes, not
+    # the armed console's raw record queue: [Console]::ReadLine reads [Console]::In directly, which
+    # competes with Open-ClaudeConsoleInput's ReadConsoleInput for the same buffer and may see
+    # nothing at all. Mirrors how maintenance hands the screen to a child process - release the
+    # arming, let the ordinary console cook one line, put it back exactly as it was.
+    #
+    # Returns the NEW mouse state rather than mutating -MouseState or a caller's variable: a caller
+    # that reassigns its own $mouse INSIDE a plain scriptblock runs that assignment in a scope `&`
+    # creates fresh for the call, which never writes back to the caller's own variable. That was the
+    # live defect this function replaces (fix round 1, CRITICAL 1, 2026-09-16): the re-armed console
+    # was silently discarded into a dead local, the caller kept using the CLOSED handle afterwards,
+    # and Wait-KeyOrResize's mouse branch then returned $null immediately on every poll (
+    # Read-ClaudeInputEvent bails on `.Closed` before it ever waits) with no -MaxLoops and no sleep -
+    # a tight 100%-CPU loop reachable from the very first rejected free path. The caller MUST do
+    # `$script:mouse = (Read-ClaudeFreePath ...).MouseState` (or otherwise write to the actual
+    # variable it reads elsewhere), never a bare `$mouse = ...` inside another scriptblock.
+    #
+    # Every dependency is injected, so this is assertable without a console at all - the same shape
+    # as Set-ClaudeProfile's -Mirror and Resolve-ClaudeExecutable's -Resolver.
+    param(
+        $MouseState,
+        [scriptblock]$Close = { param($s) $null = Close-ClaudeConsoleInput -State $s },
+        [scriptblock]$Open = { Open-ClaudeConsoleInput },
+        # Preview must stay side-effect-free: claude-auto.ps1 passes -Rearm:(-not $Preview), so a
+        # preview run (which never armed the console to begin with, $MouseState is $null there)
+        # never opens one either.
+        [switch]$Rearm,
+        [scriptblock]$GetSize = { @([Console]::WindowWidth, [Console]::WindowHeight) },
+        # A BUFFER row, not a window-relative one - SetCursorPosition takes buffer coordinates, and
+        # off the alternate screen buffer (a plain console with real scrollback) WindowTop can be
+        # nonzero. Fix round 1, MINOR 1: `$h - 1` alone put the prompt above the visible window on
+        # any console that was not on the alternate buffer.
+        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
+        [scriptblock]$Write = { param([string]$Text) [Console]::Write($Text) },
+        [scriptblock]$SetCursor = { param([int]$X, [int]$Y) [Console]::SetCursorPosition($X, $Y) },
+        [scriptblock]$ReadLine = { [Console]::ReadLine() }
+    )
+    $newState = $MouseState
+    $line = ''
+    try {
+        if ($MouseState) { & $Close $MouseState }
+        $w, $h = & $GetSize
+        $top = & $GetWindowTop
+        try {
+            # Fix round 1, MINOR 1: Enter-AltBuffer hid the cursor (?25l) for the whole screen and
+            # the prompt never showed it - shown here, hidden again in the finally below regardless
+            # of how the read ends.
+            & $Write "$([char]27)[?25h"
+            & $SetCursor 0 ($top + $h - 1)
+        } catch { }
+        & $Write "$([char]27)[K  path: "
+        $line = & $ReadLine
+    } catch { $line = '' }
+    finally {
+        try { & $Write "$([char]27)[?25l" } catch { }
+        # Re-armed in the finally so a throwing reader still leaves the console usable - never let
+        # a failed read strand the launcher without its mouse for the rest of the session.
+        if ($Rearm) { $newState = & $Open }
+    }
+    return [pscustomobject]@{ Line = "$line"; MouseState = $newState }
+}
+
 function ConvertFrom-ClaudeMouseReport {
     # A decoded VT mouse report, in exactly the shape ConvertTo-ClaudeInputEvent produces for a
     # MOUSE_EVENT record, so every screen consumes it without knowing which terminal it came from.

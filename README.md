@@ -4,8 +4,8 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Windows PowerShell launcher for Claude Code: an account picker, remembered model/effort/advisor/
-permission choices per account, a session-resume picker, and a maintenance screen, all driven by one
-config file so nothing here is hardcoded to a particular machine.
+permission choices per account, a project picker, a session-resume picker, and a maintenance screen,
+all driven by one config file so nothing here is hardcoded to a particular machine.
 
 Unofficial and unaffiliated with Anthropic. It runs the `claude` CLI you already have; bugs in the
 CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
@@ -16,7 +16,6 @@ CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
 ╰────────────────────────────────────────────────────────────────────────────╯
 
  ❯ account     [work]
-   action      ● [new] ○ continue ○ resume ○ worktree
    model       ‹ default (Sonnet 5) ›
    effort      ● [default] ○ low ○ medium ○ high ○ xhigh ○ max ○ ultracode
    advisor     ● [default (none)] ○ fable ○ opus ○ off
@@ -24,8 +23,7 @@ CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
    mode        ● [normal] ○ safe
 
   ──────────────────────────────────────────────────────────────────────────
-  w/s row  ┊  a/d value  ┊  enter start  ┊  u maintenance
-  esc quit
+  w/s row  ┊  a/d value  ┊  enter next  ┊  u maintenance  ┊  esc quit
 ```
 
 The `default (…)` labels above resolve from the reader's own `~/.claude/settings.json` and differ per machine.
@@ -88,15 +86,21 @@ are empty there so a fresh clone never warns about a script nobody has - example
 `"launchHooks": ["~/scripts/after-launch.ps1"]`,
 `"maintenanceActions": [{ "key": "i", "label": "reindex", "script": "~/scripts/reindex.ps1", "confirmTwice": true }]`).
 
+Since the project screen, `launchHooks[]` runs with the CHOSEN PROJECT as the working directory, not
+the folder the launcher itself started in - the `cd` now happens before secrets and launch hooks so
+a project's own secrets load correctly, and a hook script that reads its cwd sees the project, not
+the launch directory.
+
 ### Secrets
 
 `secretsRoot` is a directory of per-project subdirectories whose FILES become environment variables (file name = variable name, content = value), so a token never sits in a config file. `.md` files and empty files are skipped. Three tiers apply in order, each later one overriding the earlier: `shared/`, `<slug>/org/` (opted in with a junction, never automatic), then `<slug>/` for the current working directory.
 
 ## What each screen does
 
-- **Launch screen** - rows for account (a tab strip carrying each account's five-hour usage %), action (`worktree` starts the session in a new git worktree, `-w`), model, effort, advisor, permission and mode (`safe` disables CLAUDE.md, skills, plugins, hooks and MCP for that session). With `remote: true` a Remote row appears too. Arrows move and change, enter starts, `u` opens maintenance, esc quits.
+- **Launch screen** - rows for account (a tab strip carrying each account's five-hour usage %), model, effort, advisor, permission and mode (`safe` disables CLAUDE.md, skills, plugins, hooks and MCP for that session). With `remote: true` a Remote row appears too. Arrows move and change, enter moves on to the project screen, `u` opens maintenance, esc quits.
+- **Project screen** - which directory the session runs in, and what it does there: known projects (from `~/.claude/projects`), the current directory, or a typed path. `enter` starts a new session, `c` continues, `r` resumes (opens the session picker below, scoped to that project), `t` starts it in a new git worktree (`-w`); `/` filters, `esc` goes back to the launch screen.
 - **Maintenance** (`u`) - `u` update, `r` rename swap, `d` doctor, `m` mcp list, `p` prune, plus one hotkey per configured `maintenanceActions[]` entry, `esc` back. **Not covered by `CLAUDE_AUTO_PREVIEW`** - unlike every other screen, its actions run against your real Claude Code install even during a preview run; `tests\preview.ps1` never presses one of these keys.
-- **Session picker** (action = resume) - a list with a last-exchange preview; `/` filters, `enter` opens, `f` forks, `esc` returns to the launch screen.
+- **Session picker** (reached by choosing resume on the project screen) - a list with a last-exchange preview, scoped to the chosen project by default; `/` filters, `enter` opens, `f` forks, `tab` widens to every project and back, `esc` cancels and returns to the launch screen (not the project screen - cancelling a resume is a change of mind about launching at all).
 
 ## Arguments and environment switches
 
