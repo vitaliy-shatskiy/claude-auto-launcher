@@ -26,6 +26,19 @@ function Assert([string]$Name, [bool]$Condition) {
     else { Write-Host "  FAIL $Name" -ForegroundColor Red; $script:fail++ }
 }
 
+# Privilege-dependent block detector (Task 10 review, item E): the Repair-SharedLink
+# delete-refused block below (icacls /deny DE/DC) is empirically privilege-dependent - measured
+# 2026-09-15 as exit 0 (all pass) from an elevated (Administrator) session, and 3 FAILs from two
+# independent NON-elevated sessions on this same machine. A gate that reports a different verdict in
+# two terminals of one machine is broken, so that block runs only when elevated; the non-elevated
+# branch (where the deny ACE does not bite the way the block assumes) SKIPS it and makes this suite
+# exit 2 - "could not run", never a silent pass.
+$script:IsElevatedSession = $false
+try {
+    $script:IsElevatedSession = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch { }
+$script:CouldNotRunReason = $null
+
 $root = Join-Path $env:TEMP ("cct-secrets-test-" + [guid]::NewGuid().ToString('N'))
 $slug = 'C--test--proj'
 New-Item -ItemType Directory -Force "$root\shared", "$root\org\acme", "$root\$slug" | Out-Null
@@ -247,19 +260,28 @@ try {
     # (b) the DELETE is refused (no delete on the file, no delete-child on the directory - exactly
     # the pair an AV product or a locked file produces): the copy must survive, and the launcher
     # must not report a re-link that never happened.
-    $fbWorkB = Join-Path $fbBase 'b\work'
-    New-Item -ItemType Directory -Force $fbWorkB, $fbSecB | Out-Null
-    Set-Content -LiteralPath "$fbWorkB\settings.json" -Value '{"model":"work"}' -NoNewline
-    Set-Content -LiteralPath "$fbSecB\settings.json"  -Value '{"model":"drifted"}' -NoNewline
-    (Get-Item -LiteralPath "$fbSecB\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
-    & icacls.exe "$fbSecB\settings.json" '/deny' "${who}:(DE)" *>$null
-    & icacls.exe $fbSecB '/deny' "${who}:(DC)" *>$null
-    $WorkRoot = $fbWorkB; $SecondaryRoots = @($fbSecB)
-    $fbB = @(Repair-SharedLink -Name 'settings.json' 6>&1 | ForEach-Object { "$_" })
-    Assert 'a re-link refused mid-way leaves the file in place' (Test-Path -LiteralPath "$fbSecB\settings.json")
-    Assert 'its content is untouched'                           ((Get-Content -LiteralPath "$fbSecB\settings.json" -Raw) -eq '{"model":"drifted"}')
-    Assert 'the failure costs one line'                         (@($fbB | Where-Object { $_ -match 'could not re-link' }).Count -eq 1)
-    Assert 'and nothing claims it was re-linked'                (@($fbB | Where-Object { $_ -match 're-linked settings\.json' }).Count -eq 0)
+    #
+    # PRIVILEGE-DEPENDENT - see the detector comment above $script:IsElevatedSession. Runs for real
+    # only when elevated; a non-elevated session skips it and this suite exits 2 instead of reporting
+    # a false verdict either way.
+    if ($script:IsElevatedSession) {
+        $fbWorkB = Join-Path $fbBase 'b\work'
+        New-Item -ItemType Directory -Force $fbWorkB, $fbSecB | Out-Null
+        Set-Content -LiteralPath "$fbWorkB\settings.json" -Value '{"model":"work"}' -NoNewline
+        Set-Content -LiteralPath "$fbSecB\settings.json"  -Value '{"model":"drifted"}' -NoNewline
+        (Get-Item -LiteralPath "$fbSecB\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
+        & icacls.exe "$fbSecB\settings.json" '/deny' "${who}:(DE)" *>$null
+        & icacls.exe $fbSecB '/deny' "${who}:(DC)" *>$null
+        $WorkRoot = $fbWorkB; $SecondaryRoots = @($fbSecB)
+        $fbB = @(Repair-SharedLink -Name 'settings.json' 6>&1 | ForEach-Object { "$_" })
+        Assert 'a re-link refused mid-way leaves the file in place' (Test-Path -LiteralPath "$fbSecB\settings.json")
+        Assert 'its content is untouched'                           ((Get-Content -LiteralPath "$fbSecB\settings.json" -Raw) -eq '{"model":"drifted"}')
+        Assert 'the failure costs one line'                         (@($fbB | Where-Object { $_ -match 'could not re-link' }).Count -eq 1)
+        Assert 'and nothing claims it was re-linked'                (@($fbB | Where-Object { $_ -match 're-linked settings\.json' }).Count -eq 0)
+    } else {
+        Write-Host "  SKIP the delete-refused block needs an elevated session - the deny ACE does not bite the same way non-elevated (measured 2026-09-15, two independent runs)" -ForegroundColor Yellow
+        $script:CouldNotRunReason = 'the delete-refused Repair-SharedLink block (Test-Env.ps1, Repair-SharedLink section) is privilege-dependent and this session is not elevated - run it elevated instead of trusting a non-elevated verdict'
+    }
 } finally {
     $WorkRoot = $origWR4; $SecondaryRoots = $origSR4
     # Lift every deny before the sweep, or the tree cannot be removed and the temp dir is littered.
@@ -669,15 +691,34 @@ try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSumma
 
 } finally { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 147) {
-    Write-Host "COULD NOT RUN: expected 147 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
-    exit 2
-}
+# The privilege-dependent block (item E) contributes 4 assertions only when elevated; a non-elevated
+# session skips them and this suite must report COULD NOT RUN rather than a count mismatch or a
+# false pass/fail.
+#
+# ORDER MATTERS (Task 10 review, fix round 1, MINOR 2+3): a real FAIL is checked FIRST, or a
+# non-elevated session with a genuine, unrelated failure elsewhere would have reported
+# "COULD NOT RUN: ... privilege-dependent ..." instead of the failure - downgrading red to amber and
+# hiding a real bug behind the expected privilege skip. The count guard comes next, with its
+# conditional floor (147 elevated / 143 non-elevated) actually reached now, rather than dead code
+# behind an earlier unconditional exit (MINOR 3: with $script:CouldNotRunReason always set on a
+# non-elevated run, the old ordering's `exit 2` above the count check meant the 143 branch could
+# never execute). $script:CouldNotRunReason is checked LAST, on purpose: reaching it means no
+# assertion failed and the count is exactly what elevation predicts, so the only thing left to
+# report is the deliberate, accounted-for skip.
 if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 147 } else { 143 }
+if ($script:Ran -ne $script:ExpectedRan) {
+    Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
+    exit 2
+}
+if ($script:CouldNotRunReason) {
+    Write-Host "COULD NOT RUN: $script:CouldNotRunReason" -ForegroundColor Red
+    exit 2
+}
 # Counted, not guessed: HEAD claimed 72 while running 75 (measured 2026-09-04 by counting the
 # ok/FAIL lines of a bare run). A banner nobody re-counts is a number that drifts silently.
-Write-Host '147 assertions, all pass' -ForegroundColor Green
+Write-Host "$script:ExpectedRan assertions, all pass" -ForegroundColor Green
 exit 0

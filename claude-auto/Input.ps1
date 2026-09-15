@@ -446,6 +446,13 @@ function Read-ClaudeFreePath {
         # preview run (which never armed the console to begin with, $MouseState is $null there)
         # never opens one either.
         [switch]$Rearm,
+        # Whether the caller's screen is on the alternate buffer with the cursor already hidden
+        # (Enter-AltBuffer's ?25l) and only its OWN Exit-AltBuffer (guarded `if ($alt)`) will ever
+        # show it again. This function always shows the cursor (?25h) to display the prompt; without
+        # this switch it also unconditionally hid it again on the way out (review item B), which on a
+        # non-alt-buffer session (no Enter-AltBuffer call, nobody's Exit-AltBuffer to undo it) left
+        # the terminal cursor hidden for good. Pass the caller's own $alt.
+        [switch]$RestoreCursorHidden,
         [scriptblock]$GetSize = { @([Console]::WindowWidth, [Console]::WindowHeight) },
         # A BUFFER row, not a window-relative one - SetCursorPosition takes buffer coordinates, and
         # off the alternate screen buffer (a plain console with real scrollback) WindowTop can be
@@ -473,7 +480,10 @@ function Read-ClaudeFreePath {
         $line = & $ReadLine
     } catch { $line = '' }
     finally {
-        try { & $Write "$([char]27)[?25l" } catch { }
+        # Hidden again ONLY when the caller's own screen will re-show it (alt-buffer Exit-AltBuffer,
+        # guarded `if ($alt)`). Off the alt buffer this must stay a no-op, or the terminal cursor is
+        # left hidden with nothing left to undo it (review item B, Task 10).
+        if ($RestoreCursorHidden) { try { & $Write "$([char]27)[?25l" } catch { } }
         # Re-armed in the finally so a throwing reader still leaves the console usable - never let
         # a failed read strand the launcher without its mouse for the rest of the session.
         if ($Rearm) { $newState = & $Open }

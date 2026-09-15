@@ -23,7 +23,7 @@ CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
    mode        ● [normal] ○ safe
 
   ──────────────────────────────────────────────────────────────────────────
-  w/s row  ┊  a/d value  ┊  enter next  ┊  u maintenance  ┊  esc quit
+  w/s row  ┊  a/d value  ┊   enter  next  ┊   u  maintenance  ┊   esc  quit
 ```
 
 The `default (…)` labels above resolve from the reader's own `~/.claude/settings.json` and differ per machine.
@@ -138,8 +138,8 @@ The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer;
 pwsh -File tests\checkpoint.ps1
 ```
 
-16 checks: 12 unit suites (`Theme`, `Layout`, `Sessions`, `Ui`, `Maintenance`, `Remote`, `Prefs`,
-`Env`, `Config`, `Input`, `Install`, `Mirror`), a privacy scan, and three launcher-level checks.
+17 checks: 13 unit suites (`Theme`, `Layout`, `Sessions`, `Projects`, `Ui`, `Maintenance`, `Remote`,
+`Prefs`, `Env`, `Config`, `Input`, `Install`, `Mirror`), a privacy scan, and three launcher-level checks.
 Every exit code is read on its own line, and **`2` means the check could not run — never a pass**.
 
 Any suite runs alone: `pwsh -File tests\Test-Ui.ps1`. `Test-Input.ps1 -Live` adds the console-mode

@@ -19,6 +19,17 @@ function Assert-Equal {
         $script:Failed++
     } else { Write-Host "ok    $Because" }
 }
+function Assert-True {
+    # Assert-Equal $null $x stringifies both sides ("$Expected" -ne "$Actual"), so it passes for ''
+    # and @() too, not just $null (Task 10 review, fix round 1, SUSPICION->FIX sweep). Use this
+    # instead: ($null -eq $x) is a real type-aware comparison.
+    param([bool]$Actual, [string]$Because)
+    $script:Ran++
+    if (-not $Actual) {
+        Write-Host "FAIL  $Because"
+        $script:Failed++
+    } else { Write-Host "ok    $Because" }
+}
 
 # Fixed-length synthetic path, not (Join-Path $HOME '.local\bin\claude.exe'): several assertions
 # below render at the MINIMUM supported width and check that content fits without truncation - a
@@ -390,7 +401,7 @@ $pruned = Get-Content -LiteralPath $script:HashCachePath -Raw | ConvertFrom-Json
 Assert-Equal $false ([bool]($pruned.PSObject.Properties.Name -match 'gone\.bin')) 'an entry whose file is gone is pruned at the next write'
 Assert-Equal $true ([bool]($pruned.PSObject.Properties.Name -match 'big\.bin')) 'the entry still in use survives the prune'
 
-Assert-Equal $null (Get-CachedFileHash -Path (Join-Path $hashDir 'never-existed.bin')) 'a missing file yields null rather than throwing'
+Assert-True ($null -eq (Get-CachedFileHash -Path (Join-Path $hashDir 'never-existed.bin'))) 'a missing file yields null rather than throwing'
 
 # A file that EXISTS but cannot be read is the same answer. It used to throw a raw PowerShell error
 # into the maintenance screen - reachable whenever an antivirus or indexer holds a just-downloaded
@@ -406,7 +417,7 @@ try {
     # assertion cannot fail (a mutation run proved exactly that about the first version of it).
     $lockErr = @(Get-CachedFileHash -Path $lockedSmall 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
     Assert-Equal 0 $lockErr.Count 'a small file held open writes nothing to the error stream'
-    Assert-Equal $null (Get-CachedFileHash -Path $lockedSmall) 'and answers null, exactly like a missing file'
+    Assert-True ($null -eq (Get-CachedFileHash -Path $lockedSmall)) 'and answers null, exactly like a missing file'
 } finally { $lockSmall.Dispose() }
 
 $lockedBig = Join-Path $hashDir 'locked-big.bin'
@@ -415,7 +426,7 @@ $lockBig = [IO.File]::Open($lockedBig, [IO.FileMode]::Open, [IO.FileAccess]::Rea
 try {
     $lockErrBig = @(Get-CachedFileHash -Path $lockedBig 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
     Assert-Equal 0 $lockErrBig.Count 'a large file held open writes nothing to the error stream either'
-    Assert-Equal $null (Get-CachedFileHash -Path $lockedBig) 'and answers null too'
+    Assert-True ($null -eq (Get-CachedFileHash -Path $lockedBig)) 'and answers null too'
 } finally { $lockBig.Dispose() }
 $lockCache = Get-Content -LiteralPath $script:HashCachePath -Raw | ConvertFrom-Json
 Assert-Equal $false ([bool]($lockCache.PSObject.Properties.Name -match 'locked-big')) 'a failed hash is never remembered, so the next call retries'

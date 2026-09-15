@@ -102,7 +102,11 @@ function Initialize-ProjectSlugFixture {
 
     return $projectsRoot
 }
-$script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
+# NOT called here at script load: the wipe/rebuild it does (Remove-Item -Recurse -Force outside the
+# repo) must never run on a path that is about to exit 2 anyway (Task 10 review - a missing launcher
+# or fixture config was wiping the fixture tree on every invocation, -Record included, before the
+# guards below even ran). It is called once each guard it needs has already passed, right before the
+# one call site that actually reads it (Get-AllRunOutput, in each of the two branches below).
 
 # preview.ps1's own (non--Full) summary filter does not include CLAUDE_CONFIG_DIR or argv count -
 # both are named explicitly by the finding this check exists for (the session picker's account
@@ -160,6 +164,7 @@ if (-not (Test-Path -LiteralPath $FixtureConfig)) {
 
 if ($Record) {
     try {
+        $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
         $lines = Get-AllRunOutput
         if ($lines.Count -eq 0) {
             Write-Host "CANNOT RECORD: the preview runs produced no output at all" -ForegroundColor Red
@@ -181,6 +186,7 @@ if (-not (Test-Path -LiteralPath $Reference)) {
 }
 
 try {
+    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
     $actual = Get-AllRunOutput
 } catch {
     Write-Host "CANNOT CHECK: $($_.Exception.Message)" -ForegroundColor Red

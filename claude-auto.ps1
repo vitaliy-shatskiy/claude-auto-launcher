@@ -225,7 +225,11 @@ if ($UseUi) {
         # so the actual keystroke handling is unverified past what Read-ClaudeFreePath's own
         # injected-dependency unit tests (Test-Input.ps1) prove.
         $readClaudePath = {
-            $result = Read-ClaudeFreePath -MouseState $mouse -Rearm:(-not $Preview) -GetSize $size
+            # -RestoreCursorHidden:$alt - only Exit-AltBuffer ever shows the cursor again, and it
+            # only runs `if ($alt)`; a non-alt-buffer session (no Enter-AltBuffer ?25l) must not have
+            # this prompt hide the cursor on its way out, or nothing ever shows it again (review
+            # item B, Task 10).
+            $result = Read-ClaudeFreePath -MouseState $mouse -Rearm:(-not $Preview) -GetSize $size -RestoreCursorHidden:$alt
             $script:mouse = $result.MouseState
             return $result.Line
         }

@@ -82,15 +82,19 @@ function Set-LaunchRoster {
 # 50 columns the worst launch frame is 19 lines - 3 box + 1 blank + 7 rows + 3 bars (five hour,
 # seven day, model bucket) + 1 blank + 1 separator + 1 restored + 2 wrapped footer lines - plus the
 # headroom row Write-Frame needs. It was 20+1 with the Action row still on this screen.
-# Never guess this number: Test-Ui renders that exact frame at an unrefusable height, counts it and
-# asserts this constant is the count plus one, so it re-measures itself on every run.
+# Never guess this number: Test-Ui renders that exact LAUNCH frame at an unrefusable height, counts
+# it and asserts this constant is the count plus one, so it re-measures itself on every run.
 # The "7 rows" above assumes the Remote row is present (remote: true in the config): with
 # remote: false the frame is one row shorter and this minimum has headroom to spare.
-# The project screen's own full-list render (Task 9, 50 columns, 12 known projects plus the two
-# pinned rows) was measured alongside this drop and stays well under the launch screen's own
-# requirement even at height 19 (18 lines, footer wrapping to three) - it scrolls where the launch
-# screen cannot, so it never pushes this constant higher than the launch screen's own worst case.
-# Re-measure both, not just the launch screen, before ever moving this constant again.
+# The picker and project screens are NOT part of this measurement and must never be (fix round 1,
+# Task 10 review, IMPORTANT 1): both scroll, so unlike the launch screen above they have no fixed
+# worst-case line count to measure at all - rendered at an unbounded height, their line count grows
+# LINEARLY with however many rows the fixture happens to have (measured: project 12/13/40 rows ->
+# 19/20/47 lines; picker 6/15/30 rows -> 16/25/40 lines). Test-Ui instead proves both CLAMP their
+# viewport to whatever height they are given (a 40-row fixture still fits at MinHeight, and renders
+# MORE lines unbound - the only way to tell a real clamp from a merely-short fixture), which is why
+# neither can ever push this constant higher than the launch screen's own worst case. Re-measure the
+# LAUNCH screen, never the other two, before ever moving this constant again.
 $script:MinWidth = 50
 $script:MinHeight = 20
 $script:TwoPaneWidth = 100

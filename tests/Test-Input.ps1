@@ -24,6 +24,17 @@ function Assert-Equal {
         $script:Failed++
     } else { Write-Host "ok    $Because" }
 }
+function Assert-True {
+    # Assert-Equal $null $x stringifies both sides ("$Expected" -ne "$Actual"), so it passes for ''
+    # and @() too, not just $null - it reads stronger than it is for a $null check (review item C,
+    # Task 10). Use this instead: ($null -eq $x) is a real type-aware comparison.
+    param([bool]$Actual, [string]$Because)
+    $script:Ran++
+    if (-not $Actual) {
+        Write-Host "FAIL  $Because"
+        $script:Failed++
+    } else { Write-Host "ok    $Because" }
+}
 
 # ---------------------------------------------------------------- hit-testing
 
@@ -58,7 +69,7 @@ $rcfpOpen = { $script:rcfpOpenCalls++; $newMouseState }
 $oldMouseState = [pscustomobject]@{ Id = 'OLD'; Closed = $false }
 
 $script:rcfpWrites.Clear(); $script:rcfpCursor = $null; $script:rcfpClosedWith = $null; $script:rcfpOpenCalls = 0
-$r = Read-ClaudeFreePath -MouseState $oldMouseState -Rearm `
+$r = Read-ClaudeFreePath -MouseState $oldMouseState -Rearm -RestoreCursorHidden `
      -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 50 } `
      -Write $rcfpWrite -SetCursor $rcfpSetCursor -ReadLine { 'C:\typed\path' }
 Assert-Equal 'C:\typed\path' $r.Line 'the read line is returned'
@@ -66,16 +77,43 @@ Assert-Equal 'NEW' $r.MouseState.Id 'the caller gets back the OPENED state throu
 Assert-Equal 'OLD' $script:rcfpClosedWith.Id 'the state passed in is the one that gets closed'
 Assert-Equal 1 $script:rcfpOpenCalls '-Rearm opens exactly once'
 Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25h") 'the cursor is shown before the read'
-Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25l") 'and hidden again afterwards'
+# -RestoreCursorHidden (Task 10, review item B): the caller passes this only when its OWN screen is
+# on the alt buffer and its Exit-AltBuffer will show the cursor again - only THEN may this function
+# hide it on the way out.
+Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25l") '-RestoreCursorHidden: hidden again afterwards'
 Assert-Equal $true (([array]::IndexOf($script:rcfpWrites, "$([char]27)[?25h")) -lt ([array]::IndexOf($script:rcfpWrites, "$([char]27)[?25l"))) 'show comes before hide'
 Assert-Equal '0,73' ($script:rcfpCursor -join ',') 'the row is WindowTop + height - 1, a BUFFER row - not just height - 1, which is wrong off the alternate buffer'
+
+# Without -RestoreCursorHidden (the default: no alt buffer, so nobody's Exit-AltBuffer would ever
+# show the cursor again) - the cursor is shown for the prompt but NEVER hidden again. Before this
+# fix (review item B) the hide was unconditional and this branch left the terminal cursor hidden for
+# the rest of the session on any host that never entered the alt buffer.
+$script:rcfpWrites.Clear()
+$rNoRestore = Read-ClaudeFreePath -MouseState $oldMouseState -Rearm `
+    -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 50 } `
+    -Write $rcfpWrite -SetCursor $rcfpSetCursor -ReadLine { 'C:\typed\path' }
+Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25h") 'without -RestoreCursorHidden: the cursor is still shown before the read'
+Assert-Equal $false ($script:rcfpWrites -contains "$([char]27)[?25l") 'without -RestoreCursorHidden: never hidden again - nothing would undo it'
+# -RestoreCursorHidden only changes what the finally writes to the console - it must not change the
+# function's own return value (the line read, or -Rearm's re-armed state).
+Assert-Equal 'C:\typed\path' $rNoRestore.Line 'without -RestoreCursorHidden: the read line is still returned'
+Assert-Equal 'NEW' $rNoRestore.MouseState.Id 'without -RestoreCursorHidden: -Rearm still re-arms and returns the new state'
+
+# SOURCE assertion, the same trick this file already uses for the P/Invoke list (line ~818 below):
+# `$script:mouse = $result.MouseState` inside claude-auto.ps1's $readClaudePath scriptblock is
+# structurally untestable headless - the preview path never arms the mouse, so no suite run ever
+# executes this specific line, and a mutant that dropped or renamed it would still pass every other
+# assertion here. Pinning the exact source line is the only guard possible short of a live console.
+$claudeAutoSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
+$mouseAssignHits = @([regex]::Matches($claudeAutoSrc, [regex]::Escape('$script:mouse = $result.MouseState'))).Count
+Assert-Equal 1 $mouseAssignHits 'claude-auto.ps1 writes the re-armed mouse state back through $script:mouse = $result.MouseState exactly once (source assertion - the assignment cannot be exercised headless)'
 
 # No mouse state at all (preview, or a console-less host): nothing to close, nothing re-armed
 # unless asked, and it still returns cleanly.
 $script:rcfpOpenCalls = 0; $script:rcfpClosedWith = $null
 $r2 = Read-ClaudeFreePath -MouseState $null -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write {} -SetCursor {} -ReadLine { 'x' }
-Assert-Equal $null $r2.MouseState 'with no mouse state and no -Rearm, none is returned'
-Assert-Equal $null $script:rcfpClosedWith 'and nothing was closed - there was nothing to close'
+Assert-True ($null -eq $r2.MouseState) 'with no mouse state and no -Rearm, none is returned'
+Assert-True ($null -eq $script:rcfpClosedWith) 'and nothing was closed - there was nothing to close'
 Assert-Equal 0 $script:rcfpOpenCalls 'nor opened - -Rearm was not requested'
 
 # -Rearm not requested (the preview path, or any caller that never armed the console to begin with):
@@ -801,15 +839,18 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # (arming a SECOND time after TreatControlCAsInput can fail, in which case only 1 assertion runs
 # there instead of 4 - see 'arming after TreatControlCAsInput should still work'), so its count is
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
-# genuine hidden console, never guessed. The bare count (76: 59 before Task 9's fix round 1, plus
-# 17 for Read-ClaudeFreePath's own injected-dependency assertions) IS exact - checkpoint.ps1 only
-# ever runs this suite bare, and that path has no such branching. The LiveOnly floor of 115 is
-# untouched: it was already a lower bound, not a guess of the branching total, and the 17 new
-# assertions (pure, no console needed) run there too, just widening the margin.
+# genuine hidden console, never guessed. The bare count (81: 59 before Task 9's fix round 1, 17 for
+# Read-ClaudeFreePath's own injected-dependency assertions, 3 from Task 10 - the -RestoreCursorHidden
+# branches (review item B) and the $script:mouse source assertion (item D) - plus 2 more from Task 10
+# fix round 1 (MINOR 4: a weak $null MouseState check replaced with Assert-True; MINOR 5: the
+# previously-unused $rNoRestore return value now asserted)) IS exact - checkpoint.ps1 only ever runs
+# this suite bare, and that path has no such branching. The LiveOnly floor of 115 is untouched: it
+# was already a lower bound, not a guess of the branching total, and the new assertions (pure, no
+# console needed) run there too, just widening the margin.
 if ($LiveOnly) {
     if ($script:Ran -lt 115) { Write-Host "COULD NOT RUN: expected at least 115 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
-} elseif ($script:Ran -ne 76) {
-    Write-Host "COULD NOT RUN: expected 76 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
+} elseif ($script:Ran -ne 81) {
+    Write-Host "COULD NOT RUN: expected 81 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

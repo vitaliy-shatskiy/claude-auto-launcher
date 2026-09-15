@@ -1704,7 +1704,7 @@ $pickSessions = @([pscustomobject]@{ Id = 'aaa'; Path = 'C:\x'; Modified = (Get-
 $FKeyUpper = [System.ConsoleKeyInfo]::new([char]'F', [System.ConsoleKey]0, $false, $false, $false)
 $w = New-EventReader @($FKeyUpper, $esc)
 $picked = Invoke-SessionPicker -Sessions $pickSessions -ReadKey $w -Draw { param($s, $i, $f) $null } -Wait $w -GetWindowTop { 0 }
-Assert-Equal $null $picked 'an uppercase F does not fork a session - picker key matching is case-sensitive'
+Assert-True ($null -eq $picked) 'an uppercase F does not fork a session - picker key matching is case-sensitive'
 
 # --- Hotkeys on any keyboard layout (owner ask 2026-09-02: RDP from a phone, Russian and Ukrainian
 # layouts). A real console reports the VIRTUAL key of the physical key whatever the layout paints
@@ -1765,24 +1765,59 @@ $narrowInfo = [pscustomobject]@{ Matches = $false; NewestVersion = '2.1.240'; In
 $narrowLimits = @{ work = [pscustomobject]@{ FiveHour = 41; SevenDay = 63; AgeText = '12 min ago'; Model = 15; ModelLabel = 'FABLE' } }
 $longStatus = (1..40 | ForEach-Object { "status line $_ with some words in it" }) -join "`n"
 
-# MinHeight is MEASURED, not chosen: the worst 50-column launch frame is rendered at a height the
-# guard cannot refuse, its lines are counted, and the constant must be that count plus the headroom
-# row Write-Frame needs. Written this way the number re-measures itself on every run - a literal
-# would go stale the first time a row or a bar is added, which is exactly how the old 16 survived
-# being one short. Measured 2026-09-04: 20 lines (3 box + blank + 8 rows + 3 bars + blank +
-# separator + restored + 2 wrapped footer lines) -> 21. RE-MEASURED 2026-09-15 (Task 9) when the
-# Action row left this screen: 19 lines (one fewer row) -> 20. The project screen's own full-list
-# render at 50 columns was measured alongside this drop (12 known projects plus the two pinned
-# rows) and stays under this same minimum even at height 19 (18 lines, footer wrapping to three) -
-# it scrolls where the launch screen cannot, so it never pushes this constant higher.
+# MinHeight is MEASURED, not chosen: the worst 50-column LAUNCH frame - the one screen with no
+# scroll, every row fixed content rather than a list - is rendered at a height the guard cannot
+# refuse (200), its lines are counted, and the constant must be that count plus the headroom row
+# Write-Frame needs. Written this way the number re-measures itself on every run - a literal would
+# go stale the first time a row or a bar is added, which is exactly how the old 16 survived being
+# one short. Measured 2026-09-04: 20 lines (3 box + blank + 8 rows + 3 bars + blank + separator +
+# restored + 2 wrapped footer lines) -> 21. RE-MEASURED 2026-09-15 (Task 9) when the Action row left
+# this screen: 19 lines (one fewer row) -> 20.
+#
+# The picker and project screens do NOT feed this measurement, and never have since (fix round 1,
+# Task 10 review, IMPORTANT 1): a version of this block briefly rendered them at Height 200 too and
+# asserted their EXACT count, which does not measure the screen - it measures the FIXTURE. Both
+# scroll, so their line count at an unbounded height grows LINEARLY with however many rows the
+# fixture happens to have (measured: project 12/13/40 rows -> 19/20/47 lines; picker 6/15/30 rows ->
+# 16/25/40 lines) - an exact-count assertion there pins MinHeight to an arbitrary fixture size, and
+# bumping the fixture by one row would make the gate demand a taller minimum for no real reason, when
+# the screen itself is unchanged. What actually matters is that both screens CLAMP their viewport to
+# whatever height they are given, so neither can ever push this constant higher than the launch
+# screen's own worst case - proven below with a fixture (40 rows) far past what any real viewport
+# shows: it still FITS at MinHeight, and unbound (Height 200) it renders MORE lines than at
+# MinHeight, which is the only way to tell a screen that actually clamped from one that merely had a
+# short list. They scroll where the launch screen cannot, so re-measure LAUNCH, never these two,
+# before ever moving this constant.
 $worstCase = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height 200 -Limits $narrowLimits `
     -Restored @('Model') -RestoredAge '12 min' -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultAdvisorLabel 'default (fable)')
-Assert-Equal 19 $worstCase.Count 'the worst 50-column frame is 19 lines'
+Assert-Equal 19 $worstCase.Count 'the worst 50-column launch frame is 19 lines'
 Assert-Equal ($worstCase.Count + 1) $script:MinHeight 'MinHeight is that count plus the headroom row'
 
+# Picker: a 40-session fixture, far past what any viewport shows, must still FIT at MinHeight, and
+# must render MORE lines when given the room - proving the viewport actually clamped, not merely
+# that the list happened to be short (which is exactly what a naive exact-count assertion could not
+# tell apart, per the comment above). The fit assertion alone is stub-blind (fix round 2, coordinator
+# review, finding 2): widening the too-small gate (`-lt $script:MinHeight` -> `-lt ($script:MinHeight
+# + 3)`) makes the frame at MinHeight return the ~4-line "need 50x20" stub instead of a real render,
+# and 4 <= 19 / 4 < (unbounded count) both still pass - a mutant the fit+clamp pair alone cannot see.
+# The title line ("resume - N sessions") only appears on a REAL render, never on the stub, so it is
+# asserted alongside every fit check below.
+$pickerBigSessions = @(1..40 | ForEach-Object { [pscustomobject]@{ SessionId = "big$_"; Project = "project-$_"; Worktree = ''; Title = "question $_"; LastUser = 'x'; LastAssistant = 'y'; Modified = (Get-Date).AddMinutes(-$_); PromptCount = $_; SizeBytes = 2048 } })
+$pickerFitPlain = @(Get-PickerFrame -Sessions $pickerBigSessions -Index 0 -Width 50 -Height $script:MinHeight)
+Assert-True ($pickerFitPlain.Count -le ($script:MinHeight - 1)) 'a 40-session plain picker still fits at MinHeight - the viewport clamps, not the list length'
+Assert-True (($pickerFitPlain -join "`n") -match 'sessions') 'and it is a REAL render at MinHeight, not the too-small stub (a widened size gate cannot fake this)'
+$pickerUnboundedPlain = @(Get-PickerFrame -Sessions $pickerBigSessions -Index 0 -Width 50 -Height 200)
+Assert-True ($pickerUnboundedPlain.Count -gt $pickerFitPlain.Count) 'and renders more lines when given the room - proving MinHeight is a real clamp on this screen, not an accident of a short fixture'
+
+$pickerFitScoped = @(Get-PickerFrame -Sessions $pickerBigSessions -Index 0 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height $script:MinHeight)
+Assert-True ($pickerFitScoped.Count -le ($script:MinHeight - 1)) 'a 40-session SCOPED picker still fits at MinHeight too'
+Assert-True (($pickerFitScoped -join "`n") -match 'sessions') 'and the scoped fit is a REAL render too, not the stub'
+$pickerUnboundedScoped = @(Get-PickerFrame -Sessions $pickerBigSessions -Index 0 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height 200)
+Assert-True ($pickerUnboundedScoped.Count -gt $pickerFitScoped.Count) 'and the scoped picker clamps the same way'
+
 # The project screen's own worst case at 50 columns: a full registry (more projects than the
-# minimum viewport shows) plus the two pinned rows, at the new minimum height itself - the case
-# that could have forced MinHeight back up had it not fit.
+# minimum viewport shows) plus the two pinned rows - kept at 12 rows because the hint-readability
+# checks further below only need a fixture bigger than one screenful, not proof of clamping.
 $projWorstList = 1..12 | ForEach-Object {
     [pscustomobject]@{
         Slug = "wc$_"; Path = "C:\Users\sample-user\Projects\project-name-$_"
@@ -1790,8 +1825,22 @@ $projWorstList = 1..12 | ForEach-Object {
         LastActivity = (Get-Date).AddHours(-$_)
     }
 }
-$projWorst = @(Get-ProjectFrame -Projects $projWorstList -Index 5 -Cwd 'C:\x' -Width 50 -Height $script:MinHeight)
-Assert-Equal $true ($projWorst.Count -le ($script:MinHeight - 1)) 'the project screen worst case at 50 columns still leaves the headroom row at MinHeight'
+
+# Project: the same clamp proof as the picker above, with its own 40-row registry - it scrolls where
+# the launch screen cannot, so it never pushes this constant higher than the launch screen's own
+# worst case (it scrolls; it never pushes this constant higher).
+$projBigList = 1..40 | ForEach-Object {
+    [pscustomobject]@{
+        Slug = "big$_"; Path = "C:\Users\sample-user\Projects\project-name-$_"
+        Name = "project-name-$_"; Worktree = $(if ($_ % 3 -eq 0) { 'feature-x' } else { $null })
+        LastActivity = (Get-Date).AddHours(-$_)
+    }
+}
+$projFit = @(Get-ProjectFrame -Projects $projBigList -Index 5 -Cwd 'C:\x' -Width 50 -Height $script:MinHeight)
+Assert-True ($projFit.Count -le ($script:MinHeight - 1)) 'a 40-project registry still fits at MinHeight - the viewport clamps, not the registry size'
+Assert-True (($projFit -join "`n") -match 'known') 'and it is a REAL render at MinHeight, not the too-small stub (a widened size gate cannot fake this)'
+$projUnbounded = @(Get-ProjectFrame -Projects $projBigList -Index 5 -Cwd 'C:\x' -Width 50 -Height 200)
+Assert-True ($projUnbounded.Count -gt $projFit.Count) 'and renders more lines when given the room - proving MinHeight is a real clamp on this screen too'
 
 foreach ($h in @($script:MinHeight, 50)) {
     $nmap = $null
@@ -2196,7 +2245,7 @@ try {
     $p4 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('t')) -Draw {}
     Assert-Equal 'worktree' $p4.Action 't means worktree'
 
-    Assert-Equal $null (Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {}) 'Escape cancels'
+    Assert-True ($null -eq (Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {})) 'Escape cancels'
 
     # The cwd pinned row is two rows past the last project.
     $p5 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
@@ -2222,14 +2271,14 @@ try {
     # A letter that IS a hotkey, typed while filtering, must only edit the filter text - never fire
     # the action. Proven by the run needing a further Escape to leave rather than acting on 'c'.
     $p6b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'c', 'Escape', 'Escape')) -Draw {}
-    Assert-Equal $null $p6b 'typing the "c" hotkey while filtering only edits the filter text, then Escape leaves'
+    Assert-True ($null -eq $p6b) 'typing the "c" hotkey while filtering only edits the filter text, then Escape leaves'
 
     # Escape in filter mode clears the filter (first Escape) rather than leaving; a second Escape
     # leaves the screen. Both asserted: the first by what Enter picks afterwards, the second by $null.
     $p6c = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Enter')) -Draw {}
     Assert-Equal $tmpAlpha $p6c.Path 'the first Escape clears the filter text rather than leaving, so Enter picks the unfiltered first row'
     $p6d = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Escape')) -Draw {}
-    Assert-Equal $null $p6d 'the second Escape leaves the screen'
+    Assert-True ($null -eq $p6d) 'the second Escape leaves the screen'
 
     # -Initial puts the cursor on a remembered project.
     $p7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
@@ -2245,7 +2294,7 @@ try {
     # The free-path row reads through -ReadPath. A path that does not exist must not be returned -
     # the loop stays open, proven by needing a further Escape to leave rather than returning on Enter.
     $p8 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'Enter', 'Escape')) -Draw {} -ReadPath { 'C:\this-path-does-not-really-exist-9f3a' }
-    Assert-Equal $null $p8 'a free path that does not exist keeps the loop open; Escape then cancels'
+    Assert-True ($null -eq $p8) 'a free path that does not exist keeps the loop open; Escape then cancels'
 
     # A real directory typed into the free-path row IS returned, resolved, and its slug looked up the
     # same way the cwd row's is.
@@ -2270,7 +2319,7 @@ try {
     Remove-Item -LiteralPath $vanishedDir -Recurse -Force
     $vanishedProjs = @([pscustomobject]@{ Slug = 'V'; Path = $vanishedDir; Name = 'vanished'; Worktree = $null; LastActivity = (Get-Date) })
     $pVanished = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter', 'Escape')) -Draw {}
-    Assert-Equal $null $pVanished 'Enter on a registry row whose directory has vanished does not return - the loop stays open'
+    Assert-True ($null -eq $pVanished) 'Enter on a registry row whose directory has vanished does not return - the loop stays open'
 
     # --- Mouse: a single click only moves the selection; nothing but a double click or a hotkey may
     # start a session. ---
@@ -2284,7 +2333,7 @@ try {
 
     $w10 = New-EventReader @((New-MouseEvent -Y 5 -Left), $esc)
     $p10 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w10 -Draw $pDraw -Wait $w10 -GetWindowTop { 0 }
-    Assert-Equal $null $p10 'a single click on a project row does not start anything - Escape still cancels'
+    Assert-True ($null -eq $p10) 'a single click on a project row does not start anything - Escape still cancels'
 
     $w11 = New-EventReader @((New-MouseEvent -Y 5 -Left), $enterKey)
     $p11 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w11 -Draw $pDraw -Wait $w11 -GetWindowTop { 0 }
@@ -2316,7 +2365,7 @@ try {
         $esc
     )
     $p15 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w15 -Draw $pDraw -Wait $w15 -GetWindowTop { 0 } -ReadPath $dblReadPath
-    Assert-Equal $null $p15 'the double-click-over-footer run still ends with Escape (the bogus path was never returned)'
+    Assert-True ($null -eq $p15) 'the double-click-over-footer run still ends with Escape (the bogus path was never returned)'
     Assert-True ($script:dblReadPathCalls -le 1) 'a double click over a footer button invokes -ReadPath at most once, not once per record'
 
     # --- Hover: a move inside the same footer button must not redraw. Counting $Draw proves the
@@ -2333,7 +2382,7 @@ try {
         $esc
     )
     $p12 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w12 -Draw $pDrawCounting -Wait $w12 -GetWindowTop { 0 }
-    Assert-Equal $null $p12 'the hover run ends with Escape as usual'
+    Assert-True ($null -eq $p12) 'the hover run ends with Escape as usual'
     Assert-True ($script:pDraws -le 2) 'two moves inside the same footer button draw at most twice: the initial frame plus one hover change'
     Assert-True ($script:pDraws -ge 1) 'and it did draw at least once, so the upper bound is not trivially satisfied by zero'
 
@@ -2401,7 +2450,7 @@ try {
         $esc
     )
     $pRealHover = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wReal -Draw $realDraw -Wait $wReal -GetWindowTop { 0 }
-    Assert-Equal $null $pRealHover 'the real-render hover run also ends with Escape'
+    Assert-True ($null -eq $pRealHover) 'the real-render hover run also ends with Escape'
     Assert-Equal 3 $script:capturedFrames.Count 'three real frames were drawn: initial, hover-c, hover-r'
     Assert-True ($script:capturedFrames[0] -ne $script:capturedFrames[1]) 'hovering c changes the rendered frame from the unhovered one'
     Assert-True ($script:capturedFrames[1] -ne $script:capturedFrames[2]) 'hovering r changes the rendered frame from hovering c'
@@ -2411,7 +2460,7 @@ try {
     $script:capturedNotice = $null
     $noticeDraw = { param($p, $i, $f, $t, $h, $n) $script:capturedNotice = $n }
     $pNotice = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'Enter', 'Escape')) -Draw $noticeDraw -ReadPath { 'C:\bogus-notice-test-9f3a' }
-    Assert-Equal $null $pNotice 'the bogus free path run still ends with Escape'
+    Assert-True ($null -eq $pNotice) 'the bogus free path run still ends with Escape'
     Assert-Equal 'path not found' $script:capturedNotice 'a rejected pick leaves a notice for the frame to show'
 
     # --- Fix round 3 (coordinator ruling): the notice clears on the next KEY only, never on a mouse
@@ -2433,7 +2482,7 @@ try {
         $esc
     )
     $p17 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w17 -Draw $noticeSeqDraw -Wait $w17 -GetWindowTop { 0 } -ReadPath { 'C:\bogus-notice-persists-9f3a' }
-    Assert-Equal $null $p17 'the notice-persistence run still ends with Escape'
+    Assert-True ($null -eq $p17) 'the notice-persistence run still ends with Escape'
     Assert-Equal 7 $script:noticeSequence.Count 'one draw per event handled: 3 navigation, the failed Enter, the hover move, the clearing key, and the one after it'
     Assert-Equal 'path not found' $script:noticeSequence[4] 'the notice appears in the draw right after the rejected Enter'
     Assert-Equal 'path not found' $script:noticeSequence[5] 'a mouse move (even one that changes the hover) leaves the notice standing'
@@ -2457,7 +2506,7 @@ try {
     Assert-Equal $tmpAlpha $pWheelBack.Path 'down then up on the wheel comes back'
 
     $pCtrlC = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-MixedKeyReader -Keys @($CtrlC)) -Draw {}
-    Assert-Equal $null $pCtrlC 'Ctrl+C leaves like Escape'
+    Assert-True ($null -eq $pCtrlC) 'Ctrl+C leaves like Escape'
 
     # Built with the REAL virtual key (fix round 3, SMALL 3): New-ScriptedKeyReader's single-char
     # entries carry ConsoleKey 0, so the virtual-key branch of Test-ClaudeHotkey never matches
@@ -2466,14 +2515,14 @@ try {
     # match succeed - this is what makes the case guard itself the thing under test.
     $upperCKey = [System.ConsoleKeyInfo]::new([char]'C', [System.ConsoleKey]::C, $false, $false, $false)
     $pUpperC = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-MixedKeyReader -Keys @($upperCKey, 'Escape')) -Draw {}
-    Assert-Equal $null $pUpperC 'an uppercase C does not fire continue - the same case guard every hotkey has'
+    Assert-True ($null -eq $pUpperC) 'an uppercase C does not fire continue - the same case guard every hotkey has'
 } finally {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tmpCwd -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 907) { Write-Host "COULD NOT RUN: expected 907 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 915) { Write-Host "COULD NOT RUN: expected 915 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
