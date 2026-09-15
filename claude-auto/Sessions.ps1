@@ -361,15 +361,36 @@ function Get-SessionsRootForAccount {
 function Get-PhysicalDirectoryPath {
     # The directory a path really names, with any junction or symlink in it resolved to its final
     # target, and no trailing separator. Best-effort: anything unresolvable comes back as given.
-    param([Parameter(Mandatory)][string]$Path)
+    # EVERY component, not only the last. ResolveLinkTarget inspects the path's own final component
+    # and nothing above it, so a junctioned PROFILE ROOT holding a real projects\ directory - a
+    # layout equally consistent with "four roots' projects\ are one junction" - came back unresolved
+    # and quietly got its own cache file (adversarial review 2026-09-16, B2). The parent chain is
+    # resolved first and the leaf re-attached to whatever it resolved to.
+    param([Parameter(Mandatory)][string]$Path, [int]$Depth = 0)
     $p = $Path
     try {
         # $true = resolve the FINAL target: a chain of links must land on the real directory, not on
         # the next link in it, or two roots reaching the same place through different hops would
         # still be treated as two places.
-        $target = [IO.Directory]::ResolveLinkTarget($Path, $true)
+        $target = [IO.Directory]::ResolveLinkTarget($p, $true)
         if ($target) { $p = $target.FullName }
     } catch { }
+    # 64 is a depth no real path reaches and a bound a cycle of links cannot spin past.
+    if ($Depth -lt 64) {
+        $parent = try { Split-Path -Path $p } catch { $null }
+        if ($parent -and $parent -ne $p) {
+            $realParent = Get-PhysicalDirectoryPath -Path $parent -Depth ($Depth + 1)
+            if ($realParent -and $realParent -ne $parent) {
+                $leaf = try { Split-Path -Path $p -Leaf } catch { $null }
+                if ($leaf) {
+                    $rebuilt = Join-Path $realParent $leaf
+                    # The leaf may itself be a link once the chain above it moved.
+                    try { $t2 = [IO.Directory]::ResolveLinkTarget($rebuilt, $true); if ($t2) { $rebuilt = $t2.FullName } } catch { }
+                    $p = $rebuilt
+                }
+            }
+        }
+    }
     # A drive root is 'C:\' and trimming it to 'C:' changes what it means; nothing else needs its
     # trailing separator.
     if ($p.Length -gt 3) { $p = $p.TrimEnd([char]92, [char]47) }
@@ -405,10 +426,40 @@ function Write-SessionsCache {
     # A failure here is swallowed, as the Set-Content it replaces was: the cache is an optimisation
     # and a launcher that will not start is worse than one that re-summarises.
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)]$Entries)
+    # A launcher killed between the write and the move strands a full cache-sized temp beside the
+    # cache, and nothing ever removed it (adversarial review 2026-09-16, B9). Siblings older than a
+    # minute only: a younger one may belong to an instance that is mid-write right now.
+    try {
+        $dir = Split-Path -Path $Path
+        $leaf = Split-Path -Path $Path -Leaf
+        if ($dir -and $leaf -and (Test-Path -LiteralPath $dir -PathType Container)) {
+            $cutoff = (Get-Date).AddMinutes(-1)
+            foreach ($stale in @(Get-ChildItem -LiteralPath $dir -Filter "$leaf.*.tmp" -File -Force -ErrorAction SilentlyContinue)) {
+                if ($stale.LastWriteTime -lt $cutoff) { Remove-Item -LiteralPath $stale.FullName -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    } catch { }
     $tmp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
     try {
         [IO.File]::WriteAllText($tmp, ($Entries | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
-        [IO.File]::Move($tmp, $Path, $true)
+        # File.Move-with-overwrite needs DELETE access to the destination and fails while somebody
+        # holds it open without delete sharing. The launcher's own readers now share delete
+        # (Read-SessionsCache), but a foreign reader still exists - so retry briefly rather than
+        # losing the write on the first collision. Give up SILENTLY after that: the cache is an
+        # optimisation and a launcher that will not start is worse than one that re-summarises.
+        $moved = $false
+        for ($i = 0; $i -lt 5 -and -not $moved; $i++) {
+            try { [IO.File]::Move($tmp, $Path, $true); $moved = $true }
+            catch { if ($i -lt 4) { Start-Sleep -Milliseconds 20 } }
+        }
+        if (-not $moved) { throw 'the cache file could not be replaced' }
+        # This process now knows what the file holds without reading it back. Recorded so a later
+        # read that finds the file BUSY has something better to answer than "everything is cold"
+        # (Read-SessionsCache).
+        try {
+            $st = [IO.FileInfo]::new($Path)
+            $script:SessionsCacheMemo = @{ Path = $Path; Stamp = "$($st.LastWriteTimeUtc.Ticks)|$($st.Length)"; Entries = $Entries }
+        } catch { }
     } catch {
         try { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } catch { }
     }
@@ -417,14 +468,44 @@ function Write-SessionsCache {
 function Read-SessionsCache {
     # The cache file as a hashtable, or an empty one. Extracted from Get-ClaudeSessions so the read
     # side of the shared file has the same single home as the write side (Write-SessionsCache).
+    #
+    # A read that fails because another instance has the file OPEN is not a corrupt cache. Up to four
+    # launchers run at once over one shared file, and `catch { @{} }` could not tell the two apart:
+    # a busy cache became a silent full cold start - the exact cost this cache exists to remove -
+    # and Get-Content's error painted over the picker frame (adversarial review 2026-09-16, G4/B14).
+    # Three answers, in order: the file, a brief retry, then this process's own last good copy.
     param([Parameter(Mandatory)][string]$Path)
-    $cache = @{}
-    if (-not (Test-Path -LiteralPath $Path)) { return $cache }
-    try {
-        (Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json).PSObject.Properties |
-            ForEach-Object { $cache[$_.Name] = $_.Value }
-    } catch { $cache = @{} }   # a corrupt cache is rebuilt, never fatal
-    return $cache
+    $stat = try { [IO.FileInfo]::new($Path) } catch { $null }
+    if (-not $stat -or -not $stat.Exists) { return @{} }
+    $stamp = "$($stat.LastWriteTimeUtc.Ticks)|$($stat.Length)"
+    for ($i = 0; $i -lt 5; $i++) {
+        try {
+            $text = $null
+            # FileShare.Delete as well as ReadWrite: without it THIS read blocks another instance's
+            # atomic replace of the same file (File.Move over an open destination needs delete
+            # sharing), so the launcher's own cache read silently ate other launchers' writes.
+            $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                                  [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+            try { $text = [IO.StreamReader]::new($fs).ReadToEnd() } finally { $fs.Dispose() }
+            $cache = @{}
+            ($text | ConvertFrom-Json -ErrorAction Stop).PSObject.Properties |
+                ForEach-Object { $cache[$_.Name] = $_.Value }
+            $script:SessionsCacheMemo = @{ Path = $Path; Stamp = $stamp; Entries = $cache }
+            return $cache
+        } catch [System.IO.IOException] {
+            # busy, not broken: another instance is mid-replace. 5 x 20 ms, then fall through.
+            Start-Sleep -Milliseconds 20
+        } catch {
+            return @{}   # genuinely corrupt: rebuilt, never fatal
+        }
+    }
+    # Still busy. This process read the same bytes earlier and nothing has changed them, so serving
+    # that copy is strictly better than declaring every session cold.
+    if ($script:SessionsCacheMemo -and $script:SessionsCacheMemo.Path -eq $Path -and
+        $script:SessionsCacheMemo.Stamp -eq $stamp) {
+        return $script:SessionsCacheMemo.Entries
+    }
+    return @{}
 }
 
 function Get-ClaudeSessionFile {
@@ -480,6 +561,9 @@ function Get-ClaudeSessions {
     # root spelled 'C:\Users\J\Projects\[old]\projects' as a PATTERN and matches nothing, so the
     # project screen lists the project and pressing `r` on it shows an empty picker.
     if (-not (Test-Path -LiteralPath $ProjectsRoot)) { return @() }
+    # Clamped here rather than left to Select-Object, whose range error is TERMINATING and would
+    # escape a picker loop as a raw binding failure.
+    if ($Skip -lt 0) { $Skip = 0 }
 
     $cache = Read-SessionsCache -Path $CachePath
 
@@ -556,7 +640,10 @@ function Get-ClaudeSessions {
                 # cached by a DIFFERENT account root reaching this transcript through its own
                 # junction, and a consumer must get the path it asked about, not the one whoever
                 # filled the cache happened to use.
-                $summary.Path = $f.FullName
+                # Add-Member -Force, not an assignment: `$o.Path = x` THROWS on a PSCustomObject that
+                # has no Path property, and the enclosing `catch { continue }` then dropped the
+                # session from the listing with no trace (adversarial review 2026-09-16, B12).
+                $summary | Add-Member -NotePropertyName Path -NotePropertyValue $f.FullName -Force
                 $slugNames = ConvertFrom-ClaudeProjectSlug -Slug "$($summary.Slug)"
                 $projectName = if ($projectPath) { Split-Path -Path $projectPath -Leaf } else { $slugNames.Project }
                 $summary.Project = Get-CleanTranscriptText -Text $projectName
@@ -568,25 +655,20 @@ function Get-ClaudeSessions {
         $out += $summary
     }
 
-    if ($ProjectSlug -or $Skip -gt 0) {
-        # A PAGED call is the same case as a scoped one and for the same reason: it only ever looked
-        # at a window. Pruning is a survey's privilege - an unfiltered, unpaged call knows every
-        # session that exists, so what it did not find is gone - and page 2 knows nothing about page
-        # 1. (Consequence, deliberate: the first page is what an unpaged launch prunes down to, so
-        # later pages go cold again on the next launch. That is the window the acceptance number
-        # measures, and keeping every page warm would mean never pruning at all.)
-        #
-        # A scoped call only ever enumerated ONE project's files. Writing $fresh alone would evict
-        # every other project's cached entry from the shared file on the next launch (measured: 3
-        # keys before a filtered call, 2 after) - the param comment above already records the
-        # sibling incident of a shared cache file getting thrashed. Merge onto what was already
-        # there instead. An UNFILTERED call still replaces the file wholesale - that is what prunes
-        # entries for sessions that no longer exist, so that path is left alone on purpose.
+    # Pruning is a SURVEY's privilege and nothing else's: only a call that actually looked at every
+    # transcript under the root knows that what it did not find is gone. A scoped call saw one
+    # project; a -Skip'ped or snapshot-paged call saw a window; and a -Limit'ed call saw its first N
+    # - which is exactly what the launcher's own first page is. Treating that as a survey replaced
+    # the whole shared file with ten rows and made every other page, of every other account, cold
+    # again on the next launch, forever (adversarial review 2026-09-16, C3/C3b: 25 cache keys before
+    # the launcher's call, 10 after).
+    $isSurvey = (-not $ProjectSlug) -and ($null -eq $Files) -and ($Skip -le 0) -and ($window.Count -eq $all.Count)
+    if ($isSurvey) {
+        Write-SessionsCache -Path $CachePath -Entries $fresh
+    } else {
         $merged = $cache.Clone()
         foreach ($k in $fresh.Keys) { $merged[$k] = $fresh[$k] }
         Write-SessionsCache -Path $CachePath -Entries $merged
-    } else {
-        Write-SessionsCache -Path $CachePath -Entries $fresh
     }
     return $out
 }

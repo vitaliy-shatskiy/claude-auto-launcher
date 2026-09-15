@@ -34,8 +34,16 @@ function Get-ProjectRegistry {
         # (like -ProjectSlug) reached a specific downstream call, because the real registry's
         # content is neither controlled nor known ahead of time.
         [string]$ProjectsRoot = $(if ($env:CLAUDE_AUTO_PROJECTS_ROOT) { $env:CLAUDE_AUTO_PROJECTS_ROOT } else { Join-Path $HOME '.claude\projects' }),
-        [string]$CachePath = (Join-Path (Split-Path $ProjectsRoot -Parent) 'claude-auto-projects.json')
+        # Computed in the BODY, not as a default expression: `Split-Path 'C:\' -Parent` is '' and
+        # Join-Path rejects an empty -Path, so a drive-root CLAUDE_AUTO_PROJECTS_ROOT threw during
+        # parameter binding - before any guard in here could run (adversarial review 2026-09-16, B8).
+        [string]$CachePath = ''
     )
+    if (-not $CachePath) {
+        $cacheParent = try { Split-Path -Path $ProjectsRoot -Parent } catch { '' }
+        if (-not $cacheParent) { $cacheParent = $ProjectsRoot }
+        $CachePath = Join-Path $cacheParent 'claude-auto-projects.json'
+    }
     if (-not (Test-Path -LiteralPath $ProjectsRoot)) { return @() }
 
     $cache = @{}

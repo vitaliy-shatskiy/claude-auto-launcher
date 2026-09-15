@@ -623,7 +623,122 @@ $snapGone = @($snapshot) + @(Join-Path $snapDir 'never-existed.jsonl')
 Assert-Equal 6 (@(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Files $snapGone -Limit 100)).Count 'a transcript deleted since the snapshot was taken is dropped from the page, never fatal'
 Remove-Item -LiteralPath $snapRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 109) { Write-Host "COULD NOT RUN: expected 109 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the shared cache: who may prune it, and what happens when it is busy --------------------------
+$shRoot = Join-Path $env:TEMP ('claude-auto-share-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$shDir = Join-Path $shRoot 'C--src-share'
+New-Item -ItemType Directory -Force -Path $shDir | Out-Null
+foreach ($n in 1..6) {
+    $sp = Join-Path $shDir "h$n.jsonl"
+    [IO.File]::WriteAllText($sp, '{"type":"user","cwd":"C:\\src\\share","message":{"role":"user","content":"prompt h' + $n + '"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    (Get-Item -LiteralPath $sp).LastWriteTime = (Get-Date '2026-09-01 12:00:00').AddMinutes($n)
+}
+$shCache = Join-Path $shRoot 'c.json'
+$shKeys = { @((Get-Content -LiteralPath $shCache -Raw | ConvertFrom-Json).PSObject.Properties).Count }
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 100)
+Assert-Equal 6 (& $shKeys) 'a survey - every transcript under the root - caches every session'
+# The launcher's own call: -Limit 10 with no slug and no skip. It looked at a WINDOW, so it must not
+# evict the rows it did not look at from a file all four accounts share.
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 2)
+Assert-Equal 6 (& $shKeys) 'a -Limit''ed call merges onto the cache instead of pruning it down to its own page'
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 2 -Skip 2)
+Assert-Equal 6 (& $shKeys) 'and so does a -Skip''ped page'
+# and the point of that: page 2 is still warm after a fresh launch re-reads page 1
+$shCalls = 0
+$shOrig = ${function:Get-ClaudeSessionSummary}
+function Get-ClaudeSessionSummary {
+    param([Parameter(Mandatory)][string]$Path, [int]$HeadLines = 400, [int]$TailLines = 120, [string]$ProjectPath = $null, [switch]$NoPreFilter)
+    $script:shCalls++; & $shOrig @PSBoundParameters
+}
+$script:shCalls = 0
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 2)
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 2 -Skip 2)
+${function:Get-ClaudeSessionSummary} = $shOrig
+Assert-Equal 0 $script:shCalls 'page 2 stays warm across a relaunch - nothing is re-summarised'
+# A survey still prunes: that is what drops sessions that no longer exist.
+Remove-Item -LiteralPath (Join-Path $shDir 'h1.jsonl') -Force
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 100)
+Assert-Equal 5 (& $shKeys) 'a survey still evicts the entries of transcripts that are gone'
+
+# A temp stranded by a killed launcher is swept by the next write; a YOUNG one is another instance's
+# work in flight and must survive.
+$oldTmp = "$shCache.deadbeefdeadbeefdeadbeefdeadbeef.tmp"
+[IO.File]::WriteAllText($oldTmp, '{"orphan":1}', (New-Object System.Text.UTF8Encoding($false)))
+(Get-Item -LiteralPath $oldTmp).LastWriteTime = (Get-Date).AddMinutes(-5)
+$youngTmp = "$shCache.00000000000000000000000000000000.tmp"
+[IO.File]::WriteAllText($youngTmp, '{"inflight":1}', (New-Object System.Text.UTF8Encoding($false)))
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 100)
+Assert-Equal $false (Test-Path -LiteralPath $oldTmp) 'a temp stranded by a killed launcher is cleaned up by the next write'
+Assert-Equal $true (Test-Path -LiteralPath $youngTmp) 'a temp younger than a minute is another instance mid-write and is left alone'
+Remove-Item -LiteralPath $youngTmp -Force
+
+# The write is a RENAME, not an overwrite-in-place. A hard link to the cache is the witness: a
+# rename replaces the name and leaves the witness on the old content; a copy-over writes through it.
+$hlRoot = Join-Path $env:TEMP ('claude-auto-hl-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $hlRoot | Out-Null
+$hlCache = Join-Path $hlRoot 'c.json'
+[IO.File]::WriteAllText($hlCache, '{"before":1}', (New-Object System.Text.UTF8Encoding($false)))
+$hlWitness = Join-Path $hlRoot 'witness.json'
+$null = New-Item -ItemType HardLink -Path $hlWitness -Target $hlCache
+Write-SessionsCache -Path $hlCache -Entries @{ after = 1 }
+Assert-Equal $true ([IO.File]::ReadAllText($hlCache) -match 'after') 'the cache write lands'
+Assert-Equal '{"before":1}' ([IO.File]::ReadAllText($hlWitness)) 'and it lands as an atomic RENAME: a second link to the old file still holds the old bytes, which an overwrite-in-place could not leave'
+Remove-Item -LiteralPath $hlRoot -Recurse -Force
+
+# A cache entry with no Path property must still yield its row: `$o.Path = x` throws on a
+# PSCustomObject that lacks it, and the enclosing catch dropped the session with no trace.
+$npDir = Join-Path $shRoot 'C--src-nopath'
+New-Item -ItemType Directory -Force -Path $npDir | Out-Null
+$npFile = Join-Path $npDir 'nnnn9999.jsonl'
+[IO.File]::WriteAllText($npFile, '{"type":"user","cwd":"C:\\src\\nopath","message":{"role":"user","content":"a prompt"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+$npInfo = Get-Item -LiteralPath $npFile
+$npKey = "$script:SummaryVersion|$($npInfo.FullName)|$($npInfo.LastWriteTimeUtc.Ticks)|$($npInfo.Length)"
+$npEntry = [ordered]@{ SessionId = 'nnnn9999'; Slug = 'C--src-nopath'; Project = 'nopath'; Worktree = $null
+                       Modified = $npInfo.LastWriteTime; SizeBytes = $npInfo.Length; PromptCount = 1
+                       Title = 'cached title'; LastUser = 'u'; LastAssistant = 'a'; RecentMessages = @() }
+$npCache = Join-Path $shRoot 'nopath.json'
+[IO.File]::WriteAllText($npCache, (@{ $npKey = $npEntry } | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+$npRows = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $npCache -ProjectSlug 'C--src-nopath')
+Assert-Equal 1 $npRows.Count 'a cache entry lacking Path still yields its row'
+Assert-Equal 'cached title' $npRows[0].Title 'and it is served from the cache, not re-summarised'
+Assert-Equal $npInfo.FullName $npRows[0].Path 'and its Path is refreshed to the path the CALLER asked about, whatever root filled the cache'
+
+# A cache another instance holds OPEN is busy, not corrupt: no error record, and no full cold start.
+$busyCalls = 0
+$busyOrig = ${function:Get-ClaudeSessionSummary}
+function Get-ClaudeSessionSummary {
+    param([Parameter(Mandatory)][string]$Path, [int]$HeadLines = 400, [int]$TailLines = 120, [string]$ProjectPath = $null, [switch]$NoPreFilter)
+    $script:busyCalls++; & $busyOrig @PSBoundParameters
+}
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 100)   # warm the new rows in
+$script:busyCalls = 0
+$null = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 100)
+$warmCalls = $script:busyCalls
+$script:busyCalls = 0
+$busyHandle = [IO.File]::Open($shCache, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+try { $busyOut = @(Get-ClaudeSessions -ProjectsRoot $shRoot -CachePath $shCache -Limit 100 2>&1) } finally { $busyHandle.Dispose() }
+${function:Get-ClaudeSessionSummary} = $busyOrig
+Assert-Equal 0 $warmCalls 'a second listing over an unchanged tree summarises nothing - the control for the next assertion'
+Assert-Equal $warmCalls $script:busyCalls 'a cache another instance is holding open is not a silent full cold start'
+Assert-Equal 0 @($busyOut | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }).Count 'and the busy read never reaches the terminal as an error record over the picker frame'
+Remove-Item -LiteralPath $shRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# --- the physical projects directory, resolved through EVERY component -----------------------------
+$phRoot = Join-Path $env:TEMP ('claude-auto-phys-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$phHome = Join-Path $phRoot 'phys'
+$phProjects = Join-Path $phHome 'projects'
+New-Item -ItemType Directory -Force -Path $phProjects | Out-Null
+$phAccA = Join-Path $phRoot 'accA'
+New-Item -ItemType Directory -Force -Path $phAccA | Out-Null
+$null = New-Item -ItemType Junction -Path (Join-Path $phAccA 'projects') -Target $phProjects
+Assert-Equal $phProjects (Get-PhysicalDirectoryPath -Path (Join-Path $phAccA 'projects')) 'a junction at the FINAL component resolves to its target'
+# The junction one level UP: a junctioned profile root holding a real projects\ directory.
+$phAccB = Join-Path $phRoot 'accB'
+$null = New-Item -ItemType Junction -Path $phAccB -Target $phHome
+Assert-Equal $phProjects (Get-PhysicalDirectoryPath -Path (Join-Path $phAccB 'projects')) 'a junction on an INTERMEDIATE component is resolved too, not left as the caller spelled it'
+Assert-Equal (Get-SessionsCachePath -ProjectsRoot $phProjects) (Get-SessionsCachePath -ProjectsRoot (Join-Path $phAccB 'projects')) 'so a root reached through a junctioned profile root shares the one cache file'
+Remove-Item -LiteralPath $phRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 127) { Write-Host "COULD NOT RUN: expected 127 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
