@@ -33,11 +33,17 @@ $script:StructUserType   = '(?<!\\)"type"\s*:\s*"user"'
 $script:StructToolResult = '(?<!\\)"type"\s*:\s*"tool_result"'
 $script:StructSidechain  = '(?<!\\)"isSidechain"\s*:\s*true'
 $script:StructMeta       = '(?<!\\)"isMeta"\s*:\s*true'
-# Content that is a plain string opening with an ordinary character: no rejection rule in
-# Get-ClaudeUserPrompt can apply to it (every one of them is anchored to the start of the content),
-# so it is a human prompt and needs no parse. Anything else - a content ARRAY, a wrapper tag, an
-# escape - goes to the authority itself.
-$script:PlainPromptContent = '(?<!\\)"content"\s*:\s*"[^<"\\]'
+# The MESSAGE's content, as a plain string opening with an ordinary, non-blank character: no
+# rejection rule in Get-ClaudeUserPrompt can apply to it (every one of them is anchored to the start
+# of the content, and IsNullOrWhiteSpace rejects blanks), so it is a human prompt and needs no parse.
+# Anything else - a content ARRAY, a wrapper tag, an escape, whitespace - goes to the authority.
+#
+# Anchored INSIDE "message" and blank-rejecting for two measured disagreements (re-review
+# 2026-09-16, W2): whitespace-only content counted 1 against the authority's 0 - a session with
+# nothing to resume into offered as resumable, the exact symptom B3 is about - and a sibling
+# "toolUseResult":{"content":"..."} let a record whose real message is a noise text BLOCK take the
+# shortcut. [^{}]{0,400} keeps the between-part on one JSON object and bounds the scan.
+$script:PlainPromptContent = '(?<!\\)"message"\s*:\s*\{[^{}]{0,400}?(?<!\\)"content"\s*:\s*"[^<"\\\s]'
 
 # Resolved at load time so the per-file loop does not hash this module 40 times. A failure falls
 # back to a constant rather than throwing: a cache that never invalidates is bad, a launcher that

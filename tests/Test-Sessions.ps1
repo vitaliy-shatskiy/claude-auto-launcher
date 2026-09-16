@@ -655,6 +655,16 @@ $auCases = [ordered]@{
     'a real prompt in non-compact JSON'       = '{"type": "user", "message": {"role": "user", "content": "a real prompt"}}'
     'an empty text block array'               = '{"type":"user","message":{"role":"user","content":[]}}'
     'an assistant record'                     = '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}'
+    # Two shapes the parse-free shortcut used to take on its own (re-review 2026-09-16, W2).
+    # Whitespace-only content is the B3 symptom exactly: the authority calls it no prompt
+    # (IsNullOrWhiteSpace), so a session with nothing to resume into was offered as resumable.
+    'whitespace-only string content'          = '{"type":"user","message":{"role":"user","content":"   "}}'
+    # A toolUseResult sibling carries a "content":"..." of its own, beside a message whose real
+    # content is a noise text BLOCK.
+    'a toolUseResult sibling beside a noise text block' = '{"type":"user","toolUseResult":{"content":"tool output here"},"message":{"role":"user","content":[{"type":"text","text":"<system-reminder>noise</system-reminder>"}]}}'
+    # The control for both: the shortcut must still fire on an ordinary prompt, or the agreement
+    # above is bought by parsing everything.
+    'a plain prompt after a toolUseResult sibling' = '{"type":"user","toolUseResult":{"content":"tool output here"},"message":{"role":"user","content":"fix the build"}}'
 }
 $auI = 0
 foreach ($auName in $auCases.Keys) {
@@ -868,7 +878,7 @@ $pfEsc = Join-Path $pfDir 'eeee3333.jsonl'
 Assert-Equal 'escaped key prompt' (Get-ClaudeSessionSummary -Path $pfEsc -ProjectPath 'C:\src\pf').Title 'a \u-escaped type key is decoded by the parser, so the pre-filter must not skip the line on a literal miss'
 Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 159) { Write-Host "COULD NOT RUN: expected 159 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 162) { Write-Host "COULD NOT RUN: expected 162 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
