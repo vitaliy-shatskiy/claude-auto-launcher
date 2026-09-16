@@ -323,7 +323,10 @@ function Invoke-ScreenLoop {
                     # Move first, pick second - the invariant both list screens keep today (the
                     # index is set to the clicked row before the pick runs), so a DoubleClick
                     # handler reads $s.Index and never has to re-derive the row from the hit.
-                    $State.Index = $loopHit.Row
+                    # Both map shapes, because Get-HitAt answers both: a list map hands back the
+                    # row INDEX, a Rows[] map (launch, maintenance) the row OBJECT - assigning that
+                    # object put a pscustomobject in $State.Index, silently on a -Silent screen.
+                    $State.Index = $(if ($loopHit.Row -is [int]) { $loopHit.Row } else { [int]$loopHit.Row.Index })
                     $loopRes = & $loopH.DoubleClick $State $loopHit
                     $null = & $loopLogRes $State 'doubleclick' $loopRes @{ button = 'row' }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
@@ -1081,8 +1084,12 @@ function Invoke-ClaudeCommandText {
 }
 
 function Invoke-MaintenanceScreen {
-    # Returns nothing: this screen acts and comes back. Every action reports through $status rather
+    # Returns nothing: this screen acts and comes back. Every action reports through $s.Status rather
     # than printing, so the frame stays the single source of what is on screen.
+    #
+    # Draw, wait, resize, the mouse, Escape and Ctrl+C are Invoke-ScreenLoop's; what is left here is
+    # what THIS menu does - the confirm-twice guard, the keys, and the drain after a child process
+    # owned the screen.
     #
     # Every action that shells out draws a "running ..." frame first. Without it the screen simply
     # freezes for as long as the child takes - `claude update` downloading ~300 MB is the bad case -
@@ -1116,106 +1123,154 @@ function Invoke-MaintenanceScreen {
         [scriptblock]$RecordTime = { try { Get-ClaudeInputRecordTime } catch { $null } },
         [int]$ConfirmMinMs = 150
     )
-    $status = ''
-    $rowMap = $null
-    # The key whose confirm is armed, $null otherwise. State, never a parse of the status text: a
-    # key interpolated into a regex ('.' or '[') either matched everything or threw, and a generic
-    # '^confirm' let one key's warning confirm ANOTHER key's action. Any press consumes it.
-    $pending = $null
-    # When that confirm was armed. A PASTE is not two presses: this screen acts on every character
-    # it is handed and ConfirmTwice was the only brake, so a pasted string containing 'pp' deleted
-    # builds and 'ii' started a five-minute fleet reindex with nobody touching the keyboard.
-    $pendingAt = $null
+    # A handler is a plain scriptblock run from INSIDE Invoke-ScreenLoop, and PowerShell resolves its
+    # names against THAT scope first: $Draw, $State, $Wait and $GetWindowTop there are the LOOP's
+    # parameters, not these ones. This screen also opens from inside the LAUNCH screen's OnKey, so
+    # its scope chain reaches that screen's locals too - which is why every name below is its own.
+    $paintMaint = $Draw
+    $drainAfter = $Drain
+    $recordAt = $RecordTime
+    $actionList = @($Actions)
+    $scriptRunner = $Runner
+    $confirmMs = $ConfirmMinMs
     # One place, so a new action cannot forget it: run the child, then throw away everything the
     # terminal queued while it owned the screen (a replayed hover ran `mcp list` over and over).
-    $run = {
-        param([scriptblock]$Action)
-        $result = & $Action
-        if ($Drain) { & $Drain }
-        return $result
+    $runMaint = {
+        param([scriptblock]$Deferred)
+        $maintOut = & $Deferred
+        if ($drainAfter) { $null = & $drainAfter }
+        return $maintOut
     }
-    while ($true) {
-        $info = Get-ClaudeInstallInfo
-        $rowMap = & $Draw $info $status
-        $key = & $Wait
-        if ("$key" -eq 'resize') { continue }
-
-        # This screen has no rows to select - its body is status text - so the mouse does exactly
-        # one thing: a click on a footer hint becomes that hint's key. Everything else is ignored.
-        #
-        # A DOUBLE_CLICK record is excluded along with a move: it carries the button down with
-        # MOUSE_MOVED clear, so it used to walk through this guard as a SECOND press - enough to get
-        # past the confirm on prune and on the five-minute fleet reindex with one gesture.
-        if ($key -and $key.Kind -eq 'mouse') {
-            $synthetic = $null
-            if ($key.Left -and -not $key.IsMove -and -not $key.IsDoubleClick -and $rowMap) {
-                $hint = Get-ClaudeFooterHit -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop (& $GetWindowTop)
-                if ($hint) { $synthetic = New-SyntheticKey -Key $hint.Key -Char $hint.Char }
-            }
-            if (-not $synthetic) { continue }
-            $key = $synthetic
+    # Every configured action shares ONE handler: the loop dispatches by character and does not say
+    # WHICH entry matched, so OnKey - which runs first, on the same key, through the same
+    # Test-ClaudeHotkey the loop dispatches with - leaves the matched action on $s.Hit.
+    # ConfirmTwice ones are confirmed first because they are SLOW - a menu that freezes for minutes
+    # with no warning reads as a hung launcher; the confirm text says so.
+    $maintAction = {
+        param($s)
+        $chosen = $s.Hit
+        if (-not $chosen) { return }
+        if ($chosen.ConfirmTwice -and ($s.WasPending -ne $chosen.Key -or $s.TooFast)) {
+            $s.Pending = $chosen.Key
+            $s.PendingAt = $s.Now
+            $s.Status = "confirm: press $($chosen.Key) again to run $($chosen.Label) (the screen will sit still while it runs)"
+        } else {
+            $s.Status = "running $($chosen.Label)..."
+            $null = & $paintMaint $s.Info $s.Status
+            $s.Status = (& $runMaint { (Invoke-MaintenanceScript -ScriptPath $chosen.Script -Label $chosen.Label -Runner $scriptRunner).Message })
         }
-
-        $ch = "$($key.KeyChar)"
-        $name = "$($key.Key)"
-        # What the menu is about to ACT on, beside the raw record the reader already traced. Reading
-        # only one of the two answers "a key arrived"; reading both answers "and this is the branch
-        # it took", which is the question the hover diagnosis kept getting wrong.
-        # Guarded on the flag, not on Get-Command: a Get-Command per loop iteration is a command
-        # lookup on every keypress and every mouse move, which is the kind of cost a diagnostic has
-        # no business adding to the thing it observes.
-        if ($script:TraceOn) {
-            $code = if ($ch.Length -gt 0) { [int][char]$ch[0] } else { 0 }
-            Write-ClaudeInputTrace ("ACT  maintenance ch=U+{0:X4} key={1}" -f $code, $name)
-        }
-        # Test-ClaudeHotkey on every one of these, never -eq. PowerShell's -eq is case-INSENSITIVE,
-        # so the uppercase letter that terminates an SGR mouse report (ESC [ < b ; x ; y M) pressed
-        # the very key its lowercase hint advertises: a hover over a terminal that delivers mouse
-        # reports as text ran `claude mcp list` again and again, with U, R, D, P and I - update,
-        # rename swap, doctor, prune and a five-minute fleet reindex - one character away. Caught
-        # live in a Rider terminal tab 2026-08-25. The matcher keeps that guard and adds
-        # the virtual key and the Cyrillic letter on the same physical key (owner, 2026-09-02: the
-        # keys must work on the Russian and Ukrainian layouts).
-        if ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return }
-        $wasPending = $pending
-        $wasPendingAt = $pendingAt
-        $pending = $null
-        $pendingAt = $null
-        # Too fast to be a second press. The armed key is RE-armed rather than cancelled, so a long
-        # paste of the same letter is a stream of re-arms and never an action.
-        $now = & $RecordTime
-        $tooFast = ($null -ne $now -and $null -ne $wasPendingAt -and ($now - $wasPendingAt) -lt $ConfirmMinMs)
-        # An unrelated key cancels an armed confirm AND its text: otherwise "press i again" stays on
-        # screen while the next i only re-arms. Branches that re-arm set their own text below.
-        if ($wasPending -and -not (Test-ClaudeHotkey -Key $key -Char $wasPending)) { $status = '' }
-        if (Test-ClaudeHotkey -Key $key -Char 'u') { $status = 'running claude update...'; & $Draw $info $status; $status = (& $run { (Invoke-ClaudeUpdate).Message }) }
-        elseif (Test-ClaudeHotkey -Key $key -Char 'r') { $status = (& $run { (Repair-ClaudeBinaryByRename).Message }) }
+    }
+    # The five built-in keys, then the configured actions - and a configured action never takes a
+    # built-in letter, exactly as the if/elseif chain this table replaces consulted $Actions only
+    # when none of u/r/d/m/p had matched.
+    #
+    # The loop presses every one of these through Test-ClaudeHotkey, never -eq. PowerShell's -eq is
+    # case-INSENSITIVE, so the uppercase letter that terminates an SGR mouse report
+    # (ESC [ < b ; x ; y M) pressed the very key its lowercase hint advertises: a hover over a
+    # terminal that delivers mouse reports as text ran `claude mcp list` again and again, with U, R,
+    # D, P and I - update, rename swap, doctor, prune and a five-minute fleet reindex - one
+    # character away. Caught live in a Rider terminal tab 2026-08-25. The matcher keeps that guard
+    # and adds the virtual key and the Cyrillic letter on the same physical key (owner, 2026-09-02:
+    # the keys must work on the Russian and Ukrainian layouts).
+    $maintKeys = @{
+        'u' = { param($s) $s.Status = 'running claude update...'; $null = & $paintMaint $s.Info $s.Status; $s.Status = (& $runMaint { (Invoke-ClaudeUpdate).Message }) }
+        'r' = { param($s) $s.Status = (& $runMaint { (Repair-ClaudeBinaryByRename).Message }) }
         # No Select-Object -Last 3 on either of these. Both reports put what matters at the TOP -
         # doctor's version, path, install method and last update attempt; the mcp list's first
         # servers - so keeping the last three lines showed doctor's closing boilerplate and one
         # arbitrary server, which is why both keys looked like they did nothing.
-        elseif (Test-ClaudeHotkey -Key $key -Char 'd') { $status = 'running claude doctor...'; & $Draw $info $status; $status = (& $run { Invoke-ClaudeCommandText -Arguments @('doctor') }) }
-        elseif (Test-ClaudeHotkey -Key $key -Char 'm') { $status = 'running claude mcp list...'; & $Draw $info $status; $status = (& $run { Invoke-ClaudeCommandText -Arguments @('mcp', 'list') }) }
-        elseif (Test-ClaudeHotkey -Key $key -Char 'p') {
-            if ($wasPending -ne 'p' -or $tooFast) { $pending = 'p'; $pendingAt = $now; $status = "confirm: press p again to delete all but the 2 newest builds" }
-            else { $r = Remove-OldClaudeVersions -Keep 2; $status = "deleted $($r.Deleted.Count) builds, freed $('{0:N1}' -f ($r.FreedBytes / 1GB)) GB" }
-        }
-        # Configured actions. ConfirmTwice ones are confirmed first because they are SLOW - a menu
-        # that freezes for minutes with no warning reads as a hung launcher; the confirm text says so.
-        else {
-            foreach ($a in $Actions) {
-                if (-not (Test-ClaudeHotkey -Key $key -Char $a.Key)) { continue }
-                if ($a.ConfirmTwice -and ($wasPending -ne $a.Key -or $tooFast)) {
-                    $pending = $a.Key
-                    $pendingAt = $now
-                    $status = "confirm: press $($a.Key) again to run $($a.Label) (the screen will sit still while it runs)"
-                } else {
-                    $status = "running $($a.Label)..."
-                    & $Draw $info $status
-                    $status = (& $run { (Invoke-MaintenanceScript -ScriptPath $a.Script -Label $a.Label -Runner $Runner).Message })
-                }
-                break
-            }
+        'd' = { param($s) $s.Status = 'running claude doctor...'; $null = & $paintMaint $s.Info $s.Status; $s.Status = (& $runMaint { Invoke-ClaudeCommandText -Arguments @('doctor') }) }
+        'm' = { param($s) $s.Status = 'running claude mcp list...'; $null = & $paintMaint $s.Info $s.Status; $s.Status = (& $runMaint { Invoke-ClaudeCommandText -Arguments @('mcp', 'list') }) }
+        'p' = {
+            param($s)
+            if ($s.WasPending -ne 'p' -or $s.TooFast) { $s.Pending = 'p'; $s.PendingAt = $s.Now; $s.Status = "confirm: press p again to delete all but the 2 newest builds" }
+            else { $pruned = Remove-OldClaudeVersions -Keep 2; $s.Status = "deleted $($pruned.Deleted.Count) builds, freed $('{0:N1}' -f ($pruned.FreedBytes / 1GB)) GB" }
         }
     }
+    foreach ($maintCfg in $actionList) {
+        # A key the table already holds is a built-in, and an action with no key at all would put an
+        # empty -Char in front of the matcher on every keypress.
+        if ($null -eq $maintCfg -or -not $maintCfg.Key) { continue }
+        if ($maintKeys.ContainsKey([string]$maintCfg.Key)) { continue }
+        $maintKeys[[string]$maintCfg.Key] = $maintAction
+    }
+
+    $maintState = @{
+        Index = 0; Hover = -1; HoverRow = -1; Typing = $false
+        # What the frame on screen was drawn from, so an action's "running ..." frame repaints the
+        # same install info the frame under it already showed.
+        Info = $null
+        Status = ''
+        # The key whose confirm is armed, $null otherwise. State, never a parse of the status text:
+        # a key interpolated into a regex ('.' or '[') either matched everything or threw, and a
+        # generic '^confirm' let one key's warning confirm ANOTHER key's action. Any press consumes
+        # it. PendingAt is when it was armed - a PASTE is not two presses: this screen acts on every
+        # character it is handed and ConfirmTwice was the only brake, so a pasted string containing
+        # 'pp' deleted builds and 'ii' started a five-minute fleet reindex with nobody touching the
+        # keyboard.
+        Pending = $null
+        PendingAt = $null
+        # What OnKey read off the press being dispatched, for the handler behind it: the confirm that
+        # was armed when it arrived, whether it came too fast to be a second press, its arrival
+        # stamp, and the configured action it names.
+        WasPending = $null
+        TooFast = $false
+        Now = $null
+        Hit = $null
+    }
+
+    $maintHandlers = @{
+        # Everything the old loop body did BEFORE dispatching a key, in the slot that runs before the
+        # hotkeys and so keeps that precedence: the trace line, the confirm-twice bookkeeping, and
+        # which configured action this press names. It never consumes the key.
+        OnKey = {
+            param($s, $k)
+            # What the menu is about to ACT on, beside the raw record the reader already traced.
+            # Reading only one of the two answers "a key arrived"; reading both answers "and this is
+            # the branch it took", which is the question the hover diagnosis kept getting wrong.
+            # Guarded on the flag, not on Get-Command: a Get-Command per loop iteration is a command
+            # lookup on every keypress and every mouse move, which is the kind of cost a diagnostic
+            # has no business adding to the thing it observes.
+            if ($script:TraceOn) {
+                $maintChar = "$($k.KeyChar)"
+                $maintCode = if ($maintChar.Length -gt 0) { [int][char]$maintChar[0] } else { 0 }
+                Write-ClaudeInputTrace ("ACT  maintenance ch=U+{0:X4} key={1}" -f $maintCode, "$($k.Key)")
+            }
+            $s.WasPending = $s.Pending
+            $maintArmedAt = $s.PendingAt
+            $s.Pending = $null
+            $s.PendingAt = $null
+            # Too fast to be a second press. The armed key is RE-armed by the branch behind this one
+            # rather than cancelled, so a long paste of the same letter is a stream of re-arms and
+            # never an action. The stamp comes from the INPUT RECORD, never from this screen's own
+            # clock: a redraw plus Get-ClaudeInstallInfo between two real presses easily outlasts any
+            # threshold worth setting, while two characters of one paste arrive microseconds apart
+            # however slow the screen is. $null - the keyboard-only ReadKey path - leaves the guard
+            # inert rather than blocking a confirm the reader really did press twice.
+            $s.Now = & $recordAt
+            $s.TooFast = ($null -ne $s.Now -and $null -ne $maintArmedAt -and ($s.Now - $maintArmedAt) -lt $confirmMs)
+            # An unrelated key cancels an armed confirm AND its text: otherwise "press i again" stays
+            # on screen while the next i only re-arms. Branches that re-arm set their own text.
+            if ($s.WasPending -and -not (Test-ClaudeHotkey -Key $k -Char $s.WasPending)) { $s.Status = '' }
+            $s.Hit = $null
+            foreach ($maintCand in $actionList) {
+                if ($null -eq $maintCand -or -not $maintCand.Key) { continue }
+                if (Test-ClaudeHotkey -Key $k -Char $maintCand.Key) { $s.Hit = $maintCand; break }
+            }
+            return $false
+        }
+        Hotkeys = $maintKeys
+    }
+    # No Rows: this screen's body is status text and it has no cursor, which is what keeps the loop's
+    # w/a/s/d aliases inert here - 'd' is doctor, and a configured action may sit on any letter (C1).
+    # No Click either: a click on a footer hint becomes that hint's key inside the loop, a double
+    # click on one is ignored there (it carries the button down with MOUSE_MOVED clear, and used to
+    # walk through as a SECOND press - enough to get past the confirm on prune and on the five-minute
+    # fleet reindex with one gesture), and nothing else on this screen is clickable. Escape and
+    # Ctrl+C are the loop's own default: they end the screen with nothing.
+    # -Silent: this screen writes no log records, and wrote none before the loop existed either.
+    # The install info is refreshed by the DRAW, so the frame and the info on it are always the same
+    # pass - exactly as they were when the draw sat at the top of this function's own loop.
+    $null = Invoke-ScreenLoop -Screen 'maintenance' -State $maintState -Wait $Wait -GetWindowTop $GetWindowTop -Silent `
+        -Draw { param($s) $s.Info = Get-ClaudeInstallInfo; & $paintMaint $s.Info $s.Status } -Handlers $maintHandlers
 }

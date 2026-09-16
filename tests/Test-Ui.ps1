@@ -2120,6 +2120,37 @@ $w = New-EventReader @($pKey, $pKey, $esc)
 Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner $fakeRunner -RecordTime { $null }
 Assert-Equal 1 $script:pruneRuns 'with no arrival stamp available the confirm behaves exactly as it did before'
 
+# --- C1: this screen has NO cursor, so no arrow ALIAS may shadow a menu key --------------------
+# Its handler table carries no Rows, and that is what keeps the loop's w/a/s/d aliases inert here:
+# 'd' is doctor rather than a right-arrow, and a configured action may sit on 's' or 'w' without
+# the cursor eating the press. `claude doctor` shells out through Invoke-ClaudeCommandText, so that
+# one function is shadowed for the rest of this file - function lookup is last-wins in this scope
+# and nothing below calls it.
+$script:doctorRuns = 0
+function Invoke-ClaudeCommandText { param([string[]]$Arguments) $script:doctorRuns++; "doctor report for $($Arguments -join ' ')" }
+$dKey = [System.ConsoleKeyInfo]::new([char]'d', [System.ConsoleKey]::D, $false, $false, $false)
+$sKeyMaint = [System.ConsoleKeyInfo]::new([char]'s', [System.ConsoleKey]::S, $false, $false, $false)
+$wKeyMaint = [System.ConsoleKeyInfo]::new([char]'w', [System.ConsoleKey]::W, $false, $false, $false)
+$w = New-EventReader @($dKey, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner { throw 'must not run' }
+Assert-Equal 1 $script:doctorRuns 'd runs claude doctor on the maintenance screen - no cursor here, so no a/d alias shadows the menu key'
+Assert-Equal $true ($script:lastStatus -match '^doctor report') 'and what the command printed is what the screen shows'
+# w and s with nothing bound to them: no throw, no action, nothing on the status line.
+$script:doctorRuns = 0
+$w = New-EventReader @($wKeyMaint, $sKeyMaint, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner { throw 'must not run' }
+Assert-Equal 0 $script:doctorRuns 'w and s press nothing at all on this screen'
+Assert-Equal '' $script:lastStatus 'and the status stays empty - neither letter ran anything'
+# The falsifiable half: an action CONFIGURED on s (or w) runs from that key. Give this screen a
+# cursor and the same press would be a Down, and the action would never run.
+$script:actionRuns = @()
+$wsActions = @(
+    [pscustomobject]@{ Key = 's'; Label = 'sweep'; Script = (Join-Path $PSScriptRoot 'fixtures\config-four.json'); ConfirmTwice = $false }
+    [pscustomobject]@{ Key = 'w'; Label = 'warm'; Script = (Join-Path $PSScriptRoot 'fixtures\config-four.json'); ConfirmTwice = $false })
+$w = New-EventReader @($sKeyMaint, $wKeyMaint, $esc)
+Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $wsActions -Runner { param($p) $script:actionRuns += 'ran'; [pscustomobject]@{ Output = @('ok'); ExitCode = 0 } }
+Assert-Equal 'ran,ran' ($script:actionRuns -join ',') 'an action on s and one on w both run - neither letter is an arrow on a screen with no rows'
+
 # Without -Width the footer is one line, as every caller that never wraps expects.
 $oneLine = New-HintFooter -Glyphs (Get-Glyphs) -Hints @(
     @{ Token = 'u'; Label = 'update'; Clickable = $true; Key = ''; Char = 'u' }
@@ -3506,8 +3537,21 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
         DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
     }
 Assert-Equal 'dbl@2' $r 'a row double click moves the index to the clicked row before the handler picks'
+# R9: the two row-map shapes answer a hit differently - a list map with an INDEX, a Rows[] map (the
+# launch and maintenance shape) with the row OBJECT. The move-before-pick above has to read that
+# row's own Index: the object casts to [int] nowhere, so it throws in the key record and, on a
+# -Silent screen, would put a pscustomobject in $State.Index without a sound.
+$rq = [System.Collections.Queue]::new()
+$rq.Enqueue((New-MouseEvent -X 2 -Y 7 -Left -Double))
+$rowShapeMap = [pscustomobject]@{ Rows = @([pscustomobject]@{ Y = 7; Index = 4; Cells = @() })
+                                  FooterY = 9; FooterLines = 1; Footer = @() }
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $rq.Dequeue() } -Draw { $rowShapeMap } -Handlers @{
+        Rows        = { 5 }
+        DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
+    }
+Assert-Equal 'dbl@4' $r 'a row double click on a Rows[]-shaped map moves the index to that row''s own Index, not to the row object'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1133) { Write-Host "COULD NOT RUN: expected 1133 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1139) { Write-Host "COULD NOT RUN: expected 1139 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
