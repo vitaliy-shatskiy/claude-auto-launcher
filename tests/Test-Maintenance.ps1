@@ -664,7 +664,68 @@ Assert-True ($uiCatchText -match "Write-LauncherLog\s+-Stage\s+'error'") 'the ca
 $uiCatchStatements = @($uiCatch[0].Body.Statements)
 Assert-True ($uiCatchStatements[-1] -is [System.Management.Automation.Language.ThrowStatementAst]) 'and rethrows after logging - measured: an error escaping try/finally exits 0, through catch { ...; throw } it exits 1, so console text is identical but the exit code becomes 1 (the forwarder propagates $LASTEXITCODE)'
 
-if ($script:Ran -ne 136) { Write-Host "COULD NOT RUN: expected 136 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the ui record says WHERE the project screen opened and HOW it was left ------------------------
+# Moved here from Test-Ui.ps1 (review W5): launcher source pins belong beside the other AST pins in
+# this file, and the AST is what makes them strict. The -Raw regexes they replace were satisfied by
+# the record's own neighbouring text - a `source = $projectSource` pin matched the unrelated
+# `projectSource = $projectSource` line with the whole preselect field deleted.
+#
+# Two helpers, because a CommandAst keeps its arguments as a flat element list: the value of -X is
+# simply the element after the CommandParameterAst named X.
+$argOf = {
+    param($call, [string]$name)
+    $els = @($call.CommandElements)
+    for ($i = 0; $i -lt $els.Count - 1; $i++) {
+        if ($els[$i] -is [System.Management.Automation.Language.CommandParameterAst] -and "$($els[$i].ParameterName)" -eq $name) { return $els[$i + 1] }
+    }
+    return $null
+}
+# key -> the source text of its value, for one hashtable literal.
+$pairsOf = {
+    param($ht)
+    $map = @{}
+    if ($ht -is [System.Management.Automation.Language.HashtableAst]) {
+        foreach ($kv in $ht.KeyValuePairs) { $map["$($kv.Item1.Extent.Text)"] = "$($kv.Item2.Extent.Text)" }
+    }
+    return $map
+}
+$logCalls = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+    "$($n.GetCommandName())" -eq 'Write-LauncherLog' }, $true))
+Assert-True ($logCalls.Count -ge 4) 'claude-auto.ps1 writes launcher log records at all'
+$uiRecCall = @($logCalls | Where-Object { "$((& $argOf $_ 'Stage').Value)" -eq 'ui' })
+Assert-Equal 1 $uiRecCall.Count 'and exactly one of them is the ui record'
+$uiRecData = & $argOf $uiRecCall[0] 'Data'
+Assert-True ($uiRecData -is [System.Management.Automation.Language.HashtableAst]) 'whose -Data is a hashtable literal, not a variable built somewhere else'
+$uiRecFields = & $pairsOf $uiRecData
+Assert-True ($uiRecFields.ContainsKey('preselect')) 'the ui record carries where the project screen OPENED'
+Assert-True ($uiRecFields.ContainsKey('chosen')) 'and what the owner left it ON'
+Assert-True ($uiRecFields.ContainsKey('projectSource')) 'with projectSource kept beside them for one release, so a reader pinned to the flat field keeps working'
+# The nested literals, by key and by VALUE: `preselect.path` reading $state.Project would answer
+# "what did he pick" a second time instead of "where did the screen open" - the two questions the
+# record exists to keep apart, and a difference no text-length regex would notice.
+$preselectHt = @((& $argOf $uiRecCall[0] 'Data').FindAll({ param($n) $n -is [System.Management.Automation.Language.HashtableAst] -and
+    @($n.KeyValuePairs | ForEach-Object { "$($_.Item1.Extent.Text)" }) -contains 'source' }, $true))
+Assert-Equal 1 $preselectHt.Count 'preselect is a hashtable of its own'
+$preselectFields = & $pairsOf $preselectHt[0]
+Assert-Equal '$projectSource' $preselectFields['source'] 'carrying the source Set-LaunchStartProject returned'
+Assert-Equal '$preselectPath' $preselectFields['path'] 'and the path captured BEFORE the screen, never re-derived from the final pick'
+$chosenHt = @((& $argOf $uiRecCall[0] 'Data').FindAll({ param($n) $n -is [System.Management.Automation.Language.HashtableAst] -and
+    @($n.KeyValuePairs | ForEach-Object { "$($_.Item1.Extent.Text)" }) -contains 'how' }, $true))
+Assert-Equal 1 $chosenHt.Count 'and chosen is one too'
+$chosenFields = & $pairsOf $chosenHt[0]
+Assert-Equal '$chosenHow' $chosenFields['how'] 'carrying which gesture committed the pick'
+Assert-Equal '"$($state.Project)"' $chosenFields['path'] 'beside the project it committed to'
+# The module loop degrades to a bare session and says so on the console; before this it said nothing
+# to the LOG, which is where a failure that only happens on the owner's machine has to land.
+$modLoadCall = @($logCalls | Where-Object { (& $pairsOf (& $argOf $_ 'Data'))['where'] -eq "'module-load'" })
+Assert-Equal 1 $modLoadCall.Count 'a module that fails to load leaves an error record of its own'
+# Captured once, and before the screen: after the loop $state.Project is the final pick.
+$preselectAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    "$($n.Left.Extent.Text)" -eq '$preselectPath' }, $true))
+Assert-Equal 1 $preselectAssign.Count 'the preselected path is captured in exactly one place'
+Assert-True ($preselectAssign[0].Extent.StartOffset -lt $projScreenCall[0].Extent.StartOffset) 'and BEFORE the project screen runs, or it is just the final pick under another name'
+
+if ($script:Ran -ne 151) { Write-Host "COULD NOT RUN: expected 151 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

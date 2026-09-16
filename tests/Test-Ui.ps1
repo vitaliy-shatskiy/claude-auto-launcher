@@ -3071,33 +3071,12 @@ try {
     Remove-Item -LiteralPath $uiLogRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# --- the launcher's own `ui` record, pinned as SOURCE ----------------------------------------------
-# claude-auto.ps1's UI block has a console and no suite can drive it (the same reason
-# Test-Maintenance pins the fetcher block and the cd/secrets order as text). What must not silently
-# go missing is WHY the project screen opened where it did and HOW the owner left it - the pair of
-# questions the 07:17 run could not answer. Positive control on each anchor: the text must be found
-# at all, so a renamed field fails here rather than passing vacuously.
-$uiLauncherSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
-$uiRecStart = $uiLauncherSrc.IndexOf("Write-LauncherLog -Stage 'ui'")
-Assert-True ($uiRecStart -ge 0) 'claude-auto.ps1 writes a ui record'
-$uiRecBlock = $uiLauncherSrc.Substring($uiRecStart, [Math]::Max(0, $uiLauncherSrc.IndexOf('elseif (-not [Console]::IsInputRedirected', $uiRecStart) - $uiRecStart))
-# Scoped to the field's OWN hashtable ([^}] stops at its closing brace), never a bare
-# `source = $projectSource`: the record already carries a line reading `projectSource = $projectSource`,
-# which satisfies an unscoped match with the whole preselect field deleted.
-Assert-True ($uiRecBlock -match 'preselect\s*=\s*@\{') 'the ui record carries what the project screen OPENED on'
-Assert-True ($uiRecBlock -match 'preselect\s*=\s*@\{[^}]*source\s*=\s*\$projectSource') 'with the source Set-LaunchStartProject returned'
-Assert-True ($uiRecBlock -match 'preselect\s*=\s*@\{[^}]*path\s*=\s*\$preselectPath') 'and the path it picked'
-Assert-True ($uiRecBlock -match 'chosen\s*=\s*@\{') 'and what the owner left the screen ON'
-Assert-True ($uiRecBlock -match 'chosen\s*=\s*@\{[^}]*how\s*=\s*\$chosenHow') 'with how the pick was committed'
-Assert-True ($uiRecBlock -match 'projectSource\s*=\s*\$projectSource') 'projectSource stays beside preselect for one release, so a reader pinned to it keeps working'
-# The module loop degrades to a bare session and says so on the console; before this it said nothing
-# to the LOG, which is where a failure that only happens on the owner's machine has to land.
-Assert-True ($uiLauncherSrc -match "where\s*=\s*'module-load'") 'a module that fails to load leaves an error record too'
-$uiPreselectAssign = @($uiLauncherSrc -split "`r?`n" | Where-Object { $_ -match '^\s*\$preselectPath\s*=' })
-Assert-Equal 1 $uiPreselectAssign.Count 'and the preselected path is captured in exactly one place - before the screen runs, or it is just the final pick again'
+# The launcher's own `ui` record (preselect / chosen / the module-load error) is pinned in
+# Test-Maintenance.ps1, beside the other claude-auto.ps1 AST pins - this file drives the screens
+# (review W5).
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1052) { Write-Host "COULD NOT RUN: expected 1052 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1043) { Write-Host "COULD NOT RUN: expected 1043 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
