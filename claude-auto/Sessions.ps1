@@ -611,8 +611,13 @@ function Get-ClaudeSessions {
         [int]$Limit = 40,
         # Paging. Summarising 40 transcripts is what a cold launch pays before the picker can draw
         # anything; the picker takes a first page and asks for the next only when the cursor reaches
-        # the last row (Invoke-SessionPicker -FetchMore). -Skip is applied to the SORTED list, so
-        # -Limit N with -Skip 0, N, 2N walks exactly the order an unpaged call returns.
+        # the last row (Invoke-SessionPicker -FetchMore).
+        #
+        # -Skip indexes whatever list this call enumerates. WITHOUT -Files that list is re-sorted by
+        # mtime on every call, so -Limit N with -Skip 0, N, 2N walks the unpaged order only while
+        # nothing is written: one transcript appended between two pages shifts the window down and
+        # the row it displaced is never shown (adversarial review 2026-09-16, C4). Laying pages end
+        # to end is guaranteed only over a -Files SNAPSHOT, which is why the picker takes one.
         [int]$Skip = 0,
         [string]$CachePath = (Get-SessionsCachePath -ProjectsRoot $ProjectsRoot),
         [string]$ProjectSlug = '',
