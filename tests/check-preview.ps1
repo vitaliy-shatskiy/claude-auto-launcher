@@ -121,14 +121,40 @@ function Initialize-ProjectSlugFixture {
 # printed in the frame's own title is what tells the two apart without completing a pick.
 $script:WantedPattern = 'launch args\s*:|command\s*:|remote\s*:|account\s*:|CLAUDE_CONFIG_DIR\s*:|argv count\s*:|picker cancelled|remote off for this session|crc |sessions|no sessions found'
 
+# The launcher is NOT started by its own path in real life. Everything that starts Claude Code -
+# Rider's plugin, claude-auto.cmd, PATH, the nightly audit - points at ~\bin\claude-auto.ps1, a
+# forwarder that runs `& $target @args`. That one level of indirection is not cosmetic: under
+# `pwsh -File claude-auto.ps1` the launcher's body IS the global scope, so its dot-sourced helpers
+# land in global session state; called as `& $target` the body gets a child script scope and they
+# do not. A .GetNewClosure() scriptblock resolves commands against GLOBAL only, so the session
+# picker's page fetcher threw "Get-ClaudeSessionFile is not recognized" through the forwarder and
+# ONLY through the forwarder - the shape every real launch uses and no check ever drove.
+#
+# Written per run rather than committed: it must point at whichever launcher is under test, and a
+# checked-in copy would rot against ~\bin\claude-auto.ps1. The invocation is copied from that file
+# line for line, minus its missing-checkout fallback (irrelevant here - the guard above already
+# proved the launcher exists). No param() block, for the same reason the launcher has none:
+# adding one changes how --resume, --continue and -p bind.
+function New-ForwarderShim {
+    param([Parameter(Mandatory)][string]$LauncherPath)
+    $path = Join-Path $env:TEMP ('claude-auto-fwd-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
+    $literal = (Resolve-Path -LiteralPath $LauncherPath).Path.Replace("'", "''")
+    $text = "# Scratch forwarder - the invocation shape of ~\bin\claude-auto.ps1. Deliberately no param().`r`n" +
+            "`$target = '$literal'`r`n" +
+            "& `$target @args`r`n" +
+            "exit `$LASTEXITCODE`r`n"
+    [IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+    return $path
+}
+
 function Invoke-PreviewRun {
-    param([Parameter(Mandatory)][string]$Keys)
+    param([Parameter(Mandatory)][string]$Keys, [Parameter(Mandatory)][string]$LauncherPath)
     $savedConfig = $env:CLAUDE_AUTO_CONFIG
     $savedProjectsRoot = $env:CLAUDE_AUTO_PROJECTS_ROOT
     try {
         $env:CLAUDE_AUTO_CONFIG = $FixtureConfig
         $env:CLAUDE_AUTO_PROJECTS_ROOT = $script:ProjectsFixtureRoot
-        $out = & pwsh -NoProfile -File $Preview -Keys $Keys -Launcher $Launcher -Full 2>&1
+        $out = & pwsh -NoProfile -File $Preview -Keys $Keys -Launcher $LauncherPath -Full 2>&1
         $code = $LASTEXITCODE
         $filtered = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match $script:WantedPattern })
         return @($filtered) + @("preview.ps1 exit: $code")
@@ -141,12 +167,31 @@ function Invoke-PreviewRun {
 }
 
 function Get-AllRunOutput {
+    param([Parameter(Mandatory)][string]$LauncherPath)
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($name in $script:Runs.Keys) {
         $lines.Add("=== $name ===")
-        foreach ($l in (Invoke-PreviewRun -Keys $script:Runs[$name])) { $lines.Add($l) }
+        foreach ($l in (Invoke-PreviewRun -Keys $script:Runs[$name] -LauncherPath $LauncherPath)) { $lines.Add($l) }
     }
     return , @($lines)
+}
+
+# Positional, not set semantics: order (which run's block comes first, and each line within it) is
+# part of the decision path being pinned.
+#
+# Emits the differing pairs one by one and the caller wraps in @(). NOT `return , @($pairs)`: that
+# idiom plus the caller's own @() double-wraps - the pipeline unrolls the outer array and hands back
+# ONE object that is the whole pair list, so the report said "1 line(s) differ" and printed all
+# twenty line numbers on that one row (member enumeration). Caught by this check's own first run.
+function Compare-ToReference {
+    param($Reference, $Actual)
+    $ref = @($Reference); $act = @($Actual)
+    $max = [Math]::Max($ref.Count, $act.Count)
+    for ($i = 0; $i -lt $max; $i++) {
+        $e = if ($i -lt $ref.Count) { $ref[$i] } else { $null }
+        $a = if ($i -lt $act.Count) { $act[$i] } else { $null }
+        if ($e -cne $a) { [pscustomobject]@{ Line = $i + 1; Expected = $e; Actual = $a } }
+    }
 }
 
 if (-not (Test-Path -LiteralPath $Launcher)) {
@@ -165,7 +210,9 @@ if (-not (Test-Path -LiteralPath $FixtureConfig)) {
 if ($Record) {
     try {
         $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
-        $lines = Get-AllRunOutput
+        # Recorded from the DIRECT shape only. One reference, both shapes compared against it: that
+        # is what makes a shape-dependent defect a diff instead of two references drifting apart.
+        $lines = Get-AllRunOutput -LauncherPath $Launcher
         if ($lines.Count -eq 0) {
             Write-Host "CANNOT RECORD: the preview runs produced no output at all" -ForegroundColor Red
             exit 2
@@ -185,41 +232,47 @@ if (-not (Test-Path -LiteralPath $Reference)) {
     exit 2
 }
 
-try {
-    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
-    $actual = Get-AllRunOutput
-} catch {
-    Write-Host "CANNOT CHECK: $($_.Exception.Message)" -ForegroundColor Red
-    exit 2
-}
-
 $refLines = @(Get-Content -LiteralPath $Reference -ErrorAction SilentlyContinue)
 if ($refLines.Count -eq 0) {
     Write-Host "CANNOT CHECK: the reference at $Reference is empty" -ForegroundColor Red
     exit 2
 }
 
-# Positional, not set semantics: order (which run's block comes first, and each line within it) is
-# part of the decision path being pinned.
-$max = [Math]::Max($refLines.Count, $actual.Count)
-$pairs = @()
-for ($i = 0; $i -lt $max; $i++) {
-    $e = if ($i -lt $refLines.Count) { $refLines[$i] } else { $null }
-    $a = if ($i -lt $actual.Count) { $actual[$i] } else { $null }
-    if ($e -cne $a) { $pairs += [pscustomobject]@{ Line = $i + 1; Expected = $e; Actual = $a } }
-}
-
-if ($pairs.Count -eq 0) {
-    Write-Host "OK: preview decision summary unchanged ($($refLines.Count) comparable line(s), $($script:Runs.Count) run(s))" -ForegroundColor Green
-    exit 0
+$shim = $null
+try {
+    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
+    $shim = New-ForwarderShim -LauncherPath $Launcher
+    # Both shapes, same keys, same fixture, same reference. Direct first so a defect common to both
+    # reads as an ordinary regression rather than as a forwarder problem.
+    # No @() around these calls: Get-AllRunOutput already returns `, @($lines)` and the pipeline
+    # unrolls that one wrapper - adding another would hand the comparer a single nested object.
+    $byShape = [ordered]@{}
+    $byShape['direct'] = Get-AllRunOutput -LauncherPath $Launcher
+    $byShape['forwarder'] = Get-AllRunOutput -LauncherPath $shim
+} catch {
+    Write-Host "CANNOT CHECK: $($_.Exception.Message)" -ForegroundColor Red
+    exit 2
+} finally {
+    if ($shim) { Remove-Item -LiteralPath $shim -Force -ErrorAction SilentlyContinue }
 }
 
 $none = '(no such line)'
-Write-Host "REGRESSION: the preview decision summary changed - $($pairs.Count) line(s) differ" -ForegroundColor Red
-foreach ($p in $pairs) {
-    Write-Host "  line $($p.Line)" -ForegroundColor Red
-    Write-Host "    expected: $(if ($null -eq $p.Expected) { $none } else { $p.Expected })" -ForegroundColor DarkGray
-    Write-Host "    actual  : $(if ($null -eq $p.Actual) { $none } else { $p.Actual })" -ForegroundColor Yellow
+$bad = 0
+foreach ($shape in $byShape.Keys) {
+    $pairs = @(Compare-ToReference -Reference $refLines -Actual $byShape[$shape])
+    if ($pairs.Count -eq 0) { continue }
+    $bad++
+    Write-Host "REGRESSION [$shape shape]: the preview decision summary changed - $($pairs.Count) line(s) differ" -ForegroundColor Red
+    foreach ($p in $pairs) {
+        Write-Host "  line $($p.Line)" -ForegroundColor Red
+        Write-Host "    expected: $(if ($null -eq $p.Expected) { $none } else { $p.Expected })" -ForegroundColor DarkGray
+        Write-Host "    actual  : $(if ($null -eq $p.Actual) { $none } else { $p.Actual })" -ForegroundColor Yellow
+    }
 }
-Write-Host "reference: $Reference" -ForegroundColor DarkGray
-exit 1
+
+if ($bad -gt 0) {
+    Write-Host "reference: $Reference" -ForegroundColor DarkGray
+    exit 1
+}
+Write-Host "OK: preview decision summary unchanged ($($refLines.Count) comparable line(s), $($script:Runs.Count) run(s), $($byShape.Count) invocation shape(s))" -ForegroundColor Green
+exit 0
