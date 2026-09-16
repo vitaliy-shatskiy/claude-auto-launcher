@@ -88,10 +88,12 @@ function Write-UiLog {
         # Preview must stay side-effect-free - the same guard claude-auto.ps1's UI catch and
         # Expand-SessionPage's IO catch carry, for the same reason: preview drives these very loops.
         if ($script:Preview) { return }
-        # Resolved ONCE per process, hit OR miss ($false caches the miss). Test-Ui, Test-Input and
+        # Resolved ONCE per process, hit OR miss ($false caches the miss). Test-Input and
         # Test-Maintenance load this file without Env.ps1, so there is no logger at all there and
-        # every call must become a no-op rather than a Get-Command per keypress. -CommandType
-        # Function so an alias, or a stray Write-LauncherLog.exe on PATH, cannot win the resolution.
+        # every call must become a no-op rather than a Get-Command per keypress. (Test-Ui DOES load
+        # Env.ps1 and then shadows Write-LauncherLog with a counting stub, which is how it reads the
+        # records without writing any; it removes the stub in one case to drive this miss.)
+        # -CommandType Function so an alias, or a stray Write-LauncherLog.exe on PATH, cannot win.
         if ($null -eq $script:UiLogWriter) {
             $cmd = Get-Command -Name Write-LauncherLog -CommandType Function -ErrorAction SilentlyContinue
             $script:UiLogWriter = if ($cmd) { $cmd } else { $false }

@@ -2944,13 +2944,27 @@ try {
     $script:UiLogSink = $uiSink
     $script:uiRecords = @()
     $null = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
-    $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey (New-ScriptedKeyReader -Keys @('r')) -Draw {}
+    # LeftArrow before the hotkey, and Tab on the picker: the two decisive keys that change what the
+    # screen MEANS without leaving it (the action Enter will run, and whether the list is this
+    # project or the whole account). Both were in the product and in no test - each call could be
+    # deleted with every suite still green (review W1).
+    $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey (New-ScriptedKeyReader -Keys @('LeftArrow', 'r')) -Draw {}
     # Scoped, exactly as claude-auto.ps1 opens it after the project screen - an unscoped picker
-    # reports scope 'none', which would make the scope assertion below pass on the wrong thing.
-    $null = Invoke-SessionPicker -Sessions $uiFake -ProjectSlug @('G') -ProjectName 'gamma' -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {}
+    # reports scope 'none', and Tab is guarded on having a scope at all, so both assertions below
+    # would pass on the wrong thing.
+    $null = Invoke-SessionPicker -Sessions $uiFake -ProjectSlug @('G') -ProjectName 'gamma' -ReadKey (New-ScriptedKeyReader -Keys @('Tab', 'Escape')) -Draw {}
     Assert-Equal ('screen:launch:enter,key:launch:Enter,screen:launch:leave,' +
-                  'screen:project:enter,key:project:r,screen:project:leave,' +
-                  'screen:picker:enter,key:picker:Escape,screen:picker:leave') ((& $uiTrace) -join ',') 'a scripted launch -> project -> picker -> Escape run logs exactly these records, in this order'
+                  'screen:project:enter,key:project:LeftArrow,key:project:r,screen:project:leave,' +
+                  'screen:picker:enter,key:picker:Tab,key:picker:Escape,screen:picker:leave') ((& $uiTrace) -join ',') 'a scripted launch -> project -> picker -> Escape run logs exactly these records, in this order'
+
+    # The PAYLOAD, not just the key name: a record saying "LeftArrow" without what it left the field
+    # on answers nothing, and 'worktree' is what Step-ProjectAction gives stepping back from 'new'.
+    $uiLeft = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'LeftArrow' })[0]
+    Assert-Equal 'worktree' $uiLeft.Data.action 'the action field step records the value it landed on'
+    $uiTab = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'Tab' })[0]
+    Assert-Equal 'all' $uiTab.Data.scope 'Tab records the scope it widened TO'
+    $uiPickLeave = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.name -eq 'picker' -and $_.Data.phase -eq 'leave' })[0]
+    Assert-Equal 'all' $uiPickLeave.Data.scope 'and the picker leaves in that scope, not the one it opened in'
 
     $uiEnter = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.name -eq 'project' -and $_.Data.phase -eq 'enter' })[0]
     Assert-Equal 3 $uiEnter.Data.rows 'a screen record carries the row COUNT (one project, the cwd row, the free-path row)'
@@ -3008,6 +3022,43 @@ try {
     $uiReal = @($script:loggedCalls | Where-Object { $_.Stage -eq 'screen' -or $_.Stage -eq 'key' })
     Assert-Equal 3 $uiReal.Count 'with no sink, the screen writes its records through Write-LauncherLog itself'
 
+    # Fail-open is the whole design, and no suite reached it: every suite that loads Ui.ps1 either
+    # has a logger or never calls Write-UiLog, so patching the helper to throw left all of them green
+    # (review W2). Both halves are driven here - no logger at all, and a logger that throws.
+    # Function:\ is the same table Env.ps1's definition and this file's stub share, so removing it
+    # leaves NOTHING to resolve; the cached writer is reset because the miss is cached on purpose.
+    $uiStub = (Get-Command Write-LauncherLog -CommandType Function).ScriptBlock
+    Remove-Item Function:Write-LauncherLog
+    $script:UiLogWriter = $null
+    # Get-Command is shadowed for the length of this ONE drive: the miss has to be cached, or a
+    # screen with no logger pays a command lookup per record - the per-keystroke cost the whole
+    # design is built to avoid. The Escape run below writes three records.
+    $script:getCommandCalls = 0
+    function Get-Command { $script:getCommandCalls++; Microsoft.PowerShell.Core\Get-Command @args }
+    $uiNoLoggerThrew = $false
+    try { $null = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {} }
+    catch { $uiNoLoggerThrew = $true }
+    Remove-Item Function:Get-Command
+    Assert-Equal $false $uiNoLoggerThrew 'with no logger in scope at all, a screen still runs - the miss is a no-op, never a crash'
+    Assert-Equal 1 $script:getCommandCalls 'and the miss is resolved ONCE for three records, never looked up per record'
+
+    # A logger that THROWS (a log volume that went away mid-launch) must not reach the screen loop:
+    # that is what the helper's own catch is for, and it is the one guard a menu cannot afford to lose.
+    function Write-LauncherLog { param([string]$Stage, [hashtable]$Data = @{}, [string]$RunId, [string]$Root) throw [IO.IOException]::new('the log volume went away') }
+    $script:UiLogWriter = $null
+    $uiThrowingThrew = $false
+    try { $null = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {} }
+    catch { $uiThrowingThrew = $true }
+    Assert-Equal $false $uiThrowingThrew 'and a logger that THROWS is swallowed rather than taking the menu down'
+
+    # Positive control on the restore: without it the two cases above would silently disarm every
+    # assertion after them (they would all run with no logger and count nothing).
+    Set-Item Function:Write-LauncherLog $uiStub
+    $script:UiLogWriter = $null
+    $script:loggedCalls = @()
+    $null = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {}
+    Assert-Equal 3 $script:loggedCalls.Count "and the suite's own stub is back in place afterwards"
+
     # Preview must stay side-effect-free, exactly like the launcher's own UI catch and
     # Expand-SessionPage's - a preview run drives these very loops.
     $script:Preview = $true
@@ -3046,7 +3097,7 @@ $uiPreselectAssign = @($uiLauncherSrc -split "`r?`n" | Where-Object { $_ -match 
 Assert-Equal 1 $uiPreselectAssign.Count 'and the preselected path is captured in exactly one place - before the screen runs, or it is just the final pick again'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1045) { Write-Host "COULD NOT RUN: expected 1045 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1052) { Write-Host "COULD NOT RUN: expected 1052 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
