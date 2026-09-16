@@ -3052,6 +3052,16 @@ $uiTrace = {
         else { "$($_.Stage):$($_.Data.screen):$($_.Data.key)" }
     })
 }
+# The FIELD NAMES of each record, sorted, in the same order as the trace above. `stage:name:key`
+# alone answers "what happened"; this answers "with what", which is the half a screen rewrite
+# actually endangers - a record that lost `action`, `scope` or `filterLength` still traces the same.
+$uiFields = {
+    @($script:uiRecords | ForEach-Object {
+        $head = if ($_.Stage -eq 'screen') { "screen:$($_.Data.name):$($_.Data.phase)" }
+                else { "$($_.Stage):$($_.Data.screen):$($_.Data.key)" }
+        "$head -> $((@($_.Data.Keys) | Sort-Object) -join ',')"
+    })
+}
 $uiLogRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-uilog-$([Guid]::NewGuid().ToString('N'))")
 $uiLogProj = Join-Path $uiLogRoot 'gamma'
 New-Item -ItemType Directory -Path $uiLogProj -Force | Out-Null
@@ -3077,6 +3087,22 @@ try {
                   'screen:project:enter,key:project:LeftArrow,key:project:r,screen:project:leave,' +
                   'screen:picker:enter,key:picker:Tab,key:picker:Escape,screen:picker:leave') ((& $uiTrace) -join ',') 'a scripted launch -> project -> picker -> Escape run logs exactly these records, in this order'
 
+    # The FIELDS of every record in that run, not just its label: a screen that stopped recording
+    # the action it stepped to, dropped `scope`, or renamed `filterLength` traces identically above.
+    # This is the contract each screen migrated onto Invoke-ScreenLoop is verified against.
+    Assert-Equal (@(
+        'screen:launch:enter -> index,name,phase,rows'
+        'key:launch:Enter -> index,key,screen'
+        'screen:launch:leave -> index,ms,name,phase,rows'
+        'screen:project:enter -> filterLength,index,name,phase,rows'
+        'key:project:LeftArrow -> action,index,key,screen'
+        'key:project:r -> action,index,key,screen'
+        'screen:project:leave -> filterLength,index,ms,name,phase,rows'
+        'screen:picker:enter -> filterLength,index,name,phase,rows,scope'
+        'key:picker:Tab -> index,key,scope,screen'
+        'key:picker:Escape -> index,key,scope,screen'
+        'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'and every one of those records carries exactly these fields - a dropped or renamed one is red here'
     # The PAYLOAD, not just the key name: a record saying "LeftArrow" without what it left the field
     # on answers nothing, and 'worktree' is what Step-ProjectAction gives stepping back from 'new'.
     $uiLeft = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'LeftArrow' })[0]
@@ -3217,7 +3243,7 @@ Assert-Equal 13 (Get-HitAt -RowMap $pm -X 5 -Y 15 -WindowTop 10).Row 'window top
 Assert-Equal 2 (Get-HitAt -RowMap $lm -X 2 -Y 10 -WindowTop 3).Row.Index 'and WindowTop is subtracted for a launch row too'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1091) { Write-Host "COULD NOT RUN: expected 1091 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1092) { Write-Host "COULD NOT RUN: expected 1092 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
