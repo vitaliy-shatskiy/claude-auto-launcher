@@ -49,14 +49,21 @@ $script:Runs = [ordered]@{
     # cancels it. See Initialize-ProjectSlugFixture below for why the session COUNT this prints is
     # the actual regression guard, not merely "picker cancelled" (which reads identically whichever
     # way the scoping went).
-    'switch-and-resume' = 'RightArrow,Enter,r,Escape'
+    #
+    # Task 9 correction (its own report, "Concerns for Task 10/11" 1): row 0 became the CURRENT
+    # DIRECTORY (spec D6), so fixture-slug-a - still sorted first among the REGISTRY rows - moved to
+    # row 1. One 's' before 'r' is what still lands the hotkey on it instead of resuming the cwd.
+    'switch-and-resume' = 'RightArrow,Enter,s,r,Escape'
     # A project the account has NO sessions for must open an EMPTY picker, never the account's
     # list. Reached through the 'current directory' row: Get-ProjectRegistry drops a slug
     # directory with no *.jsonl outright ("No transcript, no path and no activity"), so a
-    # transcript-less project is never a row to select at all. Two fixture rows, then 's,s', lands
-    # on 'current directory', whose cwd is a fixture repo with no slug directory anywhere - over an
-    # account that HAS two sessions. Correct output is "0 sessions"; the failure it guards is that
-    # frame reading "2 sessions".
+    # transcript-less project is never a row to select at all. The cwd row needs no navigation at
+    # all to reach it, over an account that HAS two sessions. Correct output is "0 sessions"; the
+    # failure it guards is that frame reading "2 sessions".
+    #
+    # Task 9 correction (its own report, "Concerns for Task 10/11" 1): row 0 is now the current
+    # directory itself, so the two 's' keys that used to walk past both fixture rows to reach it
+    # would instead land the hotkey on the second fixture project - dropped outright.
     #
     # What it does NOT cover, measured rather than assumed (review W2): a path outside the registry
     # has no slugs, so claude-auto.ps1 hands the fetcher an EMPTY slug list and the fetch is
@@ -66,7 +73,7 @@ $script:Runs = [ordered]@{
     # (Get-ClaudeSessions keys on $PSBoundParameters.ContainsKey('Files'), presence not emptiness,
     # and the snapshot reaches it through a VARIABLE, which cannot unroll). Those casts are pinned
     # in source by Test-Maintenance instead, which is the only guard that can fail for them.
-    'unknown-project'   = 'RightArrow,Enter,s,s,r,Escape'
+    'unknown-project'   = 'RightArrow,Enter,r,Escape'
 }
 
 # Per-run working directory. Only the unknown-project run needs one (it is selected BY the cwd), and it
