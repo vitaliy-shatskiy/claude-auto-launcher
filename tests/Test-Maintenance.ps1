@@ -514,8 +514,12 @@ Remove-Item -Recurse -Force $tmp
 $launcherSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
 $fetchStart = $launcherSrc.IndexOf('$fetchNextPage = {')
 Assert-True ($fetchStart -ge 0) 'claude-auto.ps1 builds a page fetcher'
-$fetchEnd = $launcherSrc.IndexOf('.GetNewClosure()', $fetchStart)
-Assert-True ($fetchEnd -gt $fetchStart) 'and closes it over the launcher''s current state'
+# Anchored on the statement AFTER the block, not on '.GetNewClosure()': that call was the forwarder
+# defect and is gone, so the old end anchor would never be found and every assertion below it would
+# run over an empty string - vacuously green (review W3). This anchor has the same positive control:
+# the text must exist at all, or $fetchEnd stays -1 and the assert fails.
+$fetchEnd = $launcherSrc.IndexOf('$pickerSlugs =', $fetchStart)
+Assert-True ($fetchEnd -gt $fetchStart) 'and the block is bounded by the statement that consumes it'
 $fetchBlock = $launcherSrc.Substring($fetchStart, [Math]::Max(0, $fetchEnd - $fetchStart))
 Assert-True ($fetchBlock -match 'ProjectSlug') 'the fetcher carries the picker''s project scope'
 Assert-True ($fetchBlock -match '-Files ') 'and pages a snapshot rather than a re-sorted listing'
@@ -525,17 +529,20 @@ Assert-True ($fetchBlock -match '-Files ') 'and pages a snapshot rather than a r
 # check-preview's 'empty-scope' run beside this.
 Assert-True ($fetchBlock -match '\[string\[\]\]\(&\s*\$getSessionFile') 'the snapshot is cast [string[]] as it is TAKEN, so an empty scope stays an empty array instead of unrolling to $null'
 Assert-True ($fetchBlock -match '\$snapshot = \[string\[\]\]') 'and cast again where it is handed to -Files, so an empty snapshot cannot leave -Files unbound and fall back to the whole account'
-# .GetNewClosure() binds the block to its own dynamic module, whose COMMAND lookup falls back to the
-# GLOBAL session state and never to the scope that built it. Naming a launcher helper inside the
-# block therefore works under `pwsh -File claude-auto.ps1` (there the launcher body IS global) and
-# throws "not recognized" through ~\bin\claude-auto.ps1's `& $target @args` - the entry every real
-# launch uses. Both helpers are resolved into variables outside the block and called through them.
+# A scriptblock that carries its own module - .GetNewClosure() - resolves COMMANDS against the GLOBAL
+# session state and never against the scope that built it. Naming a launcher helper inside the block
+# therefore worked under `pwsh -File claude-auto.ps1` (there the launcher body IS global) and threw
+# "not recognized" through ~\bin\claude-auto.ps1's `& $target @args` - the entry every real launch
+# uses. The closure is gone and both helpers are resolved into variables outside the block, so the
+# block names no command at all and cannot regain that dependency.
 # tests\check-preview.ps1 drives both shapes behaviourally; this is the cheap structural guard beside
 # it, for the machines where that check has no reference and reports DID NOT RUN.
-Assert-True ($launcherSrc -match '\$getSessionFile = Get-Command Get-ClaudeSessionFile') 'the launcher resolves Get-ClaudeSessionFile OUTSIDE the closure'
-Assert-True ($launcherSrc -match '\$getSessions = Get-Command Get-ClaudeSessions') 'and Get-ClaudeSessions too'
-Assert-True ($fetchBlock -match '&\s*\$getSessionFile ') 'and the fetcher calls the resolved command object rather than looking the name up inside its module scope'
+Assert-True ($launcherSrc -match '\$getSessionFile = Get-Command -Name Get-ClaudeSessionFile -CommandType Function') 'the launcher resolves Get-ClaudeSessionFile outside the block, as a Function'
+Assert-True ($launcherSrc -match '\$getSessions = Get-Command -Name Get-ClaudeSessions -CommandType Function') 'and Get-ClaudeSessions too - an alias or a stray .exe cannot win either resolution'
+Assert-True ($fetchBlock -match '&\s*\$getSessionFile ') 'and the fetcher calls the resolved command object rather than looking a name up at invocation time'
 Assert-True ($fetchBlock -match '&\s*\$getSessions ') 'both of them'
+Assert-True ($fetchBlock -notmatch 'Get-Claude') 'no launcher helper is named inside the block at all - the whole class of forwarder-only failures, not just the two commands that caused it'
+Assert-True ($launcherSrc -notmatch '\$fetchNextPage[\s\S]{0,800}?GetNewClosure') 'and the block is NOT a closure, so nothing inside it resolves against global session state'
 
 # --- check-preview's forwarder shim really is a FORWARDER ------------------------------------------
 # The second invocation shape is only worth running if the shim still runs `& $target @args`. Changed
@@ -611,7 +618,7 @@ $guardOf = {
 Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
 Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
 
-if ($script:Ran -ne 123) { Write-Host "COULD NOT RUN: expected 123 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 125) { Write-Host "COULD NOT RUN: expected 125 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
