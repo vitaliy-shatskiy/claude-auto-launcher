@@ -379,6 +379,12 @@ $null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $
 $tabRow = @($tmap.Rows | Where-Object { $_.Name -eq 'Account' })[0]
 Assert-Equal 'work,personal,low' ((@($tabRow.Cells) | ForEach-Object { $_.Value }) -join ',') 'every tab is a click cell carrying its account key'
 Assert-Equal $true ($tabRow.Cells[1].Start -gt $tabRow.Cells[0].End) 'the cells do not overlap'
+# Non-overlap alone cannot see a span that drifted left by exactly one joiner - the spans stay in
+# order while every one of them points one tab too far back. Read the span off the DRAWN line
+# instead: this is the assertion that fails when the strip's own joiner stops being counted.
+$tabStripFrame = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $tabLimits)
+$tabStripLine = @($tabStripFrame | Where-Object { $_ -match '\baccount\b' })[0]
+Assert-Equal 'personal 17%' ($tabStripLine.Substring($tabRow.Cells[1].Start, $tabRow.Cells[1].End - $tabRow.Cells[1].Start + 1)) 'and each span covers exactly its own tab on the line as drawn, joiner counted'
 
 # The active tab is painted with the account tint, and only the active one. Exactly one Bold escape
 # on the line, and it opens the bracketed cell: Assert-Equal cannot see control characters, so the
@@ -425,6 +431,24 @@ foreach ($ascii in @($true, $false)) {
     $isCompact = $modelLine.Count -eq 1 -and ($modelLine[0] -match [regex]::Escape($glyphs.LAngle)) -and ($modelLine[0] -match [regex]::Escape($glyphs.RAngle))
     Assert-Equal $true $isCompact "width 60 (ascii=${ascii}): the overflowing model row collapses to the compact ‹ › form, not a silent truncation"
 }
+
+# New-RadioRow's glyph-less COMPACT form separates values with one space and nothing else, so it is
+# only readable when no value's label carries a space of its own: 'on off on+QR [stop server]' reads
+# as six values where the row has four. A row with a multi-word label therefore keeps the FULL form
+# even when it does not fit, and falls through to the ‹ › collapse above (controller ruling R4).
+$r4Glyphs = Get-Glyphs
+$r4At50 = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height 40)
+$r4Remote = @($r4At50 | Where-Object { $_ -match '\bremote\b' })[0]
+Assert-Equal $true ($r4Remote -match [regex]::Escape($r4Glyphs.LAngle)) 'at 50 columns the remote row collapses to ‹ ›: one of its values is two words, and the compact form would read as two values'
+Assert-Equal $false ($r4Remote.Contains('stop server')) 'so the multi-word value is never drawn beside its neighbours with only a space between them'
+$r4Model80 = @(@(Get-LaunchFrame -State (New-LaunchState) -Width 80 -Height 24) | Where-Object { $_ -match '\bmodel\b' })[0]
+Assert-Equal $true ($r4Model80 -match [regex]::Escape($r4Glyphs.LAngle)) 'and the model row collapses at 80 columns for the same reason - every one of its labels is two words'
+# The positive half: a row whose values are all single words still takes the compact form at a width
+# where the full one does not fit (advisor: 47 cells full, 39 compact, 46 available at width 50).
+$r4Advisor = @($r4At50 | Where-Object { $_ -match '\badvisor\b' })[0]
+Assert-Equal $true ($r4Advisor.Contains('[default]')) 'a single-word row DOES take the compact form where the full one does not fit'
+Assert-Equal $false ($r4Advisor -match [regex]::Escape($r4Glyphs.On)) 'which is the form that drops the radio glyphs'
+Assert-Equal $false ($r4Advisor -match [regex]::Escape($r4Glyphs.LAngle)) 'and not the collapse - every one of its values is still on the row'
 
 # Widths, both glyph sets, every breakpoint.
 foreach ($w in @(60, 80, 120, 200)) {
@@ -3172,7 +3196,7 @@ try {
 # (review W5).
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1071) { Write-Host "COULD NOT RUN: expected 1071 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1078) { Write-Host "COULD NOT RUN: expected 1078 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

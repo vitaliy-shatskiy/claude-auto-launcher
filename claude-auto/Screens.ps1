@@ -722,6 +722,17 @@ function New-RadioRow {
     }
     $full = & $build $false
     if ($MaxWidth -le 0 -or (Get-DisplayWidth -Text $full.Text) -le $MaxWidth) { return $full }
+    # The compact form separates values with ONE space and nothing else, so a value whose own label
+    # carries a space stops being one value: the remote row would read '   remote      on off on+QR
+    # [stop server]' - four values that parse as six words - and the model row's labels ('Fable 5.1',
+    # 'Sonnet 5[1M]') do the same. Such a row keeps the FULL form even over -MaxWidth and lets the
+    # caller's own overflow branch (Get-LaunchFrame's ‹ › collapse) handle it, exactly as before this
+    # row existed. Controller ruling R4 - deliberately not a two-space or middle-dot separator, which
+    # would change every row that already reads correctly.
+    foreach ($v in $Values) {
+        $text = if ($Labels.ContainsKey($v)) { "$($Labels[$v])" } else { "$v" }
+        if ($text -match ' ') { return $full }
+    }
     return (& $build $true)
 }
 
