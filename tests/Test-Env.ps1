@@ -13,7 +13,12 @@
 
 # The roster is derived at load, so the fixture must be named BEFORE the dot-source.
 $env:CLAUDE_AUTO_CONFIG = "$PSScriptRoot\fixtures\config-four.json"
-try { . (Join-Path $PSScriptRoot '..\claude-auto\Env.ps1') } catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
+try {
+    # Sessions.ps1 too: Repair-SharedProfiles clears Get-PhysicalDirectoryPath's memo before it
+    # re-points any junction, and the launcher always has both loaded.
+    . (Join-Path $PSScriptRoot '..\claude-auto\Sessions.ps1')
+    . (Join-Path $PSScriptRoot '..\claude-auto\Env.ps1')
+} catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
 
 # The body runs inside try/finally so a terminating error mid-suite cannot leak the fixture path.
 try {
@@ -25,6 +30,19 @@ function Assert([string]$Name, [bool]$Condition) {
     if ($Condition) { Write-Host "  ok   $Name" }
     else { Write-Host "  FAIL $Name" -ForegroundColor Red; $script:fail++ }
 }
+
+# Privilege-dependent block detector (Task 10 review, item E): the Repair-SharedLink
+# delete-refused block below (icacls /deny DE/DC) is empirically privilege-dependent - measured
+# 2026-09-15 as exit 0 (all pass) from an elevated (Administrator) session, and 3 FAILs from two
+# independent NON-elevated sessions on this same machine. A gate that reports a different verdict in
+# two terminals of one machine is broken, so that block runs only when elevated; the non-elevated
+# branch (where the deny ACE does not bite the way the block assumes) SKIPS it and makes this suite
+# exit 2 - "could not run", never a silent pass.
+$script:IsElevatedSession = $false
+try {
+    $script:IsElevatedSession = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch { }
+$script:CouldNotRunReason = $null
 
 $root = Join-Path $env:TEMP ("cct-secrets-test-" + [guid]::NewGuid().ToString('N'))
 $slug = 'C--test--proj'
@@ -247,19 +265,28 @@ try {
     # (b) the DELETE is refused (no delete on the file, no delete-child on the directory - exactly
     # the pair an AV product or a locked file produces): the copy must survive, and the launcher
     # must not report a re-link that never happened.
-    $fbWorkB = Join-Path $fbBase 'b\work'
-    New-Item -ItemType Directory -Force $fbWorkB, $fbSecB | Out-Null
-    Set-Content -LiteralPath "$fbWorkB\settings.json" -Value '{"model":"work"}' -NoNewline
-    Set-Content -LiteralPath "$fbSecB\settings.json"  -Value '{"model":"drifted"}' -NoNewline
-    (Get-Item -LiteralPath "$fbSecB\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
-    & icacls.exe "$fbSecB\settings.json" '/deny' "${who}:(DE)" *>$null
-    & icacls.exe $fbSecB '/deny' "${who}:(DC)" *>$null
-    $WorkRoot = $fbWorkB; $SecondaryRoots = @($fbSecB)
-    $fbB = @(Repair-SharedLink -Name 'settings.json' 6>&1 | ForEach-Object { "$_" })
-    Assert 'a re-link refused mid-way leaves the file in place' (Test-Path -LiteralPath "$fbSecB\settings.json")
-    Assert 'its content is untouched'                           ((Get-Content -LiteralPath "$fbSecB\settings.json" -Raw) -eq '{"model":"drifted"}')
-    Assert 'the failure costs one line'                         (@($fbB | Where-Object { $_ -match 'could not re-link' }).Count -eq 1)
-    Assert 'and nothing claims it was re-linked'                (@($fbB | Where-Object { $_ -match 're-linked settings\.json' }).Count -eq 0)
+    #
+    # PRIVILEGE-DEPENDENT - see the detector comment above $script:IsElevatedSession. Runs for real
+    # only when elevated; a non-elevated session skips it and this suite exits 2 instead of reporting
+    # a false verdict either way.
+    if ($script:IsElevatedSession) {
+        $fbWorkB = Join-Path $fbBase 'b\work'
+        New-Item -ItemType Directory -Force $fbWorkB, $fbSecB | Out-Null
+        Set-Content -LiteralPath "$fbWorkB\settings.json" -Value '{"model":"work"}' -NoNewline
+        Set-Content -LiteralPath "$fbSecB\settings.json"  -Value '{"model":"drifted"}' -NoNewline
+        (Get-Item -LiteralPath "$fbSecB\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
+        & icacls.exe "$fbSecB\settings.json" '/deny' "${who}:(DE)" *>$null
+        & icacls.exe $fbSecB '/deny' "${who}:(DC)" *>$null
+        $WorkRoot = $fbWorkB; $SecondaryRoots = @($fbSecB)
+        $fbB = @(Repair-SharedLink -Name 'settings.json' 6>&1 | ForEach-Object { "$_" })
+        Assert 'a re-link refused mid-way leaves the file in place' (Test-Path -LiteralPath "$fbSecB\settings.json")
+        Assert 'its content is untouched'                           ((Get-Content -LiteralPath "$fbSecB\settings.json" -Raw) -eq '{"model":"drifted"}')
+        Assert 'the failure costs one line'                         (@($fbB | Where-Object { $_ -match 'could not re-link' }).Count -eq 1)
+        Assert 'and nothing claims it was re-linked'                (@($fbB | Where-Object { $_ -match 're-linked settings\.json' }).Count -eq 0)
+    } else {
+        Write-Host "  SKIP the delete-refused block needs an elevated session - the deny ACE does not bite the same way non-elevated (measured 2026-09-15, two independent runs)" -ForegroundColor Yellow
+        $script:CouldNotRunReason = 'the delete-refused Repair-SharedLink block (Test-Env.ps1, Repair-SharedLink section) is privilege-dependent and this session is not elevated - run it elevated instead of trusting a non-elevated verdict'
+    }
 } finally {
     $WorkRoot = $origWR4; $SecondaryRoots = $origSR4
     # Lift every deny before the sweep, or the tree cannot be removed and the temp dir is littered.
@@ -458,7 +485,9 @@ try {
 
     # Off preview, the same setup DOES get repaired - proves the guard is the ONLY thing that changed,
     # not that Repair-SharedProfiles silently does nothing.
-    Repair-SharedProfiles 6>$null
+    $script:PhysicalPathMemo = @{ 'sentinel' = 'stale' }
+Repair-SharedProfiles 6>$null
+Assert 'Repair-SharedProfiles forgets the resolved-path memo before it re-points any junction' (-not $script:PhysicalPathMemo.ContainsKey('sentinel'))
     Assert 'not preview: the drifted copy is relinked to the newest'     ((Get-Content -LiteralPath (Join-Path $rootP 'settings.json') -Raw) -eq '{"model":"work"}')
     Assert 'not preview: the missing junction is created'                (Test-Path -LiteralPath (Join-Path $rootP 'projects'))
 } finally {
@@ -638,21 +667,80 @@ Assert 'a resolver that finds nothing reports not Ok, never throws' (-not $missi
 Assert 'and carries no path'                                        ($null -eq $missing.Path)
 Assert 'and names the problem'                                      ($missing.Message -match 'not on PATH')
 
+# --- Set-ClaudeProjectDirectory (Task 9): the guard between the project screen and
+# Import-ProjectSecrets. -Switcher is injected so this never actually moves the test runner. ---------
+$script:switchedTo = $null
+$switcherSpy = { param($p) $script:switchedTo = $p }
+
+Assert 'an empty project does not switch'    (-not (Set-ClaudeProjectDirectory -Project '' -Switcher $switcherSpy))
+Assert 'and the switcher is never called'    ($null -eq $script:switchedTo)
+
+$bogusProject = Join-Path $env:TEMP ("cct-bogus-project-" + [guid]::NewGuid().ToString('N'))
+$script:switchedTo = $null
+$bogusResult = $null
+try { $bogusResult = Set-ClaudeProjectDirectory -Project $bogusProject -Switcher $switcherSpy 6>$null }
+catch { $bogusResult = 'THREW' }
+Assert 'a project directory that does not exist does not throw' ($bogusResult -eq $false)
+Assert 'and the switcher is never called for it'                ($null -eq $script:switchedTo)
+
+$realProject = Join-Path $env:TEMP ("cct-real-project-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $realProject | Out-Null
+try {
+    $script:switchedTo = $null
+    $realResult = Set-ClaudeProjectDirectory -Project $realProject -Switcher $switcherSpy
+    Assert 'a real project directory switches'          $realResult
+    Assert 'and the switcher receives that exact path'  ($script:switchedTo -eq $realProject)
+} finally { Remove-Item -LiteralPath $realProject -Recurse -Force -ErrorAction SilentlyContinue }
+
+# A plain FILE is not a directory. Test-Path without -PathType Container says $true for one, and
+# Set-Location then throws ItemNotFoundException and takes the launcher down after everything else
+# has already succeeded - which is what the guard's -PathType is for. Nothing in the whole checkpoint
+# noticed when that switch was removed (adversarial review 2026-09-16, B7: mutant M6 survived).
+$fileProject = Join-Path $env:TEMP ("cct-file-project-" + [guid]::NewGuid().ToString('N'))
+[IO.File]::WriteAllText($fileProject, 'not a directory', (New-Object System.Text.UTF8Encoding($false)))
+try {
+    $script:switchedTo = $null
+    $fileResult = $null
+    try { $fileResult = Set-ClaudeProjectDirectory -Project $fileProject -Switcher $switcherSpy 6>$null }
+    catch { $fileResult = 'THREW' }
+    Assert 'a plain FILE is refused as the project directory' ($fileResult -eq $false)
+    Assert 'and the switcher is never called with it'         ($null -eq $script:switchedTo)
+} finally { Remove-Item -LiteralPath $fileProject -Force -ErrorAction SilentlyContinue }
+
 # --- Get-RateLimitSummary: a machine with no records (a fresh install) gets an empty table ---------
 $emptyLimits = Join-Path $env:TEMP ("cal-limits-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $emptyLimits | Out-Null
 try { Assert 'no rate-limit records: empty table, no error' ((Get-RateLimitSummary -Directory $emptyLimits).Count -eq 0) } finally { Remove-Item $emptyLimits -Recurse -Force }
 
 } finally { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 141) {
-    Write-Host "COULD NOT RUN: expected 141 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
-    exit 2
-}
+# The privilege-dependent block (item E) contributes 4 assertions only when elevated; a non-elevated
+# session skips them and this suite must report COULD NOT RUN rather than a count mismatch or a
+# false pass/fail.
+#
+# ORDER MATTERS (Task 10 review, fix round 1, MINOR 2+3): a real FAIL is checked FIRST, or a
+# non-elevated session with a genuine, unrelated failure elsewhere would have reported
+# "COULD NOT RUN: ... privilege-dependent ..." instead of the failure - downgrading red to amber and
+# hiding a real bug behind the expected privilege skip. The count guard comes next, with its
+# conditional floor (147 elevated / 143 non-elevated) actually reached now, rather than dead code
+# behind an earlier unconditional exit (MINOR 3: with $script:CouldNotRunReason always set on a
+# non-elevated run, the old ordering's `exit 2` above the count check meant the 143 branch could
+# never execute). $script:CouldNotRunReason is checked LAST, on purpose: reaching it means no
+# assertion failed and the count is exactly what elevation predicts, so the only thing left to
+# report is the deliberate, accounted-for skip.
 if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 150 } else { 146 }
+if ($script:Ran -ne $script:ExpectedRan) {
+    Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
+    exit 2
+}
+if ($script:CouldNotRunReason) {
+    Write-Host "COULD NOT RUN: $script:CouldNotRunReason" -ForegroundColor Red
+    exit 2
+}
 # Counted, not guessed: HEAD claimed 72 while running 75 (measured 2026-09-04 by counting the
 # ok/FAIL lines of a bare run). A banner nobody re-counts is a number that drifts silently.
-Write-Host '141 assertions, all pass' -ForegroundColor Green
+Write-Host "$script:ExpectedRan assertions, all pass" -ForegroundColor Green
 exit 0

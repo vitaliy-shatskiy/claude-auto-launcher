@@ -16,7 +16,7 @@ param(
     [string]$PreviewScript = (Join-Path $PSScriptRoot 'check-preview.ps1')
 )
 
-$suites = 'Theme', 'Layout', 'Sessions', 'Ui', 'Maintenance', 'Remote', 'Prefs', 'Env', 'Config', 'Input', 'Install', 'Mirror'
+$suites = 'Theme', 'Layout', 'Sessions', 'Projects', 'Ui', 'Maintenance', 'Remote', 'Prefs', 'Env', 'Config', 'Input', 'Install', 'Mirror'
 $rows = @()
 $failed = 0
 $unverified = 0
@@ -31,7 +31,13 @@ foreach ($name in $suites) {
     # Input's live half (mouse, VT-swallow, console-mode assertions) is skipped without -Live - the
     # suite runs it correctly on its own (self-spawns a hidden child, reports the child's exit code),
     # it is just never asked to. Every other suite has no live/bare distinction.
-    $extraArgs = if ($name -eq 'Input') { @('-Live') } else { @() }
+    # [string[]] and a STATEMENT, not an if EXPRESSION: a one-element array produced by an if
+    # expression unrolls to the scalar '-Live' on assignment, and `@extraArgs` then splats that
+    # STRING to a native command CHARACTER BY CHARACTER (ARGV = - | L | i | v | e) - the identical
+    # trap claude-auto.ps1 documents for --mcp-config. The suite therefore ran WITHOUT -Live and its
+    # green row never covered the live console half at all (adversarial review 2026-09-16, B1).
+    [string[]]$extraArgs = @()
+    if ($name -eq 'Input') { $extraArgs = @('-Live') }
     $null = & pwsh -NoProfile -File $path @extraArgs 2>&1
     $code = $LASTEXITCODE
     # 0 pass, 1 a real failure, 2 the suite could not run (a missing module, a broken dot-source).

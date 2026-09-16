@@ -5,6 +5,7 @@ try {
     . "$PSScriptRoot\..\claude-auto\Layout.ps1"
     . "$PSScriptRoot\..\claude-auto\Sessions.ps1"
     . "$PSScriptRoot\..\claude-auto\Screens.ps1"
+    . "$PSScriptRoot\..\claude-auto\Projects.ps1"   # Switch-LaunchAccount re-applies the start selection
     . "$PSScriptRoot\..\claude-auto\Prefs.ps1"
     . "$PSScriptRoot\..\claude-auto\Config.ps1"   # Test-Prefs does not load Env.ps1; Config must be explicit there
     Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
@@ -12,6 +13,7 @@ try {
 
 $script:Failed = 0
 $script:Ran = 0
+$script:LaunchStartContext = $null   # no launch context here: the start-selection re-apply is a no-op
 function Assert-Equal {
     param($Expected, $Actual, [string]$Because)
     $script:Ran++
@@ -240,6 +242,124 @@ $aged = Merge-LaunchPrefs -State (New-LaunchState) -Prefs $file -Rows $rows -Now
 Assert-Equal '1 h' $aged.AgeText 'the age of the remembered choices is available to the screen'
 Assert-Equal '1 h' $aged.State.RestoredAge 'and on the state, beside the rows it explains'
 
+# --- remembering the project per account ------------------------------------------------------
+# Project is remembered like the habit rows, but it is a filesystem path, not a pick from a row's
+# option list - so it is NOT in $ProfileFields, and it is validated on the way back in by EXISTENCE
+# AND by being a directory, not by membership in a Values list.
+$projPath = New-PrefsPath; $paths += $projPath
+$ps1 = New-LaunchState
+$ps1.Account = 'work'; $ps1.Project = $PSScriptRoot
+$saved = Save-LaunchPrefs -State $ps1 -Path $projPath -NowMs 1000
+Assert-Equal $PSScriptRoot $saved.Profiles['work']['Project'] 'the project is saved under the account'
+
+$readBack = Read-LaunchPrefs -Path $projPath
+Assert-Equal $PSScriptRoot $readBack.Profiles['work']['Project'] 'and read back'
+
+# A remembered project that still exists is restored onto a fresh state. It is NEVER marked in
+# $Restored: that list exists to put a `*` on a launch-screen ROW and justify the "* restored
+# (<age>), ctrl+r resets" legend, and the project is not a row there - it lives on its own screen,
+# where the restored path is simply the preselected row, its own feedback (owner ruling).
+$mergedExisting = Merge-LaunchPrefs -State (New-LaunchState) -Prefs $readBack -Rows $rows -NowMs 1100
+Assert-Equal $PSScriptRoot $mergedExisting.State.Project 'a remembered project that still exists is restored'
+Assert-Equal $false (@($mergedExisting.Restored) -contains 'Project') 'but is never marked restored - it is not a launch-screen row'
+
+# Silence carries the previous answer forward, exactly like a row left at 'default' - a launch that
+# never touched the project must not erase the one already remembered for this account. Unlike a
+# vanished path below, this is deliberately never dropped either (production comment: a drive that
+# is not always mounted must not cost the remembered project).
+$ps1b = New-LaunchState; $ps1b.Account = 'work'
+$null = Save-LaunchPrefs -State $ps1b -Path $projPath -NowMs 1200
+$carried = Read-LaunchPrefs -Path $projPath
+Assert-Equal $PSScriptRoot $carried.Profiles['work']['Project'] 'a save with no project carries the remembered one forward'
+
+# A remembered path that no longer exists must not be applied.
+$ps2 = New-LaunchState; $ps2.Account = 'work'; $ps2.Project = 'C:\gone\for\good'
+$null = Save-LaunchPrefs -State $ps2 -Path $projPath -NowMs 2000
+$mergedVanished = Merge-LaunchPrefs -State (New-LaunchState) -Prefs (Read-LaunchPrefs -Path $projPath) -Rows $rows -NowMs 3000
+Assert-Equal '' "$($mergedVanished.State.Project)" 'a vanished remembered project is not restored'
+Assert-Equal $false (@($mergedVanished.Restored) -contains 'Project') 'and is not marked restored'
+
+# A remembered FILE, not a directory, must be rejected too - the production comment names the
+# consumer (Set-Location), and Set-Location on a file throws ItemNotFoundException. The prefs file
+# is hand-editable by this function's own threat model, so a remembered directory can be replaced by
+# a plain file (reviewer repro).
+$ps4 = New-LaunchState; $ps4.Account = 'work'; $ps4.Project = (Join-Path $PSScriptRoot 'Test-Prefs.ps1')
+$null = Save-LaunchPrefs -State $ps4 -Path $projPath -NowMs 2500
+$mergedFile = Merge-LaunchPrefs -State (New-LaunchState) -Prefs (Read-LaunchPrefs -Path $projPath) -Rows $rows -NowMs 2600
+Assert-Equal '' "$($mergedFile.State.Project)" 'a remembered project that is a FILE, not a directory, is rejected too'
+
+# --- switching tabs must not leak the project between accounts --------------------------------
+# Project rides the same park/reload Switch-LaunchAccount already does for the five habit rows, but
+# it is not one of them - a bug here left $State.Project a single property that every switch carried
+# UNCHANGED into the arriving account, and a launch there overwrote the FILE with the wrong
+# account's project (found in review, reproduced against the real modules). Existence- AND
+# directory-checked on the way back in, exactly like Merge-LaunchPrefs, from both the session stash
+# and the file, so a stale or hand-edited path in another account's profile can never ride in.
+$swProjA = (Resolve-Path (Join-Path $PSScriptRoot '..\claude-auto')).Path
+$swProjB = $PSScriptRoot
+$swFilePath = Join-Path $PSScriptRoot 'Test-Prefs.ps1'
+$swFile = @{ Version = 2; Account = 'work'
+             Profiles = @{ work     = @{ Project = $swProjA }
+                           personal = @{ Project = $swProjB }
+                           low      = @{ Project = $swFilePath } } }
+$sw = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs $swFile -Rows $rows -NowMs 2000).State
+Assert-Equal $swProjA $sw.Project 'work opens with its own remembered project'
+$sw = Switch-LaunchAccount -State $sw -To 'personal' -Prefs $swFile -Rows $rows -NowMs 2000
+Assert-Equal $swProjB $sw.Project 'switching to personal loads PERSONAL''s project from the file, not work''s'
+Assert-Equal $swProjA $sw.Profiles['work']['Project'] 'leaving work parked its own project in the stash'
+$sw = Switch-LaunchAccount -State $sw -To 'work' -Prefs $swFile -Rows $rows -NowMs 2000
+Assert-Equal $swProjA $sw.Project 'and switching back reloads it from the stash, not personal''s leftover riding along'
+
+# The FILE-profile reload path rejects a remembered project that is a file, same as Merge-LaunchPrefs.
+$sw = Switch-LaunchAccount -State $sw -To 'low' -Prefs $swFile -Rows $rows -NowMs 2000
+Assert-Equal '' "$($sw.Project)" 'switching to an account whose remembered project is a FILE does not restore it'
+
+# And so does the SESSION-STASH reload path - a value already sitting on $State when the tab is
+# left, however it got there, is validated the same way on the way back in.
+$sw.Project = $swFilePath
+$sw = Switch-LaunchAccount -State $sw -To 'personal' -Prefs $swFile -Rows $rows -NowMs 2000
+$sw = Switch-LaunchAccount -State $sw -To 'low' -Prefs $swFile -Rows $rows -NowMs 2000
+Assert-Equal '' "$($sw.Project)" 'a session-stashed project that is a FILE is rejected on reload too'
+
+# --- ProjectSlug rides alongside Project (fix round 1, MINOR 5) -------------------------------
+# It is derived, never persisted (New-LaunchState's own comment) - but a session-stash restore is
+# in-memory state from the SAME run, not a persisted file value, so it must still carry the slug
+# alongside the project; and every place Project resets to '' must reset ProjectSlug too, or a
+# stale slug from a different project could survive a switch (harmless today only because
+# Set-LaunchStartProject/the project screen's own result always overwrite it before the session
+# picker reads it - a latent bug waiting for that assumption to move).
+$slugRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\claude-auto')).Path
+$slugFile = @{ Version = 2; Account = 'work'; Profiles = @{ work = @{ Project = $slugRoot } } }
+$swSlug = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs $slugFile -Rows $rows -NowMs 2000).State
+$swSlug.ProjectSlug = 'work-slug'
+$swSlug = Switch-LaunchAccount -State $swSlug -To 'personal' -Prefs $slugFile -Rows $rows -NowMs 2000
+Assert-Equal '' $swSlug.ProjectSlug 'switching to an account with no remembered slug resets it - no leftover from the tab just left'
+Assert-Equal 'work-slug' $swSlug.Profiles['work']['ProjectSlug'] 'leaving work parked its slug in the stash alongside the project'
+$swSlug = Switch-LaunchAccount -State $swSlug -To 'work' -Prefs $slugFile -Rows $rows -NowMs 2000
+Assert-Equal 'work-slug' $swSlug.ProjectSlug 'and switching back restores the slug from the session stash, alongside the project'
+
+# A rejected project (the FILE-path guard above) clears the slug too - one must never outlive the
+# other.
+$swSlug.Project = $swFilePath; $swSlug.ProjectSlug = 'stale-slug'
+$swSlug = Switch-LaunchAccount -State $swSlug -To 'personal' -Prefs $slugFile -Rows $rows -NowMs 2000
+$swSlug = Switch-LaunchAccount -State $swSlug -To 'low' -Prefs $slugFile -Rows $rows -NowMs 2000
+Assert-Equal '' $swSlug.ProjectSlug 'a rejected (file, not directory) project reload also clears the stale slug'
+
+# The bug's real-world damage: a launch on the account switched TO must never overwrite the account
+# switched FROM, and must write its OWN project, never one leaked across the switch.
+$leakPath = New-PrefsPath; $paths += $leakPath
+$seedWork = New-LaunchState; $seedWork.Account = 'work';     $seedWork.Project = $swProjA
+$null = Save-LaunchPrefs -State $seedWork -Path $leakPath -NowMs 1000
+$seedPersonal = New-LaunchState; $seedPersonal.Account = 'personal'; $seedPersonal.Project = $swProjB
+$null = Save-LaunchPrefs -State $seedPersonal -Path $leakPath -NowMs 1000
+$liveFile = Read-LaunchPrefs -Path $leakPath
+$live = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs $liveFile -Rows $rows -NowMs 2000).State
+$live = Switch-LaunchAccount -State $live -To 'work' -Prefs $liveFile -Rows $rows -NowMs 2000
+$null = Save-LaunchPrefs -State $live -Path $leakPath -NowMs 3000
+$afterLeak = Read-LaunchPrefs -Path $leakPath
+Assert-Equal $swProjA $afterLeak.Profiles['work'].Project 'a launch after switching TO an account writes that account''s OWN project, never a leaked one'
+Assert-Equal $swProjB $afterLeak.Profiles['personal'].Project 'and the account switched FROM keeps its own, undamaged'
+
 # --- switching tabs ---------------------------------------------------------------------------
 # The screen keeps its own stash of the five rows per account. Switching away parks the current
 # answers under the account being left, switching back brings them home: without that, changing tabs
@@ -272,6 +392,12 @@ Assert-Equal 0 (@($st.Restored)).Count 'and clears the restored marks with them'
 Assert-Equal $false ($st.Profiles.ContainsKey('personal')) 'the active tab''s stash is dropped, so nothing resurrects it'
 Assert-Equal $true  ($st.Profiles.ContainsKey('work')) 'another tab''s stash survives a reset'
 Assert-Equal 'max' $st.Profiles['work'].Effort 'with the edit it was holding'
+
+# Project is deliberately outside $ProfileFields, so ctrl+r's reset loop never touches it: losing
+# your place is not part of "reset the values".
+$st3 = New-LaunchState; $st3.Project = 'C:\somewhere'
+$st3 = Reset-LaunchTab -State $st3
+Assert-Equal 'C:\somewhere' $st3.Project 'ctrl+r does not clear the chosen project'
 
 # --- CLAUDE_AUTO_PREFS override (deferred review finding) -------------------------------------
 # The test harness must never read or write the owner's real ~/.claude/claude-auto-prefs.json:
@@ -401,7 +527,41 @@ for (`$i = 0; `$i -lt `$Count; `$i++) { `$null = Save-LaunchPrefs -State `$state
 
 foreach ($f in $paths) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 105) { Write-Host "COULD NOT RUN: expected 105 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the start selection is re-decided on every tab switch -----------------------------------------
+# Spec ordering: 1. cwd when it is a real project, 2. the remembered project of the LAUNCHED account,
+# 3. unresolved. The launched account is whichever tab the owner ends on, so rule 2's input changes
+# with every switch - and applied once before the screen loop, rule 1 silently stopped applying from
+# the first switch on (adversarial review 2026-09-16, A5/A5b).
+$ssRoot = Join-Path $env:TEMP ('claude-auto-start-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$ssCwd = Join-Path $ssRoot 'the-cwd-project'
+$ssRem = Join-Path $ssRoot 'remembered-elsewhere'
+New-Item -ItemType Directory -Force -Path $ssCwd | Out-Null
+New-Item -ItemType Directory -Force -Path $ssRem | Out-Null
+$ssReg = @([pscustomobject]@{ Slug = 'CWD'; Path = $ssCwd; Name = 'the-cwd-project'; Worktree = $null; LastActivity = (Get-Date) })
+$ssRows = Get-LaunchRows
+$ssPrefs = @{ Version = 2; Account = 'work'; Profiles = @{ personal = @{ Project = $ssRem } } }
+
+$ss1 = New-LaunchState; $ss1.Account = 'work'
+$null = Set-LaunchStartProject -State $ss1 -Cwd $ssCwd -Projects $ssReg
+Assert-Equal $ssCwd $ss1.Project 'rule 1 on the opening tab: a cwd that is a known project is preselected'
+$ss1 = Switch-LaunchAccount -State $ss1 -To 'personal' -Prefs $ssPrefs -Rows $ssRows
+Assert-Equal $ssCwd $ss1.Project 'and it still outranks the ARRIVING account''s remembered project after a tab switch'
+Assert-Equal 'CWD' $ss1.ProjectSlug 'with the slug that belongs to it, not the one left over from the tab before'
+
+$ss2 = New-LaunchState; $ss2.Account = 'work'
+$null = Set-LaunchStartProject -State $ss2 -Cwd $ssCwd -Projects $ssReg
+$ss2 = Switch-LaunchAccount -State $ss2 -To 'personal' -Prefs @{} -Rows $ssRows
+Assert-Equal $ssCwd $ss2.Project 'an account with nothing remembered keeps the cwd preselection instead of opening at row 0'
+
+# A neutral cwd - neither a known project nor a .git directory - falls through to rule 2.
+$ss3 = New-LaunchState; $ss3.Account = 'work'
+$null = Set-LaunchStartProject -State $ss3 -Cwd $ssRoot -Projects $ssReg
+$ss3 = Switch-LaunchAccount -State $ss3 -To 'personal' -Prefs $ssPrefs -Rows $ssRows
+Assert-Equal $ssRem $ss3.Project 'a neutral cwd falls through to rule 2 - the arriving account''s remembered project'
+$script:LaunchStartContext = $null
+Remove-Item -LiteralPath $ssRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 131) { Write-Host "COULD NOT RUN: expected 131 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

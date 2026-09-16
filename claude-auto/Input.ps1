@@ -418,6 +418,79 @@ function Get-ClaudeInputRecordTime {
     return $script:LastRecordMs
 }
 
+function Read-ClaudeFreePath {
+    # The free-path prompt (Invoke-ProjectScreen's -ReadPath) needs the OWNER's own keystrokes, not
+    # the armed console's raw record queue: [Console]::ReadLine reads [Console]::In directly, which
+    # competes with Open-ClaudeConsoleInput's ReadConsoleInput for the same buffer and may see
+    # nothing at all. Mirrors how maintenance hands the screen to a child process - release the
+    # arming, let the ordinary console cook one line, put it back exactly as it was.
+    #
+    # Returns the NEW mouse state rather than mutating -MouseState or a caller's variable: a caller
+    # that reassigns its own $mouse INSIDE a plain scriptblock runs that assignment in a scope `&`
+    # creates fresh for the call, which never writes back to the caller's own variable. That was the
+    # live defect this function replaces (fix round 1, CRITICAL 1, 2026-09-16): the re-armed console
+    # was silently discarded into a dead local, the caller kept using the CLOSED handle afterwards,
+    # and Wait-KeyOrResize's mouse branch then returned $null immediately on every poll (
+    # Read-ClaudeInputEvent bails on `.Closed` before it ever waits) with no -MaxLoops and no sleep -
+    # a tight 100%-CPU loop reachable from the very first rejected free path. The caller MUST do
+    # `$script:mouse = (Read-ClaudeFreePath ...).MouseState` (or otherwise write to the actual
+    # variable it reads elsewhere), never a bare `$mouse = ...` inside another scriptblock.
+    #
+    # Every dependency is injected, so this is assertable without a console at all - the same shape
+    # as Set-ClaudeProfile's -Mirror and Resolve-ClaudeExecutable's -Resolver.
+    param(
+        $MouseState,
+        [scriptblock]$Close = { param($s) $null = Close-ClaudeConsoleInput -State $s },
+        [scriptblock]$Open = { Open-ClaudeConsoleInput },
+        # Preview must stay side-effect-free: claude-auto.ps1 passes -Rearm:(-not $Preview), so a
+        # preview run (which never armed the console to begin with, $MouseState is $null there)
+        # never opens one either.
+        [switch]$Rearm,
+        # Whether the caller's screen is on the alternate buffer with the cursor already hidden
+        # (Enter-AltBuffer's ?25l) and only its OWN Exit-AltBuffer (guarded `if ($alt)`) will ever
+        # show it again. This function always shows the cursor (?25h) to display the prompt; without
+        # this switch it also unconditionally hid it again on the way out (review item B), which on a
+        # non-alt-buffer session (no Enter-AltBuffer call, nobody's Exit-AltBuffer to undo it) left
+        # the terminal cursor hidden for good. Pass the caller's own $alt.
+        [switch]$RestoreCursorHidden,
+        [scriptblock]$GetSize = { @([Console]::WindowWidth, [Console]::WindowHeight) },
+        # A BUFFER row, not a window-relative one - SetCursorPosition takes buffer coordinates, and
+        # off the alternate screen buffer (a plain console with real scrollback) WindowTop can be
+        # nonzero. Fix round 1, MINOR 1: `$h - 1` alone put the prompt above the visible window on
+        # any console that was not on the alternate buffer.
+        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
+        [scriptblock]$Write = { param([string]$Text) [Console]::Write($Text) },
+        [scriptblock]$SetCursor = { param([int]$X, [int]$Y) [Console]::SetCursorPosition($X, $Y) },
+        [scriptblock]$ReadLine = { [Console]::ReadLine() }
+    )
+    $newState = $MouseState
+    $line = ''
+    try {
+        if ($MouseState) { & $Close $MouseState }
+        $w, $h = & $GetSize
+        $top = & $GetWindowTop
+        try {
+            # Fix round 1, MINOR 1: Enter-AltBuffer hid the cursor (?25l) for the whole screen and
+            # the prompt never showed it - shown here, hidden again in the finally below regardless
+            # of how the read ends.
+            & $Write "$([char]27)[?25h"
+            & $SetCursor 0 ($top + $h - 1)
+        } catch { }
+        & $Write "$([char]27)[K  path: "
+        $line = & $ReadLine
+    } catch { $line = '' }
+    finally {
+        # Hidden again ONLY when the caller's own screen will re-show it (alt-buffer Exit-AltBuffer,
+        # guarded `if ($alt)`). Off the alt buffer this must stay a no-op, or the terminal cursor is
+        # left hidden with nothing left to undo it (review item B, Task 10).
+        if ($RestoreCursorHidden) { try { & $Write "$([char]27)[?25l" } catch { } }
+        # Re-armed in the finally so a throwing reader still leaves the console usable - never let
+        # a failed read strand the launcher without its mouse for the rest of the session.
+        if ($Rearm) { $newState = & $Open }
+    }
+    return [pscustomobject]@{ Line = "$line"; MouseState = $newState }
+}
+
 function ConvertFrom-ClaudeMouseReport {
     # A decoded VT mouse report, in exactly the shape ConvertTo-ClaudeInputEvent produces for a
     # MOUSE_EVENT record, so every screen consumes it without knowing which terminal it came from.
@@ -681,12 +754,21 @@ function Get-ClaudeFooterHit {
 $script:HotkeyLayoutChars = @{
     'u' = [char]0x0433   # CYRILLIC SMALL LETTER GHE
     'r' = [char]0x043A   # CYRILLIC SMALL LETTER KA
-    'd' = [char]0x0432   # CYRILLIC SMALL LETTER VE
+    'd' = [char]0x0432   # CYRILLIC SMALL LETTER VE (right, on the launch/picker screens; doctor, on maintenance)
     'm' = [char]0x044C   # CYRILLIC SMALL LETTER SOFT SIGN
     'p' = [char]0x0437   # CYRILLIC SMALL LETTER ZE
     'i' = [char]0x0448   # CYRILLIC SMALL LETTER SHA
     'f' = [char]0x0430   # CYRILLIC SMALL LETTER A
     '/' = [char]0x002E   # the slash key is '.' unshifted on both layouts
+    # WASD navigation (2026-09-09): up/left/down/right on every screen that has a cursor.
+    'w' = [char]0x0446   # CYRILLIC SMALL LETTER TSE
+    'a' = [char]0x0444   # CYRILLIC SMALL LETTER EF
+    's' = [char]0x044B   # CYRILLIC SMALL LETTER YERU
+    # Project-screen actions (2026-09-15): continue/worktree lost the VK_PACKET route (an RDP soft
+    # keyboard, a paste) without these - the character-only match above only covers a genuine
+    # Latin-layout press.
+    'c' = [char]0x0441   # CYRILLIC SMALL LETTER ES
+    't' = [char]0x0435   # CYRILLIC SMALL LETTER IE
 }
 # Hotkeys whose virtual key is not the uppercase Latin letter.
 $script:HotkeyVirtualKeys = @{ '/' = [System.ConsoleKey]::Oem2 }

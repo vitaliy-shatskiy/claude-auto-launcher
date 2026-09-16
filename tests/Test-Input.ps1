@@ -14,6 +14,9 @@ try { . "$PSScriptRoot\..\claude-auto\Input.ps1" } catch { Write-Host "COULD NOT
 
 $script:Failed = 0
 $script:Ran = 0
+# Three outcomes, not two. A half that could not run at all is neither a pass nor a failure, and
+# rendering it as either is the mistake this repository's exit-code contract exists to prevent.
+$script:Unverified = 0
 function Assert-Equal {
     param($Expected, $Actual, [string]$Because)
     $script:Ran++
@@ -21,6 +24,17 @@ function Assert-Equal {
         Write-Host "FAIL  $Because"
         Write-Host "      expected: $Expected"
         Write-Host "      actual:   $Actual"
+        $script:Failed++
+    } else { Write-Host "ok    $Because" }
+}
+function Assert-True {
+    # Assert-Equal $null $x stringifies both sides ("$Expected" -ne "$Actual"), so it passes for ''
+    # and @() too, not just $null - it reads stronger than it is for a $null check (review item C,
+    # Task 10). Use this instead: ($null -eq $x) is a real type-aware comparison.
+    param([bool]$Actual, [string]$Because)
+    $script:Ran++
+    if (-not $Actual) {
+        Write-Host "FAIL  $Because"
         $script:Failed++
     } else { Write-Host "ok    $Because" }
 }
@@ -38,6 +52,92 @@ Assert-Equal ''   (Get-ClaudeMouseRow -Y 5  -FirstRowY 5 -RowCount 0) 'no rows m
 # once the terminal has scrolled, and forgetting WindowTop is how a click lands rows away.
 Assert-Equal 1    (Get-ClaudeMouseRow -Y 106 -FirstRowY 5 -RowCount 4 -WindowTop 100) 'the window top is subtracted before mapping'
 Assert-Equal ''   (Get-ClaudeMouseRow -Y 6   -FirstRowY 5 -RowCount 4 -WindowTop 100) 'a stale buffer coordinate does not wrap into range'
+
+# ---------------------------------------------------------------- Read-ClaudeFreePath (Task 9 fix
+# round 1, CRITICAL 1). Every dependency injected, so this never needs a console. The whole point:
+# the caller gets the re-armed state back through the RETURN VALUE, never through a scriptblock
+# reassigning a variable in its own child scope - the live defect this replaces re-armed into a
+# dead local, left the caller polling a CLOSED handle, and spun Wait-KeyOrResize's mouse branch at
+# 100% CPU with no sleep.
+
+$script:rcfpWrites = New-Object System.Collections.Generic.List[string]
+$rcfpWrite = { param([string]$Text) $script:rcfpWrites.Add($Text) }
+$script:rcfpCursor = $null
+$rcfpSetCursor = { param([int]$X, [int]$Y) $script:rcfpCursor = @($X, $Y) }
+$script:rcfpClosedWith = $null
+$rcfpClose = { param($s) $script:rcfpClosedWith = $s }
+$script:rcfpOpenCalls = 0
+$newMouseState = [pscustomobject]@{ Id = 'NEW'; Closed = $false }
+$rcfpOpen = { $script:rcfpOpenCalls++; $newMouseState }
+$oldMouseState = [pscustomobject]@{ Id = 'OLD'; Closed = $false }
+
+$script:rcfpWrites.Clear(); $script:rcfpCursor = $null; $script:rcfpClosedWith = $null; $script:rcfpOpenCalls = 0
+$r = Read-ClaudeFreePath -MouseState $oldMouseState -Rearm -RestoreCursorHidden `
+     -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 50 } `
+     -Write $rcfpWrite -SetCursor $rcfpSetCursor -ReadLine { 'C:\typed\path' }
+Assert-Equal 'C:\typed\path' $r.Line 'the read line is returned'
+Assert-Equal 'NEW' $r.MouseState.Id 'the caller gets back the OPENED state through the return value, not the old one it passed in'
+Assert-Equal 'OLD' $script:rcfpClosedWith.Id 'the state passed in is the one that gets closed'
+Assert-Equal 1 $script:rcfpOpenCalls '-Rearm opens exactly once'
+Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25h") 'the cursor is shown before the read'
+# -RestoreCursorHidden (Task 10, review item B): the caller passes this only when its OWN screen is
+# on the alt buffer and its Exit-AltBuffer will show the cursor again - only THEN may this function
+# hide it on the way out.
+Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25l") '-RestoreCursorHidden: hidden again afterwards'
+Assert-Equal $true (([array]::IndexOf($script:rcfpWrites, "$([char]27)[?25h")) -lt ([array]::IndexOf($script:rcfpWrites, "$([char]27)[?25l"))) 'show comes before hide'
+Assert-Equal '0,73' ($script:rcfpCursor -join ',') 'the row is WindowTop + height - 1, a BUFFER row - not just height - 1, which is wrong off the alternate buffer'
+
+# Without -RestoreCursorHidden (the default: no alt buffer, so nobody's Exit-AltBuffer would ever
+# show the cursor again) - the cursor is shown for the prompt but NEVER hidden again. Before this
+# fix (review item B) the hide was unconditional and this branch left the terminal cursor hidden for
+# the rest of the session on any host that never entered the alt buffer.
+$script:rcfpWrites.Clear()
+$rNoRestore = Read-ClaudeFreePath -MouseState $oldMouseState -Rearm `
+    -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 50 } `
+    -Write $rcfpWrite -SetCursor $rcfpSetCursor -ReadLine { 'C:\typed\path' }
+Assert-Equal $true ($script:rcfpWrites -contains "$([char]27)[?25h") 'without -RestoreCursorHidden: the cursor is still shown before the read'
+Assert-Equal $false ($script:rcfpWrites -contains "$([char]27)[?25l") 'without -RestoreCursorHidden: never hidden again - nothing would undo it'
+# -RestoreCursorHidden only changes what the finally writes to the console - it must not change the
+# function's own return value (the line read, or -Rearm's re-armed state).
+Assert-Equal 'C:\typed\path' $rNoRestore.Line 'without -RestoreCursorHidden: the read line is still returned'
+Assert-Equal 'NEW' $rNoRestore.MouseState.Id 'without -RestoreCursorHidden: -Rearm still re-arms and returns the new state'
+
+# SOURCE assertion, the same trick this file already uses for the P/Invoke list (line ~818 below):
+# `$script:mouse = $result.MouseState` inside claude-auto.ps1's $readClaudePath scriptblock is
+# structurally untestable headless - the preview path never arms the mouse, so no suite run ever
+# executes this specific line, and a mutant that dropped or renamed it would still pass every other
+# assertion here. Pinning the exact source line is the only guard possible short of a live console.
+$claudeAutoSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
+$mouseAssignHits = @([regex]::Matches($claudeAutoSrc, [regex]::Escape('$script:mouse = $result.MouseState'))).Count
+Assert-Equal 1 $mouseAssignHits 'claude-auto.ps1 writes the re-armed mouse state back through $script:mouse = $result.MouseState exactly once (source assertion - the assignment cannot be exercised headless)'
+
+# No mouse state at all (preview, or a console-less host): nothing to close, nothing re-armed
+# unless asked, and it still returns cleanly.
+$script:rcfpOpenCalls = 0; $script:rcfpClosedWith = $null
+$r2 = Read-ClaudeFreePath -MouseState $null -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write {} -SetCursor {} -ReadLine { 'x' }
+Assert-True ($null -eq $r2.MouseState) 'with no mouse state and no -Rearm, none is returned'
+Assert-True ($null -eq $script:rcfpClosedWith) 'and nothing was closed - there was nothing to close'
+Assert-Equal 0 $script:rcfpOpenCalls 'nor opened - -Rearm was not requested'
+
+# -Rearm not requested (the preview path, or any caller that never armed the console to begin with):
+# even with a real state to close, it must not re-open - matches claude-auto.ps1's own
+# `-Rearm:(-not $Preview)`.
+$script:rcfpOpenCalls = 0; $script:rcfpClosedWith = $null
+$r3 = Read-ClaudeFreePath -MouseState $oldMouseState -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write {} -SetCursor {} -ReadLine { 'x' }
+Assert-Equal 'OLD' $script:rcfpClosedWith.Id 'it still closes the state it was given'
+Assert-Equal 0 $script:rcfpOpenCalls 'but never re-opens without -Rearm'
+Assert-Equal 'OLD' $r3.MouseState.Id 'and reports the same (now-closed) state back rather than $null - Close-ClaudeConsoleInput marks .Closed on the shared object, it does not hand back a new one'
+
+# A throwing reader must not leak the console closed: the re-arm still happens (a `finally`), and
+# the line comes back empty rather than propagating the exception into the project screen's loop.
+$script:rcfpOpenCalls = 0
+$threwInside = $false
+$r4 = $null
+try { $r4 = Read-ClaudeFreePath -MouseState $oldMouseState -Rearm -Close $rcfpClose -Open $rcfpOpen -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write {} -SetCursor {} -ReadLine { throw 'boom' } }
+catch { $threwInside = $true }
+Assert-Equal $false $threwInside 'a throwing reader does not escape the function'
+Assert-Equal '' "$($r4.Line)" 'and the line comes back empty'
+Assert-Equal 1 $script:rcfpOpenCalls 'the console is still re-armed even though the read failed - the whole reason this is a finally'
 
 # ---------------------------------------------------------------- record translation
 
@@ -201,6 +301,20 @@ $sgrM = [System.ConsoleKeyInfo]::new([char]'M', [System.ConsoleKey]::M, $true, $
 Assert-Equal $false (Test-ClaudeHotkey -Key $sgrM -Char 'm' -CapsLock $true) 'a shifted M is never the m hotkey, Caps Lock or not'
 Assert-Equal $true  (Test-ClaudeHotkey -Key ([System.ConsoleKeyInfo]::new([char]'u', [System.ConsoleKey]::U, $false, $false, $false)) -Char 'u' -CapsLock $true) 'and a plain lowercase u still matches with Caps Lock on'
 
+# ------------------------------------------------------- WASD: the Cyrillic layout entries -----
+# VK_PACKET input (an RDP soft keyboard, the owner's actual case) carries no virtual key at all, so
+# the physical-key match cannot see it - only the character the Russian/Ukrainian layout produces
+# on that key does. Table entries added for w/a/s; 'd' already existed for the maintenance screen.
+# c/t added (fix round 2, project-screen minor): continue/worktree lost the same VK_PACKET route.
+foreach ($pair in @(@('w', 0x0446), @('a', 0x0444), @('s', 0x044B), @('c', 0x0441), @('t', 0x0435))) {
+    $ch = [char]$pair[1]
+    $k = [System.ConsoleKeyInfo]::new($ch, [System.ConsoleKey]0, $false, $false, $false)
+    Assert-Equal $true (Test-ClaudeHotkey -Key $k -Char $pair[0] -CapsLock $false) "$($pair[0]) matches its Cyrillic layout letter"
+}
+# The modifier guard is not weakened by adding a letter: a SHIFTED w must still not navigate.
+$shiftedW = [System.ConsoleKeyInfo]::new('W', [System.ConsoleKey]::W, $true, $false, $false)
+Assert-Equal $false (Test-ClaudeHotkey -Key $shiftedW -Char 'w') 'a shifted w is never the w hotkey'
+
 # ---------------------------------------------------------------- live console
 
 if ($Live -and -not $LiveOnly) {
@@ -233,6 +347,14 @@ if ($Live -and -not $LiveOnly) {
     if ($liveCode -eq 0) {
         $note = if ($liveAttempts -gt 1) { " (on attempt $liveAttempts - the first one was a flake)" } else { '' }
         Write-Host "ok    the live console path passed in a child process with its own console$note"
+    } elseif ($liveCode -eq 2) {
+        # The child could not run the half at all - no console to attach to, or an assertion whose
+        # argument threw. Three outcomes, not two: DID NOT RUN is never a pass and never a failure,
+        # and it must not be rendered as either. checkpoint.ps1 prints it as its own verdict and the
+        # owner runs the real-terminal half by hand.
+        Write-Host "DID NOT RUN  the live console half could not run in the child process (exit 2)"
+        Write-Host "      re-run to see it: pwsh -NoProfile -File `"$PSCommandPath`" -LiveOnly"
+        $script:Unverified++
     } else {
         Write-Host "FAIL  the live console path failed in the child process twice (exit $liveCode)"
         Write-Host "      re-run to see it: pwsh -NoProfile -File `"$PSCommandPath`" -LiveOnly"
@@ -266,6 +388,14 @@ if ($Live -and -not $LiveOnly) {
 
         # Inject a click and read it back: the only way to exercise the real reader without a hand
         # on the mouse. It proves the struct marshalling and the wait/read loop together.
+        # DRAIN FIRST. A console this process did not create - and a HIDDEN one especially - has
+        # records of its own waiting: measured 2026-09-16, a hidden child console queues a
+        # WINDOW_BUFFER_SIZE_EVENT as the buffer scrolls under the 89 lines this suite prints before
+        # it gets here. Read-ClaudeInputEvent correctly returns that as 'resize', the read loop below
+        # stops on the first non-null event, and the injected record then arrives exactly one read
+        # late - which is the whole of the "live half is red" report (branch pass B2). The reader was
+        # never at fault; the injection was being made into a queue that was not empty.
+        $null = Clear-ClaudeInputQueue -State $state
         $rec = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
         $rec[0] = New-MouseRec 42 9 ([ClaudeAuto.ConsoleInput]::FROM_LEFT_1ST_BUTTON_PRESSED) 0
         [uint32]$written = 0
@@ -295,6 +425,7 @@ if ($Live -and -not $LiveOnly) {
         # state must return the event rather than fall through to [Console]::KeyAvailable, which
         # would eat it. Everything else here tests the reader; this tests the seam the menu uses.
         . "$PSScriptRoot\..\claude-auto\Ui.ps1"
+        $null = Clear-ClaudeInputQueue -State $state       # same rule as the injection above
         $rec2 = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
         $rec2[0] = New-MouseRec 7 3 ([ClaudeAuto.ConsoleInput]::FROM_LEFT_1ST_BUTTON_PRESSED) 0
         [uint32]$w2 = 0
@@ -683,6 +814,7 @@ if ($Live -and -not $LiveOnly) {
             'with TreatControlCAsInput set first, the armed mode has PROCESSED_INPUT cleared — so Ctrl+C arrives as a KEY and the launch screen can treat it as Escape'
 
         # And prove it end to end: a real Ctrl+C key record must survive the seam with its modifier.
+        $null = Clear-ClaudeInputQueue -State $armed2      # same rule as the injections above
         $ctrlRec = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
         $ctrlRec[0] = New-KeyRec 1 0x43 0x03 ([ClaudeAuto.ConsoleInput]::LEFT_CTRL_PRESSED)
         [uint32]$cw = 0
@@ -728,13 +860,20 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # (arming a SECOND time after TreatControlCAsInput can fail, in which case only 1 assertion runs
 # there instead of 4 - see 'arming after TreatControlCAsInput should still work'), so its count is
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
-# genuine hidden console, never guessed. The bare count (53) IS exact - checkpoint.ps1 only ever
-# runs this suite bare, and that path has no such branching.
+# genuine hidden console, never guessed. The bare count (81: 59 before Task 9's fix round 1, 17 for
+# Read-ClaudeFreePath's own injected-dependency assertions, 3 from Task 10 - the -RestoreCursorHidden
+# branches (review item B) and the $script:mouse source assertion (item D) - plus 2 more from Task 10
+# fix round 1 (MINOR 4: a weak $null MouseState check replaced with Assert-True; MINOR 5: the
+# previously-unused $rNoRestore return value now asserted)) IS exact - checkpoint.ps1 only ever runs
+# this suite bare, and that path has no such branching. The LiveOnly floor of 115 is untouched: it
+# was already a lower bound, not a guess of the branching total, and the new assertions (pure, no
+# console needed) run there too, just widening the margin.
 if ($LiveOnly) {
-    if ($script:Ran -lt 111) { Write-Host "COULD NOT RUN: expected at least 111 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
-} elseif ($script:Ran -ne 53) {
-    Write-Host "COULD NOT RUN: expected 53 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
+    if ($script:Ran -lt 115) { Write-Host "COULD NOT RUN: expected at least 115 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+} elseif ($script:Ran -ne 81) {
+    Write-Host "COULD NOT RUN: expected 81 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
+if ($script:Unverified) { Write-Host ""; Write-Host "$script:Unverified check(s) DID NOT RUN - this is NOT a pass"; exit 2 }
 Write-Host ""; Write-Host "all passed"
 exit 0

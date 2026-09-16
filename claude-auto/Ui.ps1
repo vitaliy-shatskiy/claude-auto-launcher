@@ -220,13 +220,18 @@ function Invoke-LaunchScreen {
         # whole-state reset would flatten every tab's stash, which is the same "my settings reset
         # themselves" failure one level up.
         if ($key.Key -eq [System.ConsoleKey]::R -and ($key.Modifiers -band [System.ConsoleModifiers]::Control)) { $State = Reset-LaunchTab -State $State }
-        elseif ($name -eq 'UpArrow') { if ($State.Row -gt 0) { $State.Row-- } }
-        elseif ($name -eq 'DownArrow') { if ($State.Row -lt (Get-LaunchRows).Count - 1) { $State.Row++ } }
+        # WASD navigates alongside the arrows on every screen with a cursor (2026-09-09): w/a/s/d
+        # go through Test-ClaudeHotkey (Input.ps1), never -eq, so a shifted or Cyrillic-layout key
+        # is judged by the same modifier/case guards as every other hotkey.
+        elseif ($name -eq 'UpArrow' -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($State.Row -gt 0) { $State.Row-- } }
+        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($State.Row -lt (Get-LaunchRows).Count - 1) { $State.Row++ } }
         # The account row is a tab strip: stepping it is a tab switch, and the five habit rows have
         # to travel with it. Every other row steps and nothing else happens.
-        elseif ($name -eq 'LeftArrow' -or $name -eq 'RightArrow') {
+        elseif ($name -eq 'LeftArrow' -or $name -eq 'RightArrow' -or
+                (Test-ClaudeHotkey -Key $key -Char 'a') -or (Test-ClaudeHotkey -Key $key -Char 'd')) {
             $leaving = $State.Account
-            $State = Step-LaunchValue -State $State -Delta $(if ($name -eq 'LeftArrow') { -1 } else { 1 })
+            $back = ($name -eq 'LeftArrow') -or (Test-ClaudeHotkey -Key $key -Char 'a')
+            $State = Step-LaunchValue -State $State -Delta $(if ($back) { -1 } else { 1 })
             if ((Get-LaunchRows)[$State.Row].Name -eq 'Account') { $State = Switch-LaunchTab -State $State -From $leaving -Prefs $Prefs -Rows (Get-LaunchRows) }
         }
         elseif ($name -eq 'Enter') { return $State }
@@ -236,31 +241,340 @@ function Invoke-LaunchScreen {
     }
 }
 
+function Invoke-ProjectScreen {
+    # Where the session runs and what it does there. Returns @{ Path; Action; Slug } or $null on
+    # Escape. Escape at this screen means "back to the launch screen", never "start anyway".
+    #
+    # Slug rides along because two repositories can share a folder name: the session picker (a
+    # later task) scopes sessions by slug, never by path, so an ambiguous name must never silently
+    # fall back to the wrong project's sessions.
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects,
+        [string]$Cwd = '',
+        [string]$Initial = '',
+        [Parameter(Mandatory)][scriptblock]$ReadKey,
+        [scriptblock]$Draw = {
+            param($p, $i, $f, $t, $h, $n)
+            $map = $null
+            Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Cwd $Cwd -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
+            $map
+        },
+        [scriptblock]$Wait = { & $ReadKey },
+        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
+        # Reading a free path is I/O, so it is injected: the suites pass a scriptblock and never
+        # block on a console prompt.
+        [scriptblock]$ReadPath = { Read-Host '  path' }
+    )
+    $filter = ''
+    $typing = $false
+    $hover = -1
+    $notice = ''
+    $rowMap = $null
+    $rows = @()
+    $index = 0
+    # The remembered project starts under the cursor rather than at the top: arriving at this screen
+    # and pressing Enter must reproduce the last launch. Compared through ConvertTo-ProjectKey, not
+    # raw string equality: -Initial is whatever the caller last stored, which may differ from the
+    # registry's own spelling by case or slash direction (fix round 2, reviewer: 'c:/w/beta/' silently
+    # preselected the wrong row under a bare [Array]::IndexOf).
+    if ($Initial) {
+        $initialKey = ConvertTo-ProjectKey $Initial
+        $at = [Array]::IndexOf(@($Projects | ForEach-Object { ConvertTo-ProjectKey $_.Path }), $initialKey)
+        if ($at -ge 0) { $index = $at }
+    }
+
+    # Mirrors Get-ProjectFrame's row assembly. Kept here rather than exported so the frame stays
+    # pure; the two are pinned against each other by the RowCount assertion in Test-Ui. Slug rides
+    # along on a project row so a pick never has to look the project back up by (ambiguous) name.
+    $rowsOf = {
+        param($f)
+        $items = @(Select-ProjectMatch -Projects $Projects -Filter $f)
+        $r = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug; Slugs = @(if ($_.Slugs) { $_.Slugs } else { $_.Slug }) } })
+        $r += [pscustomobject]@{ Kind = 'cwd';  Path = $Cwd; Slug = ''; Slugs = @() }
+        $r += [pscustomobject]@{ Kind = 'path'; Path = '';   Slug = ''; Slugs = @() }
+        return @($r)
+    }
+
+    # The pinned rows carry no slug of their own - the directory they resolve to may still be a
+    # known project (the cwd IS one, or a typed path resolves to one), and the session picker needs
+    # to know that exactly. ConvertTo-ProjectKey (Projects.ps1) is the one shared normaliser - see
+    # its own comment for why a second, ad-hoc one here would eventually drift from it.
+    # Returns EVERY slug of that directory: Get-ProjectRegistry merges the slug folders of one real
+    # directory onto one row, and the picker must reach all of them.
+    $slugOf = {
+        param([string]$Path)
+        if (-not $Path) { return @() }
+        $key = ConvertTo-ProjectKey $Path
+        $hit = @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $key })
+        if ($hit.Count -gt 0) { return @($hit | ForEach-Object { if ($_.Slugs) { $_.Slugs } else { $_.Slug } }) }
+        return @()
+    }
+
+    # Resolves the current row into the result the caller returns. Hoisted out of the loop (fix
+    # round 2, minor: it does not close over anything the loop body does not already hold, and a
+    # scriptblock literal re-evaluated every iteration was pointless allocation) - $rows/$index still
+    # resolve to whatever the loop most recently set, since this is an ordinary scriptblock, not a
+    # closure snapshot.
+    #
+    # EVERY row kind is checked for existence now (fix round 2, IMPORTANT 1): Prefs.ps1's remembered-
+    # project guard makes the identical call the other way ("this value becomes a Set-Location
+    # target"), and this screen's lifetime is a second window on top of that - long enough for
+    # `git worktree remove` in another terminal to invalidate a row the registry still lists. Only
+    # the free-path row additionally resolves the path: a registry or cwd path is already in its
+    # canonical form, and resolving it here would be pointless.
+    $pick = {
+        param([string]$Action)
+        $r = $rows[$index]
+        $path = $r.Path
+        $slugs = @($r.Slugs)
+        if ($r.Kind -eq 'path') { $path = ("$(& $ReadPath)").Trim('"', ' ') }
+        # A NUL in a typed path makes Test-Path raise a non-terminating ArgumentException instead of
+        # answering $false, and at the default $ErrorActionPreference a four-line red dump lands on
+        # the screen in place of this loop's own "path not found" notice (adversarial review
+        # 2026-09-16, A6). The decision was always right; only the output was wrong.
+        if (-not $path -or $path.IndexOf([char]0) -ge 0) { return $null }
+        if (-not (Test-Path -LiteralPath $path -PathType Container)) { return $null }
+        if ($r.Kind -eq 'path') {
+            $path = (Resolve-Path -LiteralPath $path).Path
+            $slugs = @(& $slugOf $path)
+        } elseif ($r.Kind -eq 'cwd') {
+            $slugs = @(& $slugOf $path)
+        }
+        return [pscustomobject]@{ Path = $path; Action = $Action; Slug = $(if ($slugs.Count -gt 0) { $slugs[0] } else { '' }); Slugs = $slugs }
+    }
+
+    # Hover is a REDUCTION, not a cost: a plain top-of-loop draw (as every mouse move already forces
+    # on the launch and session screens) would redraw on every motion event regardless of this flag,
+    # so the flag has to gate the draw call itself. $true means "the coming top-of-loop draw may
+    # run"; only a mouse move that lands on the SAME footer button as last time ever clears it -
+    # every other path (including a move that changes the hovered button) leaves it set, so a real
+    # hover change still redraws exactly once.
+    $needDraw = $true
+
+    while ($true) {
+        $rows = & $rowsOf $filter
+        if ($index -ge $rows.Count) { $index = [Math]::Max(0, $rows.Count - 1) }
+        if ($needDraw) { $rowMap = & $Draw $Projects $index $filter $typing $hover $notice }
+        $needDraw = $true
+        $key = & $Wait
+        if ("$key" -eq 'resize') { continue }
+
+        if ($key -and $key.Kind -eq 'mouse') {
+            $synthetic = $null
+            if ($key.WheelUp)   { if ($index -gt 0) { $index-- } ; continue }
+            if ($key.WheelDown) { if ($index -lt $rows.Count - 1) { $index++ } ; continue }
+            $top = & $GetWindowTop
+            # Hover: only a CHANGE of the hovered button is worth a frame. A move inside the same
+            # button - the overwhelming majority of motion events - skips the NEXT draw entirely,
+            # which is strictly less work than this loop did before hover existed.
+            if ($key.IsMove) {
+                $hit = Get-ClaudeFooterHit -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop $top
+                $now = if ($hit) { [Array]::IndexOf(@($rowMap.Footer), $hit) } else { -1 }
+                if ($now -eq $hover) { $needDraw = $false; continue }
+                $hover = $now
+                continue
+            }
+            # -not IsMove (fix round 2, IMPORTANT 2): a drag is Left set WITH IsMove, and without
+            # this guard it fell through as a press on every position it passed over. IsDoubleClick
+            # is excluded from the FOOTER-hit branch only (mirrors Invoke-MaintenanceScreen: a
+            # physical double click reaches this loop as TWO records, a plain press then one flagged
+            # IsDoubleClick, and treating the second one as a second footer press fired the action -
+            # and, if it read the free-path row, called -ReadPath - a second time).
+            if ($key.Left -and -not $key.IsMove -and $rowMap) {
+                $hint = if ($key.IsDoubleClick) { $null } else { Get-ClaudeFooterHit -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop $top }
+                if ($hint) { $synthetic = New-SyntheticKey -Key $hint.Key -Char $hint.Char }
+                else {
+                    $row = Get-ClaudeMouseRow -Y $key.Y -FirstRowY $rowMap.FirstRowY -RowCount $rowMap.RowCount -WindowTop $top
+                    if ($null -ne $row) {
+                        $target = $rowMap.Start + $row
+                        # A single click only MOVES. Starting a session on a stray click is the one
+                        # mistake nobody forgives - the same rule the session picker follows. A
+                        # DOUBLE click is the session picker's own exception to that rule: two
+                        # presses close enough to register as one gesture are unambiguous intent.
+                        if ($target -ge 0 -and $target -lt $rows.Count) {
+                            $index = $target
+                            if ($key.IsDoubleClick) {
+                                $r = & $pick 'new'
+                                if ($r) { return $r } else { $notice = 'path not found' }
+                            }
+                        }
+                    }
+                }
+            }
+            if (-not $synthetic) { continue }
+            $key = $synthetic
+        }
+
+        # A new KEY event retires the previous rejection notice - it explains the press that just
+        # happened, not every press after it. Set again below if THIS key also fails a pick. This
+        # point is reached only by a genuine keyboard event or a mouse click that just became a
+        # synthetic one (a footer hit): every purely mouse path above it - a move, the wheel, a
+        # plain row-select click, a double click handled inline - already `continue`d without
+        # passing through here, so hovering away from a shown notice cannot wipe it before it is
+        # read (fix round 3, coordinator ruling).
+        $notice = ''
+        $name = "$($key.Key)"
+
+        if ($typing) {
+            if ($name -eq 'Enter') { $typing = $false }
+            elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { $typing = $false; $filter = ''; $index = 0 }
+            elseif ($name -eq 'Backspace') { if ($filter.Length -gt 0) { $filter = $filter.Substring(0, $filter.Length - 1) } }
+            # \ / : added (fix round 2, minor): Select-ProjectMatch's documented purpose is matching
+            # a PASTED path literally, and a path is not a path without its separators and drive
+            # colon.
+            elseif ($key.KeyChar -and ([char]::IsLetterOrDigit($key.KeyChar) -or $key.KeyChar -in @(' ', '-', '.', '_', '\', '/', ':'))) {
+                $filter += $key.KeyChar
+                $index = 0
+            }
+            continue
+        }
+
+        if ($name -eq 'UpArrow'   -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
+        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($index -lt $rows.Count - 1) { $index++ } }
+        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return $null }
+        elseif ($name -eq 'Enter') { $r = & $pick 'new';      if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char 'c') { $r = & $pick 'continue'; if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char 'r') { $r = & $pick 'resume';   if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char 't') { $r = & $pick 'worktree'; if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char '/') { $typing = $true }
+    }
+}
+
+function Expand-SessionPage {
+    # Appends the next page of sessions to a picker's list. Pulled out of Invoke-SessionPicker so
+    # the keyboard and the wheel grow the list through the SAME rule, and so that rule is assertable
+    # without driving a picker loop.
+    #
+    # A row already on the list is never added again: the newest-first window moves whenever a
+    # session is written while the picker is open, so the next page can overlap the last one and the
+    # same session would otherwise be offered twice.
+    #
+    # An EMPTY page means the end. "Added nothing" does not: a page that is entirely overlap - the
+    # exact case the dedup exists for - would then end the paging permanently with sessions still
+    # behind it (adversarial review 2026-09-16, D1). A fetcher that throws (a root that vanished
+    # mid-session) ends the paging rather than the picker.
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions,
+        [Parameter(Mandatory)][scriptblock]$FetchMore,
+        # How many rows have been FETCHED so far - the offset into the caller's snapshot. This is
+        # NOT $Sessions.Count once a page has overlapped: the dedup drops rows, and an offset taken
+        # from the deduped count re-reads the same window forever. -1 keeps the old behaviour for a
+        # caller that does not thread it.
+        [int]$Fetched = -1,
+        # Which scope the page is for, handed to the fetcher beside the offset so a scoped picker
+        # pages its OWN project instead of the whole account.
+        [string[]]$Scope = @()
+    )
+    $offset = if ($Fetched -ge 0) { $Fetched } else { @($Sessions).Count }
+    $page = @()
+    # A fetcher that fails because the WORLD changed - a projects root that vanished, a transcript
+    # that went away mid-read - ends the paging rather than the picker. A fetcher that fails because
+    # it is MISWIRED does not: an ArgumentException or a binding failure is a programming error, and
+    # swallowing it turns a scoped picker that can no longer page into one that quietly stops, which
+    # is the same silence C1 hid behind for a whole round (re-review 2 2026-09-16, N2).
+    try { $page = @(& $FetchMore $offset $Scope) }
+    catch [System.ArgumentException] { throw }
+    catch [System.Management.Automation.ParameterBindingException] { throw }
+    catch { $page = @() }
+    $seen = @{}
+    foreach ($s in $Sessions) { $seen["$($s.SessionId)|$($s.Path)"] = $true }
+    $added = @($page | Where-Object { $_ -and -not $seen["$($_.SessionId)|$($_.Path)"] })
+    return [pscustomobject]@{
+        Sessions  = @(@($Sessions) + $added)
+        Added     = $added.Count
+        Fetched   = $offset + $page.Count
+        Exhausted = ($page.Count -eq 0)
+    }
+}
+
 function Invoke-SessionPicker {
     # Returns the chosen session object, or $null when the user pressed Esc at the list level.
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions,
         [Parameter(Mandatory)][scriptblock]$ReadKey,
+        # Scopes the picker to one project. -ProjectSlug is the exact key (a session's transcript
+        # directory name) and is what actually filters; -ProjectName is kept ONLY as the display
+        # label for the title/footer, except as a fallback filter when no slug is known at all (an
+        # unrecognised cwd has none). Two repositories can share a folder name, so scoping by name
+        # alone would silently mix their sessions together - slug never does, because it comes from
+        # the transcript path itself, not from a display string.
+        # A LIST: one real directory can own several slug folders (a cwd recorded with different
+        # separators, a folder renamed and renamed back). Get-ProjectRegistry merges those into one
+        # row and keeps every slug on it, and the picker must reach all of them or half the project's
+        # sessions are unreachable from the screen that just named it.
+        [string[]]$ProjectSlug = @(),
+        [string]$ProjectName = '',
         # $Draw RETURNS the row map when it can - where the session rows landed on screen - so a
         # click can be turned into an index by the same arithmetic that drew them. A Draw that
         # returns nothing (every existing test injects one) simply leaves the mouse inert.
         [scriptblock]$Draw = {
-            param($s, $i, $f)
+            param($s, $i, $f, $sc, $pn)
             $map = $null
-            Get-PickerFrame -Sessions $s -Index $i -Filter $f -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
+            Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
             $map
         },
         [scriptblock]$Wait = { & $ReadKey },
         # Mouse coordinates are SCREEN-BUFFER rows; the frame is drawn relative to the visible
         # window. Injected so the mapping is assertable without a console.
-        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } }
+        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
+        # Paging. Called with the number of rows already on the list, whenever the cursor reaches
+        # the last row, and expected to return the next page. The launcher hands the picker one
+        # page instead of every session so the first frame costs one page's worth of summarising
+        # rather than forty. $null for a caller that already holds the whole list - the picker then
+        # behaves exactly as it did, and the cursor simply stops at the last row.
+        [scriptblock]$FetchMore = $null
     )
     $index = 0
     $filter = ''
     $typing = $false
     $rowMap = $null
+    # No slug AND no name means there is nothing to scope to (an unrecognised cwd, or a caller that
+    # never learned a project at all) - the picker then behaves exactly as it always has, and Tab
+    # does nothing (guarded below), because there is no "other" scope to widen from or narrow to.
+    # 'none' (fix round 1, IMPORTANT 1), not 'all': Get-PickerFrame renders 'none' with NO tab hint
+    # at all, where 'all' would show one labelled "this project" that Tab could never act on - a
+    # button that always does nothing, wrapping the footer at 80 columns for every user who has
+    # never even seen the project screen.
+    # Empties filtered out: a caller passing -ProjectSlug '' means "no slug", and a one-element array
+    # holding '' would otherwise read as a scope that matches nothing.
+    $slugSet = @($ProjectSlug | Where-Object { $_ })
+    $hasScope = ($slugSet.Count -gt 0) -or [bool]$ProjectName
+    $scope = if ($hasScope) { 'project' } else { 'none' }
+
+    # One page bucket PER SCOPE. The page the launcher handed in was fetched for the scope the
+    # picker opens in; Tab is a different question of disk ("every session of this account", not
+    # "the next ten of this project") and gets its own page 1 and its own paging offset. Keeping
+    # both means Tab back and forth costs one fetch each way, not one per press.
+    $slugsFor = { param([string]$S) if ($S -eq 'project') { $slugSet } else { @() } }
+    $newBucket = {
+        param([string]$S)
+        $b = [pscustomobject]@{ Sessions = @($Sessions); Fetched = @($Sessions).Count; Exhausted = $true }
+        if ($FetchMore) {
+            $b = [pscustomobject]@{ Sessions = @(); Fetched = 0; Exhausted = $false }
+            $g = Expand-SessionPage -Sessions @() -FetchMore $FetchMore -Fetched 0 -Scope (& $slugsFor $S)
+            $b.Sessions = $g.Sessions; $b.Fetched = $g.Fetched; $b.Exhausted = $g.Exhausted
+        }
+        return $b
+    }
+    $pages = @{}
+    $pages[$scope] = [pscustomobject]@{ Sessions = @($Sessions); Fetched = @($Sessions).Count; Exhausted = (-not $FetchMore) }
 
     while ($true) {
+        if (-not $pages.ContainsKey($scope)) { $pages[$scope] = & $newBucket $scope }
+        $bucket = $pages[$scope]
+        # Scoped BEFORE Select-ResumableSessions/Select-SessionMatch run, so $items - and therefore
+        # $index - only ever ranges over the sessions the current scope actually shows. $pool (not
+        # $Sessions) is what gets handed to $Draw too, so Get-PickerFrame's own hiddenCount and "N
+        # sessions" title reflect the scoped pool, never the full account.
+        # @() wraps the WHOLE if/else, not just its branches: `$x = if (...) {...} else { @() }`
+        # unwraps an empty-array branch to $null on assignment regardless of how that branch built
+        # it - the exact trap the comment below already warns about, now one line earlier.
+        $pool = @(
+            if ($scope -eq 'project' -and $hasScope) {
+                if ($slugSet.Count -gt 0) { $bucket.Sessions | Where-Object { $_.Slug -in $slugSet } }
+                else { $bucket.Sessions | Where-Object { $_.Project -eq $ProjectName } }
+            } else { $bucket.Sessions }
+        )
         # Select-ResumableSessions drops empty (zero-prompt) sessions before the filter runs, and
         # Get-PickerFrame does the exact same thing before rendering - the two must never disagree
         # about which index points at which session.
@@ -269,9 +583,16 @@ function Invoke-SessionPicker {
         # built that array internally, and Select-SessionMatch's -Sessions is Mandatory - an account
         # with every session filtered out (or none at all) crashed the picker here with a raw
         # PowerShell binding error. Found via tests\check-preview.ps1's empty-fixture-account run.
-        $items = Select-SessionMatch -Sessions @(Select-ResumableSessions -Sessions $Sessions) -Filter $filter
+        $resumable = @(Select-ResumableSessions -Sessions $pool)
+        $items = Select-SessionMatch -Sessions $resumable -Filter $filter
+        # Paging stops only when the fetcher is out of rows, or when the filter can see NOTHING at
+        # all - the case where every Down was a synchronous cold disk page that could not change the
+        # frame (adversarial review 2026-09-16, D4). Gating on "the filter hides nothing" instead
+        # (`$items.Count -ge $resumable.Count`) went too far: one hidden row stopped every fetch, so
+        # a session matching the filter one page deeper was unreachable (re-review, W1).
+        $canPage = [bool]$FetchMore -and -not $bucket.Exhausted -and -not ($items.Count -eq 0 -and $resumable.Count -gt 0)
         if ($index -ge $items.Count) { $index = [Math]::Max(0, $items.Count - 1) }
-        $rowMap = & $Draw $Sessions $index $filter
+        $rowMap = & $Draw $pool $index $filter $scope $ProjectName
         $key = & $Wait
         if ("$key" -eq 'resize') { continue }
 
@@ -282,7 +603,15 @@ function Invoke-SessionPicker {
         if ($key -and $key.Kind -eq 'mouse') {
             $synthetic = $null
             if ($key.WheelUp) { if ($index -gt 0) { $index-- } ; continue }
-            if ($key.WheelDown) { if ($index -lt $items.Count - 1) { $index++ } ; continue }
+            if ($key.WheelDown) {
+                if ($index -lt $items.Count - 1) { $index++ }
+                elseif ($canPage) {
+                    $grown = Expand-SessionPage -Sessions $bucket.Sessions -FetchMore $FetchMore -Fetched $bucket.Fetched -Scope (& $slugsFor $scope)
+                    $bucket.Sessions = $grown.Sessions; $bucket.Fetched = $grown.Fetched; $bucket.Exhausted = $grown.Exhausted
+                    if ($grown.Added -gt 0 -and $items.Count -gt 0) { $index++ }
+                }
+                continue
+            }
             # Act on the PRESS: the release carries the same position with no button set, and a drag
             # arrives as MOVE-with-button. Both are ignored, or one click would fire twice.
             if ($key.Left -and -not $key.IsMove -and $rowMap) {
@@ -325,8 +654,33 @@ function Invoke-SessionPicker {
             continue
         }
 
-        if ($name -eq 'UpArrow') { if ($index -gt 0) { $index-- } }
-        elseif ($name -eq 'DownArrow') { if ($index -lt $items.Count - 1) { $index++ } }
+        # WASD alongside the arrows here too - reached only outside the $typing branch above, so
+        # letters typed into an open filter are never read as navigation.
+        if ($name -eq 'UpArrow' -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
+        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) {
+            if ($index -lt $items.Count - 1) { $index++ }
+            elseif ($canPage) {
+                # The cursor is on the last row and there may be more behind it. $index is bumped
+                # past the end on purpose: the appended rows still have to pass the scope and the
+                # filter, and the loop re-clamps $index against $items before drawing, so this lands
+                # on the first NEW visible row or stays put when the page added nothing visible.
+                # Not bumped when the list was EMPTY: there was no row under the cursor to step off,
+                # so the first fetched row would be skipped over (adversarial review 2026-09-16, D3).
+                $grown = Expand-SessionPage -Sessions $bucket.Sessions -FetchMore $FetchMore -Fetched $bucket.Fetched -Scope (& $slugsFor $scope)
+                $bucket.Sessions = $grown.Sessions; $bucket.Fetched = $grown.Fetched; $bucket.Exhausted = $grown.Exhausted
+                if ($grown.Added -gt 0 -and $items.Count -gt 0) { $index++ }
+            }
+        }
+        # Tab, not a letter: Test-ClaudeHotkey is for the Latin letters a footer hint advertises via
+        # -Char, and every named key on this screen (Enter, Escape) is already matched on $name the
+        # same way this is - never -eq alone, but through the SAME $name string every other named key
+        # here uses. Guarded on $hasScope: with nothing to scope to, there is no "other" scope to
+        # widen from or narrow to, so the key does nothing rather than toggling between two labels
+        # that would both mean "everything".
+        elseif ($name -eq 'Tab' -and $hasScope) {
+            $scope = if ($scope -eq 'project') { 'all' } else { 'project' }
+            $index = 0
+        }
         elseif ($name -eq 'Enter') { if ($items.Count -gt 0) { return [pscustomobject]@{ Session = $items[$index]; Fork = $false } } }
         elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return $null }
         # Test-ClaudeHotkey (Input.ps1): the character, the virtual key or the Cyrillic letter on

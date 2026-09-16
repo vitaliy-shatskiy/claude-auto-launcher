@@ -19,6 +19,17 @@ function Assert-Equal {
         $script:Failed++
     } else { Write-Host "ok    $Because" }
 }
+function Assert-True {
+    # Assert-Equal $null $x stringifies both sides ("$Expected" -ne "$Actual"), so it passes for ''
+    # and @() too, not just $null (Task 10 review, fix round 1, SUSPICION->FIX sweep). Use this
+    # instead: ($null -eq $x) is a real type-aware comparison.
+    param([bool]$Actual, [string]$Because)
+    $script:Ran++
+    if (-not $Actual) {
+        Write-Host "FAIL  $Because"
+        $script:Failed++
+    } else { Write-Host "ok    $Because" }
+}
 
 # Fixed-length synthetic path, not (Join-Path $HOME '.local\bin\claude.exe'): several assertions
 # below render at the MINIMUM supported width and check that content fits without truncation - a
@@ -390,7 +401,7 @@ $pruned = Get-Content -LiteralPath $script:HashCachePath -Raw | ConvertFrom-Json
 Assert-Equal $false ([bool]($pruned.PSObject.Properties.Name -match 'gone\.bin')) 'an entry whose file is gone is pruned at the next write'
 Assert-Equal $true ([bool]($pruned.PSObject.Properties.Name -match 'big\.bin')) 'the entry still in use survives the prune'
 
-Assert-Equal $null (Get-CachedFileHash -Path (Join-Path $hashDir 'never-existed.bin')) 'a missing file yields null rather than throwing'
+Assert-True ($null -eq (Get-CachedFileHash -Path (Join-Path $hashDir 'never-existed.bin'))) 'a missing file yields null rather than throwing'
 
 # A file that EXISTS but cannot be read is the same answer. It used to throw a raw PowerShell error
 # into the maintenance screen - reachable whenever an antivirus or indexer holds a just-downloaded
@@ -406,7 +417,7 @@ try {
     # assertion cannot fail (a mutation run proved exactly that about the first version of it).
     $lockErr = @(Get-CachedFileHash -Path $lockedSmall 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
     Assert-Equal 0 $lockErr.Count 'a small file held open writes nothing to the error stream'
-    Assert-Equal $null (Get-CachedFileHash -Path $lockedSmall) 'and answers null, exactly like a missing file'
+    Assert-True ($null -eq (Get-CachedFileHash -Path $lockedSmall)) 'and answers null, exactly like a missing file'
 } finally { $lockSmall.Dispose() }
 
 $lockedBig = Join-Path $hashDir 'locked-big.bin'
@@ -415,7 +426,7 @@ $lockBig = [IO.File]::Open($lockedBig, [IO.FileMode]::Open, [IO.FileAccess]::Rea
 try {
     $lockErrBig = @(Get-CachedFileHash -Path $lockedBig 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
     Assert-Equal 0 $lockErrBig.Count 'a large file held open writes nothing to the error stream either'
-    Assert-Equal $null (Get-CachedFileHash -Path $lockedBig) 'and answers null too'
+    Assert-True ($null -eq (Get-CachedFileHash -Path $lockedBig)) 'and answers null too'
 } finally { $lockBig.Dispose() }
 $lockCache = Get-Content -LiteralPath $script:HashCachePath -Raw | ConvertFrom-Json
 Assert-Equal $false ([bool]($lockCache.PSObject.Properties.Name -match 'locked-big')) 'a failed hash is never remembered, so the next call retries'
@@ -492,7 +503,72 @@ Remove-Item -Recurse -Force $tmp
 # Invoke-ClaudeCommandText (Ui.ps1) is still not asserted: beyond try/catch its only logic is
 # ConvertTo-StatusText, which Test-Ui.ps1 asserts, and exercising it means shelling out to the real
 # binary.
-if ($script:Ran -ne 99) { Write-Host "COULD NOT RUN: expected 99 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the launcher's own wiring, pinned as SOURCE ---------------------------------------------------
+# The decision loop in claude-auto.ps1 has no console and cannot be driven by a suite; these are the
+# two lines whose being wrong opened a scoped picker on an unscoped page (adversarial review
+# 2026-09-16, G1/F6). A positive control sits beside each: the anchor text must exist at all.
+# The whole fetcher BLOCK, not one line of it: pinned on a single line, the assertion only ever
+# caught an edit to THAT line, which is how a [string] parameter three files away could empty the
+# snapshot with nothing going red (re-review 2026-09-16, C1). The behavioural proof is in Test-Ui;
+# this stays as the cheap structural guard beside it.
+$launcherSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
+$fetchStart = $launcherSrc.IndexOf('$fetchNextPage = {')
+Assert-True ($fetchStart -ge 0) 'claude-auto.ps1 builds a page fetcher'
+$fetchEnd = $launcherSrc.IndexOf('.GetNewClosure()', $fetchStart)
+Assert-True ($fetchEnd -gt $fetchStart) 'and closes it over the launcher''s current state'
+$fetchBlock = $launcherSrc.Substring($fetchStart, [Math]::Max(0, $fetchEnd - $fetchStart))
+Assert-True ($fetchBlock -match 'ProjectSlug') 'the fetcher carries the picker''s project scope'
+Assert-True ($fetchBlock -match '-Files ') 'and pages a snapshot rather than a re-sorted listing'
+Assert-True ($fetchBlock -match '\[string\[\]\]') 'holding that snapshot in a [string[]] variable, so an EMPTY scope cannot unroll to $null and unbind -Files'
+Assert-True ($launcherSrc -match '-Sessions @\(&\s*\$fetchNextPage 0 \$pickerSlugs\)') 'the picker''s FIRST page comes from the same scoped fetcher, so it cannot open empty on the chosen project'
+
+# --- the gate must really run what its rows claim ---------------------------------------------------
+# checkpoint.ps1 printed "Test-Input  0 pass" for a run it never made: a one-element array from an
+# if EXPRESSION unrolls to the scalar '-Live', and `@extraArgs` splats a STRING to a native command
+# character by character (adversarial review 2026-09-16, B1). Built from checkpoint's OWN source
+# text, so the assertion cannot drift away from the file it is about.
+$cpSrc = Get-Content -LiteralPath "$PSScriptRoot\checkpoint.ps1" -Raw
+$cpAssign = @($cpSrc -split "`r?`n" | Where-Object { $_ -match '\$extraArgs\s*=' -and $_ -notmatch '^\s*#' })
+Assert-Equal 2 $cpAssign.Count 'checkpoint builds $extraArgs in two statements, not as one if expression'
+$cpVal = & ([scriptblock]::Create((@("`$name = 'Input'") + $cpAssign + @(',$extraArgs')) -join "`n"))
+Assert-True ($cpVal -is [array]) 'and what it builds for the Input suite is an ARRAY, not a scalar'
+Assert-Equal '-Live' ($cpVal -join ',') 'carrying exactly -Live'
+$cpTmp = Join-Path $env:TEMP ('claude-auto-cp-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $cpTmp | Out-Null
+$echoLive = Join-Path $cpTmp 'echo-live.ps1'
+[IO.File]::WriteAllText($echoLive, "param([switch]`$Live)`r`nWrite-Output (`"Live=`" + `$Live)`r`nWrite-Output (`"ARGV=`" + (`$args -join '|'))`r`n", (New-Object System.Text.UTF8Encoding($false)))
+$echoOut = @(& pwsh -NoProfile -File $echoLive @cpVal 2>&1 | ForEach-Object { "$_" })
+Assert-True ([bool](($echoOut -join ' ') -match 'Live=True')) 'and splatting that exact value sets -Live on the child, instead of spelling it out as - | L | i | v | e'
+Remove-Item -LiteralPath $cpTmp -Recurse -Force -ErrorAction SilentlyContinue
+
+# --- the cd happens BEFORE the secrets import, and neither happens under -Preview -------------------
+# Import-ProjectSecrets derives its slug from $PWD, so a switch after it loads the launch directory's
+# secrets into another project's session. The order is pinned as SOURCE because the decision loop has
+# no console; the positive control is that both statements are found at all. Both are guarded on
+# -Preview now - the secrets import was not, so a preview run had a side effect on a path documented
+# as side-effect-free and no preview-driven check could exercise the ordering (adversarial review
+# 2026-09-16, B13).
+$launcherAst = [System.Management.Automation.Language.Parser]::ParseFile("$PSScriptRoot\..\claude-auto.ps1", [ref]$null, [ref]$null)
+$cdCall = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+    "$($n.GetCommandName())" -eq 'Set-ClaudeProjectDirectory' }, $true))
+$secretsCall = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+    "$($n.GetCommandName())" -eq 'Import-ProjectSecrets' }, $true))
+Assert-Equal 1 $cdCall.Count 'claude-auto.ps1 switches the project directory in exactly one place'
+Assert-Equal 1 $secretsCall.Count 'and imports the project secrets in exactly one place'
+Assert-True ($cdCall[0].Extent.StartOffset -lt $secretsCall[0].Extent.StartOffset) 'and the cd comes FIRST, because Import-ProjectSecrets derives its slug from $PWD'
+$guardOf = {
+    param($node)
+    $p = $node.Parent
+    while ($p) {
+        if ($p -is [System.Management.Automation.Language.IfStatementAst]) { return "$($p.Clauses[0].Item1.Extent.Text)" }
+        $p = $p.Parent
+    }
+    return ''
+}
+Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
+Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
+
+if ($script:Ran -ne 114) { Write-Host "COULD NOT RUN: expected 114 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

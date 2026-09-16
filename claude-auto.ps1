@@ -35,7 +35,7 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 
 $ModuleDir = Join-Path $PSScriptRoot 'claude-auto'
 $ModulesOk = $true
-foreach ($m in @('Config.ps1', 'Env.ps1', 'Remote.ps1', 'Sessions.ps1', 'Theme.ps1', 'Layout.ps1', 'Screens.ps1', 'Prefs.ps1', 'Input.ps1', 'Ui.ps1', 'Maintenance.ps1')) {
+foreach ($m in @('Config.ps1', 'Env.ps1', 'Remote.ps1', 'Sessions.ps1', 'Projects.ps1', 'Theme.ps1', 'Layout.ps1', 'Screens.ps1', 'Prefs.ps1', 'Input.ps1', 'Ui.ps1', 'Maintenance.ps1')) {
     try { . (Join-Path $ModuleDir $m) }
     catch {
         Write-Host "  module $m failed to load: $($_.Exception.Message)" -ForegroundColor DarkYellow
@@ -200,6 +200,40 @@ if ($UseUi) {
         # Kept for the `ui` log below only - it is the state the FILE produced, before the screen.
         # The frame reads the live marks off $state itself now (they change with every tab switch).
         $restored = $merged.Restored
+
+        # Built once, before the loop: Get-ProjectRegistry scans the filesystem, so re-running it on
+        # every pass through the loop (a rejected free path, a trip back from the picker) would cost
+        # a rescan for nothing the loop itself changes. Preview must stay side-effect-free: the
+        # registry's cache write is a WRITE like any other guarded on this path, so preview gets its
+        # own per-PID scratch cache under %TEMP% instead of the real one under ~/.claude - reading
+        # the real ~/.claude/projects directory itself is unavoidable (the screen has nothing to
+        # list otherwise) and mirrors Get-RateLimitSummary's own unguarded read a few lines up.
+        $LaunchCwd = $PWD.Path
+        $projectsCacheArgs = if ($Preview) { @{ CachePath = (Join-Path $env:TEMP "claude-auto-projects-preview-$PID.json") } } else { @{} }
+        $projects = @(Get-ProjectRegistry @projectsCacheArgs)
+        # cwd when it is a known project or holds a .git; otherwise what this account launched last;
+        # otherwise nothing, and the project screen opens with the cursor at the top.
+        $projectSource = Set-LaunchStartProject -State $state -Cwd $LaunchCwd -Projects $projects
+
+        # The free-path prompt itself is Read-ClaudeFreePath (Input.ps1) - see its own comment for
+        # why the re-arm MUST come back through a return value, never a plain `$mouse = ...` inside
+        # this scriptblock (fix round 1, CRITICAL 1: that assignment ran in the child scope `&`
+        # creates for the call and never reached the script-scope $mouse the rest of this file
+        # reads, so the caller kept polling a CLOSED handle - a tight 100%-CPU loop with no sleep,
+        # reachable from the very first rejected free path). `$script:mouse` here is not optional.
+        # NEEDS THE OWNER'S HAND IN A REAL TERMINAL: no suite can drive a real [Console]::ReadLine,
+        # so the actual keystroke handling is unverified past what Read-ClaudeFreePath's own
+        # injected-dependency unit tests (Test-Input.ps1) prove.
+        $readClaudePath = {
+            # -RestoreCursorHidden:$alt - only Exit-AltBuffer ever shows the cursor again, and it
+            # only runs `if ($alt)`; a non-alt-buffer session (no Enter-AltBuffer ?25l) must not have
+            # this prompt hide the cursor on its way out, or nothing ever shows it again (review
+            # item B, Task 10).
+            $result = Read-ClaudeFreePath -MouseState $mouse -Rearm:(-not $Preview) -GetSize $size -RestoreCursorHidden:$alt
+            $script:mouse = $result.MouseState
+            return $result.Line
+        }
+
         while ($true) {
             $state = Invoke-LaunchScreen -State $state -ReadKey $KeySource -Wait $wait -Draw $draw -Prefs $prefs -OnKey {
                 param($k)
@@ -232,17 +266,35 @@ if ($UseUi) {
                 }
                 exit 0
             }
+            $projDraw = {
+                param($p, $i, $f, $t, $h, $n)
+                $w, $hh = & $size
+                $pmap = $null
+                & $paint (Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Cwd $LaunchCwd `
+                          -Width $w -Height $hh -Color:$useColor -Ascii:$ascii -RowMap ([ref]$pmap))
+                $pmap
+            }
+            $chosen = Invoke-ProjectScreen -Projects $projects -Cwd $LaunchCwd -Initial "$($state.Project)" `
+                      -ReadKey $KeySource -Wait $wait -Draw $projDraw -ReadPath $readClaudePath
+            # Escape at the project screen goes back to the launch screen, exactly as Escape at the
+            # session picker already does. Preview cannot loop - its key list is finite - so it breaks.
+            if (-not $chosen) { if ($Preview) { $previewPickerCancelled = $true; break }; continue }
+            $state.Project = $chosen.Path
+            $state.ProjectSlug = $chosen.Slug
+            $state.ProjectSlugs = @($chosen.Slugs)
+            $state.Action = $chosen.Action
             if ($state.Action -ne 'resume') { break }
 
+            $projectName = Split-Path -Path $state.Project -Leaf
             $pdraw = {
-                param($s, $i, $f)
+                param($s, $i, $f, $scope, $name)
                 $w, $h = & $size
                 # The row map is the ONLY thing this returns: $paint writes through
                 # [Console]::Write / Write-Host and emits nothing to the pipeline. The picker needs
                 # it to turn a click into a session, and it comes from the renderer so the two can
                 # never disagree about which line holds which row.
                 $map = $null
-                & $paint (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Width $w -Height $h -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
+                & $paint (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $scope -ProjectName $name -Width $w -Height $h -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
                 $map
             }
             # deferred review finding: this used to call Get-ClaudeSessions with no root at all,
@@ -254,7 +306,42 @@ if ($UseUi) {
             # Mandatory - an account with no sessions yet (a fresh secondary root, or any account
             # once the root fix above actually scopes to it) crashed here with a raw PowerShell
             # binding error instead of showing an empty picker. Found via tests\check-preview.ps1.
-            $picked = Invoke-SessionPicker -Sessions @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit 40) -ReadKey $KeySource -Wait $wait -Draw $pdraw
+            # SCOPED, both halves. The picker shows the project the owner just chose, so the page it
+            # is handed - and every page it later asks for - must be that project's. Handing a
+            # scoped picker an unscoped page of ten opened it EMPTY whenever the chosen project's
+            # newest session was not among the ten newest of the whole account, and each Down then
+            # paged other projects' transcripts that the scope threw away (adversarial review
+            # 2026-09-16, G1/G2/D5). Tab asks the fetcher again with an empty scope, so widening to
+            # the whole account is one page of disk, not a second read of everything.
+            #
+            # SNAPSHOT: the file list is enumerated once per scope and every page is -Skip over THAT
+            # list, so a transcript appended while the picker is open cannot shift the window and
+            # hide a session behind the gap (C4).
+            #
+            # PAGED: the first frame costs one page of summarising, not forty. Measured on this
+            # machine over the live projects root, cold: 40 sessions 1 333 ms, 10 sessions ~240 ms.
+            # The picker asks for the next page when the cursor reaches the last row, so the rest is
+            # paid for by whoever actually scrolls that far.
+            $sessionPageSize = 10
+            $sessionSnapshots = @{}
+            # The snapshot is stored in a [string[]] VARIABLE and handed to -Files as that variable,
+            # never as an argument expression: a function returning an empty array unrolls to $null
+            # on the pipeline, -Files would come back unbound, and Get-ClaudeSessions would silently
+            # fall back to the whole unscoped account - which is exactly how a two-slug project
+            # opened its picker on ten foreign rows (re-review 2026-09-16, C1).
+            $fetchNextPage = { param($have, [string[]]$ProjectSlug)
+                $k = (@($ProjectSlug | Where-Object { $_ }) -join '|')
+                if (-not $sessionSnapshots.ContainsKey($k)) {
+                    $sessionSnapshots[$k] = [string[]](Get-ClaudeSessionFile -ProjectsRoot $sessionsRoot -ProjectSlug $ProjectSlug)
+                }
+                $snapshot = [string[]]$sessionSnapshots[$k]
+                @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize -Skip $have -Files $snapshot)
+            }.GetNewClosure()
+            $pickerSlugs = @($state.ProjectSlugs | Where-Object { $_ })
+            if ($pickerSlugs.Count -eq 0 -and $state.ProjectSlug) { $pickerSlugs = @("$($state.ProjectSlug)") }
+            $picked = Invoke-SessionPicker -Sessions @(& $fetchNextPage 0 $pickerSlugs) `
+                      -FetchMore $fetchNextPage `
+                      -ProjectSlug $pickerSlugs -ProjectName $projectName -ReadKey $KeySource -Wait $wait -Draw $pdraw
             if ($picked) { $resumeId = $picked.Session.SessionId; $forkSession = [bool]$picked.Fork; break }
             # Escape at the picker returns $null (cancel) and, in a real session, this loop goes back
             # to the launch screen. Preview cannot loop - the scripted key list is finite - so it must
@@ -310,6 +397,16 @@ if ($UseUi) {
             # screen left behind. The two differing is the whole signature of a launch that changed
             # the habit, whether that was deliberate or a stray `r`.
             saved    = $savedPrefs
+            # Without BOTH of the next two, "it started in the wrong folder" is unanswerable from the
+            # log - the same gap the 2026-08-23 prefs investigation hit, one level up (there it was
+            # the account's habits; here it is which directory the session actually runs in).
+            launchedFrom   = $LaunchCwd
+            project        = $state.Project
+            # How the STARTING pick (before the project screen ran) was resolved - cwd/remembered/
+            # none, from Resolve-StartProject. Not re-derived if the owner picked a different project
+            # on the screen: this answers "why did the screen open where it did", a separate question
+            # from "what did it end on" (already `project`, above).
+            projectSource  = $projectSource
         }
     }
 }
@@ -335,7 +432,29 @@ elseif (-not [Console]::IsInputRedirected -and $args.Count -eq 0) {
 }
 
 Set-ClaudeProfile -Account $choice -Preview:$Preview
-$null = Import-ProjectSecrets -WorkingDirectory $PWD.Path -Root $LauncherConfig.SecretsRoot
+# BEFORE Import-ProjectSecrets: it derives its slug from $PWD (Env.ps1), so switching after this
+# line would load the launch directory's secrets into another project's session. Verified
+# 2026-09-15: a child process DOES inherit the directory after Set-Location, so no explicit
+# WorkingDirectory start is needed - but [Environment]::CurrentDirectory does NOT follow, so every
+# .NET path call past this point must be absolute. Audited Import-ProjectSecrets and
+# Get-McpConfigPaths (Env.ps1): neither makes a relative .NET path call - both build every path by
+# Join-Path against an already-absolute base ($Root, $env:TEMP), so this switch cannot break either.
+# A rejected path (not there, or not a directory) is logged and falls back to the launch cwd rather
+# than throwing - Set-Location -LiteralPath on a bad path would otherwise take the whole launcher
+# down after everything else already succeeded. Set-ClaudeProjectDirectory (Env.ps1) is the guard
+# itself, pulled out so it has a unit seam - Test-Env.ps1 drives it directly.
+#
+# BOTH halves are guarded on -Preview, not just the cd. Import-ProjectSecrets was unguarded, so a
+# preview run imported the LAUNCH directory's secrets into its own process without ever performing
+# the cd - process-local and harmless, but a side effect on a path documented as side-effect-free,
+# and it meant no preview-driven check could ever exercise this ordering at all (adversarial review
+# 2026-09-16, B13). The ORDER itself is pinned as source by Test-Maintenance.
+if ($UseUi -and $state -and -not $Preview) {
+    $null = Set-ClaudeProjectDirectory -Project $state.Project
+}
+if (-not $Preview) {
+    $null = Import-ProjectSecrets -WorkingDirectory $PWD.Path -Root $LauncherConfig.SecretsRoot
+}
 
 # Profile sharing only when the config asks for it: a single-account machine has nothing to link.
 # Preview must be side-effect-free - Repair-SharedProfiles (Env.ps1) guards every step on it.

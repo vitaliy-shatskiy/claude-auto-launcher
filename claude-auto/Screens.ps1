@@ -19,7 +19,12 @@ $script:Rows = @(
     # The box is capped at 100 columns (Get-LaunchFrame's $boxWidth) and this is the width-critical
     # row, which is why Config.ps1 limits an account key to 8 characters.
     @{ Name = 'Account';    Label = 'account';    Values = @('work') }
-    @{ Name = 'Action';     Label = 'action';     Values = @('new', 'continue', 'resume', 'worktree') }
+    # Action is no longer a launch-screen row (2026-09-15): the project screen between this one and
+    # the session picker decides new/continue/resume/worktree, since it is the one place that
+    # already knows WHICH project the action applies to. $State.Action still exists (New-LaunchState
+    # keeps it at 'new') - Get-LaunchArgs still reads it, and the project screen's own result
+    # (Invoke-ProjectScreen's -Action) sets it in claude-auto.ps1 - only the row that let this
+    # screen edit it directly is gone.
     @{ Name = 'Model';      Label = 'model';      Values = @('default', 'fable', 'opus1m', 'sonnet1m', 'haiku')
        Labels = @{ fable = 'Fable 5.1'; opus1m = 'Opus 5[1M]'; sonnet1m = 'Sonnet 5[1M]'; haiku = 'Haiku 4.5' }
        Args   = @{ fable = 'fable';   opus1m = 'opus[1m]';   sonnet1m = 'sonnet[1m]';   haiku = 'haiku' } }
@@ -72,16 +77,26 @@ function Set-LaunchRoster {
 # 50 columns since 2026-09-02: the owner launches over RDP from a phone, where 50x50 is what the
 # screen gives. Every frame must survive it - footers wrap (New-HintFooter -Width), option rows
 # collapse to the selected value, the maintenance verdicts fit 34 characters.
-# Height 21, RE-MEASURED 2026-09-04 when the account row became a tab strip and the bars moved off
-# it: at 50 columns the worst launch frame is 20 lines - 3 box + 1 blank + 8 rows + 3 bars (five
-# hour, seven day, model bucket) + 1 blank + 1 separator + 1 restored + 2 wrapped footer lines -
-# plus the headroom row Write-Frame needs. It was 18+1 before the advisor row and the third bar.
-# Never guess this number: Test-Ui renders that exact frame at an unrefusable height, counts it and
-# asserts this constant is the count plus one, so it re-measures itself on every run.
-# The "8 rows" above assumes the Remote row is present (remote: true in the config): with
+# Height 20, RE-MEASURED 2026-09-15 when the Action row left the launch screen (Task 9: the project
+# screen decides new/continue/resume/worktree now) and the footer's 'enter' hint became 'next': at
+# 50 columns the worst launch frame is 19 lines - 3 box + 1 blank + 7 rows + 3 bars (five hour,
+# seven day, model bucket) + 1 blank + 1 separator + 1 restored + 2 wrapped footer lines - plus the
+# headroom row Write-Frame needs. It was 20+1 with the Action row still on this screen.
+# Never guess this number: Test-Ui renders that exact LAUNCH frame at an unrefusable height, counts
+# it and asserts this constant is the count plus one, so it re-measures itself on every run.
+# The "7 rows" above assumes the Remote row is present (remote: true in the config): with
 # remote: false the frame is one row shorter and this minimum has headroom to spare.
+# The picker and project screens are NOT part of this measurement and must never be (fix round 1,
+# Task 10 review, IMPORTANT 1): both scroll, so unlike the launch screen above they have no fixed
+# worst-case line count to measure at all - rendered at an unbounded height, their line count grows
+# LINEARLY with however many rows the fixture happens to have (measured: project 12/13/40 rows ->
+# 19/20/47 lines; picker 6/15/30 rows -> 16/25/40 lines). Test-Ui instead proves both CLAMP their
+# viewport to whatever height they are given (a 40-row fixture still fits at MinHeight, and renders
+# MORE lines unbound - the only way to tell a real clamp from a merely-short fixture), which is why
+# neither can ever push this constant higher than the launch screen's own worst case. Re-measure the
+# LAUNCH screen, never the other two, before ever moving this constant again.
 $script:MinWidth = 50
-$script:MinHeight = 21
+$script:MinHeight = 20
 $script:TwoPaneWidth = 100
 
 function Get-LaunchRows { return $script:Rows }
@@ -103,6 +118,21 @@ function New-LaunchState {
         # account; Restored/RestoredAge are recomputed on every tab switch, which is why the frame
         # reads them from here rather than from a copy the launcher captured before the screen.
         Profiles = @{}; Restored = @(); RestoredAge = ''
+        # The last project directory launched from, per account (Prefs.ps1). Not in $ProfileFields:
+        # it is a filesystem path, not a pick from a row's option list, so it is saved and merged by
+        # its own explicit lines, validated by existence rather than membership.
+        Project = ''
+        # The registry slug for Project, when it is a known project - '' for an unrecognised
+        # directory (a free path, or a cwd nothing has seen before). Derived, never persisted: it
+        # rides along so the session picker can scope by slug (exact) rather than by name (which two
+        # repositories can share) without looking the path up in the registry a second time.
+        ProjectSlug = ''
+        # EVERY slug of that directory, not just the primary one. One real directory can own several
+        # slug folders (a cwd recorded with different separators, a folder renamed and renamed back);
+        # Get-ProjectRegistry merges those into one row and keeps them all here, and the session
+        # picker scopes on the whole set - otherwise half a project's sessions are unreachable from
+        # the screen that just named it (adversarial review 2026-09-16, A12).
+        ProjectSlugs = @()
     }
 }
 
@@ -254,7 +284,7 @@ function Add-LaunchColor {
         param($m)
         (Get-PercentColor -Percent ([int]$m.Groups[1].Value)) + $m.Value + $script:C.Reset
     })
-    $out = $out -replace '\b(account|model|effort|advisor|permission|remote|action|mode)\b', ($c.Dim + '$1' + $c.Reset)
+    $out = $out -replace '\b(account|model|effort|advisor|permission|remote|mode)\b', ($c.Dim + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Cursor)])", ($c.BrightYellow + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Sparkle)])", ($c.Accent + '$1' + $c.Reset)
     $out = $out -replace '(\d+ (?:min|h|d) ago|just now)', ($c.Dim + '$1' + $c.Reset)
@@ -280,13 +310,21 @@ function New-HintFooter {
     # hints that are not arrows - and their click spans with them. Returns Lines (Text + Spans per
     # line, every span carrying its Line index) and, for the callers that never wrap, Text/Spans of
     # the FIRST line. Without -Width everything lands on one line, as before.
-    param([Parameter(Mandatory)][array]$Hints, [Parameter(Mandatory)][hashtable]$Glyphs, [int]$Width = 0)
+    param([Parameter(Mandatory)][array]$Hints, [Parameter(Mandatory)][hashtable]$Glyphs, [int]$Width = 0, [switch]$Plain)
     $sep = "  $($Glyphs.HintSep)  "
     $lines = @()
     $text = '  '
     $spans = @()
     foreach ($h in $Hints) {
-        $piece = $h.Token
+        # A clickable hint is a BUTTON: the key gets a cell of its own so reverse video paints an
+        # even block around it. With colour off that block is invisible, so -Plain brackets the
+        # token instead - the structure has to survive NO_COLOR and a dumb terminal. Both forms are
+        # the same width (1 + token + 1), which is what keeps wrapping identical either way.
+        $token =
+            if (-not $h.Clickable) { $h.Token }
+            elseif ($Plain) { "[$($h.Token)]" }
+            else { " $($h.Token) " }
+        $piece = $token
         if ($h.Label) { $piece += ' ' + $h.Label }
         $hasContent = $text.Length -gt 2
         if ($Width -gt 0 -and $hasContent -and ($text.Length + $sep.Length + $piece.Length) -gt $Width) {
@@ -297,22 +335,19 @@ function New-HintFooter {
         }
         if ($hasContent) { $text += $sep }
         $start = $text.Length
-        $tokenEnd = $start + $h.Token.Length - 1
+        $tokenEnd = $start + $token.Length - 1
         $text += $piece
-        if ($h.Clickable) {
-            $spans += [pscustomobject]@{
-                Start = $start; End = $text.Length - 1
-                KeyStart = $start; KeyEnd = $tokenEnd
-                Key = $h.Key; Char = $h.Char; Line = $lines.Count
-            }
-        } else {
-            # Not clickable, but still worth painting: the arrow hints are how the keyboard is
-            # discovered, and dimming them uniformly is what makes the actions stand out.
-            $spans += [pscustomobject]@{
-                Start = -1; End = -1
-                KeyStart = $start; KeyEnd = $tokenEnd
-                Key = ''; Char = ''; Line = $lines.Count
-            }
+        # One shape for both cases: a non-clickable hint is still worth painting - the arrow hints
+        # are how the keyboard is discovered, and dimming them uniformly is what makes the actions
+        # stand out - so it gets the same span with Start/End sentinelled to -1 rather than a whole
+        # separate object literal.
+        $spans += [pscustomobject]@{
+            Start = if ($h.Clickable) { $start } else { -1 }
+            End = if ($h.Clickable) { $text.Length - 1 } else { -1 }
+            KeyStart = $start; KeyEnd = $tokenEnd
+            Key = if ($h.Clickable) { $h.Key } else { '' }
+            Char = if ($h.Clickable) { $h.Char } else { '' }
+            Line = $lines.Count
         }
     }
     $lines += [pscustomobject]@{ Text = $text; Spans = @($spans) }
@@ -324,7 +359,13 @@ function Add-HintColor {
     # index rather than by pattern is what keeps this reversible - stripping the colour returns the
     # original line exactly, which the suite asserts - and it cannot mis-fire on a label that
     # happens to contain the same word as a key.
-    param([string]$Line, [array]$Spans, [switch]$Enabled)
+    #
+    # -HasHover singles out ONE clickable span for the Claude-accent tint instead of the ordinary
+    # reverse-video block, so a hovered footer button visibly differs from every other one. Matched
+    # by (Key, Char) rather than position: those two fields are what New-HintFooter gives every hint
+    # to keep it unique, and they survive a footer that wraps onto a second line where a plain
+    # column offset would not.
+    param([string]$Line, [array]$Spans, [switch]$Enabled, [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '')
     if (-not $Enabled -or -not $Line -or -not $Spans) { return $Line }
     $c = $script:C
     $out = ''
@@ -332,7 +373,11 @@ function Add-HintColor {
     foreach ($s in ($Spans | Sort-Object KeyStart)) {
         if ($s.KeyStart -lt $cursor -or $s.KeyEnd -ge $Line.Length) { continue }
         $out += $c.Dim + $Line.Substring($cursor, $s.KeyStart - $cursor) + $c.Reset
-        $tint = if ($s.Start -ge 0) { $c.BrightCyan } else { $c.Dim }
+        $isHovered = $HasHover -and $s.Start -ge 0 -and $s.Key -eq $HoverKey -and $s.Char -eq $HoverChar
+        $tint =
+            if ($isHovered) { $c.Accent + $c.Bold }
+            elseif ($s.Start -ge 0) { $c.Reverse + $c.Bold }
+            else { $c.Dim }
         $out += $tint + $Line.Substring($s.KeyStart, $s.KeyEnd - $s.KeyStart + 1) + $c.Reset
         $cursor = $s.KeyEnd + 1
     }
@@ -350,7 +395,11 @@ function Complete-PickerFrame {
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Lines,
         [Parameter(Mandatory)]$Footer,
         [int]$Width, [hashtable]$Glyphs, [switch]$Color, $RowMap,
-        [ValidateSet('picker', 'launch')][string]$Body = 'picker'
+        [ValidateSet('picker', 'launch')][string]$Body = 'picker',
+        # Forwarded to Add-HintColor untouched. Every existing caller omits these, so every existing
+        # frame paints exactly as before - only a caller that names a hovered (Key, Char) pair
+        # changes what comes out.
+        [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = ''
     )
     $footerLines = @($Footer.Lines)
     if ($footerLines.Count -eq 0) { $footerLines = @([pscustomobject]@{ Text = $Footer.Text; Spans = @($Footer.Spans) }) }
@@ -375,7 +424,7 @@ function Complete-PickerFrame {
         $l = Limit-Line -Text $all[$i] -Max $Width
         # The footer is painted by column span, not by pattern: its words ('row', 'value', 'start')
         # are ordinary English and a pattern-based rule would tint them wherever else they appear.
-        if ($i -ge $footerIndex) { $painted += Add-HintColor -Line $l -Spans $footerLines[$i - $footerIndex].Spans -Enabled:$Color }
+        if ($i -ge $footerIndex) { $painted += Add-HintColor -Line $l -Spans $footerLines[$i - $footerIndex].Spans -Enabled:$Color -HasHover:$HasHover -HoverKey $HoverKey -HoverChar $HoverChar }
         elseif ($Body -eq 'launch') { $painted += Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
         else { $painted += Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
     }
@@ -557,16 +606,137 @@ function Get-LaunchFrame {
         $when = if ($RestoredAge -eq 'just now') { 'just now' } else { "$RestoredAge ago" }
         $lines += "  * restored ($when), ctrl+r resets"
     }
-    # Arrows are deliberately NOT clickable: "up/down" names two directions, and a click on it
-    # cannot mean one of them. Everything that IS a single action is.
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Hints @(
-        @{ Token = 'up/down';    Label = 'row';         Clickable = $false }
-        @{ Token = 'left/right'; Label = 'value';       Clickable = $false }
-        @{ Token = 'enter';      Label = 'start';       Clickable = $true; Key = 'Enter';  Char = '' }
+    # Arrows are deliberately NOT clickable: "w/s" (or "a/d") names two directions, and a click on
+    # it cannot mean one of them. Everything that IS a single action is. w/s and a/d, not
+    # up/down and left/right (2026-09-09): WASD navigates every screen with a cursor now, and
+    # naming it here is what tells the owner the shorter keys exist at all.
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
+        @{ Token = 'w/s'; Label = 'row';         Clickable = $false }
+        @{ Token = 'a/d'; Label = 'value';       Clickable = $false }
+        @{ Token = 'enter';      Label = 'next';        Clickable = $true; Key = 'Enter';  Char = '' }
         @{ Token = 'u';          Label = 'maintenance'; Clickable = $true; Key = '';       Char = 'u' }
         @{ Token = 'esc';        Label = 'quit';        Clickable = $true; Key = 'Escape'; Char = '' }
     )
     return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch)
+}
+
+function Get-ProjectFrame {
+    # Where the session will run, and what it will do there. Pure like every builder in this file.
+    # The pinned rows (current directory, enter a path) sit after the registry so the common case -
+    # the project you were just in - is the first row and one Enter away.
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects,
+        [int]$Index = 0,
+        [string]$Filter = '',
+        [switch]$Typing,
+        [string]$Cwd = '',
+        [int]$Width = 78,
+        [int]$Height = 24,
+        [datetime]$Now = (Get-Date),
+        [switch]$Color,
+        [switch]$Ascii,
+        # -Hover names a clickable footer-button INDEX (matching the order Get-ClaudeFooterHit and
+        # the input loop use: [Array]::IndexOf into the RowMap's flattened Footer list), -1 for none.
+        [int]$Hover = -1,
+        # A rejected pick (a vanished directory, a free path that does not exist) - shown once in the
+        # title and cleared by the loop on the next key, so the reason a press did nothing is never
+        # silent.
+        [string]$Notice = '',
+        [ref]$RowMap
+    )
+    if ($RowMap) { $RowMap.Value = [pscustomobject]@{ FirstRowY = 0; RowCount = 0; Start = 0 } }
+    if ($Width -lt $script:MinWidth -or $Height -lt $script:MinHeight) {
+        return (Get-TooSmallFrame -Width $Width -Height $Height)
+    }
+    $g = Get-Glyphs -Ascii:$Ascii
+    $items = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
+    # The pinned rows are rows: they are selected, hit-tested and entered exactly like a project, so
+    # the loop below never needs to know which kind it is looking at.
+    $rows = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Item = $_ } })
+    $rows += [pscustomobject]@{ Kind = 'cwd';  Item = [pscustomobject]@{ Name = 'current directory'; Path = $Cwd; LastActivity = $null } }
+    $rows += [pscustomobject]@{ Kind = 'path'; Item = [pscustomobject]@{ Name = 'enter a path...';   Path = '';   LastActivity = $null } }
+
+    $title = "project $($g.H) $($items.Count) known"
+    # -Typing shows the filter box the moment '/' is pressed, before any character narrows it, and
+    # the trailing '_' is the only cursor this plain-text title has room for.
+    # Through the same sanitiser every other transcript-sourced field on this screen goes through.
+    # Today the loop's own keystroke whitelist is what keeps an escape out of -Filter, and -Notice is
+    # only ever set to a literal - so this is defence in depth, not a live hole; but every other
+    # field here is protected structurally and these two were the exception (adversarial review
+    # 2026-09-16, A12). A future caller passing text should not have to know.
+    if ($Filter -or $Typing) { $title += " $($g.H) filter: $(Get-CleanTranscriptText -Text $Filter)"; if ($Typing) { $title += '_' } }
+    if ($Notice) { $title += " $($g.H) $(Get-CleanTranscriptText -Text $Notice)" }
+
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
+        @{ Token = 'w/s';   Label = 'move';     Clickable = $false }
+        @{ Token = 'enter'; Label = 'new';      Clickable = $true; Key = 'Enter';  Char = '' }
+        @{ Token = 'c';     Label = 'continue'; Clickable = $true; Key = '';       Char = 'c' }
+        @{ Token = 'r';     Label = 'resume';   Clickable = $true; Key = '';       Char = 'r' }
+        @{ Token = 't';     Label = 'worktree'; Clickable = $true; Key = '';       Char = 't' }
+        @{ Token = '/';     Label = 'filter';   Clickable = $true; Key = '';       Char = '/' }
+        @{ Token = 'esc';   Label = 'back';     Clickable = $true; Key = 'Escape'; Char = '' }
+    )
+    # Which (Key, Char) pair -Hover names, if any - looked up on the SAME clickable-span order that
+    # Complete-PickerFrame will later flatten into RowMap.Footer, so index N here is index N there.
+    $hoverKey = ''
+    $hoverChar = ''
+    $hasHover = $false
+    if ($Hover -ge 0) {
+        $clickable = @($footer.Lines | ForEach-Object { $_.Spans } | Where-Object { $_.Start -ge 0 })
+        if ($Hover -lt $clickable.Count) {
+            $hoverKey = $clickable[$Hover].Key
+            $hoverChar = $clickable[$Hover].Char
+            $hasHover = $true
+        }
+    }
+
+    # Box top + box bottom + headroom + the footer's own lines, exactly like Get-PickerFrame.
+    $bodyRows = [Math]::Max(3, $Height - 3 - @($footer.Lines).Count)
+    if ($Index -ge $rows.Count) { $Index = [Math]::Max(0, $rows.Count - 1) }
+    $vp = Get-Viewport -Count $rows.Count -Index $Index -Visible $bodyRows
+    $inner = $Width - 2
+
+    $body = @()
+    for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
+        $r = $rows[$i]
+        $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
+        if ($r.Kind -eq 'project') {
+            $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
+            $name = $r.Item.Name
+            if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
+            # A very long name must not itself push the age column off the row: clamped BEFORE the
+            # path gets whatever room is left, so a 60-character project name at 50 columns still
+            # shows how recently the project was used instead of New-Box's own clamp cutting the
+            # age off the end of an overlong raw line.
+            $name = Limit-Line -Text $name -Max ([Math]::Max(1, $inner - $mark.Length - $age.Length - 2))
+            # The path is what disambiguates two folders of the same name, so it is the column that
+            # gets cut, never the name.
+            $room = $inner - $mark.Length - $name.Length - $age.Length - 4
+            $tail = if ($room -gt 8) { (Limit-Line -Text $r.Item.Path -Max $room) } else { '' }
+            $pad = [Math]::Max(1, $inner - $mark.Length - $name.Length - $tail.Length - $age.Length - 1)
+            $body += $mark + $name + (' ' * $pad) + $tail + ' ' + $age
+        } elseif ($r.Kind -eq 'cwd') {
+            # The reader must see which directory the row means - rendered like a project row's
+            # name+path columns, minus the age no pinned row has a real LastActivity for.
+            $name = $r.Item.Name
+            $room = $inner - $mark.Length - $name.Length - 3
+            $tail = if ($room -gt 8) { (Limit-Line -Text $r.Item.Path -Max $room) } else { '' }
+            $pad = [Math]::Max(1, $inner - $mark.Length - $name.Length - $tail.Length - 1)
+            $body += $mark + $name + (' ' * $pad) + $tail
+        } else {
+            $body += $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
+        }
+    }
+
+    $lines = New-Box -Lines $body -Width $Width -Title $title -Ascii:$Ascii
+    if ($RowMap) {
+        $RowMap.Value = [pscustomobject]@{
+            FirstRowY = $lines.Count - $body.Count - 1
+            RowCount  = $vp.Visible
+            Start     = $vp.Start
+        }
+    }
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar)
 }
 
 function Get-SessionExchange {
@@ -641,14 +811,45 @@ function Select-ResumableSessions {
     # stays an honest reader of what is actually on disk and any other caller still sees everything.
     # Shared by Invoke-SessionPicker (navigation) and Get-PickerFrame (rendering) so the two can never
     # disagree about which index points at which session.
+    #
+    # Read as an INT. PromptCount used to be the string "N+" past the counter's byte budget, and
+    # PowerShell coerces the other operand to the left one's type - so '0+' -gt 0 was TRUE and a
+    # >4 MB transcript whose first 4 MB holds nothing a human typed was offered as resumable
+    # (adversarial review 2026-09-16, E4b). The trailing '+' is still stripped so a cache written by
+    # an older build stays readable.
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions)
-    return @($Sessions | Where-Object { $_.PromptCount -gt 0 })
+    return @($Sessions | Where-Object { (Get-PromptCountValue -Session $_) -gt 0 })
+}
+
+function Get-PromptCountValue {
+    # The prompt count as an int, whatever shape the row carries it in.
+    param($Session)
+    $n = 0
+    [void][int]::TryParse(("$($Session.PromptCount)" -replace '\+$', ''), [ref]$n)
+    return $n
+}
+
+function Format-PromptCount {
+    # What the picker shows: the number, plus the '+' that says the transcript ran past the
+    # counter's byte budget. The marker is rendered from the FLAG, never stored in the number.
+    param($Session)
+    $capped = if ($null -ne $Session.PSObject.Properties['PromptCountCapped']) { [bool]$Session.PromptCountCapped }
+              else { "$($Session.PromptCount)".EndsWith('+') }
+    $n = Get-PromptCountValue -Session $Session
+    if ($capped) { return "$n+" }
+    return "$n"
 }
 
 function Select-SessionMatch {
+    # -like reads '[' as the start of a character class, and an unmatched one is a TERMINATING
+    # WildcardPatternException that escapes Where-Object into the render loop - the same defect
+    # Select-ProjectMatch (Projects.ps1) already carries the fix for. Escaping the filter text is
+    # the fix: someone who typed '[' is looking for a literal '[', and Escape gives them that.
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions, [string]$Filter)
-    if ([string]::IsNullOrWhiteSpace($Filter)) { return $Sessions }
-    $f = $Filter.Trim()
+    # @() for the same reason as Select-ProjectMatch: an unfiltered one-element answer must not
+    # unroll to a bare object where the filtered answer is an array.
+    if ([string]::IsNullOrWhiteSpace($Filter)) { return @($Sessions) }
+    $f = [Management.Automation.WildcardPattern]::Escape($Filter.Trim())
     return @($Sessions | Where-Object {
         "$($_.Project) $($_.Worktree) $($_.Title) $($_.LastUser) $($_.LastAssistant)" -like "*$f*"
     })
@@ -702,6 +903,19 @@ function Get-PickerFrame {
         [datetime]$Now = (Get-Date),
         [switch]$Color,
         [switch]$Ascii,
+        # 'none' | 'project' | 'all'. 'none' is the picker's original, pre-Task-8 shape exactly -
+        # no tab hint, no title suffix, project column shown - for the caller that has no project
+        # context at all (fix round 1, IMPORTANT 1: a hint that always does nothing, because the
+        # launcher never had a slug or name to scope by in the first place, is dead weight that
+        # costs a wrapped footer line at 80 columns for every user, not a feature). 'project': the
+        # caller has already narrowed -Sessions to the scoped pool - every row here is then the same
+        # project, so its own name is dropped from the list column (pure noise) - and the tab hint
+        # offers to widen. 'all': every session is shown and the tab hint offers to narrow back.
+        [ValidateSet('none', 'project', 'all')]
+        [string]$Scope = 'none',
+        # Display label for the title under -Scope project ONLY (fix round 1, IMPORTANT 3) - falls
+        # back to the generic "this project" when the caller knows a slug but not a display name.
+        [string]$ProjectName = '',
         # Where the session rows landed, for hit-testing a mouse click. Filled by the SAME code that
         # renders them - the alternative is a second copy of the viewport arithmetic, and the two
         # would eventually disagree about which index sits on which line, which is precisely the
@@ -719,19 +933,37 @@ function Get-PickerFrame {
     $resumable = @(Select-ResumableSessions -Sessions $Sessions)
     $hiddenCount = @($Sessions).Count - $resumable.Count
     $items = @(Select-SessionMatch -Sessions $resumable -Filter $Filter)
+    # Fix round 2, item 4: a filter can shrink $items below whatever -Index the caller passed - the
+    # loop in Invoke-SessionPicker always re-clamps its own $index before drawing, so production
+    # never hits this, but a caller that renders a frame directly (a test, a future screen) does not
+    # get that shield for free. Same clamp Get-ProjectFrame already carries for its own rows.
+    if ($Index -ge $items.Count) { $Index = [Math]::Max(0, $items.Count - 1) }
 
     $title = "resume $($g.H) $($items.Count) sessions"
+    # IMPORTANT 3: the comment on Invoke-SessionPicker's -ProjectName always said this was the
+    # display label - it never actually reached the title until now. Falls back to the generic
+    # phrase only when the caller knows a slug but never learned a display name for it.
+    if ($Scope -eq 'project') { $title += " $($g.H) " + $(if ($ProjectName) { $ProjectName } else { 'this project' }) }
     if ($hiddenCount -gt 0) { $title += " $($g.H) $hiddenCount empty hidden" }
     if ($Filter) { $title += " $($g.H) filter: $Filter" }
     # Same rule as the launch screen: the arrow hint names two directions and cannot be clicked
-    # into one of them; every single action can.
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Hints @(
-        @{ Token = 'up/down'; Label = 'move';   Clickable = $false }
+    # into one of them; every single action can. w/s, not up/down (2026-09-09) - see Get-LaunchFrame.
+    # The tab hint's label names the scope a press LANDS ON, not the one showing now - the same
+    # convention Tab uses everywhere else in this codebase (a toggle names its destination).
+    # -Scope none gets NO tab hint at all (IMPORTANT 1): it would be permanently dead (Tab does
+    # nothing without a project to scope by - Invoke-SessionPicker never even reaches the Tab
+    # branch) and costs a wrapped footer line at 80 columns for a click that can never do anything.
+    $hints = @(
+        @{ Token = 'w/s'; Label = 'move';   Clickable = $false }
         @{ Token = '/';       Label = 'filter'; Clickable = $true; Key = ''; Char = '/' }
         @{ Token = 'enter';   Label = 'open';   Clickable = $true; Key = 'Enter'; Char = '' }
         @{ Token = 'f';       Label = 'fork';   Clickable = $true; Key = ''; Char = 'f' }
-        @{ Token = 'esc';     Label = 'back';   Clickable = $true; Key = 'Escape'; Char = '' }
     )
+    if ($Scope -ne 'none') {
+        $hints += @{ Token = 'tab'; Label = $(if ($Scope -eq 'project') { 'all projects' } else { 'this project' }); Clickable = $true; Key = 'Tab'; Char = '' }
+    }
+    $hints += @{ Token = 'esc'; Label = 'back'; Clickable = $true; Key = 'Escape'; Char = '' }
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints $hints
 
     if ($items.Count -eq 0) {
         $emptyMsg =
@@ -765,7 +997,9 @@ function Get-PickerFrame {
         for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
             $s = $items[$i]
             $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
-            $where = $s.Project
+            # Under -Scope project every row IS the same project - naming it on each one is pure
+            # noise, so it is dropped here and the room it frees goes to the snippet below.
+            $where = if ($Scope -eq 'project') { '' } else { $s.Project }
             if ($s.Worktree) { $where = "$($g.Worktree) $($s.Worktree)" }
             $age = Format-RelativeAge -From $s.Modified -Now $Now
             $what = if ($s.LastUser) { $s.LastUser } elseif ($s.Title) { $s.Title } else { '' }
@@ -773,8 +1007,13 @@ function Get-PickerFrame {
             # are all the same repository. The snippet is what makes the list scannable.
             $room = $leftWidth - $mark.Length - $age.Length - 2
             $label = $where
+            # Minor (fix round 1): with $where dropped to '' under -Scope project, the old fixed
+            # '  ' separator left the label starting with two dead spaces nobody could read anything
+            # into. Built from only the non-empty parts, and the freed width goes to the snippet -
+            # reclaiming, not just hiding, the columns -Scope project frees.
             if ($what -and $room -gt ($where.Length + 4)) {
-                $label = $where + '  ' + (Limit-Line -Text $what -Max ($room - $where.Length - 2))
+                $sep = if ($where) { '  ' } else { '' }
+                $label = $where + $sep + (Limit-Line -Text $what -Max ($room - $where.Length - $sep.Length))
             }
             $pad = [Math]::Max(1, $leftWidth - $mark.Length - $label.Length - $age.Length - 1)
             $list += $mark + (Limit-Line -Text $label -Max ($leftWidth - $mark.Length - $age.Length - 2)) +
@@ -785,7 +1024,7 @@ function Get-PickerFrame {
         $s = $items[$Index]
         $head = "$($s.Project)"
         if ($s.Worktree) { $head += "  $($g.Worktree) $($s.Worktree)" }
-        $head += "  $($g.H)  $($s.PromptCount) msgs  $($g.H)  $($s.Modified.ToString('dd MMM HH:mm'))"
+        $head += "  $($g.H)  $(Format-PromptCount -Session $s) msgs  $($g.H)  $($s.Modified.ToString('dd MMM HH:mm'))"
         $body = @($list)
         $body += '  ' + (Limit-Line -Text $head -Max ($Width - 4))
         $body += '  ' + ([string]$g.H * ($Width - 6))
@@ -815,7 +1054,8 @@ function Get-PickerFrame {
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
         $s = $items[$i]
         $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
-        $where = $s.Project
+        # Same drop as the narrow branch above - every row is the same project under -Scope project.
+        $where = if ($Scope -eq 'project') { '' } else { $s.Project }
         if ($s.Worktree) { $where = "$($g.Worktree) $($s.Worktree)" }
         $age = Format-RelativeAge -From $s.Modified -Now $Now
         $what = if ($s.LastUser) { $s.LastUser } elseif ($s.Title) { $s.Title } else { '' }
@@ -823,8 +1063,10 @@ function Get-PickerFrame {
         # are all the same repository. The snippet is what makes the list scannable.
         $room = $leftWidth - $mark.Length - $age.Length - 2
         $label = $where
+        # Same reclaim as the narrow branch above.
         if ($what -and $room -gt ($where.Length + 4)) {
-            $label = $where + '  ' + (Limit-Line -Text $what -Max ($room - $where.Length - 2))
+            $sep = if ($where) { '  ' } else { '' }
+            $label = $where + $sep + (Limit-Line -Text $what -Max ($room - $where.Length - $sep.Length))
         }
         $pad = [Math]::Max(1, $leftWidth - $mark.Length - $label.Length - $age.Length - 1)
         $list += $mark + (Limit-Line -Text $label -Max ($leftWidth - $mark.Length - $age.Length - 2)) +
@@ -837,7 +1079,7 @@ function Get-PickerFrame {
 
     $detail = @()
     $detail += ' ' + (Limit-Line -Text $where -Max ($rightWidth - 2))
-    $detail += ' ' + $s.Modified.ToString('dd MMM HH:mm') + "  $($g.H)  $($s.PromptCount) msgs  $($g.H)  $('{0:N0}' -f ($s.SizeBytes / 1KB)) KB"
+    $detail += ' ' + $s.Modified.ToString('dd MMM HH:mm') + "  $($g.H)  $(Format-PromptCount -Session $s) msgs  $($g.H)  $('{0:N0}' -f ($s.SizeBytes / 1KB)) KB"
     $detail += ' ' + ([string]$g.H * ($rightWidth - 2))
     # Budget against the body height, not the number of list rows: with three sessions on a 40-row
     # terminal the old arithmetic gave the preview two lines while 30 sat empty. As many recent,
@@ -892,7 +1134,7 @@ function Get-MaintenanceFrame {
         $hints += @{ Token = $a.Key; Label = $a.Label; Clickable = $true; Key = ''; Char = $a.Key }
     }
     $hints += @{ Token = 'esc'; Label = 'back'; Clickable = $true; Key = 'Escape'; Char = '' }
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Hints $hints
+    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints $hints
 
     $body = @(
         "  installed   $($Info.BinPath)",

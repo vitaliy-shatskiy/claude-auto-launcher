@@ -5,6 +5,7 @@ try {
     . "$PSScriptRoot\..\claude-auto\Theme.ps1"
     . "$PSScriptRoot\..\claude-auto\Layout.ps1"
     . "$PSScriptRoot\..\claude-auto\Sessions.ps1"   # Get-PickerFrame calls Format-RelativeAge at render time
+    . "$PSScriptRoot\..\claude-auto\Projects.ps1"   # Get-ProjectFrame calls Select-ProjectMatch at render time
     . "$PSScriptRoot\..\claude-auto\Screens.ps1"
     . "$PSScriptRoot\..\claude-auto\Prefs.ps1"   # Invoke-LaunchScreen calls Switch-LaunchAccount / Reset-LaunchTab
     . "$PSScriptRoot\..\claude-auto\Input.ps1"   # Invoke-SessionPicker maps a click through Get-ClaudeMouseRow
@@ -23,6 +24,16 @@ function Assert-Equal {
         Write-Host "FAIL  $Because"
         Write-Host "      expected: $Expected"
         Write-Host "      actual:   $Actual"
+        $script:Failed++
+    } else {
+        Write-Host "ok    $Because"
+    }
+}
+function Assert-True {
+    param([bool]$Actual, [string]$Because)
+    $script:Ran++
+    if (-not $Actual) {
+        Write-Host "FAIL  $Because"
         $script:Failed++
     } else {
         Write-Host "ok    $Because"
@@ -60,7 +71,7 @@ function Get-RowIndex {
 # The navigation tests below all compute their DownArrow counts from Get-RowIndex, so they would
 # keep passing under ANY row order - they prove navigation works, not that the order is the one
 # the owner asked for. This is the one assertion that actually pins the order.
-Assert-Equal 'Account,Remote,Action,Model,Effort,Advisor,Permission,Mode' (((Get-LaunchRows) | ForEach-Object { $_.Name }) -join ',') 'the row order is account, remote, action, model, effort, advisor, permission, mode'
+Assert-Equal 'Account,Remote,Model,Effort,Advisor,Permission,Mode' (((Get-LaunchRows) | ForEach-Object { $_.Name }) -join ',') 'the row order is account, remote, model, effort, advisor, permission, mode - action left this screen for the project screen (Task 9)'
 
 # --- screen 1 -----------------------------------------------------------------------------
 
@@ -75,6 +86,9 @@ Assert-Equal 'normal'  $r.Mode    'Enter alone does not enable safe mode'
 
 # THE invariant: the default state adds no arguments at all.
 Assert-Equal 0 (@(Get-LaunchArgs -State (New-LaunchState))).Count 'a default state produces no launch arguments'
+# ProjectSlug (Task 9): derived, never a habit - a fresh state carries none until Resolve-StartProject
+# or the project screen fills it in.
+Assert-Equal '' (New-LaunchState).ProjectSlug 'a fresh state carries no project slug'
 
 $s = New-LaunchState; $s.Model = 'fable'
 Assert-Equal '--model fable' (@(Get-LaunchArgs -State $s) -join ' ') 'fable becomes --model fable'
@@ -776,29 +790,298 @@ Assert-Equal $false ($pickerFooter -match [regex]::Escape($doubledCursor)) 'the 
 $launchFooter = @(Get-LaunchFrame -State (New-LaunchState) -Width 120 -Height 24)[-1]
 Assert-Equal $false ($launchFooter -match [regex]::Escape($doubledCursor)) 'the launch footer contains no doubled cursor glyph'
 
-# Colour identity for the picker, at both layouts.
+# --- Task 8: the session picker scoped to the chosen project -------------------------------
+
+# Correction 2: Select-SessionMatch was `-like` with no escaping, exactly the defect
+# Select-ProjectMatch (Projects.ps1) already carries the fix for - a bare '[' in the filter is an
+# unmatched character class and raises a terminating WildcardPatternException through the render
+# loop. Proven the same way check-hooks-fire proves a gate: the call must not throw AND must
+# return zero matches (no session text here contains a literal '[').
+$bracketThrew = $false
+try { $bracketMatches = @(Select-SessionMatch -Sessions $fake -Filter '[') }
+catch { $bracketThrew = $true }
+Assert-Equal $false $bracketThrew 'Select-SessionMatch does not throw on a filter of a single ['
+Assert-Equal 0 $bracketMatches.Count 'and a lone [ matches nothing, since no fixture session contains one literally'
+
+# Correction 1: two sessions can share a Project NAME (not unique) while living in different
+# repositories - only Slug (the transcript directory name) is exact. Scoping by slug must show
+# only the matching one, never fall back to name matching just because a name collided.
+$sharedNameA = [pscustomobject]@{ SessionId='sn000001'; Slug='SlugA'; Project='Shared'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='a'; LastUser='session a text'; LastAssistant='reply a' }
+$sharedNameB = [pscustomobject]@{ SessionId='sn000002'; Slug='SlugB'; Project='Shared'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='b'; LastUser='session b text'; LastAssistant='reply b' }
+$sharedName = @($sharedNameA, $sharedNameB)
+
+$slugSel = Invoke-SessionPicker -Sessions $sharedName -ProjectSlug 'SlugA' -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+Assert-Equal 'sn000001' $slugSel.Session.SessionId 'scoping by slug shows only the matching session, even though both share a Project name'
+
+# Tab widens from the scoped project to every session, and back.
+$slugTabSel = Invoke-SessionPicker -Sessions $sharedName -ProjectSlug 'SlugA' -ReadKey (New-ScriptedKeyReader -Keys @('Tab', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'sn000002' $slugTabSel.Session.SessionId 'Tab widens the scope to all projects, so the second (same-name, different-slug) session becomes reachable'
+
+# With no slug known at all (an unrecognised cwd), scoping falls back to Project by name.
+$nameFallbackSel = Invoke-SessionPicker -Sessions $fake -ProjectName 'Workbench' -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+Assert-Equal 'aaaa1111' $nameFallbackSel.Session.SessionId 'with no slug known, scoping falls back to matching Project by name'
+
+# Fix round 1, MINOR: the Tab key is built the way a real terminal actually sends it (KeyChar TAB,
+# ConsoleKey.Tab), not New-ScriptedKeyReader's synthetic zero-char stand-in for a multi-letter key
+# name - so this assertion exercises the real character path through the $typing branch's KeyChar
+# guard, not merely a $key.Key match. Tab inside typing mode is not a toggle (global constraint):
+# scoped to SlugA (one session visible); if Tab secretly widened the scope while typing, DownArrow
+# after Escape would have a second session to move to and Enter would return it instead.
+$RealTabKey = [System.ConsoleKeyInfo]::new([char]9, [System.ConsoleKey]::Tab, $false, $false, $false)
+$typingTabSel = Invoke-SessionPicker -Sessions $sharedName -ProjectSlug 'SlugA' -ReadKey (New-MixedKeyReader -Keys @('/', $RealTabKey, 'Escape', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'sn000001' $typingTabSel.Session.SessionId 'a real Tab keystroke while typing a filter does not toggle the scope - DownArrow afterwards has nothing else to move to'
+
+# With no slug AND no name at all, there is no "other" scope - Tab does nothing (proven by the
+# session count never changing: only one of the two sessions is reachable either way is wrong here,
+# so instead this proves Tab is simply inert by getting the same, unscoped result before and after).
+$noScopeSel = Invoke-SessionPicker -Sessions $sharedName -ReadKey (New-ScriptedKeyReader -Keys @('Tab', 'Enter')) -Draw {}
+Assert-Equal 'sn000001' $noScopeSel.Session.SessionId 'with neither -ProjectSlug nor -ProjectName, Tab does nothing and the picker behaves exactly as before this task'
+
+# Fix round 1, IMPORTANT 4a: with BOTH -ProjectSlug and -ProjectName given, slug alone decides the
+# scope - a session that matches only by NAME under a FOREIGN slug must stay excluded, or an
+# implementation that silently ORs the two together (`Slug -eq X -or (Name -and Project -eq Name)`)
+# would pass every assertion above (none of them supply both parameters at once). The scoped pool
+# must be exactly one session (sn000001), proven by two DownArrows still landing on it.
+$foreignSlugSameName = [pscustomobject]@{ SessionId='sn000003'; Slug='SlugC'; Project='Shared'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='c'; LastUser='session c text'; LastAssistant='reply c' }
+$bothParamsSessions = @($sharedNameA, $sharedNameB, $foreignSlugSameName)
+$bothParamsSel = Invoke-SessionPicker -Sessions $bothParamsSessions -ProjectSlug 'SlugA' -ProjectName 'Shared' -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'sn000001' $bothParamsSel.Session.SessionId 'with both -ProjectSlug and -ProjectName given, slug alone decides scope - a session matching only by name under a foreign slug is excluded, so two DownArrows past the one visible session still land on it'
+
+# Fix round 1, IMPORTANT 4b: the name-FALLBACK branch (no slug at all) is an EXACT match, not a
+# substring - a session whose Project merely CONTAINS the name ('api-legacy' contains 'api') must
+# stay excluded, or a `-like "*$ProjectName*"` mutant would pass every fallback assertion above
+# (none of them have a superstring collision).
+$exactNameA = [pscustomobject]@{ SessionId='api00001'; Project='api'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='a'; LastUser='api session text'; LastAssistant='reply' }
+$exactNameB = [pscustomobject]@{ SessionId='api00002'; Project='api-legacy'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='b'; LastUser='legacy session text'; LastAssistant='reply' }
+$exactNameSel = Invoke-SessionPicker -Sessions @($exactNameA, $exactNameB) -ProjectName 'api' -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'api00001' $exactNameSel.Session.SessionId 'the name fallback is an exact match - a session whose Project only CONTAINS the name (api-legacy) stays out of the scoped pool, so DownArrow has nowhere else to go'
+
+# Fix round 1, IMPORTANT 5: Tab must reset the index, not merely change the scope - every Tab test
+# above starts at index 0, so deleting the reset would survive all of them. Scoped by NAME (both
+# sessions are in the initial pool), DownArrow selects the second, Tab widens to 'all' (still both
+# sessions, same order): without the reset Enter would return the second (carried-over index); with
+# it, the first.
+$tabResetSel = Invoke-SessionPicker -Sessions $sharedName -ProjectName 'Shared' -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Tab', 'Enter')) -Draw {}
+Assert-Equal 'sn000001' $tabResetSel.Session.SessionId 'Tab resets the index to 0 - otherwise the second session (selected by DownArrow before the toggle) would still be current after it'
+
+# Fix round 1, IMPORTANT 1: -Scope 'none' (and the default, now 'none' rather than 'all') renders
+# NO tab hint at all - Invoke-SessionPicker only ever reaches Tab's $hasScope guard when it has a
+# project to scope by, so a hint that always does nothing would be permanently dead weight, and at
+# HEAD it was costing a wrapped footer line (2, not the pre-task 1) at 80 columns for every user.
+$noneScopeText = (@(Get-PickerFrame -Sessions $sharedName -Index 0 -Width 78 -Height 24) -join "`n")
+Assert-True ($noneScopeText -notmatch 'tab') 'the default scope (none) has no tab hint at all'
+$noneScopeExplicitText = (@(Get-PickerFrame -Sessions $sharedName -Index 0 -Scope 'none' -Width 78 -Height 24) -join "`n")
+Assert-True ($noneScopeExplicitText -notmatch 'tab') 'an explicit -Scope none has no tab hint either'
+$noneMap = $null
+$null = Get-PickerFrame -Sessions $sharedName -Index 0 -Width 78 -Height 24 -RowMap ([ref]$noneMap)
+Assert-Equal 1 $noneMap.FooterLines 'the default (none) scope footer is exactly 1 line at width 78 - the pre-Task-8 count, tab hint or not'
+$noneMapExplicit = $null
+$null = Get-PickerFrame -Sessions $sharedName -Index 0 -Scope 'none' -Width 78 -Height 24 -RowMap ([ref]$noneMapExplicit)
+Assert-Equal 1 $noneMapExplicit.FooterLines 'an explicit -Scope none footer is exactly 1 line at width 78 too'
+
+# Get-PickerFrame -Scope 'project'/'all': the footer advertises the toggle, and its label names the
+# OTHER scope. Two separate .Contains-shaped checks rather than one 'tab.*all projects' regex:
+# -Plain (colour off, the default here) renders the token bracketed ('[tab]'), not padded ('tab '),
+# so a pattern assuming a literal space right after "tab" would fail on the very form this produces.
+$fProjectScopeText = (@(Get-PickerFrame -Sessions $sharedName -Index 0 -Scope 'project' -Width 78 -Height 24) -join "`n")
+Assert-True ($fProjectScopeText -match 'tab') 'in project scope the footer advertises a tab hint'
+Assert-True ($fProjectScopeText -match 'all projects') 'in project scope the tab hint offers to widen to all projects'
+$fAllScopeText = (@(Get-PickerFrame -Sessions $sharedName -Index 0 -Scope 'all' -Width 78 -Height 24) -join "`n")
+Assert-True ($fAllScopeText -match 'tab') 'in all scope the footer advertises a tab hint'
+Assert-True ($fAllScopeText -match 'this project') 'in all scope the tab hint offers to narrow to this project'
+
+# -Index 1 selects session B in every scope-frame check below, so the wide layout's own
+# detail/preview header (unchanged by this task - it names ONE selected session, not a repeated
+# list column) only ever prints session B's project name - it can never be the source of a
+# 'FirstProj' match, which isolates every check to session A's LIST row, the thing this task
+# actually changes.
+$scopeFixtureA = [pscustomobject]@{ SessionId='scp0001'; Project='FirstProj'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='a'; LastUser='alpha snippet text'; LastAssistant='reply a' }
+$scopeFixtureB = [pscustomobject]@{ SessionId='scp0002'; Project='SecondProj'; Worktree=$null; Modified=$now; SizeBytes=10; PromptCount=1; Title='b'; LastUser='beta snippet text'; LastAssistant='reply b' }
+$scopeFixture = @($scopeFixtureA, $scopeFixtureB)
+
+# Fix round 1, IMPORTANT 3: -ProjectName is the display label the comment on Invoke-SessionPicker's
+# parameter always claimed it was - it must actually reach the title under -Scope project, and
+# never appear at all under -Scope all (where there is no single project to name). A sentinel name
+# that matches none of the fixture sessions' own Project fields, so a hit can only come from the
+# title itself, never a list row.
+$titleFrameProject = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'project' -ProjectName 'MyNamedProject' -Width 120 -Height 24)
+Assert-True ($titleFrameProject[0] -match 'MyNamedProject') 'under -Scope project, -ProjectName appears in the title'
+$titleFrameAll = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'all' -ProjectName 'MyNamedProject' -Width 120 -Height 24)
+Assert-Equal 0 (@($titleFrameAll | Where-Object { $_ -match 'MyNamedProject' }).Count) 'under -Scope all, -ProjectName does not appear anywhere in the frame'
+
+# Get-PickerFrame -Scope 'project' drops the project-name column from the list rows (every row is
+# assumed to be the same project); -Scope 'all' (and the default 'none', unchanged from before this
+# task) still shows it.
+$scopeAllFrame = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Scope 'all' -Width 120 -Height 24 -Now $now
+Assert-Equal 1 (@($scopeAllFrame | Where-Object { $_ -match 'FirstProj' }).Count) 'scope all: the non-selected session''s project name is visible in its own list row'
+$scopeProjectFrame = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Scope 'project' -Width 120 -Height 24 -Now $now
+Assert-Equal 0 (@($scopeProjectFrame | Where-Object { $_ -match 'FirstProj' }).Count) 'scope project: the project-name column is dropped from the list row'
+$scopeDefaultFrame = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Width 120 -Height 24 -Now $now
+Assert-Equal 1 (@($scopeDefaultFrame | Where-Object { $_ -match 'FirstProj' }).Count) '-Scope defaults to none, unchanged from before this task'
+
+# Fix round 1, IMPORTANT 2: the mutant `Screens.ps1:929` (narrow branch) -> `$where = $s.Project`
+# survived because both scope-frame assertions above only ever used -Width 120 (the wide branch).
+# Repeat the same FirstProj absence/presence check at 78 and at 50 (the minimum), which force the
+# NARROW branch's own, separately-coded `$where` line.
+foreach ($narrowWidth in @(78, 50)) {
+    $narrowHeight = if ($narrowWidth -eq 50) { 21 } else { 24 }
+    $scopeAllNarrow = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Scope 'all' -Width $narrowWidth -Height $narrowHeight -Now $now
+    Assert-Equal 1 (@($scopeAllNarrow | Where-Object { $_ -match 'FirstProj' }).Count) "width ${narrowWidth} (narrow branch): scope all shows the non-selected session's project name"
+    $scopeProjectNarrow = Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter '' -Scope 'project' -Width $narrowWidth -Height $narrowHeight -Now $now
+    Assert-Equal 0 (@($scopeProjectNarrow | Where-Object { $_ -match 'FirstProj' }).Count) "width ${narrowWidth} (narrow branch): scope project drops the project-name column from the list row"
+}
+
+# Fix round 2, item 1: -ProjectName forwarding through the LOOP's own $Draw call (Ui.ps1:501) was
+# unpinned end to end - deleting the argument there left every earlier -ProjectName assertion green,
+# because they all called Get-PickerFrame directly. A capturing 5-parameter -Draw proves the loop
+# itself hands the name through as the 5th positional argument, under -Scope project.
+$script:capturedDrawProjectName = 'not called'
+$capturingNameDraw = { param($s, $i, $f, $sc, $pn) $script:capturedDrawProjectName = $pn; $null }
+$null = Invoke-SessionPicker -Sessions $sharedName -ProjectSlug 'SlugA' -ProjectName 'Shared' -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw $capturingNameDraw
+Assert-Equal 'Shared' $script:capturedDrawProjectName 'Invoke-SessionPicker forwards -ProjectName to $Draw as its 5th argument'
+
+# Fix round 2, item 2: the separator reclaim (Screens.ps1, both list branches) was unpinned -
+# reverting either branch's `$sep` back to a fixed '  ' left every earlier assertion green, because
+# none of them checked WHERE the snippet actually starts, only whether the project name text was
+# present or absent. Pinned on the raw measurable: the column index of the snippet's own first word
+# ('alpha', from scopeFixtureA's LastUser) within its row. Measured, not guessed: scope all puts it
+# at column 15 (1 border + 3 mark + 'FirstProj' (9) + '  ' (2) separator); scope project puts it at
+# column 4 (1 border + 3 mark, no separator at all - the whole 11-cell gap this task frees over to
+# the snippet). Same numbers hold at both a narrow (78) and a wide, two-pane (120) width, since both
+# branches share the identical mark+where+sep composition.
+foreach ($sepWidth in @(78, 120)) {
+    $allSepRow = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'all' -Width $sepWidth -Height 24 -Now $now | Where-Object { $_ -match 'alpha' })[0]
+    Assert-Equal 15 $allSepRow.IndexOf('alpha') "width ${sepWidth}: scope all - the snippet starts after mark + project name + the two-space separator"
+    $projectSepRow = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'project' -Width $sepWidth -Height 24 -Now $now | Where-Object { $_ -match 'alpha' })[0]
+    Assert-Equal 4 $projectSepRow.IndexOf('alpha') "width ${sepWidth}: scope project - the snippet starts immediately after the mark; the separator itself is reclaimed, not just the project name"
+}
+
+# Fix round 2, item 3: -ProjectName in the title was only ever asserted at width 120, where a name
+# always fits whole. -ProjectName is appended LAST in the title string, so at the 50-column minimum
+# a long (34-character) name may be cut by Limit-Line - what must survive is the session COUNT,
+# which sits earlier in the same string and is the one thing an owner glancing at a truncated title
+# still needs to see.
+$longProjectName34 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ12345678'
+Assert-Equal 34 $longProjectName34.Length 'sanity: the fixture name really is 34 characters'
+# $script:MinHeight, not a literal 21 (fix round 1, MINOR 2): the minimum dropped to 20 when the
+# Action row left the launch screen (Task 9) - a hardcoded 21 would still pass here but would have
+# quietly stopped being "the minimum" it claimed to be.
+$narrowTitleFrame = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height $script:MinHeight -Now $now)
+Assert-True ($narrowTitleFrame[0] -match '2 sessions') 'at width 50 (the minimum height) with a 34-character -ProjectName, the session count still survives in the (truncated) title'
+
+# Fix round 2, item 4: Get-PickerFrame never clamped -Index to the FILTERED item count the way
+# Get-ProjectFrame already clamps its own -Index to -Rows.Count - a caller passing an -Index that a
+# -Filter has since made too large (production is shielded by Invoke-SessionPicker's own re-clamp
+# every loop iteration; a direct caller, including a future screen or a test, is not) threw "You
+# cannot call a method on a null-valued expression" building the narrow branch's single-session
+# preview header ($items[$Index].Modified.ToString(...) on a null $items[$Index]).
+$clampThrew = $false
+try { $clampedFrame = @(Get-PickerFrame -Sessions $scopeFixture -Index 1 -Filter 'FirstProj' -Width 120 -Height 24 -Now $now) }
+catch { $clampThrew = $true }
+Assert-Equal $false $clampThrew 'an -Index past the filtered item count is clamped, not left to throw'
+Assert-True (($clampedFrame -join "`n") -match 'FirstProj') 'and the clamped frame still renders the one session the filter actually matched'
+
+# Global constraint 3: the scrolled Start must be the ACTUAL first visible index, never the
+# degenerate 0 a mutant substituting a hardcoded value would leave in place. Measured, not guessed,
+# by rendering 30 sessions at the last row (Index 29) and reading the row map back - once for the
+# narrow branch at 78x24 and at the 50-column minimum, and once for the wide (two-pane) branch at
+# 120x24, since both branches carry their own `Start = $vp.Start` assignment. Re-measured after fix
+# round 1 (the default scope's footer lost the always-dead tab hint, changing $bodyRows at 78x24)
+# and again after Task 9 fix round 1, MINOR 2 (the minimum dropped 21 -> 20 with the Action row
+# gone) - $script:MinHeight throughout, never a literal, so this re-measures itself.
+$scrollSessions = 1..30 | ForEach-Object {
+    [pscustomobject]@{
+        SessionId = 'scr{0:00}' -f $_; Project = "ScrollProject$_"; Worktree = $null
+        Modified = $now.AddHours(-$_); SizeBytes = 1024 * $_; PromptCount = $_
+        Title = "session $_"; LastUser = "case $_"; LastAssistant = "answer $_"
+    }
+}
+$mapWide78 = $null
+$fWide78 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 78 -Height 24 -Now $now -RowMap ([ref]$mapWide78))
+Assert-Equal 1 $mapWide78.FirstRowY 'measured at 78x24, index 29 of 30 (narrow branch): FirstRowY'
+Assert-Equal 14 $mapWide78.RowCount 'measured at 78x24, index 29 of 30 (narrow branch): RowCount'
+Assert-Equal 16 $mapWide78.Start 'measured at 78x24, index 29 of 30 (narrow branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
+Assert-Equal $true ($fWide78.Count -le 24) 'the 78x24 scrolled frame still fits the terminal'
+
+$mapMin50 = $null
+$fMin50 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 50 -Height $script:MinHeight -Now $now -RowMap ([ref]$mapMin50))
+Assert-Equal 1 $mapMin50.FirstRowY 'measured at 50 columns, the minimum height, index 29 of 30 (narrow branch): FirstRowY'
+Assert-Equal 9 $mapMin50.RowCount 'measured at the minimum size, index 29 of 30 (narrow branch): RowCount'
+Assert-Equal 21 $mapMin50.Start 'measured at the minimum size, index 29 of 30 (narrow branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
+Assert-Equal $true ($fMin50.Count -le ($script:MinHeight - 1)) 'the 50-column scrolled frame still fits the minimum terminal size'
+
+$mapPane120 = $null
+$fPane120 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 120 -Height 24 -Now $now -RowMap ([ref]$mapPane120))
+Assert-Equal 1 $mapPane120.FirstRowY 'measured at 120x24, index 29 of 30 (wide branch): FirstRowY'
+Assert-Equal 20 $mapPane120.RowCount 'measured at 120x24, index 29 of 30 (wide branch): RowCount'
+Assert-Equal 10 $mapPane120.Start 'measured at 120x24, index 29 of 30 (wide branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
+Assert-Equal $true ($fPane120.Count -le 24) 'the 120x24 scrolled frame still fits the terminal'
+
+# Colour identity for the picker, at both layouts. The footer's key caps are the one deliberate
+# exception (Task 4): bracketed with colour off, padded with it on - same WIDTH either way, never
+# the same characters - so those lines are compared normalised (brackets -> padding) rather than
+# byte for byte.
 foreach ($w in @(80, 120)) {
-    $plainP   = Get-PickerFrame -Sessions $fake -Index 0 -Filter '' -Width $w -Height 24 -Now $now
+    $pMapPlain = $null
+    $plainP   = Get-PickerFrame -Sessions $fake -Index 0 -Filter '' -Width $w -Height 24 -Now $now -RowMap ([ref]$pMapPlain)
     $coloredP = Get-PickerFrame -Sessions $fake -Index 0 -Filter '' -Width $w -Height 24 -Now $now -Color
+    $footerFrom = $pMapPlain.FooterY
+    $footerTo = $footerFrom + $pMapPlain.FooterLines - 1
+    # Pin the window before trusting it: an unpinned FooterY/FooterLines that ever drifted WIDE
+    # would make the skip loop swallow the whole frame and index $plainP[$i] past the end, where
+    # $null -replace ... is '' and Remove-AnsiColor $null is '' - both loops below would then pass
+    # on an empty comparison instead of a real one.
+    # Measured at width $w: one footer line. This call passes no -Scope, so Get-PickerFrame's
+    # default ('none' - fix round 1, IMPORTANT 1) renders exactly the pre-Task-8 five hints; the
+    # tab hint only ever appears under -Scope project/all, which is covered separately above.
+    Assert-Equal 1 $pMapPlain.FooterLines "width ${w}: the picker footer is exactly one line"
+    Assert-Equal $true ($footerTo -lt $plainP.Count) "width ${w}: the footer window stays inside the frame"
     $mismatch = 0
     for ($i = 0; $i -lt $plainP.Count; $i++) {
+        if ($i -ge $footerFrom -and $i -le $footerTo) { continue }
         if ((Remove-AnsiColor -Text $coloredP[$i]) -ne $plainP[$i]) { $mismatch++ }
     }
-    Assert-Equal 0 $mismatch "stripping colour returns the plain picker frame exactly at width $w"
+    Assert-Equal 0 $mismatch "stripping colour returns the plain picker frame exactly at width $w, outside the footer's key caps"
+    $footerMismatch = 0
+    for ($i = $footerFrom; $i -le $footerTo; $i++) {
+        $normalizedPlain = (($plainP[$i] -replace '\[', ' ') -replace '\]', ' ')
+        if ($normalizedPlain -ne (Remove-AnsiColor -Text $coloredP[$i])) { $footerMismatch++ }
+    }
+    Assert-Equal 0 $footerMismatch "stripping colour and normalising brackets-to-padding matches the plain picker footer at width $w"
 }
 
 # --- colour ------------------------------------------------------------------------------
 # The whole point of painting after layout: stripping the escapes must give back exactly the
 # plain frame. If this ever fails, colour has started corrupting the width arithmetic.
 
-$plain   = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Limits @{ work = [pscustomobject]@{ FiveHour = 15; SevenDay = 97; AgeText = 'just now' } }
+$lMapPlain = $null
+$plain   = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Limits @{ work = [pscustomobject]@{ FiveHour = 15; SevenDay = 97; AgeText = 'just now' } } -RowMap ([ref]$lMapPlain)
 $colored = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Limits @{ work = [pscustomobject]@{ FiveHour = 15; SevenDay = 97; AgeText = 'just now' } } -Color
 Assert-Equal $plain.Count $colored.Count 'colouring does not change the number of lines'
+# Same exception as the picker above: the footer's key caps are bracketed here (colour off) and
+# padded there (colour on) - same width, deliberately different characters - so it is normalised
+# rather than compared byte for byte.
+$footerFrom = $lMapPlain.FooterY
+$footerTo = $footerFrom + $lMapPlain.FooterLines - 1
+# Same pin as the picker above: an unpinned window that drifted wide would make both comparison
+# loops below pass vacuously (an empty or past-the-end comparison), on a frame that never actually
+# got compared.
+# w/s and a/d (2026-09-09) are shorter than up/down and left/right - the footer that used to wrap
+# to two lines at width 84 now fits on one. Re-measured, not guessed.
+Assert-Equal 1 $lMapPlain.FooterLines 'the launch footer at width 84 is exactly one line now that the arrow hints are w/s and a/d'
+Assert-Equal $true ($footerTo -lt $plain.Count) 'the footer window stays inside the frame'
 $mismatch = 0
 for ($i = 0; $i -lt $plain.Count; $i++) {
+    if ($i -ge $footerFrom -and $i -le $footerTo) { continue }
     if ((Remove-AnsiColor -Text $colored[$i]) -ne $plain[$i]) { $mismatch++ }
 }
-Assert-Equal 0 $mismatch 'stripping colour returns the plain launch frame exactly'
+Assert-Equal 0 $mismatch 'stripping colour returns the plain launch frame exactly, outside the footer key caps'
+$footerMismatch = 0
+for ($i = $footerFrom; $i -le $footerTo; $i++) {
+    $normalizedPlain = (($plain[$i] -replace '\[', ' ') -replace '\]', ' ')
+    if ($normalizedPlain -ne (Remove-AnsiColor -Text $colored[$i])) { $footerMismatch++ }
+}
+Assert-Equal 0 $footerMismatch 'stripping colour and normalising brackets-to-padding matches the plain launch footer'
 Assert-Equal $true ([bool](@($colored | Where-Object { $_ -match "$([char]27)\[" }).Count -gt 0)) 'colour actually emitted escapes'
 
 # Percentages carry meaning, not decoration: a 97% week must not look like a 15% one.
@@ -1059,37 +1342,37 @@ $null = Get-LaunchFrame -State $launchState -Width 100 -Height 30 -RowMap ([ref]
 Assert-Equal $true ($lmap.Rows.Count -gt 2) 'the launch frame reports a row map'
 
 $rowsDef = @(Get-LaunchRows)
-$actionIdx = [Array]::FindIndex($rowsDef, [Predicate[object]]{ param($r) $r.Name -eq 'Action' })
-$actionRow = $lmap.Rows[$actionIdx]
-$resumeCell = @($actionRow.Cells | Where-Object { $_.Value -eq 'resume' })[0]
-Assert-Equal $true ($null -ne $resumeCell) 'the Action row exposes a clickable cell for every option'
+$modelIdx = [Array]::FindIndex($rowsDef, [Predicate[object]]{ param($r) $r.Name -eq 'Model' })
+$modelRowMap = $lmap.Rows[$modelIdx]
+$fableCell = @($modelRowMap.Cells | Where-Object { $_.Value -eq 'fable' })[0]
+Assert-Equal $true ($null -ne $fableCell) 'the Model row exposes a clickable cell for every option'
 
 $ldraw = { param($s) $lmap }.GetNewClosure()
 $esc = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::Escape, $false, $false, $false)
 $enterKey = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::Enter, $false, $false, $false)
 
 # A click on the row selects it, and nothing else changes.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X 1 -Left), $enterKey)
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X 1 -Left), $enterKey)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal $actionIdx $out.Row 'a click on a row selects that row'
-Assert-Equal 'new' $out.Action 'and, away from the option cells, leaves the value alone'
+Assert-Equal $modelIdx $out.Row 'a click on a row selects that row'
+Assert-Equal 'default' $out.Model 'and, away from the option cells, leaves the value alone'
 
-# A click ON the 'resume' cell selects the row AND the value.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X $resumeCell.Start -Left), $enterKey)
+# A click ON the 'fable' cell selects the row AND the value.
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X $fableCell.Start -Left), $enterKey)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal 'resume' $out.Action 'a click on an option cell selects that option'
-Assert-Equal $actionIdx $out.Row 'and selects its row too'
+Assert-Equal 'fable' $out.Model 'a click on an option cell selects that option'
+Assert-Equal $modelIdx $out.Row 'and selects its row too'
 # The far edge of the span must hit as well - an off-by-one there makes the last option unclickable.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X $resumeCell.End -Left), $enterKey)
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X $fableCell.End -Left), $enterKey)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal 'resume' $out.Action 'the last column of an option cell still hits it'
+Assert-Equal 'fable' $out.Model 'the last column of an option cell still hits it'
 # One column past it must NOT.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X ($resumeCell.End + 1) -Left), $enterKey)
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X ($fableCell.End + 1) -Left), $enterKey)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal $false ($out.Action -eq 'resume') 'one column past the cell does not select it'
+Assert-Equal $false ($out.Model -eq 'fable') 'one column past the cell does not select it'
 
 # Nothing a mouse does may START a session: only Enter returns the state.
-$w = New-EventReader @((New-MouseEvent -Y $actionRow.Y -X $resumeCell.Start -Left -Double), $esc)
+$w = New-EventReader @((New-MouseEvent -Y $modelRowMap.Y -X $fableCell.Start -Left -Double), $esc)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal '' "$out" 'even a double click does not start a session - Escape still cancels'
 
@@ -1182,13 +1465,12 @@ $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-MixedKeyReader
 Assert-Equal 'work' $out.Account 'back on the first tab'
 Assert-Equal 'max' $out.Effort 'a reset on another tab left this one alone'
 
-# Action and Mode are deliberately outside the reset: they are not habits, they already start at
-# their defaults, and clearing them would undo a choice made for THIS launch. A behaviour change
-# from the old ctrl+r, which flattened every row.
-$actionIdx2 = Get-RowIndex -Name 'Action'
-$keys = (@('DownArrow') * $actionIdx2) + @('RightArrow') + (@('UpArrow') * $actionIdx2) + @($CtrlR, 'Enter')
-$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-MixedKeyReader -Keys $keys) -Draw {}
-Assert-Equal 'continue' $out.Action 'ctrl+r leaves the action alone - it describes this launch, not a habit'
+# Action is deliberately outside the reset: since Task 9 it is not even a launch-screen row any
+# more (the project screen decides it) - Reset-LaunchTab never touches it regardless of how it got
+# set. Proven directly on the state, since there is no row left to navigate to and edit it through.
+$actionState = New-LaunchState; $actionState.Action = 'continue'
+$out = Invoke-LaunchScreen -State $actionState -ReadKey (New-MixedKeyReader -Keys @($CtrlR, 'Enter')) -Draw {}
+Assert-Equal 'continue' $out.Action 'ctrl+r leaves the action alone - it describes this launch, not a habit, and is not a row Reset-LaunchTab touches'
 
 # A tab with no stash falls back to the FILE, and the rows it restores are marked so a stale choice
 # is visible rather than silent.
@@ -1250,8 +1532,54 @@ $plainFooter = (New-HintFooter -Glyphs (Get-Glyphs) -Hints @(
     @{ Token = 'esc';   Label = 'quit';  Clickable = $true; Key = 'Escape'; Char = '' }))
 $paintedFooter = Add-HintColor -Line $plainFooter.Text -Spans $plainFooter.Spans -Enabled
 Assert-Equal $plainFooter.Text ($paintedFooter -replace "$([char]27)\[[0-9;]*m", '') 'stripping the colour off the footer returns it unchanged'
-Assert-Equal $true ($paintedFooter.Contains([string][char]27 + '[96m')) 'the key words are tinted'
+# The literal escape, not $script:C.Reverse: .Contains($script:C.Reverse) would pass vacuously if
+# Reverse were ever present-and-EMPTY ('' is contained in anything) - only a missing key (Contains
+# $null -> False) would have caught that trap, not an empty one.
+Assert-Equal $true ($paintedFooter.Contains("$([char]27)[7m")) 'the key caps are painted reverse video'
 Assert-Equal $plainFooter.Text (Add-HintColor -Line $plainFooter.Text -Spans $plainFooter.Spans) 'colour disabled leaves the footer exactly as it was'
+
+# --- footer hotkeys render as BUTTONS (Task 4). A clickable token gets a cell of its own -
+# padded with a space either side when colour will paint it, bracketed when it will not - so the
+# structure survives NO_COLOR. Assert-Equal here is (Expected, Actual) - the house order; the
+# brief's own sample had it backwards. ---
+$g4 = Get-Glyphs
+$f4 = New-HintFooter -Glyphs $g4 -Hints @(
+    @{ Token = 'up/down'; Label = 'row';   Clickable = $false }
+    @{ Token = 'enter';   Label = 'start'; Clickable = $true; Key = 'Enter'; Char = '' }
+)
+Assert-True ($f4.Text -match ' enter  start') 'a clickable token is padded into a key cap'
+$click4 = @($f4.Spans | Where-Object { $_.Key -eq 'Enter' })[0]
+Assert-Equal ' enter ' $f4.Text.Substring($click4.KeyStart, $click4.KeyEnd - $click4.KeyStart + 1) 'the cap span includes the padding'
+Assert-True ($f4.Text.Substring($click4.Start, $click4.End - $click4.Start + 1) -match 'start') 'the click span still covers the label'
+
+$plain4 = New-HintFooter -Glyphs $g4 -Plain -Hints @(
+    @{ Token = 'enter'; Label = 'start'; Clickable = $true; Key = 'Enter'; Char = '' }
+)
+Assert-True ($plain4.Text -match '\[enter\] start') 'without colour the cap is bracketed'
+
+$painted4 = Add-HintColor -Line $f4.Text -Spans $f4.Spans -Enabled
+# Not [regex]::Escape($script:C.Reverse) -match ... : Escape($null) silently returns '', and an
+# empty pattern matches ANY string - a missing Reverse code would pass this check by accident.
+Assert-True ((-not [string]::IsNullOrEmpty($script:C.Reverse)) -and $painted4.Contains($script:C.Reverse)) 'the cap is painted reverse video'
+Assert-Equal $f4.Text (Remove-AnsiColor $painted4) 'painting stays reversible'
+# Task 6 correction 4: nothing above pins WHERE the reverse-video escape lands - moving the tint
+# (Add-HintColor, Screens.ps1) off the key cap onto the preceding gap text survives every assertion
+# above (both still find the escape and both still strip back to plain text). Pin it directly: the
+# Reverse+Bold escape must be followed immediately by the cap text itself (' enter '), not the gap.
+Assert-True ($painted4.Contains($script:C.Reverse + $script:C.Bold + ' enter ' + $script:C.Reset)) 'the reverse-video escape paints the key cap itself, not the gap before it'
+
+# The width fact the padded and bracketed forms share (1 + token + 1, either way): they cannot
+# wrap to a different number of lines, so $script:MinHeight cannot diverge between colour and
+# no-colour. If this ever fails, something is wrong with the -Plain implementation.
+$widthHints = @(
+    @{ Token = 'up/down'; Label = 'row';   Clickable = $false }
+    @{ Token = 'enter';   Label = 'start'; Clickable = $true; Key = 'Enter'; Char = '' }
+    @{ Token = 'u';       Label = 'maintenance'; Clickable = $true; Key = ''; Char = 'u' }
+    @{ Token = 'esc';     Label = 'quit';  Clickable = $true; Key = 'Escape'; Char = '' }
+)
+$paddedWrap = New-HintFooter -Glyphs $g4 -Width 30 -Hints $widthHints
+$bracketWrap = New-HintFooter -Glyphs $g4 -Width 30 -Plain -Hints $widthHints
+Assert-Equal @($paddedWrap.Lines).Count @($bracketWrap.Lines).Count 'the padded and bracketed forms wrap to the same number of lines'
 
 # --- Maintenance screen. It has no rows to select, so the mouse does exactly one thing there. The
 # assertion works by EVENT BUDGET: the reader holds a single event, so a click that is honoured
@@ -1269,14 +1597,22 @@ $mChars = @($mmap.Footer | ForEach-Object { if ($_.Char) { $_.Char } else { $_.K
 Assert-Equal 'u,r,d,m,p,i,Escape' $mChars 'every maintenance action is clickable, reindex included'
 
 $escSpan = Get-HintSpan -Map $mmap -Key 'Escape'
-$w = New-EventReader @((New-MouseEvent -Y $mmap.FooterY -X $escSpan.Start -Left))
+# +$escSpan.Line: the padded key caps push this footer to wrap at width 100, so 'esc' now sits on
+# the SECOND footer line - the same offset every other wrapped-hint click in this file already uses.
+$w = New-EventReader @((New-MouseEvent -Y ($mmap.FooterY + $escSpan.Line) -X $escSpan.Start -Left))
 $threw = $false
 try { Invoke-MaintenanceScreen -ReadKey $w -Draw $mDraw -Wait $w -GetWindowTop { 0 } } catch { $threw = $true }
 Assert-Equal $false $threw 'clicking "esc back" leaves the maintenance screen on the first event'
 
-# The same click one column past the span must NOT leave - proving the hit test is what decided it,
-# not the mere arrival of a mouse event.
-$w = New-EventReader @((New-MouseEvent -Y $mmap.FooterY -X ($escSpan.End + 1) -Left))
+# A click one column past a span must NOT leave - proving the hit test is what decided it, not the
+# mere arrival of a mouse event. 'esc' no longer works for this: it is now ALONE on the wrapped
+# second footer line, so one column past its end is merely past end-of-line, not a boundary against
+# an ADJACENT hint. 'd doctor' sits between 'r rename swap' and 'm mcp list' on the FIRST footer
+# line, so one column past its end lands in the separator before 'm' - the adjacency this was
+# written to prove.
+$dSpan = Get-HintSpan -Map $mmap -Char 'd'
+Assert-Equal 0 $dSpan.Line 'doctor sits on the first, unwrapped footer line'
+$w = New-EventReader @((New-MouseEvent -Y ($mmap.FooterY + $dSpan.Line) -X ($dSpan.End + 1) -Left))
 $threw = $false
 try { Invoke-MaintenanceScreen -ReadKey $w -Draw $mDraw -Wait $w -GetWindowTop { 0 } } catch { $threw = $true }
 Assert-Equal $true $threw 'a click one column past the hint does not leave — the span decided, not the event'
@@ -1368,7 +1704,7 @@ $pickSessions = @([pscustomobject]@{ Id = 'aaa'; Path = 'C:\x'; Modified = (Get-
 $FKeyUpper = [System.ConsoleKeyInfo]::new([char]'F', [System.ConsoleKey]0, $false, $false, $false)
 $w = New-EventReader @($FKeyUpper, $esc)
 $picked = Invoke-SessionPicker -Sessions $pickSessions -ReadKey $w -Draw { param($s, $i, $f) $null } -Wait $w -GetWindowTop { 0 }
-Assert-Equal $null $picked 'an uppercase F does not fork a session - picker key matching is case-sensitive'
+Assert-True ($null -eq $picked) 'an uppercase F does not fork a session - picker key matching is case-sensitive'
 
 # --- Hotkeys on any keyboard layout (owner ask 2026-09-02: RDP from a phone, Russian and Ukrainian
 # layouts). A real console reports the VIRTUAL key of the physical key whatever the layout paints
@@ -1429,22 +1765,89 @@ $narrowInfo = [pscustomobject]@{ Matches = $false; NewestVersion = '2.1.240'; In
 $narrowLimits = @{ work = [pscustomobject]@{ FiveHour = 41; SevenDay = 63; AgeText = '12 min ago'; Model = 15; ModelLabel = 'FABLE' } }
 $longStatus = (1..40 | ForEach-Object { "status line $_ with some words in it" }) -join "`n"
 
-# MinHeight is MEASURED, not chosen: the worst 50-column launch frame is rendered at a height the
-# guard cannot refuse, its lines are counted, and the constant must be that count plus the headroom
-# row Write-Frame needs. Written this way the number re-measures itself on every run - a literal
-# would go stale the first time a row or a bar is added, which is exactly how the old 16 survived
-# being one short. Measured 2026-09-04: 20 lines (3 box + blank + 8 rows + 3 bars + blank +
-# separator + restored + 2 wrapped footer lines) -> 21.
+# MinHeight is MEASURED, not chosen: the worst 50-column LAUNCH frame - the one screen with no
+# scroll, every row fixed content rather than a list - is rendered at a height the guard cannot
+# refuse (200), its lines are counted, and the constant must be that count plus the headroom row
+# Write-Frame needs. Written this way the number re-measures itself on every run - a literal would
+# go stale the first time a row or a bar is added, which is exactly how the old 16 survived being
+# one short. Measured 2026-09-04: 20 lines (3 box + blank + 8 rows + 3 bars + blank + separator +
+# restored + 2 wrapped footer lines) -> 21. RE-MEASURED 2026-09-15 (Task 9) when the Action row left
+# this screen: 19 lines (one fewer row) -> 20.
+#
+# The picker and project screens do NOT feed this measurement, and never have since (fix round 1,
+# Task 10 review, IMPORTANT 1): a version of this block briefly rendered them at Height 200 too and
+# asserted their EXACT count, which does not measure the screen - it measures the FIXTURE. Both
+# scroll, so their line count at an unbounded height grows LINEARLY with however many rows the
+# fixture happens to have (measured: project 12/13/40 rows -> 19/20/47 lines; picker 6/15/30 rows ->
+# 16/25/40 lines) - an exact-count assertion there pins MinHeight to an arbitrary fixture size, and
+# bumping the fixture by one row would make the gate demand a taller minimum for no real reason, when
+# the screen itself is unchanged. What actually matters is that both screens CLAMP their viewport to
+# whatever height they are given, so neither can ever push this constant higher than the launch
+# screen's own worst case - proven below with a fixture (40 rows) far past what any real viewport
+# shows: it still FITS at MinHeight, and unbound (Height 200) it renders MORE lines than at
+# MinHeight, which is the only way to tell a screen that actually clamped from one that merely had a
+# short list. They scroll where the launch screen cannot, so re-measure LAUNCH, never these two,
+# before ever moving this constant.
 $worstCase = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height 200 -Limits $narrowLimits `
     -Restored @('Model') -RestoredAge '12 min' -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultAdvisorLabel 'default (fable)')
-Assert-Equal 20 $worstCase.Count 'the worst 50-column frame is 20 lines'
+Assert-Equal 19 $worstCase.Count 'the worst 50-column launch frame is 19 lines'
 Assert-Equal ($worstCase.Count + 1) $script:MinHeight 'MinHeight is that count plus the headroom row'
+
+# Picker: a 40-session fixture, far past what any viewport shows, must still FIT at MinHeight, and
+# must render MORE lines when given the room - proving the viewport actually clamped, not merely
+# that the list happened to be short (which is exactly what a naive exact-count assertion could not
+# tell apart, per the comment above). The fit assertion alone is stub-blind (fix round 2, coordinator
+# review, finding 2): widening the too-small gate (`-lt $script:MinHeight` -> `-lt ($script:MinHeight
+# + 3)`) makes the frame at MinHeight return the ~4-line "need 50x20" stub instead of a real render,
+# and 4 <= 19 / 4 < (unbounded count) both still pass - a mutant the fit+clamp pair alone cannot see.
+# The title line ("resume - N sessions") only appears on a REAL render, never on the stub, so it is
+# asserted alongside every fit check below.
+$pickerBigSessions = @(1..40 | ForEach-Object { [pscustomobject]@{ SessionId = "big$_"; Project = "project-$_"; Worktree = ''; Title = "question $_"; LastUser = 'x'; LastAssistant = 'y'; Modified = (Get-Date).AddMinutes(-$_); PromptCount = $_; SizeBytes = 2048 } })
+$pickerFitPlain = @(Get-PickerFrame -Sessions $pickerBigSessions -Index 0 -Width 50 -Height $script:MinHeight)
+Assert-True ($pickerFitPlain.Count -le ($script:MinHeight - 1)) 'a 40-session plain picker still fits at MinHeight - the viewport clamps, not the list length'
+Assert-True (($pickerFitPlain -join "`n") -match 'sessions') 'and it is a REAL render at MinHeight, not the too-small stub (a widened size gate cannot fake this)'
+$pickerUnboundedPlain = @(Get-PickerFrame -Sessions $pickerBigSessions -Index 0 -Width 50 -Height 200)
+Assert-True ($pickerUnboundedPlain.Count -gt $pickerFitPlain.Count) 'and renders more lines when given the room - proving MinHeight is a real clamp on this screen, not an accident of a short fixture'
+
+$pickerFitScoped = @(Get-PickerFrame -Sessions $pickerBigSessions -Index 0 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height $script:MinHeight)
+Assert-True ($pickerFitScoped.Count -le ($script:MinHeight - 1)) 'a 40-session SCOPED picker still fits at MinHeight too'
+Assert-True (($pickerFitScoped -join "`n") -match 'sessions') 'and the scoped fit is a REAL render too, not the stub'
+$pickerUnboundedScoped = @(Get-PickerFrame -Sessions $pickerBigSessions -Index 0 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height 200)
+Assert-True ($pickerUnboundedScoped.Count -gt $pickerFitScoped.Count) 'and the scoped picker clamps the same way'
+
+# The project screen's own worst case at 50 columns: a full registry (more projects than the
+# minimum viewport shows) plus the two pinned rows - kept at 12 rows because the hint-readability
+# checks further below only need a fixture bigger than one screenful, not proof of clamping.
+$projWorstList = 1..12 | ForEach-Object {
+    [pscustomobject]@{
+        Slug = "wc$_"; Path = "C:\Users\sample-user\Projects\project-name-$_"
+        Name = "project-name-$_"; Worktree = $(if ($_ % 3 -eq 0) { 'feature-x' } else { $null })
+        LastActivity = (Get-Date).AddHours(-$_)
+    }
+}
+
+# Project: the same clamp proof as the picker above, with its own 40-row registry - it scrolls where
+# the launch screen cannot, so it never pushes this constant higher than the launch screen's own
+# worst case (it scrolls; it never pushes this constant higher).
+$projBigList = 1..40 | ForEach-Object {
+    [pscustomobject]@{
+        Slug = "big$_"; Path = "C:\Users\sample-user\Projects\project-name-$_"
+        Name = "project-name-$_"; Worktree = $(if ($_ % 3 -eq 0) { 'feature-x' } else { $null })
+        LastActivity = (Get-Date).AddHours(-$_)
+    }
+}
+$projFit = @(Get-ProjectFrame -Projects $projBigList -Index 5 -Cwd 'C:\x' -Width 50 -Height $script:MinHeight)
+Assert-True ($projFit.Count -le ($script:MinHeight - 1)) 'a 40-project registry still fits at MinHeight - the viewport clamps, not the registry size'
+Assert-True (($projFit -join "`n") -match 'known') 'and it is a REAL render at MinHeight, not the too-small stub (a widened size gate cannot fake this)'
+$projUnbounded = @(Get-ProjectFrame -Projects $projBigList -Index 5 -Cwd 'C:\x' -Width 50 -Height 200)
+Assert-True ($projUnbounded.Count -gt $projFit.Count) 'and renders more lines when given the room - proving MinHeight is a real clamp on this screen too'
 
 foreach ($h in @($script:MinHeight, 50)) {
     $nmap = $null
     $lf = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height $h -Limits $narrowLimits -Restored @('Model') -RestoredAge '12 min' -RowMap ([ref]$nmap))
     $lfText = $lf -join "`n"
-    foreach ($hint in @('enter start', 'u maintenance', 'esc quit', 'up/down row', 'left/right value')) {
+    # Clickable tokens are bracketed here (no -Color): '[enter] next', not 'enter next'.
+    foreach ($hint in @('[enter] next', '[u] maintenance', '[esc] quit', 'w/s row', 'a/d value')) {
         Assert-Equal $true $lfText.Contains($hint) "50x${h} launch: the hint '$hint' is readable"
     }
     Assert-Equal $true ($lf.Count -le ($h - 1)) "50x${h} launch: $($lf.Count) lines leave the headroom row"
@@ -1453,17 +1856,34 @@ foreach ($h in @($script:MinHeight, 50)) {
 
     $pf = @(Get-PickerFrame -Sessions $narrowSessions -Index 2 -Width 50 -Height $h)
     $pfText = $pf -join "`n"
-    foreach ($hint in @('/ filter', 'enter open', 'f fork', 'esc back')) {
+    # 'w/s move' pinned alongside the picker's other 50-column hints (fix round 1: it was asserted
+    # nowhere, the same way 'w/s row' is pinned for the launch screen above).
+    foreach ($hint in @('w/s move', '[/] filter', '[enter] open', '[f] fork', '[esc] back')) {
         Assert-Equal $true $pfText.Contains($hint) "50x${h} picker: the hint '$hint' is readable"
     }
     Assert-Equal $true ($pf.Count -le ($h - 1)) "50x${h} picker: $($pf.Count) lines leave the headroom row"
 
+    # Fix round 1, MINOR 2: the SCOPED picker (Task 8's -Scope project, the tab hint and the
+    # ProjectName title suffix added on top of the plain picker above) was never rendered at 50
+    # columns at all - only the unscoped picker was. A 34-character -ProjectName is the worst case
+    # this took: it wrapped the title further than the plain "resume - N sessions" form.
+    $spf = @(Get-PickerFrame -Sessions $narrowSessions -Index 2 -Scope 'project' -ProjectName $longProjectName34 -Width 50 -Height $h)
+    Assert-Equal $true ($spf.Count -le ($h - 1)) "50x${h} scoped picker: $($spf.Count) lines leave the headroom row"
+    Assert-True (($spf -join "`n") -match 'tab') "50x${h} scoped picker: the tab-widen hint is readable"
+
     $mf = @(Get-MaintenanceFrame -Info $narrowInfo -Width 50 -Height $h -Status $longStatus -Actions $cfgActions)
     $mfText = $mf -join "`n"
-    foreach ($hint in @('u update', 'r rename swap', 'd doctor', 'm mcp list', 'p prune', 'i full reindex', 'esc back')) {
+    foreach ($hint in @('[u] update', '[r] rename swap', '[d] doctor', '[m] mcp list', '[p] prune', '[i] full reindex', '[esc] back')) {
         Assert-Equal $true $mfText.Contains($hint) "50x${h} maintenance: the hint '$hint' is readable"
     }
     Assert-Equal $true ($mf.Count -le ($h - 1)) "50x${h} maintenance: $($mf.Count) lines with a long status leave the headroom row"
+
+    $pjf = @(Get-ProjectFrame -Projects $projWorstList -Index 5 -Cwd 'C:\x' -Width 50 -Height $h)
+    $pjfText = $pjf -join "`n"
+    foreach ($hint in @('w/s move', '[enter] new', '[c] continue', '[r] resume', '[t] worktree', '[/] filter', '[esc] back')) {
+        Assert-Equal $true $pjfText.Contains($hint) "50x${h} project: the hint '$hint' is readable"
+    }
+    Assert-Equal $true ($pjf.Count -le ($h - 1)) "50x${h} project: $($pjf.Count) lines leave the headroom row"
 }
 
 # A click on a hint that wrapped onto a LATER footer line reaches its key - the span's line offset
@@ -1488,7 +1908,7 @@ Assert-Equal 0 $script:reindexRuns 'the same column on the FIRST footer line is 
 $noActions = Get-MaintenanceFrame -Info $narrowInfo -Width 78 -Height 24
 Assert-Equal $false (($noActions | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match 'full reindex') 'no action, no hint'
 $withAction = Get-MaintenanceFrame -Info $narrowInfo -Width 78 -Height 24 -Actions $cfgActions
-Assert-Equal $true (($withAction | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match 'i\s+full reindex') 'a configured action is a footer hint'
+Assert-Equal $true (($withAction | ForEach-Object { Remove-AnsiColor $_ }) -join "`n" -match '\[i\]\s+full reindex') 'a configured action is a footer hint'
 $w = New-EventReader @($iKey, $esc)
 Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions @() -Runner { throw 'must not run' }
 Assert-Equal $false ($script:lastStatus -match 'confirm') 'a key with no action does nothing'
@@ -1592,9 +2012,9 @@ $wrapped = New-HintFooter -Glyphs (Get-Glyphs) -Width 20 -Hints @(
     @{ Token = 'u'; Label = 'update'; Clickable = $true; Key = ''; Char = 'u' }
     @{ Token = 'r'; Label = 'rename swap'; Clickable = $true; Key = ''; Char = 'r' }
     @{ Token = 'i'; Label = 'full reindex'; Clickable = $true; Key = ''; Char = 'i' })
-Assert-Equal 3 @($wrapped.Lines).Count 'width 20: three hints of 8-13 characters take three lines'
+Assert-Equal 3 @($wrapped.Lines).Count 'width 20: three padded hints of 10-16 characters take three lines'
 Assert-Equal 0 (@($wrapped.Lines | Where-Object { $_.Text.Length -gt 20 }).Count) 'width 20: no footer line exceeds the width'
-Assert-Equal '  r rename swap' $wrapped.Lines[1].Text 'each wrapped line is indented like the first'
+Assert-Equal '   r  rename swap' $wrapped.Lines[1].Text 'each wrapped line is indented like the first'
 
 # --- roster is configurable; the Remote row is optional ------------------------------------------
 # Only .Count is trustworthy off this capture: Get-LaunchRows returns the SAME row hashtables
@@ -1640,8 +2060,685 @@ try {
     Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
 }
 
+# --- Task 5: WASD navigates alongside the arrows, on every screen with a cursor ------------------
+# Assert-Equal here is (Expected, Actual) - the house order; a written brief's own sample assertions
+# had it backwards (see the ruling this task was dispatched with).
+$sDown = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
+Assert-Equal 2 $sDown.Row 's moves the launch cursor down twice'
+$sBack = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('s', 'w', 'Enter')) -Draw {}
+Assert-Equal 0 $sBack.Row 'w moves it back up'
+
+# The modifier guard is not weakened by adding a letter: a SHIFTED W must not navigate. Fix round 1
+# (the first version was vacuous both ways: New-LaunchState starts at Row 0, and the w branch is
+# `if ($State.Row -gt 0) { $State.Row-- }`, so a shifted W that DID navigate would ALSO leave Row at
+# 0). Move first with a plain 's' to Row 1, then the shifted W: guard intact leaves it at 1; a guard
+# that let the shifted key through would pull it back to 0.
+$ShiftW = [System.ConsoleKeyInfo]::new('W', [System.ConsoleKey]::W, $true, $false, $false)
+$sShift = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-MixedKeyReader -Keys @('s', $ShiftW, 'Enter')) -Draw {}
+Assert-Equal 1 $sShift.Row 'a shifted W does not navigate the launch screen back up'
+
+# a/d step the selected row's value, exactly like left/right - reuse the same "reach the last row,
+# then wrap the value" shape the arrow-key assertions above already use.
+$aBack = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys ($remoteDowns + @('a', 'Enter'))) -Draw {}
+Assert-Equal 'stop server' $aBack.Remote 'a wraps to the last value of the remote row, like left'
+$dForward = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('d', 'Enter')) -Draw {}
+Assert-Equal ((Get-LaunchRows | Where-Object Name -eq 'Account').Values | Select-Object -Skip 1 -First 1) $dForward.Account 'd steps the account row forward, like right'
+
+# The session picker: reuse the small two-session fixture from screen 2's own arrow-key assertions.
+$sPick = Invoke-SessionPicker -Sessions $fake -ReadKey (New-ScriptedKeyReader -Keys @('s', 'Enter')) -Draw {}
+Assert-Equal 'bbbb2222' $sPick.Session.SessionId 's moves the picker selection down, like DownArrow'
+$wPick = Invoke-SessionPicker -Sessions $fake -ReadKey (New-ScriptedKeyReader -Keys @('s', 'w', 'Enter')) -Draw {}
+Assert-Equal 'aaaa1111' $wPick.Session.SessionId 'w moves it back up'
+
+# Typed filter text must not navigate: 's' and 'w' inside an open filter are characters, not moves.
+# Fix round 1: the final session id alone cannot tell filtering from navigating here (s and w cancel
+# each other, and Escape resets the index to 0 anyway - both paths land on the same session). $Draw
+# already receives (s, i, f) every redraw, so capture what it is actually called with instead.
+$script:typedDrawCalls = [System.Collections.Generic.List[object]]::new()
+$typedDraw = { param($s, $i, $f) $script:typedDrawCalls.Add([pscustomobject]@{ Index = $i; Filter = $f }); $null }
+$typedKeys = @('/', 's', 'w', 'Escape', 'Enter')
+$typedPick = Invoke-SessionPicker -Sessions $fake -ReadKey (New-ScriptedKeyReader -Keys $typedKeys) -Draw $typedDraw
+$sw = @($script:typedDrawCalls | Where-Object { $_.Filter -eq 'sw' })
+Assert-Equal 1 $sw.Count 'w and s typed into an open filter reach it as characters - the filter becomes "sw"'
+Assert-Equal 0 $sw[0].Index 'and the index never moved while those letters were being typed'
+
+# --- Task 6: the project screen frame ------------------------------------------------------
+$projs6 = @(
+    [pscustomobject]@{ Slug = 'A'; Path = 'C:\w\alpha'; Name = 'alpha'; Worktree = $null; LastActivity = (Get-Date).AddMinutes(-2) }
+    [pscustomobject]@{ Slug = 'B'; Path = 'C:\w\beta';  Name = 'beta';  Worktree = $null; LastActivity = (Get-Date).AddDays(-1) }
+)
+$map6 = $null
+$f6 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 78 -Height 24 -RowMap ([ref]$map6))
+$f6Text = $f6 -join "`n"
+Assert-True ($f6Text -match 'alpha') 'the newest project is listed'
+Assert-True ($f6Text -match 'current directory') 'the pinned cwd row is there'
+Assert-True ($f6Text -match 'enter a path') 'the pinned free-path row is there'
+Assert-Equal 4 $map6.RowCount 'two projects plus two pinned rows are hit-testable'
+# "Hit-testable like a project row" means the SAME map fields a project row would get, not merely
+# a count: FirstRowY is always 1 (one row below the box's own top border, whatever the body holds)
+# and Start is the viewport's first visible index - both computed once and shared by every row,
+# pinned or not.
+Assert-Equal 1 $map6.FirstRowY "the row map's FirstRowY sits just under the box top border"
+Assert-Equal 0 $map6.Start 'the row map start is the first visible row'
+# Fix round 2 (reviewer correction): with only 2 projects the list never scrolls, so Start is
+# always the degenerate 0 above - a mutant that hardcodes Start to 0 survives every assertion in
+# this file. Start is what the next task adds to a clicked row's offset, and a scrolled list is
+# exactly where that bites. 30 projects, selecting the LAST one, forces the viewport to scroll.
+$scroll30 = @(1..30 | ForEach-Object { [pscustomobject]@{ Slug = "S$_"; Path = "C:\w\s$_"; Name = "scrollproj-$_"; Worktree = $null; LastActivity = (Get-Date).AddMinutes(-$_) } })
+$mapScroll = $null
+$null = @(Get-ProjectFrame -Projects $scroll30 -Index 29 -Cwd 'C:\somewhere' -Width 78 -Height 24 -RowMap ([ref]$mapScroll))
+Assert-Equal 1 $mapScroll.FirstRowY 'the scrolled row map still sits just under the box top border'
+Assert-Equal 19 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
+Assert-Equal 13 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
+Assert-True ($f6Text -match 'continue') 'the footer advertises continue'
+# Plain (no -Color) hints are bracketed like every other screen's footer - '[t] worktree',
+# never ' t worktree' - see the picker's '[f] fork' etc. at 50 columns. The brief's own sample
+# checked for ' t ', which only the -Color form of New-HintFooter ever renders; against the -Plain
+# contract this call actually takes, that sample is wrong, so the check is against the bracketed
+# form - which is exactly what also proves the hotkey is 't' and not 'w': a reverted 'w' prints
+# '[w] worktree' here instead.
+Assert-True ($f6Text.Contains('[t] worktree')) 'worktree is on t, not w'
+# Fix round 1, owner ruling: the current-directory row must show WHICH directory it means, exactly
+# like a project row shows its path - '-Cwd' is otherwise accepted and never reaches the page.
+Assert-True ($f6Text.Contains('C:\somewhere')) 'the current-directory row shows the actual cwd path'
+
+# Fix round 1, mutation coverage (Select-ProjectMatch -> @($Projects), the filter silently ignored):
+# filtering to one match must both shrink the row count (one match + the two pinned rows, not
+# both projects + two pinned) and show in the title - the title's own count word ('1 known') is
+# what a filter-bypassing mutant cannot fake, because it is driven by $items.Count, not by $Filter.
+$mapF6 = $null
+$fF6 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Filter 'alpha' -Cwd 'C:\somewhere' -Width 78 -Height 24 -RowMap ([ref]$mapF6))
+$fF6Text = $fF6 -join "`n"
+Assert-Equal 3 $mapF6.RowCount 'filtering to one match still offers both pinned rows (the match plus current directory plus enter a path)'
+Assert-True ($fF6Text -match '1 known') 'the title counts only the matched project'
+Assert-True ($fF6Text -match 'filter: alpha') 'the title states the active filter'
+
+# Fix round 1, CRITICAL 1 (reviewer correction): the previous version of this check rendered at
+# Width 50 x (MinHeight-1) - one row BELOW the minimum, which hits the too-small gate
+# (Screens.ps1) and returns the 4-line stub, not the real frame; the "Count -le 20" comparison was
+# then 4 -le 20, true no matter what the real layout math does. Split into the two things that
+# check actually differently distinguishes:
+#
+# 1) the too-small gate itself, still worth its own assertion, same contract as every other builder.
+$f6TooSmall = Get-ProjectFrame -Projects $projs6 -Cwd 'C:\somewhere' -Width 50 -Height ($script:MinHeight - 1)
+Assert-Equal 1 (@($f6TooSmall | Where-Object { $_ -match [regex]::Escape("need $($script:MinWidth)x$($script:MinHeight)") }).Count) 'a too-short terminal states the required size'
+#
+# 2) the real overflow check, rendered AT $script:MinHeight (not one row short of it) with a FULL
+# registry: with only two projects the viewport is capped at 4 rows (rows.Count) regardless of
+# bodyRows, so a bodyRows miscalculation ($Height - 3 mutated to $Height - 1, or the size gate's
+# -lt $script:MinHeight widened to -lt ($script:MinHeight + 3)) cannot be observed - 30 projects
+# make the viewport big enough that both mutants change what actually renders.
+$many30 = @(1..30 | ForEach-Object { [pscustomobject]@{ Slug = "P$_"; Path = "C:\w\p$_"; Name = "project-$_"; Worktree = $null; LastActivity = (Get-Date).AddMinutes(-$_) } })
+$wide30 = @(Get-ProjectFrame -Projects $many30 -Index 0 -Cwd 'C:\somewhere' -Width 50 -Height $script:MinHeight)
+$wide30Text = $wide30 -join "`n"
+Assert-True ($wide30Text -match 'known') 'the frame at MinHeight is the real render, not the too-small stub (catches the widened size gate)'
+Assert-True ($wide30.Count -le ($script:MinHeight - 1)) 'the worst-case 50-column project frame leaves the headroom row (catches the $Height-3 miscalculation)'
+
+# Empty registry still renders and still offers the pinned rows.
+$empty6 = @(Get-ProjectFrame -Projects @() -Index 0 -Cwd 'C:\somewhere' -Width 78 -Height 24)
+Assert-True (($empty6 -join "`n") -match 'current directory') 'an empty registry still offers the cwd'
+
+# Mutation coverage - viewport reachability: with 2 projects + 2 pinned rows, a viewport sized off
+# $items.Count (2) instead of $rows.Count (4) renders only the two projects and the pinned rows
+# never appear at all. The three 'is there'/'RowCount' assertions above already catch that by
+# absence; this one pins it directly by counting how many of the four expected rows are painted.
+Assert-Equal 4 (@($f6 | Where-Object { $_ -match 'alpha|beta|current directory|enter a path' })).Count 'all four rows - two projects, two pinned - are actually painted, not just hit-testable'
+
+# Mutation coverage - path-column Limit-Line: New-Box Limit-Lines every row to the box width
+# regardless, so an overflowing raw line proves nothing on its own (see the launch screen's
+# 120-column note above) - the age text surviving at the END of the row is what a missing inner
+# clamp on the path actually breaks, because New-Box's own clamp then cuts into the overflowing
+# tail instead and the trailing ' 5 min' never reaches the page. (Fix round 1, MINOR 4: the raw
+# per-line width foreach loops that used to sit here are gone - they ran on the builder's already
+# Complete-PickerFrame-clamped return and could never fail regardless of what the layout math did.)
+$longNow6 = Get-Date
+$longProjs6 = @([pscustomobject]@{ Slug = 'L'; Path = ('C:\' + ('deepfolder\' * 30) + 'end'); Name = 'longname'; Worktree = $null; LastActivity = $longNow6.AddMinutes(-5) })
+$lf6 = @(Get-ProjectFrame -Projects $longProjs6 -Index 0 -Cwd 'C:\x' -Width 78 -Height 24 -Now $longNow6)
+Assert-True ((($lf6 -join "`n")).Contains('5 min')) 'a long project path is capped so the age at the end of the row survives'
+
+# Fix round 1, MINOR 3: a long NAME must not itself push the age off the row either - same failure
+# mode as the long path above, different column.
+$longNameProjs6 = @([pscustomobject]@{ Slug = 'N'; Path = 'C:\p'; Name = ('n' * 60); Worktree = $null; LastActivity = (Get-Date).AddMinutes(-5) })
+$lnFrame6 = @(Get-ProjectFrame -Projects $longNameProjs6 -Index 0 -Cwd 'C:\x' -Width 50 -Height 24)
+Assert-True ((($lnFrame6 -join "`n")).Contains('5 min')) 'a long project name is clamped so the age survives at 50 columns'
+
+# --- Invoke-ProjectScreen (Task 7, fix round 2): the project screen input loop, with throttled
+# hover. Driven entirely through injected seams - none of this needs a terminal.
+#
+# The existence guard now covers every row kind (fix round 2, IMPORTANT 1), so the fixtures below
+# are REAL temporary directories - not the fictional 'C:\w\alpha'-style paths round 1 used - and
+# are cleaned up in the `finally` at the bottom of this section.
+#
+# The randomness lives in ONE root directory; alpha/beta are FIXED leaf names under it (fix round
+# 3, IMPORTANT). A per-project random leaf (`pp-proj-alpha-<32 hex>`) put the GUID in the very
+# string a filter test matches against - filtering on 'be' matched beta's Name by design, but ALSO
+# matched alpha's PATH whenever its hex GUID happened to contain the substring 'be' (P=11.41%,
+# 22825/200000 measured), a flake reproducible on demand and load-bearing on any machine whose own
+# %TEMP% contains 'be'. A shared root does not reintroduce the bug: the filter tests below match on
+# 'eta' (from "beta"), and a 32-HEX-digit GUID (`[0-9a-f]` only) can never contain 't' - the
+# substring is categorically unreachable from the random component, on either fixture, forever.
+$tmpRoot  = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-proj-$([Guid]::NewGuid().ToString('N'))")
+$tmpAlpha = Join-Path $tmpRoot 'alpha'
+$tmpBeta  = Join-Path $tmpRoot 'beta'
+$tmpCwd   = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-proj-cwd-$([Guid]::NewGuid().ToString('N'))")
+New-Item -ItemType Directory -Path $tmpAlpha -Force | Out-Null
+New-Item -ItemType Directory -Path $tmpBeta -Force | Out-Null
+New-Item -ItemType Directory -Path $tmpCwd | Out-Null
+try {
+    $pProjs = @(
+        [pscustomobject]@{ Slug = 'A'; Path = $tmpAlpha; Name = 'alpha'; Worktree = $null; LastActivity = (Get-Date) }
+        [pscustomobject]@{ Slug = 'B'; Path = $tmpBeta;  Name = 'beta';  Worktree = $null; LastActivity = (Get-Date).AddDays(-1) }
+    )
+
+    $p1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal $tmpAlpha $p1.Path 'Enter on the first row picks it'
+    Assert-Equal 'new' $p1.Action 'and Enter means a new session'
+    Assert-Equal 'A' $p1.Slug "and returns the row's slug"
+
+    $p2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'c')) -Draw {}
+    Assert-Equal $tmpBeta $p2.Path 's moves down'
+    Assert-Equal 'continue' $p2.Action 'c means continue'
+    Assert-Equal 'B' $p2.Slug "and the second row's slug travels with it"
+
+    $p3 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('r')) -Draw {}
+    Assert-Equal 'resume' $p3.Action 'r means resume'
+    $p4 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('t')) -Draw {}
+    Assert-Equal 'worktree' $p4.Action 't means worktree'
+
+    Assert-True ($null -eq (Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {})) 'Escape cancels'
+
+    # The cwd pinned row is two rows past the last project.
+    $p5 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
+    Assert-Equal $tmpCwd $p5.Path 'the pinned current-directory row launches the cwd'
+    Assert-Equal '' $p5.Slug 'an unknown cwd carries no slug'
+
+    # The cwd row's slug lookup is case-insensitive and ignores a trailing separator - the session
+    # picker (next task) scopes by slug, exact, because two repositories can share a folder name.
+    # Still a REAL directory (alpha's own), just spelled with a different case, slash direction and
+    # a trailing one - Test-Path resolves all of that natively, so the existence guard is not what
+    # this assertion is pinning.
+    $alphaVariant = ($tmpAlpha -replace '\\', '/').ToUpperInvariant() + '/'
+    $p5b = Invoke-ProjectScreen -Projects $pProjs -Cwd $alphaVariant -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
+    Assert-Equal 'A' $p5b.Slug 'a cwd matching a known project (case/trailing-slash/slash-direction insensitive) carries its slug'
+
+    # Filter mode: '/' then letters must not fire the action hotkeys. Filters on 'eta' (from
+    # "beta"), not 'be': 'be' is entirely hex digits and can match a 32-hex-digit GUID by chance
+    # (measured P=11.41% here) - 't' cannot occur in a hex GUID at all, so 'eta' is reachable only
+    # through the literal word "beta" (the Name AND now the fixed leaf of the Path).
+    $p6 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'e', 't', 'a', 'Enter', 'Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p6.Path 'typing in filter mode narrows instead of acting'
+
+    # A letter that IS a hotkey, typed while filtering, must only edit the filter text - never fire
+    # the action. Proven by the run needing a further Escape to leave rather than acting on 'c'.
+    $p6b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'c', 'Escape', 'Escape')) -Draw {}
+    Assert-True ($null -eq $p6b) 'typing the "c" hotkey while filtering only edits the filter text, then Escape leaves'
+
+    # Escape in filter mode clears the filter (first Escape) rather than leaving; a second Escape
+    # leaves the screen. Both asserted: the first by what Enter picks afterwards, the second by $null.
+    $p6c = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Enter')) -Draw {}
+    Assert-Equal $tmpAlpha $p6c.Path 'the first Escape clears the filter text rather than leaving, so Enter picks the unfiltered first row'
+    $p6d = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Escape')) -Draw {}
+    Assert-True ($null -eq $p6d) 'the second Escape leaves the screen'
+
+    # -Initial puts the cursor on a remembered project.
+    $p7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p7.Path 'the initial project is preselected'
+
+    # -Initial through ConvertTo-ProjectKey (fix round 2, IMPORTANT 3): a caller passing a
+    # differently-cased, forward-slashed, trailing-slashed spelling of the SAME directory must still
+    # preselect it - a raw [Array]::IndexOf silently preselected the wrong row (or none) here.
+    $betaVariant = ($tmpBeta -replace '\\', '/').ToUpperInvariant() + '/'
+    $p7b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $betaVariant -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p7b.Path '-Initial matches by normalised key, not exact string - a case/slash variant still preselects beta'
+
+    # The free-path row reads through -ReadPath. A path that does not exist must not be returned -
+    # the loop stays open, proven by needing a further Escape to leave rather than returning on Enter.
+    $p8 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'Enter', 'Escape')) -Draw {} -ReadPath { 'C:\this-path-does-not-really-exist-9f3a' }
+    Assert-True ($null -eq $p8) 'a free path that does not exist keeps the loop open; Escape then cancels'
+
+    # A real directory typed into the free-path row IS returned, resolved, and its slug looked up the
+    # same way the cwd row's is.
+    $scratchDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-free-$([Guid]::NewGuid().ToString('N'))")
+    New-Item -ItemType Directory -Path $scratchDir | Out-Null
+    try {
+        # The trailing Escape is never reached when the pick succeeds (the function returns on Enter);
+        # it is there so a broken existence guard that wrongly rejects a real directory fails this
+        # assertion cleanly instead of exhausting the scripted reader with an uncaught exception.
+        $p8b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'Enter', 'Escape')) -Draw {} -ReadPath { "`"$scratchDir`"" }
+        Assert-Equal (Resolve-Path -LiteralPath $scratchDir).Path $p8b.Path 'a real free path is resolved and returned'
+        Assert-Equal '' $p8b.Slug 'a free path outside the registry carries no slug'
+    } finally { Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+    # --- IMPORTANT 1: the existence guard now covers registry rows too. A project the registry still
+    # lists but whose directory vanished between launch and this keypress (git worktree remove in
+    # another terminal fits) must not be returned - the same call Prefs.ps1 already makes for a
+    # remembered project ("this value becomes a Set-Location target"), extended to this screen's own,
+    # longer, lifetime. ---
+    $vanishedDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-proj-vanished-$([Guid]::NewGuid().ToString('N'))")
+    New-Item -ItemType Directory -Path $vanishedDir | Out-Null
+    Remove-Item -LiteralPath $vanishedDir -Recurse -Force
+    $vanishedProjs = @([pscustomobject]@{ Slug = 'V'; Path = $vanishedDir; Name = 'vanished'; Worktree = $null; LastActivity = (Get-Date) })
+    $pVanished = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter', 'Escape')) -Draw {}
+    Assert-True ($null -eq $pVanished) 'Enter on a registry row whose directory has vanished does not return - the loop stays open'
+
+    # --- Mouse: a single click only moves the selection; nothing but a double click or a hotkey may
+    # start a session. ---
+    $pRowMap = [pscustomobject]@{ FirstRowY = 4; RowCount = 4; Start = 0; FooterY = 20; Footer = @(
+        [pscustomobject]@{ Key = 'Enter'; Char = '';  Start = 10; End = 14 }
+        [pscustomobject]@{ Key = '';      Char = 'c'; Start = 16; End = 23 }
+        [pscustomobject]@{ Key = '';      Char = 'r'; Start = 25; End = 30 }
+        [pscustomobject]@{ Key = '';      Char = 't'; Start = 32; End = 40 }
+    ) }
+    $pDraw = { param($p, $i, $f, $t, $h) $pRowMap }.GetNewClosure()
+
+    $w10 = New-EventReader @((New-MouseEvent -Y 5 -Left), $esc)
+    $p10 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w10 -Draw $pDraw -Wait $w10 -GetWindowTop { 0 }
+    Assert-True ($null -eq $p10) 'a single click on a project row does not start anything - Escape still cancels'
+
+    $w11 = New-EventReader @((New-MouseEvent -Y 5 -Left), $enterKey)
+    $p11 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w11 -Draw $pDraw -Wait $w11 -GetWindowTop { 0 }
+    Assert-Equal $tmpBeta $p11.Path 'the click DID move the selection - Enter afterwards commits the row the click moved to'
+
+    # --- IMPORTANT 2: a double click on a ROW commits, the way Invoke-SessionPicker's does - no
+    # further key needed. ---
+    # The trailing Escape is never reached when the double click commits (the function returns
+    # immediately); it is there so a regression that stops the double click from committing fails
+    # this assertion cleanly instead of exhausting the scripted reader with an uncaught exception
+    # (fix round 3, SMALL 2).
+    $w14 = New-EventReader @((New-MouseEvent -Y 5 -Left -Double), $esc)
+    $p14 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w14 -Draw $pDraw -Wait $w14 -GetWindowTop { 0 }
+    Assert-Equal $tmpBeta $p14.Path 'a double click on a row commits it immediately'
+    Assert-Equal 'new' $p14.Action 'as a new session, with no further key pressed'
+
+    # A double click landing on a FOOTER button, unlike one landing on a row, does nothing - it
+    # mirrors Invoke-MaintenanceScreen excluding IsDoubleClick from its footer-hit guard. The probe:
+    # a physical double click over 'c' reaches this loop as two records (a plain press, then one
+    # flagged IsDoubleClick) - before the -not IsMove / IsDoubleClick guard, both walked through as
+    # a press and the free-path row's -ReadPath fired twice for one gesture.
+    $script:dblReadPathCalls = 0
+    $dblReadPath = { $script:dblReadPathCalls++; 'C:\this-bogus-path-for-doubleclick-test-9f3a' }
+    $sKey = [System.ConsoleKeyInfo]::new([char]'s', 0, $false, $false, $false)
+    $w15 = New-EventReader @(
+        $sKey, $sKey, $sKey,                        # navigate down to the free-path row (index 3)
+        (New-MouseEvent -X 17 -Y 20 -Left),          # the plain press - fires 'c' once
+        (New-MouseEvent -X 17 -Y 20 -Left -Double),  # the doubleclick-flagged record - must do nothing
+        $esc
+    )
+    $p15 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w15 -Draw $pDraw -Wait $w15 -GetWindowTop { 0 } -ReadPath $dblReadPath
+    Assert-True ($null -eq $p15) 'the double-click-over-footer run still ends with Escape (the bogus path was never returned)'
+    Assert-True ($script:dblReadPathCalls -le 1) 'a double click over a footer button invokes -ReadPath at most once, not once per record'
+
+    # --- Hover: a move inside the same footer button must not redraw. Counting $Draw proves the
+    # reduction; a clamp that always passes (e.g. an upper bound with no lower one) would not. ---
+    # No .GetNewClosure() here: it wraps the scriptblock in its own private scope, and $script: inside
+    # THAT scope binds to the closure's own bubble rather than this file's - $script:pDraws would
+    # silently increment a copy nobody ever reads. An ordinary scriptblock resolves $script: against
+    # this file's scope, which is what the assertions below actually check.
+    $script:pDraws = 0
+    $pDrawCounting = { param($p, $i, $f, $t, $h) $script:pDraws++; $pRowMap }
+    $w12 = New-EventReader @(
+        (New-MouseEvent -X 17 -Y 20 -Move),
+        (New-MouseEvent -X 18 -Y 20 -Move),
+        $esc
+    )
+    $p12 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w12 -Draw $pDrawCounting -Wait $w12 -GetWindowTop { 0 }
+    Assert-True ($null -eq $p12) 'the hover run ends with Escape as usual'
+    Assert-True ($script:pDraws -le 2) 'two moves inside the same footer button draw at most twice: the initial frame plus one hover change'
+    Assert-True ($script:pDraws -ge 1) 'and it did draw at least once, so the upper bound is not trivially satisfied by zero'
+
+    # A move that crosses INTO a different footer button must still redraw each time - the throttle is
+    # keyed on the hovered button changing, not on "any move after the first".
+    $script:pDraws2 = 0
+    $pDrawCounting2 = { param($p, $i, $f, $t, $h) $script:pDraws2++; $pRowMap }
+    $w13 = New-EventReader @(
+        (New-MouseEvent -X 17 -Y 20 -Move),   # enters the 'c' button - hover changes, redraws
+        (New-MouseEvent -X 26 -Y 20 -Move),   # enters the 'r' button - hover changes again, redraws
+        $esc
+    )
+    $p13 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w13 -Draw $pDrawCounting2 -Wait $w13 -GetWindowTop { 0 }
+    Assert-Equal 3 $script:pDraws2 'moving between two DIFFERENT buttons draws for each change: initial + two hover changes'
+
+    # --- IMPORTANT 4: -Hover and -Typing actually change what Get-ProjectFrame paints - round 1's
+    # throttle only proved the DRAW COUNT changed, never that a redraw was worth having. ---
+    $hoverMap0 = $null
+    $frameNoHover = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -Color -RowMap ([ref]$hoverMap0))
+    $cIndex = [Array]::IndexOf(@($hoverMap0.Footer | ForEach-Object { $_.Char }), 'c')
+    $rIndex = [Array]::IndexOf(@($hoverMap0.Footer | ForEach-Object { $_.Char }), 'r')
+    $hoverMapC = $null
+    $frameHoverC = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -Color -Hover $cIndex -RowMap ([ref]$hoverMapC))
+    $hoverMapR = $null
+    $frameHoverR = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -Color -Hover $rIndex -RowMap ([ref]$hoverMapR))
+    $footerLineNoHover = $frameNoHover[$hoverMap0.FooterY]
+    $footerLineHoverC = $frameHoverC[$hoverMapC.FooterY]
+    $footerLineHoverR = $frameHoverR[$hoverMapR.FooterY]
+    Assert-Equal (Remove-AnsiColor $footerLineNoHover) (Remove-AnsiColor $footerLineHoverC) 'hovering repaints the footer line without changing its plain text'
+    Assert-True ($footerLineHoverC.Contains($script:C.Accent)) 'hovering the c footer button paints its cap with the accent colour'
+    Assert-True (-not $footerLineNoHover.Contains($script:C.Accent)) 'no button is accent-tinted when nothing is hovered'
+    Assert-True ($footerLineHoverC -ne $footerLineHoverR) 'hovering a different button paints a different frame - the accent follows the hover index, not a fixed spot'
+    $typingFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Filter 'al' -Typing -Cwd $tmpCwd -Width 100 -Height 24)
+    Assert-True (($typingFrame -join "`n").Contains('filter: al_')) 'typing shows the filter text with a trailing cursor'
+
+    # -Notice's title suffix, pinned directly at the frame level (fix round 3, SMALL 1): a mutation
+    # to `if ($false) { ... }` at the call site left every existing assertion green, because nothing
+    # checked the RENDERED text - the loop-level notice tests only ever inspected the argument
+    # $Draw was called with, never what Get-ProjectFrame did with it.
+    $noticeFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Notice 'path not found' -Width 100 -Height 24)
+    Assert-True (($noticeFrame -join "`n").Contains('path not found')) '-Notice appears in the rendered title'
+    $noNoticeFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24)
+    Assert-True (-not (($noNoticeFrame -join "`n").Contains('path not found'))) 'without -Notice, nothing says "path not found"'
+
+    # --- Loop-level tie-in: the throttle is only worth having if the two hover-changed draws in the
+    # LOOP actually paint different frames, not merely that $Draw was called a different number of
+    # times (round 1's gap - a reverted hover paint would still pass a bare draw-count assertion). ---
+    $probeMap = $null
+    $null = Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -Color -RowMap ([ref]$probeMap)
+    $cSpan = @($probeMap.Footer | Where-Object { $_.Char -eq 'c' })[0]
+    $rSpan = @($probeMap.Footer | Where-Object { $_.Char -eq 'r' })[0]
+    $cY = $probeMap.FooterY + $cSpan.Line
+    $rY = $probeMap.FooterY + $rSpan.Line
+    $script:capturedFrames = New-Object System.Collections.Generic.List[string]
+    $realDraw = {
+        param($p, $i, $f, $t, $h, $n)
+        $map = $null
+        $lines = Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Cwd $tmpCwd -Width 100 -Height 24 -Color -RowMap ([ref]$map)
+        $script:capturedFrames.Add(($lines -join "`n"))
+        $map
+    }
+    $wReal = New-EventReader @(
+        (New-MouseEvent -X $cSpan.Start -Y $cY -Move),
+        (New-MouseEvent -X $rSpan.Start -Y $rY -Move),
+        $esc
+    )
+    $pRealHover = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wReal -Draw $realDraw -Wait $wReal -GetWindowTop { 0 }
+    Assert-True ($null -eq $pRealHover) 'the real-render hover run also ends with Escape'
+    Assert-Equal 3 $script:capturedFrames.Count 'three real frames were drawn: initial, hover-c, hover-r'
+    Assert-True ($script:capturedFrames[0] -ne $script:capturedFrames[1]) 'hovering c changes the rendered frame from the unhovered one'
+    Assert-True ($script:capturedFrames[1] -ne $script:capturedFrames[2]) 'hovering r changes the rendered frame from hovering c'
+
+    # --- Silent rejection now leaves a notice (minor): a bogus free path shows up in the title the
+    # NEXT time the frame draws, and the loop clears it again on the following key. ---
+    $script:capturedNotice = $null
+    $noticeDraw = { param($p, $i, $f, $t, $h, $n) $script:capturedNotice = $n }
+    $pNotice = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'Enter', 'Escape')) -Draw $noticeDraw -ReadPath { 'C:\bogus-notice-test-9f3a' }
+    Assert-True ($null -eq $pNotice) 'the bogus free path run still ends with Escape'
+    Assert-Equal 'path not found' $script:capturedNotice 'a rejected pick leaves a notice for the frame to show'
+
+    # --- Fix round 3 (coordinator ruling): the notice clears on the next KEY only, never on a mouse
+    # move/wheel/hover change - a hover that wiped "path not found" before the owner could read it
+    # would defeat the notice. Sequence: bogus free path -> Enter (notice shown) -> a mouse move onto
+    # a DIFFERENT footer button (a real hover change, so it does draw again) -> the draw right after
+    # that move must STILL carry the notice -> then a real key -> the draw after THAT is empty. ---
+    $script:noticeSequence = New-Object System.Collections.Generic.List[string]
+    $noticeSeqDraw = { param($p, $i, $f, $t, $h, $n) $script:noticeSequence.Add($n); $pRowMap }
+    $sKey3 = [System.ConsoleKeyInfo]::new([char]'s', 0, $false, $false, $false)
+    $wKey3 = [System.ConsoleKeyInfo]::new([char]'w', 0, $false, $false, $false)
+    $w17 = New-EventReader @(
+        $sKey3, $sKey3, $sKey3,               # navigate to the free-path row (index 3)
+        $enterKey,                             # Enter -> bogus path -> pick fails -> notice set
+        (New-MouseEvent -X 17 -Y 20 -Move),    # hovers onto the 'c' footer button - a REAL hover
+                                                # change, so this DOES force another draw - but must
+                                                # not clear the notice
+        $wKey3,                                # a real key: moves the cursor up AND clears the notice
+        $esc
+    )
+    $p17 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w17 -Draw $noticeSeqDraw -Wait $w17 -GetWindowTop { 0 } -ReadPath { 'C:\bogus-notice-persists-9f3a' }
+    Assert-True ($null -eq $p17) 'the notice-persistence run still ends with Escape'
+    Assert-Equal 7 $script:noticeSequence.Count 'one draw per event handled: 3 navigation, the failed Enter, the hover move, the clearing key, and the one after it'
+    Assert-Equal 'path not found' $script:noticeSequence[4] 'the notice appears in the draw right after the rejected Enter'
+    Assert-Equal 'path not found' $script:noticeSequence[5] 'a mouse move (even one that changes the hover) leaves the notice standing'
+    Assert-Equal '' $script:noticeSequence[6] 'the next KEY event clears it'
+
+    # --- Minor: \ / : are now accepted filter characters, so a pasted path matches literally
+    # end to end - typing alpha's own full path (colon and backslashes included) as the filter, then
+    # Enter, picks alpha. ---
+    $pathChars = @($tmpAlpha.ToCharArray() | ForEach-Object { "$_" })
+    $pFilterPath = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys (@('/') + $pathChars + @('Enter', 'Enter'))) -Draw {}
+    Assert-Equal $tmpAlpha $pFilterPath.Path 'typing a full path (colon and backslashes included) as the filter matches it literally'
+
+    # --- Coverage: the wheel moves the selection like w/s; Ctrl+C leaves like Escape; an uppercase C
+    # does not fire continue - Test-ClaudeHotkey's case guard, proven on THIS screen's own hotkeys too.
+    $wWheel = New-EventReader @((New-MouseEvent -Wheel -128), $enterKey)
+    $pWheelDown = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWheel -Draw {} -Wait $wWheel -GetWindowTop { 0 }
+    Assert-Equal $tmpBeta $pWheelDown.Path 'the wheel moves the selection down, like s'
+
+    $wWheel2 = New-EventReader @((New-MouseEvent -Wheel -128), (New-MouseEvent -Wheel 128), $enterKey)
+    $pWheelBack = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWheel2 -Draw {} -Wait $wWheel2 -GetWindowTop { 0 }
+    Assert-Equal $tmpAlpha $pWheelBack.Path 'down then up on the wheel comes back'
+
+    $pCtrlC = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-MixedKeyReader -Keys @($CtrlC)) -Draw {}
+    Assert-True ($null -eq $pCtrlC) 'Ctrl+C leaves like Escape'
+
+    # Built with the REAL virtual key (fix round 3, SMALL 3): New-ScriptedKeyReader's single-char
+    # entries carry ConsoleKey 0, so the virtual-key branch of Test-ClaudeHotkey never matches
+    # regardless of the case guard, and lifting that guard left this assertion green for the wrong
+    # reason. With Key = [ConsoleKey]::C, removing the IsUpper guard WOULD make the virtual-key
+    # match succeed - this is what makes the case guard itself the thing under test.
+    $upperCKey = [System.ConsoleKeyInfo]::new([char]'C', [System.ConsoleKey]::C, $false, $false, $false)
+    $pUpperC = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-MixedKeyReader -Keys @($upperCKey, 'Escape')) -Draw {}
+    Assert-True ($null -eq $pUpperC) 'an uppercase C does not fire continue - the same case guard every hotkey has'
+} finally {
+    Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmpCwd -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- picker paging ------------------------------------------------------------------------------
+# A cold listing of 40 transcripts is what the launcher pays before the picker can draw anything.
+# The picker now takes a FIRST PAGE plus a way to ask for the next one, and asks only when the
+# cursor reaches the last row - so the frame appears after one page's worth of work and the rest is
+# paid for by whoever actually scrolls that far.
+$pgPage1 = @(
+    [pscustomobject]@{ SessionId='p1a'; Path='X:\p\p1a.jsonl'; Slug='S'; Project='Paged'; Worktree=$null; Modified=(Get-Date '2026-09-01 10:00'); SizeBytes=100; PromptCount=3; Title='page one first'; LastUser='u'; LastAssistant='a' }
+    [pscustomobject]@{ SessionId='p1b'; Path='X:\p\p1b.jsonl'; Slug='S'; Project='Paged'; Worktree=$null; Modified=(Get-Date '2026-09-01 09:00'); SizeBytes=100; PromptCount=3; Title='page one second'; LastUser='u'; LastAssistant='a' }
+)
+$pgPage2 = @(
+    [pscustomobject]@{ SessionId='p2a'; Path='X:\p\p2a.jsonl'; Slug='S'; Project='Paged'; Worktree=$null; Modified=(Get-Date '2026-09-01 08:00'); SizeBytes=100; PromptCount=3; Title='page two first'; LastUser='u'; LastAssistant='a' }
+    [pscustomobject]@{ SessionId='p2b'; Path='X:\p\p2b.jsonl'; Slug='S'; Project='Paged'; Worktree=$null; Modified=(Get-Date '2026-09-01 07:00'); SizeBytes=100; PromptCount=3; Title='page two second'; LastUser='u'; LastAssistant='a' }
+)
+
+# Down to the last row of page one, Down again to grow, Enter. The fetcher records what it was
+# asked for, so "asked once, for the rows it already had" is asserted rather than assumed.
+$script:pgAsked = @()
+# No .GetNewClosure() and no leading comma: a closure's $script: writes land in the closure's own
+# scope and never reach this file, and ',$array' returns the array as ONE element, which the picker
+# would then append as a single nested row.
+$pgFetch = { param($have) $script:pgAsked += $have; $pgPage2 }
+$pgSel = Invoke-SessionPicker -Sessions $pgPage1 -FetchMore $pgFetch -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','Enter')) -Draw {}
+Assert-Equal 'p2a' $pgSel.Session.SessionId 'reaching the last row fetches the next page and the cursor lands on its first row'
+Assert-Equal '2' ($script:pgAsked -join ',') 'the fetcher is asked exactly once, for the number of rows already on the list'
+
+# An empty page means the end. The picker must stop asking - otherwise every further Down hits disk
+# for nothing - and must still open the row the cursor is on.
+$script:pgAsked = @()
+$pgEmptyFetch = { param($have) $script:pgAsked += $have; @() }
+$pgSelEnd = Invoke-SessionPicker -Sessions $pgPage1 -FetchMore $pgEmptyFetch -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','DownArrow','Enter')) -Draw {}
+Assert-Equal '2' ($script:pgAsked -join ',') 'an empty page ends the paging - the fetcher is not asked again on the next Down'
+Assert-Equal 'p1b' $pgSelEnd.Session.SessionId 'and Enter still opens the row the cursor is on'
+
+# The window moves when a session is written while the picker is open, so the next page can overlap
+# the last one. A row already on the list must not appear twice.
+$script:pgAsked = @()
+$pgOverlapFetch = { param($have) $script:pgAsked += $have; @(@($pgPage1[1]) + @($pgPage2[0])) }
+$script:pgDrawn = 0
+$pgOverlapDraw = { param($s, $i, $f, $sc, $pn) $script:pgDrawn = @($s).Count; $null }
+$pgSelOverlap = Invoke-SessionPicker -Sessions $pgPage1 -FetchMore $pgOverlapFetch -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','Enter')) -Draw $pgOverlapDraw
+Assert-Equal 3 $script:pgDrawn 'a page that overlaps the previous one adds only the row that was not already there'
+Assert-Equal 'p2a' $pgSelOverlap.Session.SessionId 'and the cursor still lands on the genuinely new row'
+
+# No fetcher at all is every existing caller: the picker behaves exactly as it always has, and Down
+# at the last row does nothing rather than throwing on a $null scriptblock.
+$pgNoFetch = Invoke-SessionPicker -Sessions $pgPage1 -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','Enter')) -Draw {}
+Assert-Equal 'p1b' $pgNoFetch.Session.SessionId 'without a fetcher the cursor stops at the last row, exactly as before'
+
+# A transcript past the prompt counter's byte budget reports "N+" instead of a number (Sessions.ps1,
+# Measure-ClaudePrompts). Select-ResumableSessions drops a session on PromptCount -gt 0, and dropping
+# the machine's biggest sessions from the picker would be the worst possible way to pay for that
+# bound - so the capped form is pinned here, where Screens.ps1 is actually loaded.
+Assert-Equal 1 (Select-ResumableSessions -Sessions @([pscustomobject]@{ SessionId='big'; PromptCount='120+' })).Count 'a capped prompt count still reads as a resumable session'
+
+# PromptCount is an INT and PromptCountCapped is the marker; the picker renders the '+' from the
+# flag. The old single string was compared with -gt, and PowerShell coerces the other operand to the
+# LEFT one's type: '0+' -gt 0 is TRUE, so a >4 MB transcript whose first 4 MB holds nothing a human
+# typed was offered as resumable (adversarial review 2026-09-16, E4a/E4b/E4c).
+Assert-Equal '3+' (Format-PromptCount -Session ([pscustomobject]@{ PromptCount = 3; PromptCountCapped = $true })) 'a capped count renders as N+'
+Assert-Equal '3' (Format-PromptCount -Session ([pscustomobject]@{ PromptCount = 3; PromptCountCapped = $false })) 'an exact count renders as a plain number'
+Assert-Equal '120+' (Format-PromptCount -Session ([pscustomobject]@{ PromptCount = '120+' })) 'a row cached by an older build, carrying the string form, still renders'
+Assert-Equal 0 (Select-ResumableSessions -Sessions @([pscustomobject]@{ SessionId = 'zerocap'; PromptCount = 0; PromptCountCapped = $true })).Count 'a capped ZERO has nothing to resume into and is dropped, exactly as an exact zero is'
+Assert-Equal 0 (Select-ResumableSessions -Sessions @([pscustomobject]@{ SessionId = 'zerocapstr'; PromptCount = '0+' })).Count 'and so is the old string form of the same row, where ''0+'' -gt 0 used to be TRUE'
+
+# --- paging: the offset, what "the end" means, and the SCOPE ---------------------------------------
+$pgRow = {
+    param([string]$Id, [string]$Slug = 'S', [string]$Project = 'Paged')
+    [pscustomobject]@{ SessionId = $Id; Path = "X:\p\$Id.jsonl"; Slug = $Slug; Project = $Project; Worktree = $null
+                       Modified = (Get-Date '2026-09-01 10:00'); SizeBytes = 100; PromptCount = 3
+                       Title = "title $Id"; LastUser = 'u'; LastAssistant = 'a'; RecentMessages = @() }
+}
+# An all-overlap page is the exact case the dedup exists for - one page's worth of appends while the
+# picker is open. Equating "added nothing" with "the end" ended the paging permanently there.
+$ovHeld = @((& $pgRow 'o1'), (& $pgRow 'o2'))
+$ovGrown = Expand-SessionPage -Sessions $ovHeld -FetchMore { param($have, $scope) @($ovHeld) } -Fetched 2
+Assert-Equal 0 $ovGrown.Added 'a page that is entirely overlap adds no row'
+Assert-Equal $false $ovGrown.Exhausted 'but an overlapping page is not the end - unseen rows can still be behind it'
+Assert-Equal $true (Expand-SessionPage -Sessions $ovHeld -FetchMore { param($have, $scope) @() } -Fetched 2).Exhausted 'an EMPTY page is the end'
+Assert-Equal 4 $ovGrown.Fetched 'the fetched offset counts what the fetcher returned, not what survived the dedup'
+$script:ovAsked = @()
+$ovFetch = { param($have, $scope) $script:ovAsked += $have; @((& $pgRow 'o2'), (& $pgRow 'o3')) }
+$ovG1 = Expand-SessionPage -Sessions $ovHeld -FetchMore $ovFetch -Fetched 2
+$ovG2 = Expand-SessionPage -Sessions $ovG1.Sessions -FetchMore $ovFetch -Fetched $ovG1.Fetched
+Assert-Equal 3 $ovG1.Sessions.Count 'an overlapping page leaves fewer rows held than were read'
+Assert-Equal '2,4' ($script:ovAsked -join ',') 'and the next page is asked for from the FETCHED offset, not from the deduped row count'
+Assert-Equal 6 $ovG2.Fetched 'the offset keeps advancing past an overlap rather than re-reading it forever'
+
+# An empty first page: one Down must land on the FIRST fetched row, not step over it.
+$script:emptyAsked = @()
+$emptyFetch = { param($have, $scope) $script:emptyAsked += $have; @((& $pgRow 'e1'), (& $pgRow 'e2')) }
+$emptySel = Invoke-SessionPicker -Sessions @() -FetchMore $emptyFetch -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Enter')) -Draw {}
+Assert-Equal '0' ($script:emptyAsked -join ',') 'an empty first page asks the fetcher from offset 0'
+Assert-Equal 'e1' $emptySel.Session.SessionId 'and the cursor lands on the first fetched row, not the second'
+
+# A filter that hides every loaded row: Down must not become a synchronous cold disk page.
+$script:filterAsked = 0
+$filterFetch = { param($have, $scope) $script:filterAsked++; @((& $pgRow 'f9')) }
+$null = Invoke-SessionPicker -Sessions $ovHeld -FetchMore $filterFetch -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'z', 'z', 'Enter', 'DownArrow', 'DownArrow', 'DownArrow', 'DownArrow', 'Escape'))
+Assert-Equal 0 $script:filterAsked 'a filter that matches nothing turns Down into no disk page at all'
+
+# THE SCOPE. The picker pages the project it is scoped to, and Tab asks for page 1 of the account.
+$mineRows = @((& $pgRow 'm1' 'MINE' 'Mine'), (& $pgRow 'm2' 'MINE' 'Mine'), (& $pgRow 'm3' 'MINE' 'Mine'))
+$otherRows = @((& $pgRow 'x1' 'OTHER' 'Other'), (& $pgRow 'x2' 'OTHER' 'Other'))
+$script:scopeAsks = @()
+$scopeFetch = {
+    param($have, $scope)
+    $script:scopeAsks += ('{0}:{1}' -f $have, (@($scope) -join '+'))
+    if (@($scope) -contains 'MINE') { @($mineRows | Select-Object -Skip $have -First 2) }
+    else { @((@($mineRows) + @($otherRows)) | Select-Object -Skip $have -First 2) }
+}
+$scopedSel = Invoke-SessionPicker -Sessions @($mineRows[0], $mineRows[1]) -FetchMore $scopeFetch -ProjectSlug @('MINE') -ProjectName 'Mine' `
+             -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal '2:MINE' ($script:scopeAsks -join ',') 'a scoped picker pages with its own slug, so the rows it fetches can actually be shown'
+Assert-Equal 'm3' $scopedSel.Session.SessionId 'and the page it fetched is reachable with one more Down'
+$script:scopeAsks = @()
+$tabSel = Invoke-SessionPicker -Sessions @($mineRows[0]) -FetchMore $scopeFetch -ProjectSlug @('MINE') -ProjectName 'Mine' `
+          -ReadKey (New-ScriptedKeyReader -Keys @('Tab', 'DownArrow', 'Enter')) -Draw {}
+Assert-Equal '0:' ($script:scopeAsks -join ',') 'Tab widens to the whole account by asking the same fetcher for page 1 with NO scope'
+Assert-Equal 'm2' $tabSel.Session.SessionId 'and the widened page is what the cursor then moves through'
+
+# One real directory, two slug folders: a picker scoped to the merged project reaches both.
+$twoSlug = @((& $pgRow 'a1' 'C--tmp-Shared' 'Shared'), (& $pgRow 'b1' 'C--tmp-Shared-alt' 'Shared'))
+$twoMap = $null
+$twoFrame = @(Get-PickerFrame -Sessions $twoSlug -Index 0 -Width 100 -Height 30 -RowMap ([ref]$twoMap))
+Assert-Equal 2 $twoMap.RowCount 'both slug folders of one directory are rows'
+$twoSel = Invoke-SessionPicker -Sessions $twoSlug -ProjectSlug @('C--tmp-Shared', 'C--tmp-Shared-alt') -ProjectName 'Shared' `
+          -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Enter')) -Draw {}
+Assert-Equal 'b1' $twoSel.Session.SessionId 'a picker scoped to a merged project reaches the sibling slug''s sessions too'
+
+# --- END TO END: the launcher's own wiring against a real projects tree ------------------------------
+# Not a source regex. The guarantee "the picker opens on the project the owner just chose" was pinned
+# only as a pattern over the launcher's first-page LINE, and a [string] parameter three files away
+# emptied the snapshot with nothing going red: -Files came back unbound and Get-ClaudeSessions fell
+# through to the whole unscoped account (re-review 2026-09-16, C1). This drives the real functions.
+$e2eRoot = Join-Path $env:TEMP ('claude-auto-e2e-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$e2eBase = Get-Date '2026-09-01 12:00:00'
+$e2eWrite = {
+    param([string]$Slug, [string]$Name, [int]$Minute, [string]$Cwd)
+    $d = Join-Path $e2eRoot $Slug
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+    $p = Join-Path $d $Name
+    [IO.File]::WriteAllText($p, '{"type":"user","cwd":' + (ConvertTo-Json $Cwd) + ',"message":{"role":"user","content":"prompt ' + $Name + '"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    (Get-Item -LiteralPath $p).LastWriteTime = $e2eBase.AddMinutes($Minute)
+}
+# One real directory under TWO slug folders, 4 sessions between them; 12 NEWER foreign sessions, so
+# an unscoped page of ten holds none of the chosen project's; and one slug folder with nothing in it.
+foreach ($n in 1..2) { & $e2eWrite 'C--src-mine' "a$n.jsonl" $n 'C:\src\mine' }
+foreach ($n in 1..2) { & $e2eWrite 'C--src-mine-alt' "b$n.jsonl" ($n + 2) 'C:/src/mine' }
+foreach ($n in 1..12) { & $e2eWrite 'C--src-busy' "z$n.jsonl" (100 + $n) 'C:\src\busy' }
+New-Item -ItemType Directory -Force -Path (Join-Path $e2eRoot 'C--src-empty') | Out-Null
+
+$e2eCache = Join-Path $e2eRoot 'sessions.json'
+$e2ePageSize = 10
+$e2eSnapshots = @{}
+# The launcher's fetcher, in the shape claude-auto.ps1 builds it.
+$e2eFetch = {
+    param($have, [string[]]$ProjectSlug)
+    $k = (@($ProjectSlug | Where-Object { $_ }) -join '|')
+    if (-not $e2eSnapshots.ContainsKey($k)) {
+        $e2eSnapshots[$k] = [string[]](Get-ClaudeSessionFile -ProjectsRoot $e2eRoot -ProjectSlug $ProjectSlug)
+    }
+    $snapshot = [string[]]$e2eSnapshots[$k]
+    @(Get-ClaudeSessions -ProjectsRoot $e2eRoot -CachePath $e2eCache -Limit $e2ePageSize -Skip $have -Files $snapshot)
+}.GetNewClosure()
+
+$e2eMine = @('C--src-mine', 'C--src-mine-alt')
+$e2ePage1 = @(& $e2eFetch 0 $e2eMine)
+Assert-Equal 4 $e2ePage1.Count 'the first page of a MERGED two-slug project is that project''s sessions'
+Assert-Equal 4 @($e2ePage1 | Where-Object { $_.Slug -in $e2eMine }).Count 'and every row on it is in scope, although 12 newer foreign sessions exist'
+Assert-Equal 2 @($e2ePage1 | Where-Object { $_.Slug -eq 'C--src-mine-alt' }).Count 'including the sibling slug''s sessions, which a single-slug scope would have missed'
+$script:e2eDrawn = -1
+$e2eDraw = { param($s, $i, $f, $sc, $pn) if ($script:e2eDrawn -lt 0) { $script:e2eDrawn = @($s).Count }; $null }
+$null = Invoke-SessionPicker -Sessions $e2ePage1 -FetchMore $e2eFetch -ProjectSlug $e2eMine -ProjectName 'mine' `
+        -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw $e2eDraw
+Assert-Equal 4 $script:e2eDrawn 'and the picker''s FIRST FRAME is handed those four rows, not an empty list'
+Assert-Equal 0 @(& $e2eFetch 4 $e2eMine).Count 'paging past the end of a scope returns nothing rather than leaking the account'
+# A scope that really holds no transcripts: an empty picker, never the whole account.
+Assert-Equal 0 @(& $e2eFetch 0 @('C--src-empty')).Count 'a slug with no sessions yields an EMPTY page, not the unscoped listing'
+# Tab widens: no scope at all, and the account's newest ten come back.
+$e2eAll = @(& $e2eFetch 0 @())
+Assert-Equal 10 $e2eAll.Count 'Tab widens to the account and gets a full page'
+Assert-Equal 10 @($e2eAll | Where-Object { $_.Slug -eq 'C--src-busy' }).Count 'of the newest sessions, whatever project they belong to'
+Remove-Item -LiteralPath $e2eRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# Paging is disabled only when the filter can see NOTHING - not merely when it hides something.
+$w1Rows = @((& $pgRow 'w1a'), (& $pgRow 'w1b'))
+$w1Rows[0].Title = 'alpha one'
+$w1Rows[1].Title = 'beta two'
+$script:w1Asked = 0
+$w1Fetch = { param($have, $scope) $script:w1Asked++; @((& $pgRow "w1n$have")) }
+$null = Invoke-SessionPicker -Sessions $w1Rows -FetchMore $w1Fetch -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('/', 'a', 'l', 'p', 'h', 'a', 'Enter', 'DownArrow', 'DownArrow', 'Escape'))
+Assert-True ($script:w1Asked -gt 0) 'a filter that hides one of two loaded rows still pages - a session matching it one page deeper must be reachable'
+
+# A fetcher that fails because the WORLD changed ends the paging; one that fails because it is
+# MISWIRED must not be swallowed. Get-ClaudeSessions throws an ArgumentException for -ProjectSlug
+# beside -Files, and a catch-all here would turn that into "this scope has no more rows" - the same
+# silence a scoped picker opening on the whole account hid behind (re-review 2, N2).
+$n2Row = & $pgRow 'n2a'
+$n2Arg = $false
+try { $null = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) throw [ArgumentException]::new('-ProjectSlug cannot be combined with -Files') } -Fetched 1 }
+catch [System.ArgumentException] { $n2Arg = $true }
+catch { }
+Assert-True $n2Arg 'a MISWIRED fetcher (ArgumentException) propagates instead of reading as the end of the list'
+# A binding failure, raised without touching the filesystem: handing a [int] parameter a word.
+# NOT `Get-ClaudeSessions -NoSuchParameter` - that function has no [CmdletBinding()], so an unknown
+# parameter lands in $args and the call RUNS, against the real projects root and its shared cache.
+$n2Bind = $false
+try { $null = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) & { param([int]$X) $X } -X 'not-an-int' } -Fetched 1 }
+catch { $n2Bind = ($_.Exception -is [System.Management.Automation.ParameterBindingException]) }
+Assert-True $n2Bind 'and so does a parameter-binding failure'
+$n2Io = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) throw [IO.IOException]::new('the projects root vanished') } -Fetched 1
+Assert-Equal 0 $n2Io.Added 'an IO failure still ends the paging quietly'
+Assert-Equal $true $n2Io.Exhausted 'and marks the list exhausted rather than taking the picker down'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 731) { Write-Host "COULD NOT RUN: expected 731 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 957) { Write-Host "COULD NOT RUN: expected 957 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
