@@ -50,7 +50,30 @@ $script:Runs = [ordered]@{
     # the actual regression guard, not merely "picker cancelled" (which reads identically whichever
     # way the scoping went).
     'switch-and-resume' = 'RightArrow,Enter,r,Escape'
+    # A project the account has NO sessions for must open an EMPTY picker, never the account's
+    # list. Reached through the 'current directory' row: Get-ProjectRegistry drops a slug
+    # directory with no *.jsonl outright ("No transcript, no path and no activity"), so a
+    # transcript-less project is never a row to select at all. Two fixture rows, then 's,s', lands
+    # on 'current directory', whose cwd is a fixture repo with no slug directory anywhere - over an
+    # account that HAS two sessions. Correct output is "0 sessions"; the failure it guards is that
+    # frame reading "2 sessions".
+    #
+    # What it does NOT cover, measured rather than assumed (review W2): a path outside the registry
+    # has no slugs, so claude-auto.ps1 hands the fetcher an EMPTY slug list and the fetch is
+    # unscoped - the filtering that empties this frame is the picker's own -ProjectName scope. The
+    # fetcher's two [string[]] casts are therefore not on this path: dropping both, dropping
+    # -Files entirely, and dropping the @() around the first page each leave this run GREEN
+    # (Get-ClaudeSessions keys on $PSBoundParameters.ContainsKey('Files'), presence not emptiness,
+    # and the snapshot reaches it through a VARIABLE, which cannot unroll). Those casts are pinned
+    # in source by Test-Maintenance instead, which is the only guard that can fail for them.
+    'unknown-project'   = 'RightArrow,Enter,s,s,r,Escape'
 }
+
+# Per-run working directory. Only the unknown-project run needs one (it is selected BY the cwd), and it
+# has to be a path with a fixed leaf - the picker frame prints that leaf as the project name, so
+# running from wherever the check happened to be invoked would put a machine-dependent word in the
+# reference. Filled in by Initialize-ProjectSlugFixture, which owns the tree it points into.
+$script:RunCwd = @{}
 
 # Fix round 1 (SURVIVING MUTANT, closed the reviewer's way): the project screen used to read the
 # REAL ~/.claude/projects registry with no fixture override at all, so this check could only ever
@@ -79,6 +102,15 @@ function Initialize-ProjectSlugFixture {
         if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
         New-Item -ItemType Directory -Force -Path $p | Out-Null
     }
+    # The DERIVED caches too (claude-auto-projects.json, claude-auto-sessions.json - both land beside
+    # the projects root, Get-ProjectRegistry and Get-SessionsCachePath). Wiping only the tree left
+    # them to accumulate across invocations and, worse, to carry state from the direct shape into the
+    # forwarder shape: two sequential runs over ONE fixture, the second always warm. They hold
+    # derived data only, so this is not a correctness fix - it is what keeps a difference between
+    # the shapes attributable to the shapes (review suspicion).
+    foreach ($c in @(Get-ChildItem -LiteralPath $Root -Filter 'claude-auto-*.json' -File -Force -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $c.FullName -Force -ErrorAction SilentlyContinue
+    }
     $repoA = Join-Path $reposRoot 'repo-a\Shared'
     $repoB = Join-Path $reposRoot 'repo-b\Shared'
     New-Item -ItemType Directory -Force -Path $repoA | Out-Null
@@ -103,6 +135,14 @@ function Initialize-ProjectSlugFixture {
     # pinned, not left to whatever order the filesystem happens to enumerate.
     (Get-Item -LiteralPath (Join-Path $slugADir 'fixture-a.jsonl')).LastWriteTime = (Get-Date)
     (Get-Item -LiteralPath (Join-Path $slugBDir 'fixture-b.jsonl')).LastWriteTime = (Get-Date).AddMinutes(-5)
+
+    # A third repo with NO slug directory anywhere under the projects root: the empty-scope run is
+    # driven from inside it, so the picker opens on a project this account has never held a session
+    # for. Named 'Empty' because the picker frame prints the leaf as the project name and the
+    # reference has to be the same word on every machine.
+    $repoEmpty = Join-Path $reposRoot 'repo-c\Empty'
+    New-Item -ItemType Directory -Force -Path $repoEmpty | Out-Null
+    $script:RunCwd['unknown-project'] = $repoEmpty
 
     return $projectsRoot
 }
@@ -168,17 +208,21 @@ function New-ForwarderShim {
 }
 
 function Invoke-PreviewRun {
-    param([Parameter(Mandatory)][string]$Keys, [Parameter(Mandatory)][string]$LauncherPath)
+    param([Parameter(Mandatory)][string]$Keys, [Parameter(Mandatory)][string]$LauncherPath, [string]$WorkingDirectory)
     $savedConfig = $env:CLAUDE_AUTO_CONFIG
     $savedProjectsRoot = $env:CLAUDE_AUTO_PROJECTS_ROOT
+    $pushed = $false
     try {
         $env:CLAUDE_AUTO_CONFIG = $FixtureConfig
         $env:CLAUDE_AUTO_PROJECTS_ROOT = $script:ProjectsFixtureRoot
+        # The child inherits this, and the project screen's 'current directory' row is built from it.
+        if ($WorkingDirectory) { Push-Location -LiteralPath $WorkingDirectory; $pushed = $true }
         $out = & pwsh -NoProfile -File $Preview -Keys $Keys -Launcher $LauncherPath -Full 2>&1
         $code = $LASTEXITCODE
         $filtered = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match $script:WantedPattern })
         return @($filtered) + @("preview.ps1 exit: $code")
     } finally {
+        if ($pushed) { Pop-Location }
         if ($null -eq $savedConfig) { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
         else { $env:CLAUDE_AUTO_CONFIG = $savedConfig }
         if ($null -eq $savedProjectsRoot) { Remove-Item Env:CLAUDE_AUTO_PROJECTS_ROOT -ErrorAction SilentlyContinue }
@@ -191,7 +235,7 @@ function Get-AllRunOutput {
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($name in $script:Runs.Keys) {
         $lines.Add("=== $name ===")
-        foreach ($l in (Invoke-PreviewRun -Keys $script:Runs[$name] -LauncherPath $LauncherPath)) { $lines.Add($l) }
+        foreach ($l in (Invoke-PreviewRun -Keys $script:Runs[$name] -LauncherPath $LauncherPath -WorkingDirectory $script:RunCwd[$name])) { $lines.Add($l) }
     }
     return , @($lines)
 }
@@ -260,14 +304,18 @@ if ($refLines.Count -eq 0) {
 
 $shim = $null
 try {
-    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
     $shim = New-ForwarderShim -LauncherPath $Launcher -Forwarder $Forwarder
-    # Both shapes, same keys, same fixture, same reference. Direct first so a defect common to both
-    # reads as an ordinary regression rather than as a forwarder problem.
+    # Both shapes, same keys, same reference - and a fixture rebuilt BEFORE EACH of them. Sharing one
+    # tree across the two sequential passes left the second always warm and any mutation by the first
+    # invisible, so a difference between the shapes would not have been attributable to the shapes
+    # (review suspicion). Rebuilding is idempotent and costs one directory wipe.
     # No @() around these calls: Get-AllRunOutput already returns `, @($lines)` and the pipeline
     # unrolls that one wrapper - adding another would hand the comparer a single nested object.
     $byShape = [ordered]@{}
+    # Direct first so a defect common to both reads as an ordinary regression, not a forwarder problem.
+    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
     $byShape['direct'] = Get-AllRunOutput -LauncherPath $Launcher
+    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
     $byShape['forwarder'] = Get-AllRunOutput -LauncherPath $shim
 } catch {
     Write-Host "CANNOT CHECK: $($_.Exception.Message)" -ForegroundColor Red

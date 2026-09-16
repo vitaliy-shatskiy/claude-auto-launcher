@@ -519,7 +519,12 @@ Assert-True ($fetchEnd -gt $fetchStart) 'and closes it over the launcher''s curr
 $fetchBlock = $launcherSrc.Substring($fetchStart, [Math]::Max(0, $fetchEnd - $fetchStart))
 Assert-True ($fetchBlock -match 'ProjectSlug') 'the fetcher carries the picker''s project scope'
 Assert-True ($fetchBlock -match '-Files ') 'and pages a snapshot rather than a re-sorted listing'
-Assert-True ($fetchBlock -match '\[string\[\]\]') 'holding that snapshot in a [string[]] variable, so an EMPTY scope cannot unroll to $null and unbind -Files'
+# Anchored to the two ASSIGNMENTS, not to `[string[]]` anywhere in the block: the block's own
+# `param($have, [string[]]$ProjectSlug)` already supplies that text, so the old pin matched with BOTH
+# casts deleted and could never fail (review W2). The empty-scope path is driven for real by
+# check-preview's 'empty-scope' run beside this.
+Assert-True ($fetchBlock -match '\[string\[\]\]\(&\s*\$getSessionFile') 'the snapshot is cast [string[]] as it is TAKEN, so an empty scope stays an empty array instead of unrolling to $null'
+Assert-True ($fetchBlock -match '\$snapshot = \[string\[\]\]') 'and cast again where it is handed to -Files, so an empty snapshot cannot leave -Files unbound and fall back to the whole account'
 # .GetNewClosure() binds the block to its own dynamic module, whose COMMAND lookup falls back to the
 # GLOBAL session state and never to the scope that built it. Naming a launcher helper inside the
 # block therefore works under `pwsh -File claude-auto.ps1` (there the launcher body IS global) and
@@ -606,7 +611,7 @@ $guardOf = {
 Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
 Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
 
-if ($script:Ran -ne 122) { Write-Host "COULD NOT RUN: expected 122 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 123) { Write-Host "COULD NOT RUN: expected 123 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
