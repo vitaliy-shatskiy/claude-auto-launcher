@@ -394,6 +394,9 @@ function Get-PhysicalDirectoryPath {
     # and quietly got its own cache file (adversarial review 2026-09-16, B2). The parent chain is
     # resolved first and the leaf re-attached to whatever it resolved to.
     param([Parameter(Mandatory)][string]$Path, [int]$Depth = 0)
+    # Memoised at the public entry only. A launcher run asks about the same two or three roots over
+    # and over, and each ask walks the whole component chain; the answer cannot change inside one
+    # short-lived process without somebody re-pointing a junction under it.
     $p = $Path
     try {
         # $true = resolve the FINAL target: a chain of links must land on the real directory, not on
@@ -547,11 +550,19 @@ function Get-ClaudeSessionFile {
     # (adversarial review 2026-09-16, C4). Metadata only: no transcript is opened here.
     param(
         [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
-        [string]$ProjectSlug = ''
+        # A LIST, because one real directory can own several slug folders and the picker is scoped to
+        # all of them. Declared [string] this took the array joined with a SPACE, matched no
+        # directory, and handed the launcher an empty snapshot - which then unbound -Files and put
+        # Get-ClaudeSessions back on the full unscoped listing (re-review 2026-09-16, C1).
+        [string[]]$ProjectSlug = @()
     )
     if (-not (Test-Path -LiteralPath $ProjectsRoot)) { return @() }
     $dirs = Get-ChildItem -LiteralPath $ProjectsRoot -Directory -Force -ErrorAction SilentlyContinue
-    if ($ProjectSlug) { $dirs = @($dirs | Where-Object { $_.Name -eq $ProjectSlug }) }
+    $slugs = @($ProjectSlug | Where-Object { $_ })
+    if ($slugs.Count -gt 0) { $dirs = @($dirs | Where-Object { $_.Name -in $slugs }) }
+    # A plain array: a caller that has to keep an EMPTY snapshot distinguishable from "no snapshot"
+    # stores it in a [string[]] variable and passes THAT (claude-auto.ps1), rather than letting an
+    # empty result unroll to $null through an argument expression.
     return @($dirs |
         ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue } |
         Sort-Object LastWriteTime -Descending |
@@ -587,6 +598,11 @@ function Get-ClaudeSessions {
     # -LiteralPath, matching the sibling reader Get-ProjectRegistry: the wildcard PATH set reads a
     # root spelled 'C:\Users\J\Projects\[old]\projects' as a PATTERN and matches nothing, so the
     # project screen lists the project and pressing `r` on it shows an empty picker.
+    # A snapshot ALREADY carries its scope, so a slug beside it is either redundant or a
+    # contradiction, and silently ignoring it is how a scoped call quietly became an unscoped one.
+    if ($PSBoundParameters.ContainsKey('Files') -and @($ProjectSlug | Where-Object { $_ }).Count -gt 0) {
+        throw 'Get-ClaudeSessions: -ProjectSlug cannot be combined with -Files - the snapshot already carries the scope.'
+    }
     if (-not (Test-Path -LiteralPath $ProjectsRoot)) { return @() }
     # Clamped here rather than left to Select-Object, whose range error is TERMINATING and would
     # escape a picker loop as a raw binding failure.
@@ -601,7 +617,9 @@ function Get-ClaudeSessions {
     # Test-ClaudeSessionFile's two Resolve-Path calls per file cost 1.19 s of the 1.62 s spent
     # just getting to the shortlist. Test-ClaudeSessionFile stays: it is the written form of the
     # same rule and the suites pin it.
-    $all = if ($null -ne $Files) {
+    # PRESENCE, not emptiness: -Files @() means "this scope holds no transcripts" and must yield an
+    # empty page, where falling through to the enumeration would answer with the whole account.
+    $all = if ($PSBoundParameters.ContainsKey('Files')) {
         # The caller's snapshot, in the caller's order - deliberately NOT re-sorted. A transcript
         # deleted since the snapshot was taken is dropped here rather than throwing.
         @($Files | ForEach-Object { try { Get-Item -LiteralPath $_ -Force -ErrorAction Stop } catch { } })
@@ -689,7 +707,7 @@ function Get-ClaudeSessions {
     # the whole shared file with ten rows and made every other page, of every other account, cold
     # again on the next launch, forever (adversarial review 2026-09-16, C3/C3b: 25 cache keys before
     # the launcher's call, 10 after).
-    $isSurvey = (-not $ProjectSlug) -and ($null -eq $Files) -and ($Skip -le 0) -and ($window.Count -eq $all.Count)
+    $isSurvey = (-not $ProjectSlug) -and (-not $PSBoundParameters.ContainsKey('Files')) -and ($Skip -le 0) -and ($window.Count -eq $all.Count)
     if ($isSurvey) {
         Write-SessionsCache -Path $CachePath -Entries $fresh
     } else {

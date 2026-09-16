@@ -507,11 +507,19 @@ Remove-Item -Recurse -Force $tmp
 # The decision loop in claude-auto.ps1 has no console and cannot be driven by a suite; these are the
 # two lines whose being wrong opened a scoped picker on an unscoped page (adversarial review
 # 2026-09-16, G1/F6). A positive control sits beside each: the anchor text must exist at all.
+# The whole fetcher BLOCK, not one line of it: pinned on a single line, the assertion only ever
+# caught an edit to THAT line, which is how a [string] parameter three files away could empty the
+# snapshot with nothing going red (re-review 2026-09-16, C1). The behavioural proof is in Test-Ui;
+# this stays as the cheap structural guard beside it.
 $launcherSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
-$fetchLine = @($launcherSrc -split "`n" | Where-Object { $_ -match '\$fetchNextPage\s*=' })
-Assert-Equal 1 $fetchLine.Count 'claude-auto.ps1 builds its page fetcher on exactly one line'
-Assert-True ([bool]($fetchLine -match 'ProjectSlug')) 'and that fetcher carries the picker''s project scope'
-Assert-True ([bool]($fetchLine -match '-Files ')) 'and pages a snapshot rather than a re-sorted listing'
+$fetchStart = $launcherSrc.IndexOf('$fetchNextPage = {')
+Assert-True ($fetchStart -ge 0) 'claude-auto.ps1 builds a page fetcher'
+$fetchEnd = $launcherSrc.IndexOf('.GetNewClosure()', $fetchStart)
+Assert-True ($fetchEnd -gt $fetchStart) 'and closes it over the launcher''s current state'
+$fetchBlock = $launcherSrc.Substring($fetchStart, [Math]::Max(0, $fetchEnd - $fetchStart))
+Assert-True ($fetchBlock -match 'ProjectSlug') 'the fetcher carries the picker''s project scope'
+Assert-True ($fetchBlock -match '-Files ') 'and pages a snapshot rather than a re-sorted listing'
+Assert-True ($fetchBlock -match '\[string\[\]\]') 'holding that snapshot in a [string[]] variable, so an EMPTY scope cannot unroll to $null and unbind -Files'
 Assert-True ($launcherSrc -match '-Sessions @\(&\s*\$fetchNextPage 0 \$pickerSlugs\)') 'the picker''s FIRST page comes from the same scoped fetcher, so it cannot open empty on the chosen project'
 
 # --- the gate must really run what its rows claim ---------------------------------------------------
@@ -560,7 +568,7 @@ $guardOf = {
 Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
 Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
 
-if ($script:Ran -ne 112) { Write-Host "COULD NOT RUN: expected 112 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 114) { Write-Host "COULD NOT RUN: expected 114 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -324,12 +324,19 @@ if ($UseUi) {
             # paid for by whoever actually scrolls that far.
             $sessionPageSize = 10
             $sessionSnapshots = @{}
-            $sessionSnapshot = { param([string[]]$ProjectSlug)
-                $k = (@($ProjectSlug) -join '|')
-                if (-not $sessionSnapshots.ContainsKey($k)) { $sessionSnapshots[$k] = @(Get-ClaudeSessionFile -ProjectsRoot $sessionsRoot -ProjectSlug $ProjectSlug) }
-                return $sessionSnapshots[$k]
+            # The snapshot is stored in a [string[]] VARIABLE and handed to -Files as that variable,
+            # never as an argument expression: a function returning an empty array unrolls to $null
+            # on the pipeline, -Files would come back unbound, and Get-ClaudeSessions would silently
+            # fall back to the whole unscoped account - which is exactly how a two-slug project
+            # opened its picker on ten foreign rows (re-review 2026-09-16, C1).
+            $fetchNextPage = { param($have, [string[]]$ProjectSlug)
+                $k = (@($ProjectSlug | Where-Object { $_ }) -join '|')
+                if (-not $sessionSnapshots.ContainsKey($k)) {
+                    $sessionSnapshots[$k] = [string[]](Get-ClaudeSessionFile -ProjectsRoot $sessionsRoot -ProjectSlug $ProjectSlug)
+                }
+                $snapshot = [string[]]$sessionSnapshots[$k]
+                @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize -Skip $have -Files $snapshot)
             }.GetNewClosure()
-            $fetchNextPage = { param($have, $slug) @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize -Skip $have -Files (& $sessionSnapshot -ProjectSlug $slug)) }.GetNewClosure()
             $pickerSlugs = @($state.ProjectSlugs | Where-Object { $_ })
             if ($pickerSlugs.Count -eq 0 -and $state.ProjectSlug) { $pickerSlugs = @("$($state.ProjectSlug)") }
             $picked = Invoke-SessionPicker -Sessions @(& $fetchNextPage 0 $pickerSlugs) `

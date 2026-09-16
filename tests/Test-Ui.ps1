@@ -2651,8 +2651,63 @@ $twoSel = Invoke-SessionPicker -Sessions $twoSlug -ProjectSlug @('C--tmp-Shared'
           -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', 'Enter')) -Draw {}
 Assert-Equal 'b1' $twoSel.Session.SessionId 'a picker scoped to a merged project reaches the sibling slug''s sessions too'
 
+# --- END TO END: the launcher's own wiring against a real projects tree ------------------------------
+# Not a source regex. The guarantee "the picker opens on the project the owner just chose" was pinned
+# only as a pattern over the launcher's first-page LINE, and a [string] parameter three files away
+# emptied the snapshot with nothing going red: -Files came back unbound and Get-ClaudeSessions fell
+# through to the whole unscoped account (re-review 2026-09-16, C1). This drives the real functions.
+$e2eRoot = Join-Path $env:TEMP ('claude-auto-e2e-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$e2eBase = Get-Date '2026-09-01 12:00:00'
+$e2eWrite = {
+    param([string]$Slug, [string]$Name, [int]$Minute, [string]$Cwd)
+    $d = Join-Path $e2eRoot $Slug
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+    $p = Join-Path $d $Name
+    [IO.File]::WriteAllText($p, '{"type":"user","cwd":' + (ConvertTo-Json $Cwd) + ',"message":{"role":"user","content":"prompt ' + $Name + '"}}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    (Get-Item -LiteralPath $p).LastWriteTime = $e2eBase.AddMinutes($Minute)
+}
+# One real directory under TWO slug folders, 4 sessions between them; 12 NEWER foreign sessions, so
+# an unscoped page of ten holds none of the chosen project's; and one slug folder with nothing in it.
+foreach ($n in 1..2) { & $e2eWrite 'C--src-mine' "a$n.jsonl" $n 'C:\src\mine' }
+foreach ($n in 1..2) { & $e2eWrite 'C--src-mine-alt' "b$n.jsonl" ($n + 2) 'C:/src/mine' }
+foreach ($n in 1..12) { & $e2eWrite 'C--src-busy' "z$n.jsonl" (100 + $n) 'C:\src\busy' }
+New-Item -ItemType Directory -Force -Path (Join-Path $e2eRoot 'C--src-empty') | Out-Null
+
+$e2eCache = Join-Path $e2eRoot 'sessions.json'
+$e2ePageSize = 10
+$e2eSnapshots = @{}
+# The launcher's fetcher, in the shape claude-auto.ps1 builds it.
+$e2eFetch = {
+    param($have, [string[]]$ProjectSlug)
+    $k = (@($ProjectSlug | Where-Object { $_ }) -join '|')
+    if (-not $e2eSnapshots.ContainsKey($k)) {
+        $e2eSnapshots[$k] = [string[]](Get-ClaudeSessionFile -ProjectsRoot $e2eRoot -ProjectSlug $ProjectSlug)
+    }
+    $snapshot = [string[]]$e2eSnapshots[$k]
+    @(Get-ClaudeSessions -ProjectsRoot $e2eRoot -CachePath $e2eCache -Limit $e2ePageSize -Skip $have -Files $snapshot)
+}.GetNewClosure()
+
+$e2eMine = @('C--src-mine', 'C--src-mine-alt')
+$e2ePage1 = @(& $e2eFetch 0 $e2eMine)
+Assert-Equal 4 $e2ePage1.Count 'the first page of a MERGED two-slug project is that project''s sessions'
+Assert-Equal 4 @($e2ePage1 | Where-Object { $_.Slug -in $e2eMine }).Count 'and every row on it is in scope, although 12 newer foreign sessions exist'
+Assert-Equal 2 @($e2ePage1 | Where-Object { $_.Slug -eq 'C--src-mine-alt' }).Count 'including the sibling slug''s sessions, which a single-slug scope would have missed'
+$script:e2eDrawn = -1
+$e2eDraw = { param($s, $i, $f, $sc, $pn) if ($script:e2eDrawn -lt 0) { $script:e2eDrawn = @($s).Count }; $null }
+$null = Invoke-SessionPicker -Sessions $e2ePage1 -FetchMore $e2eFetch -ProjectSlug $e2eMine -ProjectName 'mine' `
+        -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw $e2eDraw
+Assert-Equal 4 $script:e2eDrawn 'and the picker''s FIRST FRAME is handed those four rows, not an empty list'
+Assert-Equal 0 @(& $e2eFetch 4 $e2eMine).Count 'paging past the end of a scope returns nothing rather than leaking the account'
+# A scope that really holds no transcripts: an empty picker, never the whole account.
+Assert-Equal 0 @(& $e2eFetch 0 @('C--src-empty')).Count 'a slug with no sessions yields an EMPTY page, not the unscoped listing'
+# Tab widens: no scope at all, and the account's newest ten come back.
+$e2eAll = @(& $e2eFetch 0 @())
+Assert-Equal 10 $e2eAll.Count 'Tab widens to the account and gets a full page'
+Assert-Equal 10 @($e2eAll | Where-Object { $_.Slug -eq 'C--src-busy' }).Count 'of the newest sessions, whatever project they belong to'
+Remove-Item -LiteralPath $e2eRoot -Recurse -Force -ErrorAction SilentlyContinue
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 944) { Write-Host "COULD NOT RUN: expected 944 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 952) { Write-Host "COULD NOT RUN: expected 952 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
