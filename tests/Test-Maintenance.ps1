@@ -514,12 +514,62 @@ Remove-Item -Recurse -Force $tmp
 $launcherSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
 $fetchStart = $launcherSrc.IndexOf('$fetchNextPage = {')
 Assert-True ($fetchStart -ge 0) 'claude-auto.ps1 builds a page fetcher'
-$fetchEnd = $launcherSrc.IndexOf('.GetNewClosure()', $fetchStart)
-Assert-True ($fetchEnd -gt $fetchStart) 'and closes it over the launcher''s current state'
+# Anchored on the statement AFTER the block, not on '.GetNewClosure()': that call was the forwarder
+# defect and is gone, so the old end anchor would never be found and every assertion below it would
+# run over an empty string - vacuously green (review W3). This anchor has the same positive control:
+# the text must exist at all, or $fetchEnd stays -1 and the assert fails.
+$fetchEnd = $launcherSrc.IndexOf('$pickerSlugs =', $fetchStart)
+Assert-True ($fetchEnd -gt $fetchStart) 'and the block is bounded by the statement that consumes it'
 $fetchBlock = $launcherSrc.Substring($fetchStart, [Math]::Max(0, $fetchEnd - $fetchStart))
 Assert-True ($fetchBlock -match 'ProjectSlug') 'the fetcher carries the picker''s project scope'
 Assert-True ($fetchBlock -match '-Files ') 'and pages a snapshot rather than a re-sorted listing'
-Assert-True ($fetchBlock -match '\[string\[\]\]') 'holding that snapshot in a [string[]] variable, so an EMPTY scope cannot unroll to $null and unbind -Files'
+# Anchored to the two ASSIGNMENTS, not to `[string[]]` anywhere in the block: the block's own
+# `param($have, [string[]]$ProjectSlug)` already supplies that text, so the old pin matched with BOTH
+# casts deleted and could never fail (review W2). The empty-scope path is driven for real by
+# check-preview's 'empty-scope' run beside this.
+Assert-True ($fetchBlock -match '\[string\[\]\]\(&\s*\$getSessionFile') 'the snapshot is cast [string[]] as it is TAKEN, so an empty scope stays an empty array instead of unrolling to $null'
+Assert-True ($fetchBlock -match '\$snapshot = \[string\[\]\]') 'and cast again where it is handed to -Files, so an empty snapshot cannot leave -Files unbound and fall back to the whole account'
+# A scriptblock that carries its own module - .GetNewClosure() - resolves COMMANDS against the GLOBAL
+# session state and never against the scope that built it. Naming a launcher helper inside the block
+# therefore worked under `pwsh -File claude-auto.ps1` (there the launcher body IS global) and threw
+# "not recognized" through ~\bin\claude-auto.ps1's `& $target @args` - the entry every real launch
+# uses. The closure is gone and both helpers are resolved into variables outside the block, so the
+# block names no command at all and cannot regain that dependency.
+# tests\check-preview.ps1 drives both shapes behaviourally; this is the cheap structural guard beside
+# it, for the machines where that check has no reference and reports DID NOT RUN.
+Assert-True ($launcherSrc -match '\$getSessionFile = Get-Command -Name Get-ClaudeSessionFile -CommandType Function') 'the launcher resolves Get-ClaudeSessionFile outside the block, as a Function'
+Assert-True ($launcherSrc -match '\$getSessions = Get-Command -Name Get-ClaudeSessions -CommandType Function') 'and Get-ClaudeSessions too - an alias or a stray .exe cannot win either resolution'
+Assert-True ($fetchBlock -match '&\s*\$getSessionFile ') 'and the fetcher calls the resolved command object rather than looking a name up at invocation time'
+Assert-True ($fetchBlock -match '&\s*\$getSessions ') 'both of them'
+Assert-True ($fetchBlock -notmatch 'Get-Claude') 'no launcher helper is named inside the block at all - the whole class of forwarder-only failures, not just the two commands that caused it'
+Assert-True ($launcherSrc -notmatch '\$fetchNextPage[\s\S]{0,800}?GetNewClosure') 'and the block is NOT a closure, so nothing inside it resolves against global session state'
+
+# --- check-preview's forwarder shim really is a FORWARDER ------------------------------------------
+# The second invocation shape is only worth running if the shim still runs `& $target @args`. Changed
+# to `pwsh -File $target @args` it drives the -File shape twice and the summary still says "2
+# invocation shape(s)" - green against the very defect it exists for (review W1). The real generator
+# is lifted out of check-preview.ps1 and RUN here (same technique as checkpoint's $extraArgs above),
+# so this asserts the text that check actually writes, not a copy of it that could drift.
+$cpvSrc = Get-Content -LiteralPath "$PSScriptRoot\check-preview.ps1" -Raw
+Assert-True ($cpvSrc -match '(?ms)^function New-ForwarderShim \{.*?^\}') 'check-preview.ps1 builds its forwarder shim in a function'
+. ([scriptblock]::Create($Matches[0]))
+$shimTmp = Join-Path $env:TEMP ('claude-auto-shimtest-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $shimTmp | Out-Null
+# A FIXTURE forwarder, never the machine's own ~\bin copy: this must assert the same thing on a
+# clone that has no launcher installed at all.
+$fwdGood = Join-Path $shimTmp 'forwarder-good.ps1'
+$fwdBad = Join-Path $shimTmp 'forwarder-bad.ps1'
+[IO.File]::WriteAllText($fwdGood, "`$target = 'x'`r`n& `$target @args`r`nexit `$LASTEXITCODE`r`n", (New-Object System.Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText($fwdBad, "`$target = 'x'`r`npwsh -NoProfile -File `$target @args`r`nexit `$LASTEXITCODE`r`n", (New-Object System.Text.UTF8Encoding($false)))
+$shimMade = New-ForwarderShim -LauncherPath "$PSScriptRoot\..\claude-auto.ps1" -Forwarder $fwdGood
+$shimText = Get-Content -LiteralPath $shimMade -Raw
+Assert-True ($shimText -match '(?m)^&\s*\$target\s+@args\s*$') 'the shim it writes invokes the launcher as & $target @args - the forwarder shape'
+Assert-True ($shimText -notmatch '-File') 'and never as pwsh -File, which would run the -File shape twice and report it as two'
+$threw = $false
+try { $null = New-ForwarderShim -LauncherPath "$PSScriptRoot\..\claude-auto.ps1" -Forwarder $fwdBad } catch { $threw = $true }
+Assert-Equal $true $threw 'a forwarder that no longer invokes it that way STOPS the check instead of quietly weakening it'
+Remove-Item -LiteralPath $shimMade -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $shimTmp -Recurse -Force -ErrorAction SilentlyContinue
 Assert-True ($launcherSrc -match '-Sessions @\(&\s*\$fetchNextPage 0 \$pickerSlugs\)') 'the picker''s FIRST page comes from the same scoped fetcher, so it cannot open empty on the chosen project'
 
 # --- the gate must really run what its rows claim ---------------------------------------------------
@@ -568,7 +618,7 @@ $guardOf = {
 Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
 Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
 
-if ($script:Ran -ne 114) { Write-Host "COULD NOT RUN: expected 114 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 125) { Write-Host "COULD NOT RUN: expected 125 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
