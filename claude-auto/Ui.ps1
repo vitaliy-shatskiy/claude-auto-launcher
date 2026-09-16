@@ -779,6 +779,22 @@ function Invoke-ProjectScreen {
         # filterLength, never the filter: a filter is often a pasted PATH, and the log is not the
         # place for it. Screen records only - the key records carry what the key itself changed.
         ScreenFields = { param($s) @{ filterLength = $s.Filter.Length } }
+        # Hover (Task 10, spec D3): hovering a list row moves the cursor there, the way Claude
+        # Code's own picker does - the `❯` follows the mouse, and a click still commits nothing
+        # more than today (only Enter, a hotkey or a double click does). Installing this handler
+        # replaces the loop's DEFAULT hover logic outright (see Invoke-ScreenLoop's IsMove branch),
+        # so the footer-button throttle below is reproduced by hand: only a CHANGE of the hovered
+        # button is worth a frame. Anything else (the action field, a gap) redraws nothing.
+        # HoverRow is never touched here: it is unused everywhere in this file today (every screen
+        # only ever writes -1 to it), and inventing a use for it was not asked for.
+        Hover = {
+            param($s, $hit)
+            if ($hit.Kind -eq 'row' -and $s.Index -ne $hit.Row) { $s.Index = $hit.Row; return $true }
+            $btn = if ($hit.Kind -eq 'footer') { $hit.FooterIndex } else { -1 }
+            if ($btn -eq $s.Hover) { return $false }
+            $s.Hover = $btn
+            return $true
+        }
     })
 }
 
@@ -1072,6 +1088,17 @@ function Invoke-SessionPicker {
         # place for it.
         ScreenFields = { param($s) @{ filterLength = $s.Filter.Length } }
         ScreenRows = { param($s, $phase) if ($phase -eq 'enter') { [int]$s.HandedIn } else { @($s.Items).Count } }
+        # Hover (Task 10, spec D3): the same handler Invoke-ProjectScreen carries - see its own
+        # comment for why this replaces, and by hand reproduces, the loop's default footer-only
+        # throttle. HoverRow stays untouched - unused everywhere in this file.
+        Hover = {
+            param($s, $hit)
+            if ($hit.Kind -eq 'row' -and $s.Index -ne $hit.Row) { $s.Index = $hit.Row; return $true }
+            $btn = if ($hit.Kind -eq 'footer') { $hit.FooterIndex } else { -1 }
+            if ($btn -eq $s.Hover) { return $false }
+            $s.Hover = $btn
+            return $true
+        }
     }
     # Guarded on $hasScope by not existing at all: with nothing to scope to there is no "other" scope
     # to widen from or narrow to, so Tab does nothing rather than toggling between two labels that

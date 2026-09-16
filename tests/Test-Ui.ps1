@@ -1400,9 +1400,14 @@ Assert-Equal 's1' $picked.Session.SessionId 'a click below the rows changes noth
 $w = New-EventReader @((New-MouseEvent -Y 2 -Left), $enter)
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $mapDraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal 's1' $picked.Session.SessionId 'a click on the box border changes nothing'
+# Task 10 correction (spec D3): the loop reads a drag as a plain MOVE - Left rides along on the
+# event but the IsMove branch never looks at it - so once hovering a row moves the cursor, a drag
+# moves it exactly the same way a genuine hover would. This USED to read 's1' (a drag changed
+# nothing); now the move itself parks the cursor on row 2, and the Enter behind it commits THAT
+# row - the drag still never commits anything on its own, only Enter (or a double click) does.
 $w = New-EventReader @((New-MouseEvent -Y 6 -Left -Move), $enter)
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $mapDraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal 's1' $picked.Session.SessionId 'dragging across rows does not select - only a press does'
+Assert-Equal 's3' $picked.Session.SessionId 'hovering (even mid-drag) moves the cursor onto the row the mouse is over; the Enter after it commits that row'
 
 # The window has scrolled: the same session now sits at a higher BUFFER row, and forgetting that
 # is how a click lands rows away from the pointer.
@@ -1415,6 +1420,48 @@ Assert-Equal 's3' $picked.Session.SessionId 'the window top is applied, so a scr
 $w = New-EventReader @((New-MouseEvent -Y 6 -Left), $enter)
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $noMapDraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal 's1' $picked.Session.SessionId 'without a row map a click is inert, not fatal'
+
+# --- Task 10 (spec D3): hovering a list row moves the cursor there, built through the REAL
+# Get-PickerFrame so this is driven by the same FirstRowY/RowCount/Start production computes -
+# proven independently of the project screen's RowYs-shaped map above. ---
+$hoverPickDraw = {
+    param($s, $i, $f, $sc, $pn)
+    $map = $null
+    $null = Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -Width 100 -Height 24 -RowMap ([ref]$map)
+    $map
+}
+$hoverPickProbe = $null
+$null = Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 100 -Height 24 -RowMap ([ref]$hoverPickProbe)
+$wHoverPick = New-EventReader @((New-MouseEvent -X 3 -Y ($hoverPickProbe.FirstRowY + 2) -Move), $enter)
+$pickedHoverPick = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPick -Draw $hoverPickDraw -Wait $wHoverPick -GetWindowTop { 0 }
+Assert-Equal 's3' $pickedHoverPick.Session.SessionId 'hovering onto row 2 moves the picker cursor there too; the Enter that follows commits the hovered row'
+
+# A move that lands on the row the cursor already stands on must not force a redraw.
+# A LOCAL Escape key, not the outer $esc: at this point in the file $esc is still the plain
+# [char]27 from line 1301 (it becomes a real ConsoleKeyInfo only at line 1465, below) - passing
+# that through New-EventReader here would hand the loop a bare char, never end the screen, and
+# exhaust the queue.
+$hoverPickEsc = [System.ConsoleKeyInfo]::new([char]27, [System.ConsoleKey]::Escape, $false, $false, $false)
+$script:hoverPickDraws = 0
+$hoverPickCounting = { param($s, $i, $f, $sc, $pn) $script:hoverPickDraws++; $hoverPickProbe }
+$wHoverPickSame = New-EventReader @(
+    (New-MouseEvent -X 3 -Y $hoverPickProbe.FirstRowY -Move),       # row 0 - already the cursor's row
+    (New-MouseEvent -X 4 -Y $hoverPickProbe.FirstRowY -Move),       # still row 0
+    $hoverPickEsc
+)
+$pickedHoverPickSame = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPickSame -Draw $hoverPickCounting -Wait $wHoverPickSame -GetWindowTop { 0 }
+Assert-True ($null -eq $pickedHoverPickSame) 'the same-row hover run on the picker still ends with Escape'
+Assert-Equal 1 $script:hoverPickDraws 'two moves that never leave row 0 (already the cursor) draw only the initial frame'
+
+# Moving onto a DIFFERENT row must cost a frame - a handler that moved $s.Index but always
+# returned $false would still pass every assertion above (Enter reads $s.Index straight off the
+# state), so this is the ONLY thing that catches it.
+$script:hoverPickDraws2 = 0
+$hoverPickCounting2 = { param($s, $i, $f, $sc, $pn) $script:hoverPickDraws2++; $hoverPickProbe }
+$wHoverPickRedraw = New-EventReader @((New-MouseEvent -X 3 -Y ($hoverPickProbe.FirstRowY + 2) -Move), $hoverPickEsc)
+$pickedHoverPickRedraw = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPickRedraw -Draw $hoverPickCounting2 -Wait $wHoverPickRedraw -GetWindowTop { 0 }
+Assert-True ($null -eq $pickedHoverPickRedraw) 'the picker row-redraw probe still ends with Escape'
+Assert-Equal 2 $script:hoverPickDraws2 'moving onto row 2 draws again: the initial frame plus the hover change'
 
 # --- Mouse on the launch screen. Same seams, and the assertion that matters most is that a click
 # on an option CELL selects that value - the difference between a menu and a picture of one. ---
@@ -2668,6 +2715,47 @@ try {
     Assert-Equal 'path not found' $script:noticeSequence[5] 'a mouse move (even one that changes the hover) leaves the notice standing'
     Assert-Equal '' $script:noticeSequence[6] 'the next KEY event clears it'
 
+    # --- Task 10 (spec D3): hovering a list row moves the cursor there, the way Claude Code's own
+    # picker does - a click still commits nothing more than today, only Enter (or a double click)
+    # does. Built through the REAL Get-ProjectFrame, never a hand-built map, so this is driven by
+    # RowYs (Task 9) exactly as production computes it - a hand-built FirstRowY/RowCount map could
+    # never catch a Hover handler that forgot the RowYs branch Get-HitAt prefers for this screen. ---
+    $hoverRowDraw = {
+        param($p, $i, $f, $t, $h, $n, $a)
+        $map = $null
+        $null = Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Action $a -Cwd $tmpCwd -Width 100 -Height 24 -RowMap ([ref]$map)
+        $map
+    }.GetNewClosure()
+    $hoverRowProbe = $null
+    $null = Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -RowMap ([ref]$hoverRowProbe)
+    # Row 2 in the frame's own row order (cwd, alpha, beta, enter-a-path) is beta.
+    $wHoverRow = New-EventReader @((New-MouseEvent -X 3 -Y $hoverRowProbe.RowYs[2] -Move), $enterKey)
+    $pHoverRow = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverRow -Draw $hoverRowDraw -Wait $wHoverRow -GetWindowTop { 0 }
+    Assert-Equal $tmpBeta $pHoverRow.Path 'hovering onto row 2 (beta) moves the cursor there; the Enter that follows commits the hovered row'
+
+    # A move that lands on the SAME row the cursor already stands on must not force a redraw - the
+    # same throttle the footer already gets, now proven for a row too.
+    $script:hoverRowDraws = 0
+    $hoverRowCounting = { param($p, $i, $f, $t, $h, $n, $a) $script:hoverRowDraws++; $hoverRowProbe }
+    $wHoverSame = New-EventReader @(
+        (New-MouseEvent -X 3 -Y $hoverRowProbe.RowYs[0] -Move),   # row 0 - already the cursor's row
+        (New-MouseEvent -X 4 -Y $hoverRowProbe.RowYs[0] -Move),   # still row 0
+        $esc
+    )
+    $pHoverSame = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverSame -Draw $hoverRowCounting -Wait $wHoverSame -GetWindowTop { 0 }
+    Assert-True ($null -eq $pHoverSame) 'the same-row hover run still ends with Escape'
+    Assert-Equal 1 $script:hoverRowDraws 'two moves that never leave row 0 (already the cursor) draw only the initial frame'
+
+    # Moving onto a DIFFERENT row must cost a frame - a handler that moved $s.Index but always
+    # returned $false would still pass the commit assertion above (Enter reads $s.Index straight
+    # off the state, whether or not the move ever redrew), so this is the ONLY thing that catches it.
+    $script:hoverRowDraws2 = 0
+    $hoverRowCounting2 = { param($p, $i, $f, $t, $h, $n, $a) $script:hoverRowDraws2++; $hoverRowProbe }
+    $wHoverRowRedraw = New-EventReader @((New-MouseEvent -X 3 -Y $hoverRowProbe.RowYs[2] -Move), $esc)
+    $pHoverRowRedraw = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverRowRedraw -Draw $hoverRowCounting2 -Wait $wHoverRowRedraw -GetWindowTop { 0 }
+    Assert-True ($null -eq $pHoverRowRedraw) 'the row-redraw probe still ends with Escape'
+    Assert-Equal 2 $script:hoverRowDraws2 'moving onto row 2 draws again: the initial frame plus the hover change'
+
     # --- Minor: \ / : are now accepted filter characters, so a pasted path matches literally
     # end to end - typing alpha's own full path (colon and backslashes included) as the filter, then
     # Enter, picks alpha. ---
@@ -3782,7 +3870,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1216) { Write-Host "COULD NOT RUN: expected 1216 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1226) { Write-Host "COULD NOT RUN: expected 1226 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
