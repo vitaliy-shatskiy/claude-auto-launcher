@@ -736,6 +736,9 @@ function Invoke-SessionPicker {
                                              rows = @($items).Count; index = [int]$index
                                              filterLength = $filter.Length; scope = $scope }
     }
+    # `rows` on ENTER is the page the picker was handed; on LEAVE it is what was on screen after
+    # the scope, the zero-prompt drop and the filter. The two differing is information, not drift:
+    # "handed ten, showed none" is exactly the shape of the empty-picker defects this screen has had.
     Write-UiLog -Stage 'screen' -Data @{ name = 'picker'; phase = 'enter'
                                          rows = @($pages[$scope].Sessions).Count; index = [int]$index
                                          filterLength = $filter.Length; scope = $scope }
