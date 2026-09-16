@@ -45,34 +45,50 @@ try {
     $longNote = 'x' * 200
     $multiLineValue = "line-one`nline-two`nline-three"
 
+    # Day files and their ts values are relative to "now", never hardcoded - a suite pinned to two
+    # absolute dates goes red the day the -Days window rolls past them (N1). ANCIENT stays fixed: it
+    # must always be older than any window this suite exercises.
+    $today = (Get-Date).Date
+    $yesterday = $today.AddDays(-1)
+    function Fmt([datetime]$d) { $d.ToString('yyyy-MM-ddTHH:mm:ss') }
+
     $fileA = @(
-        (@{ ts = '2026-09-15T10:00:00'; stage = 'start'; run = 'AAA111'; pid = 4001; cmd = 'claude-auto.ps1'; prompt = $multiLineValue } | ConvertTo-Json -Compress),
-        (@{ ts = '2026-09-15T10:00:02'; stage = 'decision'; run = 'AAA111'; pid = 4001; useUi = $true; account = 'work' } | ConvertTo-Json -Compress),
+        (@{ ts = (Fmt ($yesterday.AddHours(10))); stage = 'start'; run = 'AAA111'; pid = 4001; cmd = 'claude-auto.ps1'; prompt = $multiLineValue } | ConvertTo-Json -Compress),
+        (@{ ts = (Fmt ($yesterday.AddHours(10).AddSeconds(2))); stage = 'decision'; run = 'AAA111'; pid = 4001; useUi = $true; account = 'work' } | ConvertTo-Json -Compress),
         '{not valid json at all',
         '',
-        (@{ ts = '2026-09-15T11:00:00'; stage = 'start'; run = 'BBB222'; pid = 4002; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress)
+        (@{ ts = (Fmt ($yesterday.AddHours(11))); stage = 'start'; run = 'BBB222'; pid = 4002; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress),
+        # D1 lives ONLY on yesterday's file - proves -Days 1 (today only) excludes it (N2).
+        (@{ ts = (Fmt ($yesterday.AddHours(9))); stage = 'start'; run = 'D1'; pid = 6001; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress)
     )
-    Set-Content -LiteralPath (Join-Path $root 'claude-auto-2026-09-15.jsonl') -Value $fileA
+    Set-Content -LiteralPath (Join-Path $root ('claude-auto-{0:yyyy-MM-dd}.jsonl' -f $yesterday)) -Value $fileA
 
     $fileB = @(
-        (@{ ts = '2026-09-15T10:00:05'; stage = 'ui'; run = 'AAA111'; pid = 4001;
+        (@{ ts = (Fmt ($yesterday.AddHours(10).AddSeconds(5))); stage = 'ui'; run = 'AAA111'; pid = 4001;
             saved   = @{ account = 'work'; profile = 'default' };
             parents = @(@{ name = 'explorer'; pid = 100 }, @{ name = 'wt'; pid = 200 });
             note    = $longNote } | ConvertTo-Json -Compress -Depth 5),
-        (@{ ts = '2026-09-15T10:00:20'; stage = 'exit'; run = 'AAA111'; pid = 4001; code = 0 } | ConvertTo-Json -Compress),
-        (@{ ts = '2026-09-15T11:00:02'; stage = 'decision'; run = 'BBB222'; pid = 4002; useUi = $false; account = 'work' } | ConvertTo-Json -Compress),
-        (@{ ts = '2026-09-15T11:00:10'; stage = 'exit'; run = 'BBB222'; pid = 4002; code = 0 } | ConvertTo-Json -Compress),
+        (@{ ts = (Fmt ($yesterday.AddHours(10).AddSeconds(20))); stage = 'exit'; run = 'AAA111'; pid = 4001; code = 0 } | ConvertTo-Json -Compress),
+        (@{ ts = (Fmt ($yesterday.AddHours(11).AddSeconds(2))); stage = 'decision'; run = 'BBB222'; pid = 4002; useUi = $false; account = 'work' } | ConvertTo-Json -Compress),
+        (@{ ts = (Fmt ($yesterday.AddHours(11).AddSeconds(10))); stage = 'exit'; run = 'BBB222'; pid = 4002; code = 0 } | ConvertTo-Json -Compress),
         # A torn record: unparsable ts. Must not crash the reader and must not silently pass as "run
         # not found" (1) - it has no usable timestamp, which is a "2", and it must not poison -Last.
         (@{ ts = 'not-a-timestamp'; stage = 'start'; run = 'TSBAD1'; pid = 4003 } | ConvertTo-Json -Compress),
         # A torn record: no ts key at all.
         (@{ stage = 'start'; run = 'TSNOKEY'; pid = 4004 } | ConvertTo-Json -Compress)
     )
-    Set-Content -LiteralPath (Join-Path $root 'claude-auto-2026-09-16.jsonl') -Value $fileB
+    Set-Content -LiteralPath (Join-Path $root ('claude-auto-{0:yyyy-MM-dd}.jsonl' -f $today)) -Value $fileB
 
-    # A run dated well outside the default 3-day window, beside the two in-window files above.
+    # A run dated well outside any window this suite exercises, beside the two in-window files above.
+    # Intentionally NOT relative to "now" - it stays ancient forever.
     Set-Content -LiteralPath (Join-Path $root 'claude-auto-2026-01-01.jsonl') -Value @(
         (@{ ts = '2026-01-01T09:00:00'; stage = 'start'; run = 'ANCIENT'; pid = 5001; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress)
+    )
+
+    # An impossible calendar date in a filename (the regex shape matches, the date does not exist)
+    # must not crash file selection for every healthy run sharing the directory (N3).
+    Set-Content -LiteralPath (Join-Path $root 'claude-auto-2026-13-45.jsonl') -Value @(
+        (@{ ts = '2026-01-01T00:00:00'; stage = 'start'; run = 'IMPOSSIBLE'; pid = 7001 } | ConvertTo-Json -Compress)
     )
 
     # --- 2. -Run A: header, one line per record in ts order, monotonic offsets, parents, truncation
@@ -161,9 +177,25 @@ try {
     Assert-Equal 1 $rBadDays.Code '-Days -1 is a clean parameter-validation error (documented exit 1), not a -First -1 binding crash'
     Assert-True (($rBadDays.Out -join "`n") -notmatch 'Select-Object') 'no raw Select-Object -First -1 error text'
 
+    # --- N2: -Days N must cover exactly N calendar days (today .. today-(N-1)), never N+1.
+    $rDays1 = Invoke-Tool @('-Run', 'D1', '-LogRoot', $root, '-Days', '1')
+    Assert-Equal 1 $rDays1.Code "-Days 1 excludes yesterday's file (D1 only lives there)"
+    Assert-True (($rDays1.Out -join "`n") -match 'not in the last 1 day') 'the -Days 1 miss names the 1-day window'
+
+    # --- N1 proof: AAA111 is dated yesterday, never a hardcoded calendar date - it must resolve at
+    # the tightest window that still covers it (2 days), today included.
+    $rBoundary = Invoke-Tool @('-Run', 'AAA111', '-LogRoot', $root, '-Days', '2')
+    Assert-Equal 0 $rBoundary.Code 'AAA111 (dated yesterday) resolves at the exact 2-day window it needs'
+
+    # --- N3: an impossible filename date (claude-auto-2026-13-45.jsonl) has sat beside every fixture
+    # file since setup - every -Run/-Last call above already ran with it present. Confirm none of them
+    # dumped a raw Where-Object error instead of answering.
+    Assert-True (($r.Out -join "`n") -notmatch 'Where-Object') 'no raw Where-Object dump from the impossible filename date (-Run)'
+    Assert-True (($rLast.Out -join "`n") -notmatch 'Where-Object') 'no raw Where-Object dump from the impossible filename date (-Last)'
+
     # --- 7. The reader must not lock the file against a concurrent launcher append (item 6): open
     # it the same way the tool now does (Read, sharing ReadWrite) and prove a live append still works.
-    $concurrentFile = Join-Path $root 'claude-auto-2026-09-16.jsonl'
+    $concurrentFile = Join-Path $root ('claude-auto-{0:yyyy-MM-dd}.jsonl' -f $today)
     $handle = [IO.File]::Open($concurrentFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
     try {
         $appendOk = $true

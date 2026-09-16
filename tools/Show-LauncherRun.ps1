@@ -19,7 +19,13 @@ if (-not (Test-Path -LiteralPath $LogRoot)) { Write-Host "no log directory: $Log
 # that fell out of the window must be reported as such, never silently denied or silently served.
 function Get-LogFiles([string]$Root, [datetime]$CutoffDate) {
     Get-ChildItem -LiteralPath $Root -Filter 'claude-auto-*.jsonl' | Where-Object {
-        if ($_.BaseName -match 'claude-auto-(\d{4}-\d{2}-\d{2})$') { ([datetime]$Matches[1]) -ge $CutoffDate } else { $false }
+        if ($_.BaseName -match 'claude-auto-(\d{4}-\d{2}-\d{2})$') {
+            # `-as` never throws on a filename date that matches the shape but not the calendar
+            # (2026-13-45): it yields $null, which is simply excluded rather than taking every
+            # healthy file in the directory down with a raw Where-Object dump.
+            $d = $Matches[1] -as [datetime]
+            $null -ne $d -and $d -ge $CutoffDate
+        } else { $false }
     }
 }
 
@@ -43,7 +49,7 @@ function Read-LogRecords([System.IO.FileInfo[]]$Files) {
     return $raw
 }
 
-$cutoff = (Get-Date).Date.AddDays(-$Days)
+$cutoff = (Get-Date).Date.AddDays(-($Days - 1))
 $files = @(Get-LogFiles -Root $LogRoot -CutoffDate $cutoff)
 if (-not $files) { Write-Host "no log files under $LogRoot in the last $Days day(s)"; exit 2 }
 
