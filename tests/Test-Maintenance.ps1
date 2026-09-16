@@ -520,6 +520,17 @@ $fetchBlock = $launcherSrc.Substring($fetchStart, [Math]::Max(0, $fetchEnd - $fe
 Assert-True ($fetchBlock -match 'ProjectSlug') 'the fetcher carries the picker''s project scope'
 Assert-True ($fetchBlock -match '-Files ') 'and pages a snapshot rather than a re-sorted listing'
 Assert-True ($fetchBlock -match '\[string\[\]\]') 'holding that snapshot in a [string[]] variable, so an EMPTY scope cannot unroll to $null and unbind -Files'
+# .GetNewClosure() binds the block to its own dynamic module, whose COMMAND lookup falls back to the
+# GLOBAL session state and never to the scope that built it. Naming a launcher helper inside the
+# block therefore works under `pwsh -File claude-auto.ps1` (there the launcher body IS global) and
+# throws "not recognized" through ~\bin\claude-auto.ps1's `& $target @args` - the entry every real
+# launch uses. Both helpers are resolved into variables outside the block and called through them.
+# tests\check-preview.ps1 drives both shapes behaviourally; this is the cheap structural guard beside
+# it, for the machines where that check has no reference and reports DID NOT RUN.
+Assert-True ($launcherSrc -match '\$getSessionFile = Get-Command Get-ClaudeSessionFile') 'the launcher resolves Get-ClaudeSessionFile OUTSIDE the closure'
+Assert-True ($launcherSrc -match '\$getSessions = Get-Command Get-ClaudeSessions') 'and Get-ClaudeSessions too'
+Assert-True ($fetchBlock -match '&\s*\$getSessionFile ') 'and the fetcher calls the resolved command object rather than looking the name up inside its module scope'
+Assert-True ($fetchBlock -match '&\s*\$getSessions ') 'both of them'
 Assert-True ($launcherSrc -match '-Sessions @\(&\s*\$fetchNextPage 0 \$pickerSlugs\)') 'the picker''s FIRST page comes from the same scoped fetcher, so it cannot open empty on the chosen project'
 
 # --- the gate must really run what its rows claim ---------------------------------------------------
@@ -568,7 +579,7 @@ $guardOf = {
 Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
 Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
 
-if ($script:Ran -ne 114) { Write-Host "COULD NOT RUN: expected 114 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 118) { Write-Host "COULD NOT RUN: expected 118 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -329,13 +329,27 @@ if ($UseUi) {
             # on the pipeline, -Files would come back unbound, and Get-ClaudeSessions would silently
             # fall back to the whole unscoped account - which is exactly how a two-slug project
             # opened its picker on ten foreign rows (re-review 2026-09-16, C1).
+            # Resolved HERE into variables and called through them - NEVER looked up by name inside
+            # the block. .GetNewClosure() binds the scriptblock to its own dynamic module, and a
+            # module's command lookup falls back to the GLOBAL session state only, never to the
+            # scope that built it. Under `pwsh -File claude-auto.ps1` the launcher's body IS the
+            # global scope, so the modules dot-sourced at the top of this file are global too and
+            # the names happened to resolve. Started the way every real launch starts - through
+            # ~\bin\claude-auto.ps1, which runs `& $target @args`, the entry Rider's plugin,
+            # claude-auto.cmd, PATH and the nightly audit all point at - the body gets a child
+            # script scope, those helpers are NOT global, and pressing `r` on the project screen
+            # printed "Get-ClaudeSessionFile is not recognized" and fell through to a launch.
+            # The closure stays: VARIABLE capture is what the snapshot below depends on, and only
+            # the command lookup was ever broken. tests\check-preview.ps1 now drives both shapes.
+            $getSessionFile = Get-Command Get-ClaudeSessionFile
+            $getSessions = Get-Command Get-ClaudeSessions
             $fetchNextPage = { param($have, [string[]]$ProjectSlug)
                 $k = (@($ProjectSlug | Where-Object { $_ }) -join '|')
                 if (-not $sessionSnapshots.ContainsKey($k)) {
-                    $sessionSnapshots[$k] = [string[]](Get-ClaudeSessionFile -ProjectsRoot $sessionsRoot -ProjectSlug $ProjectSlug)
+                    $sessionSnapshots[$k] = [string[]](& $getSessionFile -ProjectsRoot $sessionsRoot -ProjectSlug $ProjectSlug)
                 }
                 $snapshot = [string[]]$sessionSnapshots[$k]
-                @(Get-ClaudeSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize -Skip $have -Files $snapshot)
+                @(& $getSessions -ProjectsRoot $sessionsRoot -Limit $sessionPageSize -Skip $have -Files $snapshot)
             }.GetNewClosure()
             $pickerSlugs = @($state.ProjectSlugs | Where-Object { $_ })
             if ($pickerSlugs.Count -eq 0 -and $state.ProjectSlug) { $pickerSlugs = @("$($state.ProjectSlug)") }
