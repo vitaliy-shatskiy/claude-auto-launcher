@@ -787,13 +787,21 @@ function Invoke-ProjectScreen {
         # button is worth a frame. Anything else (the action field, a gap) redraws nothing.
         # HoverRow is never touched here: it is unused everywhere in this file today (every screen
         # only ever writes -1 to it), and inventing a use for it was not asked for.
+        # Fix round 1, Important 1: the row branch used to `return $true` BEFORE the footer
+        # bookkeeping ran, so a move from a lit footer button straight onto a list row left that
+        # button lit on the very next frame - the row moved, but $s.Hover never went back to -1.
+        # $btn/$moved are now computed FIRST and the row move and the footer reset both happen
+        # before either return, so a row hit always clears a stale footer light in the same frame.
+        # -is [int] (R18): the same guard the loop's own DoubleClick path uses (Invoke-ScreenLoop) -
+        # a Rows[]-shaped map (launch, maintenance) hands back the row OBJECT, never reached by
+        # this screen today, but this handler would otherwise assign a pscustomobject to $s.Index.
         Hover = {
             param($s, $hit)
-            if ($hit.Kind -eq 'row' -and $s.Index -ne $hit.Row) { $s.Index = $hit.Row; return $true }
             $btn = if ($hit.Kind -eq 'footer') { $hit.FooterIndex } else { -1 }
-            if ($btn -eq $s.Hover) { return $false }
-            $s.Hover = $btn
-            return $true
+            $moved = ($hit.Kind -eq 'row' -and $hit.Row -is [int] -and $s.Index -ne $hit.Row)
+            if ($moved) { $s.Index = $hit.Row }
+            if ($btn -ne $s.Hover) { $s.Hover = $btn; return $true }
+            return $moved
         }
     })
 }
@@ -1091,13 +1099,18 @@ function Invoke-SessionPicker {
         # Hover (Task 10, spec D3): the same handler Invoke-ProjectScreen carries - see its own
         # comment for why this replaces, and by hand reproduces, the loop's default footer-only
         # throttle. HoverRow stays untouched - unused everywhere in this file.
+        # Fix round 1, Important 1: $btn/$moved computed first, both effects applied before either
+        # return, so a move from a lit footer button onto a row clears the light in the same frame
+        # instead of leaving it lit until a later move happens to hit a gap/action/same row.
+        # -is [int] (R18): the same guard the loop's own DoubleClick path uses for a Rows[]-shaped
+        # map - never reached by this screen today, guarded anyway.
         Hover = {
             param($s, $hit)
-            if ($hit.Kind -eq 'row' -and $s.Index -ne $hit.Row) { $s.Index = $hit.Row; return $true }
             $btn = if ($hit.Kind -eq 'footer') { $hit.FooterIndex } else { -1 }
-            if ($btn -eq $s.Hover) { return $false }
-            $s.Hover = $btn
-            return $true
+            $moved = ($hit.Kind -eq 'row' -and $hit.Row -is [int] -and $s.Index -ne $hit.Row)
+            if ($moved) { $s.Index = $hit.Row }
+            if ($btn -ne $s.Hover) { $s.Hover = $btn; return $true }
+            return $moved
         }
     }
     # Guarded on $hasScope by not existing at all: with nothing to scope to there is no "other" scope

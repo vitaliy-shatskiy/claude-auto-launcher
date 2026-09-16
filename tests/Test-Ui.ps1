@@ -1400,14 +1400,19 @@ Assert-Equal 's1' $picked.Session.SessionId 'a click below the rows changes noth
 $w = New-EventReader @((New-MouseEvent -Y 2 -Left), $enter)
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $mapDraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal 's1' $picked.Session.SessionId 'a click on the box border changes nothing'
-# Task 10 correction (spec D3): the loop reads a drag as a plain MOVE - Left rides along on the
-# event but the IsMove branch never looks at it - so once hovering a row moves the cursor, a drag
-# moves it exactly the same way a genuine hover would. This USED to read 's1' (a drag changed
-# nothing); now the move itself parks the cursor on row 2, and the Enter behind it commits THAT
-# row - the drag still never commits anything on its own, only Enter (or a double click) does.
-$w = New-EventReader @((New-MouseEvent -Y 6 -Left -Move), $enter)
+# Fix round 1, Important 2: a move-then-ENTER pin here cannot fail on a drag that commits by
+# itself - if `Left + IsMove` were ever read as a click, the picker would return 's3' at the drag
+# ITSELF and never even reach the Enter behind it, so the assertion reads 's3' either way and the
+# only guard on this (Invoke-ScreenLoop's mouse dispatch: `-not ($loopKey.Left -and -not
+# $loopKey.IsMove)`) is unpinned. Ending on Escape instead makes a COMMITTING drag observable: it
+# would return a session object, never $null. The loop reads a drag as a plain MOVE - Left rides
+# along on the event but the IsMove branch never looks at it - so once hovering a row moves the
+# cursor, a drag moves it exactly the same way a genuine hover would; the bare-move-then-Enter
+# commit proof (a drag's cursor move really does stick) lives further down, at $wHoverPick.
+$dragEsc = [System.ConsoleKeyInfo]::new([char]27, [System.ConsoleKey]::Escape, $false, $false, $false)
+$w = New-EventReader @((New-MouseEvent -Y 6 -Left -Move), $dragEsc)
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $mapDraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal 's3' $picked.Session.SessionId 'hovering (even mid-drag) moves the cursor onto the row the mouse is over; the Enter after it commits that row'
+Assert-True ($null -eq $picked) 'a drag moves the cursor but commits nothing on its own - only Enter (or a double click) does'
 
 # The window has scrolled: the same session now sits at a higher BUFFER row, and forgetting that
 # is how a click lands rows away from the pointer.
@@ -1462,6 +1467,27 @@ $wHoverPickRedraw = New-EventReader @((New-MouseEvent -X 3 -Y ($hoverPickProbe.F
 $pickedHoverPickRedraw = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPickRedraw -Draw $hoverPickCounting2 -Wait $wHoverPickRedraw -GetWindowTop { 0 }
 Assert-True ($null -eq $pickedHoverPickRedraw) 'the picker row-redraw probe still ends with Escape'
 Assert-Equal 2 $script:hoverPickDraws2 'moving onto row 2 draws again: the initial frame plus the hover change'
+
+# --- Fix round 1, Important 1 (picker twin): a stale lit footer button silently swallows a
+# redraw it owes later. Get-PickerFrame carries no -Hover parameter at all (only the project and
+# launch frames paint the accent), so this cannot be pinned by reading a rendered Hover value the
+# way the project-screen pin further down does - it is pinned through its only OTHER observable
+# effect, the draw count: hover footer button 0, hover a row (which must reset the stale footer
+# light), then hover footer button 0 again - a handler that left the light on after the row move
+# would wrongly read "no change" on this third move and skip the redraw it owes. ---
+$hoverPickEnterSpan = @($hoverPickProbe.Footer | Where-Object { $_.Key -eq 'Enter' })[0]
+$hoverPickEnterY = $hoverPickProbe.FooterY + $hoverPickEnterSpan.Line
+$script:hoverPickClearDraws = 0
+$hoverPickClearCounting = { param($s, $i, $f, $sc, $pn) $script:hoverPickClearDraws++; $hoverPickProbe }
+$wHoverPickClear = New-EventReader @(
+    (New-MouseEvent -X $hoverPickEnterSpan.Start -Y $hoverPickEnterY -Move),   # footer button 0 lit
+    (New-MouseEvent -X 3 -Y ($hoverPickProbe.FirstRowY + 2) -Move),            # onto row 2 - must clear it
+    (New-MouseEvent -X $hoverPickEnterSpan.Start -Y $hoverPickEnterY -Move),   # back onto button 0
+    $hoverPickEsc
+)
+$pHoverPickClear = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPickClear -Draw $hoverPickClearCounting -Wait $wHoverPickClear -GetWindowTop { 0 }
+Assert-True ($null -eq $pHoverPickClear) 'the footer-row-footer hover run still ends with Escape'
+Assert-Equal 4 $script:hoverPickClearDraws 'four draws: initial, the footer light, the row move that must clear it, and the footer light again - a stale Hover left over from the row move would wrongly skip that fourth redraw'
 
 # --- Mouse on the launch screen. Same seams, and the assertion that matters most is that a click
 # on an option CELL selects that value - the difference between a menu and a picture of one. ---
@@ -2756,6 +2782,60 @@ try {
     Assert-True ($null -eq $pHoverRowRedraw) 'the row-redraw probe still ends with Escape'
     Assert-Equal 2 $script:hoverRowDraws2 'moving onto row 2 draws again: the initial frame plus the hover change'
 
+    # --- Fix round 1, Important 1: a move from a lit footer button straight onto a list row must
+    # clear that button's light on the SAME frame - the row branch used to `return $true` before
+    # the footer bookkeeping ran, so the light stayed on ($s.Hover) until some LATER move happened
+    # to land on a gap/action/same row. Pinned by reading the -Hover value the frame ITSELF
+    # receives on the very next draw (Get-ProjectFrame forwards $s.Hover as its 5th argument),
+    # not merely what Enter eventually commits. ---
+    $hoverClearEnterSpan = @($hoverRowProbe.Footer | Where-Object { $_.Key -eq 'Enter' })[0]
+    $hoverClearEnterY = $hoverRowProbe.FooterY + $hoverClearEnterSpan.Line
+    $script:hoverClearCalls = New-Object System.Collections.Generic.List[pscustomobject]
+    $hoverClearDraw = {
+        param($p, $i, $f, $t, $h, $n, $a)
+        $script:hoverClearCalls.Add([pscustomobject]@{ Index = $i; Hover = $h })
+        $hoverRowProbe
+    }
+    $wHoverClear = New-EventReader @(
+        (New-MouseEvent -X $hoverClearEnterSpan.Start -Y $hoverClearEnterY -Move),   # footer button 0 lit
+        (New-MouseEvent -X 3 -Y $hoverRowProbe.RowYs[2] -Move),                      # then onto row 2 (beta)
+        $esc
+    )
+    $pHoverClear = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverClear -Draw $hoverClearDraw -Wait $wHoverClear -GetWindowTop { 0 }
+    Assert-True ($null -eq $pHoverClear) 'the footer-then-row hover run still ends with Escape'
+    Assert-Equal 3 $script:hoverClearCalls.Count 'three draws: the initial frame, the footer hover, and the row hover that follows it'
+    Assert-Equal 0 $script:hoverClearCalls[1].Hover 'the footer button is lit on the frame right after hovering it'
+    Assert-Equal 2 $script:hoverClearCalls[2].Index 'the row move landed on row 2'
+    Assert-Equal (-1) $script:hoverClearCalls[2].Hover 'and the footer light is cleared on THAT SAME frame - never left lit until a later move happens to hit a gap'
+
+    # --- R18: a hover over the ACTION row (below the list, not a list row) must leave Index
+    # untouched and cost no extra frame - Get-HitAt answers it as Kind='action', which this
+    # handler treats the same as any other non-row, non-footer hit. ---
+    $script:hoverActionDraws = 0
+    $hoverActionCounting = { param($p, $i, $f, $t, $h, $n, $a) $script:hoverActionDraws++; $hoverRowProbe }
+    $wHoverAction = New-EventReader @(
+        (New-MouseEvent -X 3 -Y $hoverRowProbe.Action.Y -Move),
+        (New-MouseEvent -X 4 -Y $hoverRowProbe.Action.Y -Move),
+        $enterKey
+    )
+    $pHoverAction = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverAction -Draw $hoverActionCounting -Wait $wHoverAction -GetWindowTop { 0 }
+    Assert-Equal $tmpCwd $pHoverAction.Path 'hovering the action row leaves Index on row 0 (current directory) untouched - Enter still commits the cwd'
+    Assert-Equal 1 $script:hoverActionDraws 'and never redraws - Get-HitAt answers Kind=action, never a row hit'
+
+    # --- R18: a hover over a GAP (the blank separator line under the current-directory row) is
+    # Kind='none' from Get-HitAt - RowYs makes a row index undiscoverable from a y under a
+    # separator, and this handler must not treat "no hit" as a row move either. ---
+    $script:hoverGapDraws = 0
+    $hoverGapCounting = { param($p, $i, $f, $t, $h, $n, $a) $script:hoverGapDraws++; $hoverRowProbe }
+    $wHoverGap = New-EventReader @(
+        (New-MouseEvent -X 3 -Y ($hoverRowProbe.RowYs[0] + 1) -Move),
+        (New-MouseEvent -X 4 -Y ($hoverRowProbe.RowYs[0] + 1) -Move),
+        $enterKey
+    )
+    $pHoverGap = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverGap -Draw $hoverGapCounting -Wait $wHoverGap -GetWindowTop { 0 }
+    Assert-Equal $tmpCwd $pHoverGap.Path 'hovering the gap leaves Index on row 0 untouched - Enter still commits the cwd'
+    Assert-Equal 1 $script:hoverGapDraws 'and never redraws either - the gap is Kind=none from Get-HitAt, never a row hit'
+
     # --- Minor: \ / : are now accepted filter characters, so a pasted path matches literally
     # end to end - typing alpha's own full path (colon and backslashes included) as the filter, then
     # Enter, picks alpha. ---
@@ -3870,7 +3950,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1226) { Write-Host "COULD NOT RUN: expected 1226 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1237) { Write-Host "COULD NOT RUN: expected 1237 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

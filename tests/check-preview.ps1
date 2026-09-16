@@ -137,9 +137,10 @@ function Initialize-ProjectSlugFixture {
                message = @{ role = 'user'; content = 'fixture prompt for slug B' } } | ConvertTo-Json -Compress -Depth 5
     Set-Content -LiteralPath (Join-Path $slugADir 'fixture-a.jsonl') -Value $recA -Encoding utf8 -NoNewline
     Set-Content -LiteralPath (Join-Path $slugBDir 'fixture-b.jsonl') -Value $recB -Encoding utf8 -NoNewline
-    # fixture-slug-a sorts first (Get-ProjectRegistry orders by LastActivity descending) - the
-    # scripted keys press 'r' at row 0 without navigating, so which one sorts first has to be
-    # pinned, not left to whatever order the filesystem happens to enumerate.
+    # fixture-slug-a sorts first (Get-ProjectRegistry orders by LastActivity descending) - R14:
+    # since Task 9 put the current directory at row 0, switch-and-resume's scripted keys press one
+    # 's' to reach row 1 (the first REGISTRY row) before 'r', so which project sorts first there
+    # still has to be pinned, not left to whatever order the filesystem happens to enumerate.
     (Get-Item -LiteralPath (Join-Path $slugADir 'fixture-a.jsonl')).LastWriteTime = (Get-Date)
     (Get-Item -LiteralPath (Join-Path $slugBDir 'fixture-b.jsonl')).LastWriteTime = (Get-Date).AddMinutes(-5)
 
