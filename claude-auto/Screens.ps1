@@ -455,7 +455,10 @@ function Complete-PickerFrame {
     $footerIndex = $all.Count
     $visible = @()
     for ($f = 0; $f -lt $footerLines.Count; $f++) {
-        $footerText = Limit-Line -Text $footerLines[$f].Text -Max $Width
+        # Stripped BEFORE Limit-Line and before the spans are measured against the cut: the footer is
+        # painted by COLUMN INDEX, so a marker surviving into it would shift every span by one, and a
+        # marker cut in half by the truncation would reach the terminal.
+        $footerText = Limit-Line -Text (Add-DimSpanColor -Line $footerLines[$f].Text) -Max $Width
         $all += $footerText
         # Spans past the truncation are dropped rather than clamped: half a hint is not a hint, and
         # a click landing on a word nobody can read would look like the menu acting at random.
@@ -473,8 +476,15 @@ function Complete-PickerFrame {
         # The footer is painted by column span, not by pattern: its words ('row', 'value', 'start')
         # are ordinary English and a pattern-based rule would tint them wherever else they appear.
         if ($i -ge $footerIndex) { $painted += Add-HintColor -Line $l -Spans $footerLines[$i - $footerIndex].Spans -Enabled:$Color -HasHover:$HasHover -HoverKey $HoverKey -HoverChar $HoverChar -Selected $Selected }
-        elseif ($Body -eq 'launch') { $painted += Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
-        else { $painted += Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
+        else {
+            # The dim spans a builder marked are resolved FIRST - before the pattern painters, which
+            # search for glyphs and words and would otherwise have to find them again inside an
+            # escape sequence - and on EVERY body line, coloured or not: with colour off this is
+            # what strips the markers, so nothing internal reaches a terminal or a check reference.
+            $l = Add-DimSpanColor -Line $l -Enabled:$Color
+            if ($Body -eq 'launch') { $painted += Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
+            else { $painted += Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
+        }
     }
     return @($painted)
 }
@@ -694,7 +704,13 @@ function New-ListRow {
     # -TrailingSpace: the session picker's rows put the separator AFTER the age (age + ' ') rather
     # than before it (' ' + age) - a difference from the project rows that predates this function
     # and is kept verbatim rather than reflowed, since the byte-identity rule covers text, not taste.
-    param([string]$Mark = '   ', [string]$Label = '', [string]$Tail = '', [string]$Age = '', [int]$Width, [switch]$Ascii, [switch]$TrailingSpace)
+    # -DimTail / -DimAge (spec D6): wrap that column in the zero-width dim-span markers, so the
+    # painter can tint the PATH and the AGE without a pattern rule having to find them again in a
+    # finished row - which it cannot do reliably: a path is not a word, and inside a box the age is
+    # not at the end of the line either. The markers cost no cells, so everything below still
+    # measures the same (Theme.ps1, Add-DimSpanColor).
+    param([string]$Mark = '   ', [string]$Label = '', [string]$Tail = '', [string]$Age = '', [int]$Width, [switch]$Ascii, [switch]$TrailingSpace,
+          [switch]$DimTail, [switch]$DimAge)
     $ageW = Get-DisplayWidth -Text $Age
     $ageCol = if ($Age) { if ($TrailingSpace) { $Age + ' ' } else { ' ' + $Age } } else { '' }
     # Review fix round 1 (C1): the reserve here is mark + a 1-cell minimum pad + the age's OWN
@@ -710,6 +726,10 @@ function New-ListRow {
     # so only the no-age case reserves it here.
     $gutter = if ($Age) { 0 } else { 1 }
     $pad = [Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $tail) - (Get-DisplayWidth -Text $ageCol) - $gutter)
+    # Marked AFTER the arithmetic above, never before it: every width here is measured on the plain
+    # column, so a marked row and an unmarked one are laid out by the identical numbers.
+    if ($DimTail -and $tail) { $tail = [string]$script:DimOpen + $tail + [string]$script:DimClose }
+    if ($DimAge -and $ageCol) { $ageCol = [string]$script:DimOpen + $ageCol + [string]$script:DimClose }
     return $Mark + $label + (' ' * $pad) + $tail + $ageCol
 }
 
@@ -809,9 +829,12 @@ function Get-ProjectFrame {
     $frameWidth = Get-FrameWidth -Width $Width
     $items = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
     # The pinned rows are rows: they are selected, hit-tested and entered exactly like a project, so
-    # the loop below never needs to know which kind it is looking at.
-    $rows = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Item = $_ } })
-    $rows += [pscustomobject]@{ Kind = 'cwd';  Item = [pscustomobject]@{ Name = 'current directory'; Path = $Cwd; LastActivity = $null } }
+    # the loop below never needs to know which kind it is looking at. The CURRENT DIRECTORY leads
+    # (spec D6): arriving here from a terminal already standing in the right folder is the common
+    # case, and it must be one Enter away rather than a walk past the whole registry. Invoke-
+    # ProjectScreen's own $rowsFor builds the identical order - the two are pinned against each other.
+    $rows = @([pscustomobject]@{ Kind = 'cwd'; Item = [pscustomobject]@{ Name = 'current directory'; Path = $Cwd; LastActivity = $null } })
+    $rows += @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Item = $_ } })
     $rows += [pscustomobject]@{ Kind = 'path'; Item = [pscustomobject]@{ Name = 'enter a path...';   Path = '';   LastActivity = $null } }
 
     $title = "project $($g.H) $($items.Count) known"
@@ -862,24 +885,39 @@ function Get-ProjectFrame {
     # costs comes out of the LIST's viewport - never out of $script:MinHeight, which is measured off
     # the launch frame alone (see the constant's own comment) and which this screen must keep
     # fitting under with a registry of any size.
-    $bodyRows = [Math]::Max(3, $Height - 4 - @($footer.Lines).Count)
+    # MINUS the two separator lines as well (spec D6): the blank line under the cwd row and the one
+    # above the free-path row are body lines the box has to hold, so they come out of the LIST's own
+    # budget - never out of the frame's height, which must still fit $script:MinHeight with a
+    # registry of any size.
+    $bodyRows = [Math]::Max(3, $Height - 4 - 2 - @($footer.Lines).Count)
     if ($Index -ge $rows.Count) { $Index = [Math]::Max(0, $rows.Count - 1) }
     $vp = Get-Viewport -Count $rows.Count -Index $Index -Visible $bodyRows
     $inner = $frameWidth - 2
 
+    # $rowYs: where each VISIBLE cursor row landed in $body. The separators below are blank body
+    # LINES, not rows - nothing selects one, nothing is hit-tested onto one - so the row index can no
+    # longer be derived from a y by arithmetic, and the map carries the actual list instead.
     $body = @()
+    $rowYs = @()
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
         $r = $rows[$i]
+        # The blank line ABOVE the free-path row - skipped when that row opens the viewport, since a
+        # box whose first body line is empty reads as a rendering fault rather than as a separator.
+        if ($r.Kind -eq 'path' -and $body.Count -gt 0) { $body += '' }
         $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
+        $rowYs += $body.Count
         if ($r.Kind -eq 'project') {
             $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
             $name = $r.Item.Name
             if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
-            $body += New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii
+            $body += New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge
         } elseif ($r.Kind -eq 'cwd') {
             # The reader must see which directory the row means - rendered like a project row's
             # name+path columns, minus the age no pinned row has a real LastActivity for.
-            $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii
+            $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail
+            # And the blank line UNDER it: the current directory is a group of its own, so the eye
+            # stops there instead of reading it as the first entry of the registry (spec D6).
+            if ($i -lt ($vp.Start + $vp.Visible - 1)) { $body += '' }
         } else {
             $body += $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
         }
@@ -893,6 +931,11 @@ function Get-ProjectFrame {
     # -Current through the same canonicaliser the stepper uses, so what is DRAWN and what Right steps
     # from can never be two different strings (review W4: 'RESUME' rendered, then stepped from 'new').
     $radio = New-RadioRow -Prefix '   ' -Label 'action' -Values (Get-ProjectActions) -Current (Step-ProjectAction -Action $Action -Delta 0) -Glyphs $g -LabelWidth 8 -MaxWidth $inner
+    # Where the field actually lands in the body, taken before it is appended: with the separators in
+    # the box the field is no longer $vp.Visible lines below the first row, and a Y computed that way
+    # points at a blank line - a click on the field would do nothing and a click on a gap would step
+    # it (controller ruling C7).
+    $actionIndex = $body.Count
     $body += $radio.Text
 
     $lines = New-Box -Lines $body -Width $frameWidth -Title $title -Ascii:$Ascii
@@ -904,8 +947,12 @@ function Get-ProjectFrame {
             FirstRowY = $firstRowY
             RowCount  = $vp.Visible
             Start     = $vp.Start
+            # The frame-relative y of every visible cursor row, in row order. Get-HitAt prefers this
+            # over the FirstRowY/RowCount arithmetic, which cannot see the separators and would read
+            # a click under one as a row further down the list.
+            RowYs     = [int[]]@($rowYs | ForEach-Object { $firstRowY + $_ })
             Action    = [pscustomobject]@{
-                Y = $firstRowY + $vp.Visible
+                Y = $firstRowY + $actionIndex
                 # +1 for the box's own left border, which New-Box puts in front of every body line:
                 # these are FRAME columns, the coordinates a click arrives in.
                 Cells = @($radio.Cells | ForEach-Object {
@@ -1065,8 +1112,16 @@ function Add-PickerColor {
     $out = $out -replace "(^|\s)you $rA ", ('$1' + $markUser)
     $out = $out -replace "(^|\s)claude $rA ", ('$1' + $markClaude)
 
+    # The bullet, ANCHORED to the row it belongs to and painted BEFORE the cursor rule (R13). In
+    # ASCII mode Bullet is '+' - the same character as all four box corners - so a bare `([+])` rule
+    # painted every corner of every frame magenta, and a project named 'c++' with it. The free-path
+    # row is the only place a bullet is drawn, and it has a fixed shape: one box border, the 3-cell
+    # mark ('   ' or ' <cursor> '), the bullet, a space. Matching that shape is what makes the rule
+    # mean the bullet rather than the character. Before the cursor rule, because that rule paints the
+    # mark itself and its escapes would then break this lookbehind.
+    $markPattern = "(?:   | $([regex]::Escape([string]$Glyphs.Cursor)) )"
+    $out = $out -replace "(?<=^.$markPattern)($([regex]::Escape([string]$Glyphs.Bullet)))(?= )", ($c.Magenta + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Cursor)])", ($c.BrightYellow + '$1' + $c.Reset)
-    $out = $out -replace "([$($Glyphs.Bullet)])", ($c.Magenta + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Worktree)])", ($c.Yellow + '$1' + $c.Reset)
     $out = $out -replace '(\d+ (?:min|h|d)|now)$', ($c.Dim + '$1' + $c.Reset)
     $out = $out -replace '(\d+ msgs)', ($c.Dim + '$1' + $c.Reset)

@@ -53,6 +53,12 @@ Assert-Equal 2 (Get-DisplayWidth -Text $script:Emoji) 'an astral emoji measures 
 Assert-Equal 1 (Get-DisplayWidth -Text $script:Combining) 'a combining mark adds no cell of its own'
 Assert-Equal 0 (Get-DisplayWidth -Text '') 'empty text measures zero cells'
 Assert-Equal 1 (Get-DisplayWidth -Text ([string][char]0x0416)) 'Cyrillic stays one cell - only East Asian and emoji are wide'
+# The whole C0 range measures nothing, which is what lets Theme.ps1 mark a dim span with two of them
+# (DimOpen/DimClose) while the row is still plain text: a marked row lays out exactly like an
+# unmarked one, and Limit-Line spends no budget on a marker.
+Assert-Equal 0 (Get-CodePointWidth -CodePoint 1) 'a C0 control character measures zero cells'
+Assert-Equal 0 (Get-DisplayWidth -Text ([string]$script:DimOpen + [string]$script:DimClose)) 'so the dim-span markers cost a line nothing'
+Assert-Equal 2 (Get-DisplayWidth -Text ([string]$script:DimOpen + 'ab' + [string]$script:DimClose)) 'and a marked segment measures only its content'
 
 # --- truncation --------------------------------------------------------------------------
 Assert-Equal 'abc' (Limit-Line -Text 'abc' -Max 10) 'a short line is untouched'
@@ -245,7 +251,7 @@ Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line th
 if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
 $script:Ellipsis = [string][char]0x2026
 
-if ($script:Ran -ne 81) { Write-Host "COULD NOT RUN: expected 81 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 84) { Write-Host "COULD NOT RUN: expected 84 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

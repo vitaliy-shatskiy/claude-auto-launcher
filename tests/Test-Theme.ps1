@@ -117,7 +117,16 @@ foreach ($ascii in $false, $true) {
 }
 Assert-True (-not ([string](Get-Glyphs).Bullet).Contains([char]0x23FA)) 'the free-path bullet is no longer U+23FA, which Windows Terminal draws as an emoji'
 
-if ($script:Ran -ne 68) { Write-Host "COULD NOT RUN: expected 68 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- dim spans (spec D6): the two markers a builder wraps a column in while the line is still plain
+# text. C0 controls on purpose - Get-CodePointWidth measures everything under 0x20 as zero cells, so
+# the layout arithmetic never sees them, and Add-DimSpanColor turns them into palette escapes (or
+# strips them) only after the line is laid out.
+Assert-Equal 1 ([int][char]$script:DimOpen) 'the dim-span open marker is U+0001'
+Assert-Equal 2 ([int][char]$script:DimClose) 'and its close marker is U+0002'
+Assert-Equal ($script:C.Dim + 'x' + $script:C.Reset) (Add-DimSpanColor -Line ([string]$script:DimOpen + 'x' + [string]$script:DimClose) -Enabled) 'with colour on, a span becomes Dim ... Reset'
+Assert-Equal 'x' (Add-DimSpanColor -Line ([string]$script:DimOpen + 'x' + [string]$script:DimClose)) 'and with colour off it is stripped to the bare text'
+
+if ($script:Ran -ne 72) { Write-Host "COULD NOT RUN: expected 72 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -2263,6 +2263,12 @@ $sw = @($script:typedDrawCalls | Where-Object { $_.Filter -eq 'sw' })
 Assert-Equal 1 $sw.Count 'w and s typed into an open filter reach it as characters - the filter becomes "sw"'
 Assert-Equal 0 $sw[0].Index 'and the index never moved while those letters were being typed'
 
+# The full-registry fixture, used twice: by Task 9's D7 fit assertion (a 40-project registry with
+# both blank-line separators still fits MinHeight) and by Task 7's four-width contract at the end of
+# this file. FORTY, not thirty: the two separators cost the list two rows, so a registry that only
+# just fitted before is exactly the case that must still fit.
+$longProjects = @(1..40 | ForEach-Object { [pscustomobject]@{ Name = "project-with-a-long-name-$_"; Path = "C:\Users\sample\Desktop\Projects\an\even\longer\path\segment\$_"; Slug = "s$_"; Slugs = @("s$_"); LastActivity = (Get-Date).AddHours(-$_); Exists = $true; Worktree = '' } })
+
 # --- Task 6: the project screen frame ------------------------------------------------------
 $projs6 = @(
     [pscustomobject]@{ Slug = 'A'; Path = 'C:\w\alpha'; Name = 'alpha'; Worktree = $null; LastActivity = (Get-Date).AddMinutes(-2) }
@@ -2289,11 +2295,11 @@ $scroll30 = @(1..30 | ForEach-Object { [pscustomobject]@{ Slug = "S$_"; Path = "
 $mapScroll = $null
 $null = @(Get-ProjectFrame -Projects $scroll30 -Index 29 -Cwd 'C:\somewhere' -Width 78 -Height 24 -RowMap ([ref]$mapScroll))
 Assert-Equal 1 $mapScroll.FirstRowY 'the scrolled row map still sits just under the box top border'
-# 18 and 14, not 19 and 13, since the action field joined the box (2026-09-16): the field's row comes
-# out of the LIST's viewport, which is the whole point of putting it inside the box - the frame still
-# fits the same terminal, one list row further down.
-Assert-Equal 18 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
-Assert-Equal 14 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
+# 16 and 16, not 19 and 13, since the action field joined the box (2026-09-16) and the two separators
+# joined it in Task 9: all three come out of the LIST's viewport, which is the whole point of putting
+# them inside the box - the frame still fits the same terminal, with fewer list rows on it.
+Assert-Equal 16 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
+Assert-Equal 16 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
 Assert-True ($f6Text -match 'continue') 'the footer advertises continue'
 # Plain (no -Color) hints are bracketed like every other screen's footer - '[t] worktree',
 # never ' t worktree' - see the picker's '[f] fork' etc. at 50 columns. The brief's own sample
@@ -2394,15 +2400,16 @@ try {
         [pscustomobject]@{ Slug = 'B'; Path = $tmpBeta;  Name = 'beta';  Worktree = $null; LastActivity = (Get-Date).AddDays(-1) }
     )
 
-    $p1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
-    Assert-Equal $tmpAlpha $p1.Path 'Enter on the first row picks it'
+    # One 's' first since Task 9: row 0 is the current directory, so the newest PROJECT is row 1.
+    $p1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'Enter')) -Draw {}
+    Assert-Equal $tmpAlpha $p1.Path 'Enter on a project row picks it'
     Assert-Equal 'new' $p1.Action 'and Enter means a new session'
     Assert-Equal 'A' $p1.Slug "and returns the row's slug"
 
-    $p2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'c')) -Draw {}
-    Assert-Equal $tmpBeta $p2.Path 's moves down'
+    $p2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'c')) -Draw {}
+    Assert-Equal $tmpBeta $p2.Path 's moves down the list'
     Assert-Equal 'continue' $p2.Action 'c means continue'
-    Assert-Equal 'B' $p2.Slug "and the second row's slug travels with it"
+    Assert-Equal 'B' $p2.Slug "and the second project's slug travels with it"
 
     $p3 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('r')) -Draw {}
     Assert-Equal 'resume' $p3.Action 'r means resume'
@@ -2411,8 +2418,8 @@ try {
 
     Assert-True ($null -eq (Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {})) 'Escape cancels'
 
-    # The cwd pinned row is two rows past the last project.
-    $p5 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
+    # The cwd pinned row is row 0 since Task 9 - no navigation at all to reach it.
+    $p5 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
     Assert-Equal $tmpCwd $p5.Path 'the pinned current-directory row launches the cwd'
     Assert-Equal '' $p5.Slug 'an unknown cwd carries no slug'
 
@@ -2422,14 +2429,16 @@ try {
     # a trailing one - Test-Path resolves all of that natively, so the existence guard is not what
     # this assertion is pinning.
     $alphaVariant = ($tmpAlpha -replace '\\', '/').ToUpperInvariant() + '/'
-    $p5b = Invoke-ProjectScreen -Projects $pProjs -Cwd $alphaVariant -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {}
+    $p5b = Invoke-ProjectScreen -Projects $pProjs -Cwd $alphaVariant -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
     Assert-Equal 'A' $p5b.Slug 'a cwd matching a known project (case/trailing-slash/slash-direction insensitive) carries its slug'
 
     # Filter mode: '/' then letters must not fire the action hotkeys. Filters on 'eta' (from
     # "beta"), not 'be': 'be' is entirely hex digits and can match a 32-hex-digit GUID by chance
     # (measured P=11.41% here) - 't' cannot occur in a hex GUID at all, so 'eta' is reachable only
     # through the literal word "beta" (the Name AND now the fixed leaf of the Path).
-    $p6 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'e', 't', 'a', 'Enter', 'Enter')) -Draw {}
+    # The 's' between the two Enters is Task 9's row order: the filter leaves the cursor at the top,
+    # which is the current directory, and the MATCH is the row under it.
+    $p6 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'e', 't', 'a', 'Enter', 's', 'Enter')) -Draw {}
     Assert-Equal $tmpBeta $p6.Path 'typing in filter mode narrows instead of acting'
 
     # A letter that IS a hotkey, typed while filtering, must only edit the filter text - never fire
@@ -2440,7 +2449,7 @@ try {
     # Escape in filter mode clears the filter (first Escape) rather than leaving; a second Escape
     # leaves the screen. Both asserted: the first by what Enter picks afterwards, the second by $null.
     $p6c = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Enter')) -Draw {}
-    Assert-Equal $tmpAlpha $p6c.Path 'the first Escape clears the filter text rather than leaving, so Enter picks the unfiltered first row'
+    Assert-Equal $tmpCwd $p6c.Path 'the first Escape clears the filter text rather than leaving, so Enter picks the unfiltered first row - the current directory'
     $p6d = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Escape')) -Draw {}
     Assert-True ($null -eq $p6d) 'the second Escape leaves the screen'
 
@@ -2482,11 +2491,15 @@ try {
     New-Item -ItemType Directory -Path $vanishedDir | Out-Null
     Remove-Item -LiteralPath $vanishedDir -Recurse -Force
     $vanishedProjs = @([pscustomobject]@{ Slug = 'V'; Path = $vanishedDir; Name = 'vanished'; Worktree = $null; LastActivity = (Get-Date) })
-    $pVanished = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter', 'Escape')) -Draw {}
+    # One 's' onto the registry row: row 0 is the (existing) current directory since Task 9.
+    $pVanished = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'Enter', 'Escape')) -Draw {}
     Assert-True ($null -eq $pVanished) 'Enter on a registry row whose directory has vanished does not return - the loop stays open'
 
     # --- Mouse: a single click only moves the selection; nothing but a double click or a hotkey may
     # start a session. ---
+    # Deliberately WITHOUT RowYs: this hand-built map is the old FirstRowY/RowCount shape, which is
+    # what the session picker still hands Get-HitAt - so these runs keep that fallback branch covered
+    # while the real project map (RowYs) is driven further down.
     $pRowMap = [pscustomobject]@{ FirstRowY = 4; RowCount = 4; Start = 0; FooterY = 20; Footer = @(
         [pscustomobject]@{ Key = 'Enter'; Char = '';  Start = 10; End = 14 }
         [pscustomobject]@{ Key = '';      Char = 'c'; Start = 16; End = 23 }
@@ -2501,7 +2514,7 @@ try {
 
     $w11 = New-EventReader @((New-MouseEvent -Y 5 -Left), $enterKey)
     $p11 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w11 -Draw $pDraw -Wait $w11 -GetWindowTop { 0 }
-    Assert-Equal $tmpBeta $p11.Path 'the click DID move the selection - Enter afterwards commits the row the click moved to'
+    Assert-Equal $tmpAlpha $p11.Path 'the click DID move the selection - Enter afterwards commits the row the click moved to'
 
     # --- IMPORTANT 2: a double click on a ROW commits, the way Invoke-SessionPicker's does - no
     # further key needed. ---
@@ -2511,7 +2524,7 @@ try {
     # (fix round 3, SMALL 2).
     $w14 = New-EventReader @((New-MouseEvent -Y 5 -Left -Double), $esc)
     $p14 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w14 -Draw $pDraw -Wait $w14 -GetWindowTop { 0 }
-    Assert-Equal $tmpBeta $p14.Path 'a double click on a row commits it immediately'
+    Assert-Equal $tmpAlpha $p14.Path 'a double click on a row commits it immediately'
     Assert-Equal 'new' $p14.Action 'as a new session, with no further key pressed'
 
     # A double click landing on a FOOTER button, unlike one landing on a row, does nothing - it
@@ -2659,18 +2672,18 @@ try {
     # end to end - typing alpha's own full path (colon and backslashes included) as the filter, then
     # Enter, picks alpha. ---
     $pathChars = @($tmpAlpha.ToCharArray() | ForEach-Object { "$_" })
-    $pFilterPath = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys (@('/') + $pathChars + @('Enter', 'Enter'))) -Draw {}
+    $pFilterPath = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys (@('/') + $pathChars + @('Enter', 's', 'Enter'))) -Draw {}
     Assert-Equal $tmpAlpha $pFilterPath.Path 'typing a full path (colon and backslashes included) as the filter matches it literally'
 
     # --- Coverage: the wheel moves the selection like w/s; Ctrl+C leaves like Escape; an uppercase C
     # does not fire continue - Test-ClaudeHotkey's case guard, proven on THIS screen's own hotkeys too.
     $wWheel = New-EventReader @((New-MouseEvent -Wheel -128), $enterKey)
     $pWheelDown = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWheel -Draw {} -Wait $wWheel -GetWindowTop { 0 }
-    Assert-Equal $tmpBeta $pWheelDown.Path 'the wheel moves the selection down, like s'
+    Assert-Equal $tmpAlpha $pWheelDown.Path 'the wheel moves the selection down, like s - off the current directory onto the first project'
 
     $wWheel2 = New-EventReader @((New-MouseEvent -Wheel -128), (New-MouseEvent -Wheel 128), $enterKey)
     $pWheelBack = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWheel2 -Draw {} -Wait $wWheel2 -GetWindowTop { 0 }
-    Assert-Equal $tmpAlpha $pWheelBack.Path 'down then up on the wheel comes back'
+    Assert-Equal $tmpCwd $pWheelBack.Path 'down then up on the wheel comes back'
 
     $pCtrlC = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-MixedKeyReader -Keys @($CtrlC)) -Draw {}
     Assert-True ($null -eq $pCtrlC) 'Ctrl+C leaves like Escape'
@@ -2721,7 +2734,7 @@ try {
     Assert-Equal 'high' $effortState2.Effort 'and Delta 0 writes the canonical spelling back onto the state'
 
     # Left/Right from a LIST row: the owner never has to walk down to the field to use it.
-    $pAct1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'Enter')) -Draw {}
+    $pAct1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'RightArrow', 'Enter')) -Draw {}
     Assert-Equal 'continue' $pAct1.Action 'RightArrow on a project row steps the field, and Enter runs what it says'
     Assert-Equal $tmpAlpha $pAct1.Path 'on the highlighted project, which the arrow did not move'
     $pAct2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'RightArrow', 'Enter')) -Draw {}
@@ -2747,21 +2760,21 @@ try {
     Assert-True ($null -eq $pAct6) 'the navigation run ends with Escape'
     Assert-Equal 7 $script:actNav.Count 'one draw per key handled'
     Assert-Equal 0 $script:actNav[0].Index 'the screen opens on the first row'
-    Assert-Equal 3 $script:actNav[3].Index 'three downs reach the last list row (alpha, beta, current directory, enter a path)'
+    Assert-Equal 3 $script:actNav[3].Index 'three downs reach the last list row (current directory, alpha, beta, enter a path)'
     Assert-Equal 3 $script:actNav[4].Index 'a fourth down goes no further - there is no row past it'
     Assert-Equal 3 $script:actNav[5].Index 'nor a fifth'
     Assert-Equal 2 $script:actNav[6].Index 'and up moves back into the list one row at a time'
 
     # a/d step the field from ANY row, unconditionally (review W3): every other screen with a cursor
     # treats them as Left/Right, and a trained key that works on some rows only is worse than none.
-    $pAct7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('d', 'Enter')) -Draw {}
+    $pAct7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'd', 'Enter')) -Draw {}
     Assert-Equal 'continue' $pAct7.Action 'd on a project row steps the field, like RightArrow'
     Assert-Equal $tmpAlpha $pAct7.Path 'and does not move the selection'
 
     $actScratch = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-act-$([Guid]::NewGuid().ToString('N'))")
     New-Item -ItemType Directory -Path $actScratch | Out-Null
     try {
-        $pAct8 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('a', 'Enter')) -Draw {}
+        $pAct8 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'a', 'Enter')) -Draw {}
         Assert-Equal 'worktree' $pAct8.Action 'a on a project row steps it left, wrapping, like LeftArrow'
         $pAct9 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'd', 'Enter', 'Escape')) -Draw {} -ReadPath { $actScratch }
         Assert-Equal 'continue' $pAct9.Action 'and on the free-path row too - there is no row where the key is dead'
@@ -2774,18 +2787,20 @@ try {
     } finally { Remove-Item -LiteralPath $actScratch -Recurse -Force -ErrorAction SilentlyContinue }
 
     # c/r/t still fire immediately AND set the field. Driven on the VANISHED fixture so the pick is
-    # rejected and the loop draws again - the only way to see the field the press left behind.
+    # rejected and the loop draws again - the only way to see the field the press left behind. The
+    # CWD is that same vanished directory since Task 9: it is row 0, so the press must be rejected
+    # there too or the screen returns before it can draw the field it just set.
     $script:actHot = New-Object System.Collections.Generic.List[string]
     $hotDraw = { param($p, $i, $f, $t, $h, $n, $a, $oa) $script:actHot.Add("$a"); $null }
-    $pAct11 = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('t', 'Escape')) -Draw $hotDraw
+    $pAct11 = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $vanishedDir -ReadKey (New-ScriptedKeyReader -Keys @('t', 'Escape')) -Draw $hotDraw
     Assert-True ($null -eq $pAct11) 'the hotkey-on-a-vanished-row run ends with Escape'
     Assert-Equal 'new' $script:actHot[0] 'the field starts at new'
     Assert-Equal 'worktree' $script:actHot[1] 't sets the field as well as firing it - the screen shows what happened'
     $script:actHot = New-Object System.Collections.Generic.List[string]
-    $null = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('c', 'Escape')) -Draw $hotDraw
+    $null = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $vanishedDir -ReadKey (New-ScriptedKeyReader -Keys @('c', 'Escape')) -Draw $hotDraw
     Assert-Equal 'continue' $script:actHot[1] 'c does too'
     $script:actHot = New-Object System.Collections.Generic.List[string]
-    $null = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('r', 'Escape')) -Draw $hotDraw
+    $null = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $vanishedDir -ReadKey (New-ScriptedKeyReader -Keys @('r', 'Escape')) -Draw $hotDraw
     Assert-Equal 'resume' $script:actHot[1] 'and so does r'
 
     # --- New-RadioRow: the one option row both screens draw -----------------------------------------
@@ -2820,7 +2835,7 @@ try {
     Assert-True ($narrowAct.Contains('[resume]')) 'at 50 columns the action row still brackets the current value'
     Assert-True (-not $narrowAct.Contains("$($g.On)")) 'and drops the radio glyphs, which is what makes it fit'
     Assert-Equal 4 @($mapNarrow.Action.Cells).Count 'the compact row is still four click cells'
-    Assert-True ($fActText -match ([regex]::Escape(" $($gg.Cursor) alpha"))) 'the cursor is on the list - the field never takes it'
+    Assert-True ($fActText -match ([regex]::Escape(" $($gg.Cursor) current directory"))) 'the cursor is on the list - row 0, the current directory, since Task 9 - and the field never takes it'
     Assert-True (-not ($fActText -match ([regex]::Escape("$($gg.Cursor) action")))) 'and the field carries no cursor of its own, on any frame'
 
     # W4: the field is drawn through the SAME canonicaliser it is stepped with, so a hand-supplied
@@ -2894,7 +2909,7 @@ try {
     $wCap = New-EventReader @((New-MouseEvent -X $capNext.Start -Y $capMap.Action.Y -Left), $enterKey)
     $pCap = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wCap -Draw $capDraw -Wait $wCap -GetWindowTop { 0 }
     Assert-Equal 'continue' $pCap.Action 'clicking a value selects it'
-    Assert-Equal $tmpAlpha $pCap.Path 'without moving the selection off the highlighted project'
+    Assert-Equal $tmpCwd $pCap.Path 'without moving the selection off the highlighted row'
     $capLast = $capMap.Action.Cells[3]
     $wCap2 = New-EventReader @((New-MouseEvent -X $capLast.End -Y $capMap.Action.Y -Left), $enterKey)
     $pCap2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wCap2 -Draw $capDraw -Wait $wCap2 -GetWindowTop { 0 }
@@ -2926,7 +2941,74 @@ try {
     $wDbl = New-EventReader @($rightArrowKey, (New-MouseEvent -Y 5 -Left -Double), $esc)
     $pDbl = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wDbl -Draw $pDraw -Wait $wDbl -GetWindowTop { 0 }
     Assert-Equal 'continue' $pDbl.Action 'a double click commits whatever the field says'
-    Assert-Equal $tmpBeta $pDbl.Path 'on the row it landed on'
+    Assert-Equal $tmpAlpha $pDbl.Path 'on the row it landed on'
+
+    # --- Task 9 (spec D6/D7): the current directory FIRST, the pinned rows kept apart by a blank
+    # line each, and the path columns dim -----------------------------------------------------------
+    $m9 = $null
+    $lines9 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd 'C:\Users\sample\here' -Width 80 -Height 24 -RowMap ([ref]$m9))
+    $body9 = @($lines9 | ForEach-Object { Remove-AnsiColor $_ })
+    Assert-True ($body9[$m9.RowYs[0]].Contains('current directory')) 'row 0 is the current directory'
+    # A blank BODY line inside the box: the two borders with nothing but spaces between them.
+    Assert-True ($body9[$m9.RowYs[0] + 1] -match "^\S\s+\S$") 'a blank line separates it from the projects'
+    Assert-True ($body9[$m9.RowYs[1]].Contains($pProjs[0].Name)) 'the newest project is row 1'
+    Assert-True ($body9[$m9.RowYs[-1]].Contains('enter a path')) 'the free-path row is last'
+    Assert-True ($body9[$m9.RowYs[-1] - 1] -match "^\S\s+\S$") 'behind its own blank line'
+    Assert-Equal (2 + $pProjs.Count) $m9.RowYs.Count 'RowYs lists every VISIBLE cursor row (all of them fit at this height)'
+    # The separators are LINES, not rows: a cursor stop on one, or one counted into RowCount, would
+    # be a row the owner can select and nothing happens on.
+    Assert-Equal $m9.RowYs.Count $m9.RowCount 'and the blank lines are not rows - RowCount still counts cursor rows only'
+    Assert-Equal $m9.RowYs[-1] ($m9.Action.Y - 1) 'the action row sits right under the free-path row, its Y taken from the body, not from the viewport size'
+    Assert-True ($body9[$m9.Action.Y].Contains('action')) 'and the line that Y names is the one the field was drawn on'
+
+    # The path column is DIM - painted from a zero-width marker the builder wrapped it in, so the
+    # layout still measures cells. $projs6's paths are short enough to survive the tail clamp whole,
+    # which is what lets this assert the WHOLE path is inside the dim span.
+    $m9c = $null
+    $colored9 = @(Get-ProjectFrame -Projects $projs6 -Index 1 -Cwd 'C:\x' -Width 80 -Height 24 -Color -RowMap ([ref]$m9c))
+    Assert-True ($colored9[$m9c.RowYs[1]].Contains($script:C.Dim + $projs6[0].Path)) 'a project''s path is painted dim'
+    Assert-True (-not $colored9[$m9c.RowYs[1]].Contains([string]$script:DimOpen)) 'and no marker survives painting'
+    $m9p = $null
+    $plain9 = @(Get-ProjectFrame -Projects $projs6 -Index 1 -Cwd 'C:\x' -Width 80 -Height 24 -RowMap ([ref]$m9p))
+    Assert-Equal 0 @($plain9 | Where-Object { $_.Contains([string]$script:DimOpen) -or $_.Contains([string]$script:DimClose) }).Count 'nor the plain render - a check-preview reference captures plain text, markers and all if any leaked'
+
+    # The markers themselves: control characters, zero cells, and stripped by the transcript
+    # sanitiser - so no transcript-sourced field (a name, a filter, a notice) can open a span of its own.
+    Assert-Equal 0 (Get-DisplayWidth -Text ([string]$script:DimOpen + [string]$script:DimClose)) 'the dim-span markers measure zero cells, so a marked row lays out exactly like an unmarked one'
+    Assert-Equal 'alpha beta' (Get-CleanTranscriptText -Text ("alpha$([string]$script:DimOpen)beta$([string]$script:DimClose)")) 'the transcript sanitiser strips them, so untrusted text cannot open a dim span'
+    Assert-Equal 'abc' (Add-DimSpanColor -Line ([string]$script:DimOpen + 'abc' + [string]$script:DimClose)) 'with colour off the markers are simply stripped'
+    Assert-True ((Add-DimSpanColor -Line (Limit-Line -Text ([string]$script:DimOpen + 'abcdefgh' + [string]$script:DimClose) -Max 4) -Enabled).EndsWith($script:C.Reset)) 'and a span whose close was cut off by truncation is still closed, never left bleeding'
+
+    # R13: in ASCII mode the bullet glyph IS the corner glyph ('+'), so the bullet rule has to be
+    # anchored to the row shape - a border painted magenta is the failure this pins.
+    $gA9 = Get-Glyphs -Ascii
+    $m9a = $null
+    $ascii9 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\x' -Width 80 -Height 24 -Color -Ascii -RowMap ([ref]$m9a))
+    Assert-True (-not $ascii9[0].Contains([string][char]27)) 'in ASCII mode the top border carries no colour at all - the bullet rule cannot reach a corner'
+    Assert-True (-not $ascii9[$m9a.FooterY - 1].Contains([string][char]27)) 'nor the bottom border'
+    Assert-True ($ascii9[$m9a.RowYs[-1]].Contains($script:C.Magenta + [string]$gA9.Bullet)) 'while the free-path bullet is still painted in ASCII'
+    Assert-True ($colored9[$m9c.RowYs[-1]].Contains($script:C.Magenta + [string]$gg.Bullet)) 'and in the default glyph set too'
+
+    # The loop agrees with the frame: Enter on the opening frame runs in the CURRENT DIRECTORY.
+    $r9 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw { $null }
+    Assert-Equal $tmpCwd $r9.Path 'Enter on the opening frame runs in the current directory'
+    $r9b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $pProjs[1].Path -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw { $null }
+    Assert-Equal $tmpBeta $r9b.Path 'while -Initial still preselects the remembered project - one row further down than its index'
+
+    # A click BELOW the first separator. With FirstRowY/RowCount arithmetic the blank line counts as
+    # a row and the click lands one row too low - on the free-path row, which prompts for a path.
+    # Driven over a REAL frame's map, so the y is the one a click actually arrives in.
+    $script:m9click = $null
+    $null = Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$script:m9click)
+    $click9Draw = { param($p, $i, $f, $t, $h, $n, $a) $script:m9click }
+    $w9 = New-EventReader @((New-MouseEvent -X 4 -Y $script:m9click.RowYs[2] -Left), $enterKey, $esc)
+    $p9click = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w9 -Draw $click9Draw -Wait $w9 -GetWindowTop { 0 } -ReadPath { 'C:\this-click-must-never-reach-the-path-row-9f3a' }
+    Assert-Equal $tmpBeta $p9click.Path 'a click on the row after a blank line picks THAT row - the gap is not hit-testable'
+
+    # D7: the two separators come out of the LIST's own budget, never out of the frame's height.
+    $m9t = $null
+    $tall9 = @(Get-ProjectFrame -Projects $longProjects -Index 20 -Cwd 'C:\x' -Width 50 -Height 20 -RowMap ([ref]$m9t))
+    Assert-True ($tall9.Count -le 19) 'a 40-project registry with both gaps still fits MinHeight with the headroom row'
 } finally {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tmpCwd -Recurse -Force -ErrorAction SilentlyContinue
@@ -3627,7 +3709,7 @@ Assert-Equal 2 $draws 'the resize costs exactly one redraw and one more wait'
 # --- Task 7 (spec D4): every frame fits - no rendered line reaches the last console column -----
 # $sharedName / $fakeInfo are the fixtures the file already uses for Get-PickerFrame and
 # Get-MaintenanceFrame elsewhere in this file - reused here rather than a fifth ad hoc fixture.
-$longProjects = @(1..30 | ForEach-Object { [pscustomobject]@{ Name = "project-with-a-long-name-$_"; Path = "C:\Users\sample\Desktop\Projects\an\even\longer\path\segment\$_"; Slug = "s$_"; Slugs = @("s$_"); LastActivity = (Get-Date).AddHours(-$_); Exists = $true; Worktree = '' } })
+# $longProjects is defined once, above the project-frame section, and is 40 entries since Task 9.
 foreach ($w in 60, 80, 120, 200) {
     $m = $null
     $frames = @{
@@ -3645,7 +3727,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1175) { Write-Host "COULD NOT RUN: expected 1175 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1199) { Write-Host "COULD NOT RUN: expected 1199 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

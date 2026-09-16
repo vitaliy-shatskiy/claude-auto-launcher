@@ -30,6 +30,32 @@ $script:C = @{
     AccentFg     = "$($script:E)[38;5;232m"
 }
 
+# Dim-span markers (spec D6). A builder wraps a COLUMN - a path, an age - in these two while the row
+# is still plain text, and Complete-PickerFrame resolves them once the line is laid out. C0 controls
+# on purpose: Get-CodePointWidth measures anything under 0x20 as zero cells, so a marked row lays out
+# exactly like an unmarked one and the rule this file opens with survives a per-column tint that no
+# pattern rule could find (a path is not a word, and the age is not always at the end of the line).
+$script:DimOpen = [char]1
+$script:DimClose = [char]2
+
+function Add-DimSpanColor {
+    # Resolves the dim-span markers: to Dim ... Reset with colour on, to nothing with it off. EVERY
+    # line goes through it either way - a marker is an internal signal and must never reach a
+    # terminal, a check reference or anything that stores what was drawn.
+    #
+    # An UNPAIRED open marker is closed at the end of the line rather than passed on: the markers
+    # cost no cells, so Limit-Line spends the whole budget on visible text and can cut a row between
+    # an open marker and its close - and a Dim with no Reset dims everything drawn after it.
+    param([string]$Line, [switch]$Enabled)
+    if (-not $Line) { return $Line }
+    $open = [string]$script:DimOpen
+    $close = [string]$script:DimClose
+    if (-not $Enabled) { return ($Line -replace "[$open$close]", '') }
+    $out = $Line -replace "$open([^$open$close]*)$close", ($script:C.Dim + '$1' + $script:C.Reset)
+    if ($out.Contains($open)) { $out = ($out -replace $open, $script:C.Dim) + $script:C.Reset }
+    return ($out -replace $close, $script:C.Reset)
+}
+
 function Test-ColorSupported {
     # NO_COLOR is the de facto opt-out (no-color.org) and a dumb terminal cannot render escapes.
     if ($env:NO_COLOR) { return $false }

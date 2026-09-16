@@ -205,6 +205,16 @@ function Get-HitAt {
         if ($cell.Count -gt 0) { return [pscustomobject]@{ Kind = 'cell'; Footer = $null; FooterIndex = -1; Row = $hit[0]; Cell = $cell[0]; Value = $cell[0].Value } }
         return [pscustomobject]@{ Kind = 'row'; Footer = $null; FooterIndex = -1; Row = $hit[0]; Cell = $null; Value = $null }
     }
+    # RowYs wins wherever it is there (the project screen, whose list is broken up by blank lines):
+    # the rows are no longer one per line, so a row index cannot be derived from a y by arithmetic -
+    # a click under a separator would land one row too far down the list. A y that is not a row's own
+    # is no row at all, which is what makes a click on a gap do nothing. Every other list map carries
+    # FirstRowY/RowCount only and falls through to Get-ClaudeMouseRow, untouched.
+    if ($null -ne $RowMap.PSObject.Properties['RowYs'] -and $RowMap.RowYs) {
+        $at = [Array]::IndexOf([int[]]@($RowMap.RowYs), [int]$rowY)
+        if ($at -lt 0) { return $none }
+        return [pscustomobject]@{ Kind = 'row'; Footer = $null; FooterIndex = -1; Row = [int]($RowMap.Start + $at); Cell = $null; Value = $null }
+    }
     if ($null -ne $RowMap.PSObject.Properties['FirstRowY']) {
         $row = Get-ClaudeMouseRow -Y $Y -FirstRowY $RowMap.FirstRowY -RowCount $RowMap.RowCount -WindowTop $WindowTop
         if ($null -eq $row) { return $none }
@@ -556,8 +566,11 @@ function Invoke-ProjectScreen {
     $rowsFor = {
         param([string]$f)
         $items = @(Select-ProjectMatch -Projects $projectList -Filter $f)
-        $built = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug; Slugs = @(if ($_.Slugs) { $_.Slugs } else { $_.Slug }) } })
-        $built += [pscustomobject]@{ Kind = 'cwd';  Path = $cwdPath; Slug = ''; Slugs = @() }
+        # Same order as the frame: the current directory first (spec D6), then the registry, then the
+        # free-path row. The two orders are pinned against each other - a list built the other way
+        # here would pick a different row than the one the cursor is drawn on.
+        $built = @([pscustomobject]@{ Kind = 'cwd'; Path = $cwdPath; Slug = ''; Slugs = @() })
+        $built += @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug; Slugs = @(if ($_.Slugs) { $_.Slugs } else { $_.Slug }) } })
         $built += [pscustomobject]@{ Kind = 'path'; Path = '';       Slug = ''; Slugs = @() }
         return @($built)
     }
@@ -629,11 +642,14 @@ function Invoke-ProjectScreen {
     # raw string equality: -Initial is whatever the caller last stored, which may differ from the
     # registry's own spelling by case or slash direction (fix round 2, reviewer: 'c:/w/beta/' silently
     # preselected the wrong row under a bare [Array]::IndexOf).
+    # Row 0 is the CURRENT DIRECTORY now, so a remembered project sits one row lower than its index
+    # in the registry: 1 + that index. With nothing remembered the cursor stays on row 0, which is
+    # what makes "arrive and press Enter" mean "run here" (spec D6).
     $startIndex = 0
     if ($Initial) {
         $initialKey = ConvertTo-ProjectKey $Initial
         $at = [Array]::IndexOf(@($Projects | ForEach-Object { ConvertTo-ProjectKey $_.Path }), $initialKey)
-        if ($at -ge 0) { $startIndex = $at }
+        if ($at -ge 0) { $startIndex = 1 + $at }
     }
 
     # The action field is an INDICATOR, not a cursor stop (review W2/W3): Left/Right and a/d step it
