@@ -84,6 +84,18 @@ function Get-RowIndex {
 # the owner asked for. This is the one assertion that actually pins the order.
 Assert-Equal 'Account,Remote,Model,Effort,Advisor,Permission,Mode' (((Get-LaunchRows) | ForEach-Object { $_.Name }) -join ',') 'the row order is account, remote, model, effort, advisor, permission, mode - action left this screen for the project screen (Task 9)'
 
+# --- New-ListRow: mark + label + tail + age, one layout for every list ----------------------------
+$row = New-ListRow -Mark '   ' -Label 'alpha' -Tail 'C:\Users\sample\alpha' -Age '4 min' -Width 60
+Assert-Equal 60 (Get-DisplayWidth -Text $row) 'New-ListRow fills exactly the width it is given'
+Assert-True ($row.StartsWith('   alpha ')) 'mark and label lead the row'
+Assert-True ($row.EndsWith(' 4 min')) 'the age is the last column'
+Assert-True ($row.Contains('C:\Users\sample\alpha')) 'and the tail sits between them'
+$narrow = New-ListRow -Mark ' > ' -Label ('x' * 70) -Tail 'C:\p' -Age '2 d' -Width 40
+Assert-Equal 40 (Get-DisplayWidth -Text $narrow) 'a label longer than the row is clamped, never overflowing'
+Assert-True ($narrow.EndsWith(' 2 d')) 'and the age still survives'
+$noTail = New-ListRow -Mark '   ' -Label 'name' -Tail 'C:\very\long\path\that\cannot\fit' -Age '1 h' -Width 20
+Assert-True (-not $noTail.Contains('C:\')) 'a tail with fewer than 9 cells of room is dropped rather than cut to nothing'
+
 # --- screen 1 -----------------------------------------------------------------------------
 
 # Enter alone must reproduce today's launcher exactly: work account, remote on, new session.
@@ -3100,7 +3112,7 @@ try {
 # (review W5).
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1051) { Write-Host "COULD NOT RUN: expected 1051 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1058) { Write-Host "COULD NOT RUN: expected 1058 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

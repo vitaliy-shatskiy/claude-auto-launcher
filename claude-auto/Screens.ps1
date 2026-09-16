@@ -647,6 +647,24 @@ function Get-LaunchFrame {
     return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch)
 }
 
+function New-ListRow {
+    # mark + label + pad + tail + ' ' + age, in exactly -Width cells. The label is clamped FIRST so a
+    # very long name cannot push the age off the row; the tail (a path, a snippet) takes whatever is
+    # left and is dropped below 9 cells - a nine-character path fragment identifies nothing. Both
+    # the project screen and the session picker draw their rows through here; the two copies they
+    # carried before differed only in which column they cut first.
+    # -TrailingSpace: the session picker's rows put the separator AFTER the age (age + ' ') rather
+    # than before it (' ' + age) - a difference from the project rows that predates this function
+    # and is kept verbatim rather than reflowed, since the byte-identity rule covers text, not taste.
+    param([string]$Mark = '   ', [string]$Label = '', [string]$Tail = '', [string]$Age = '', [int]$Width, [switch]$Ascii, [switch]$TrailingSpace)
+    $ageCol = if ($Age) { if ($TrailingSpace) { $Age + ' ' } else { ' ' + $Age } } else { '' }
+    $label = Limit-Line -Text $Label -Max ([Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $ageCol) - 2)) -Ascii:$Ascii
+    $room = $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $ageCol) - 3
+    $tail = if ($Tail -and $room -gt 8) { Limit-Line -Text $Tail -Max $room -Ascii:$Ascii } else { '' }
+    $pad = [Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $tail) - (Get-DisplayWidth -Text $ageCol))
+    return $Mark + $label + (' ' * $pad) + $tail + $ageCol
+}
+
 function Get-ProjectFrame {
     # Where the session will run, and what it will do there. Pure like every builder in this file.
     # The pinned rows (current directory, enter a path) sit after the registry so the common case -
@@ -747,25 +765,11 @@ function Get-ProjectFrame {
             $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
             $name = $r.Item.Name
             if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
-            # A very long name must not itself push the age column off the row: clamped BEFORE the
-            # path gets whatever room is left, so a 60-character project name at 50 columns still
-            # shows how recently the project was used instead of New-Box's own clamp cutting the
-            # age off the end of an overlong raw line.
-            $name = Limit-Line -Text $name -Max ([Math]::Max(1, $inner - $mark.Length - $age.Length - 2))
-            # The path is what disambiguates two folders of the same name, so it is the column that
-            # gets cut, never the name.
-            $room = $inner - $mark.Length - $name.Length - $age.Length - 4
-            $tail = if ($room -gt 8) { (Limit-Line -Text $r.Item.Path -Max $room) } else { '' }
-            $pad = [Math]::Max(1, $inner - $mark.Length - $name.Length - $tail.Length - $age.Length - 1)
-            $body += $mark + $name + (' ' * $pad) + $tail + ' ' + $age
+            $body += New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii
         } elseif ($r.Kind -eq 'cwd') {
             # The reader must see which directory the row means - rendered like a project row's
             # name+path columns, minus the age no pinned row has a real LastActivity for.
-            $name = $r.Item.Name
-            $room = $inner - $mark.Length - $name.Length - 3
-            $tail = if ($room -gt 8) { (Limit-Line -Text $r.Item.Path -Max $room) } else { '' }
-            $pad = [Math]::Max(1, $inner - $mark.Length - $name.Length - $tail.Length - 1)
-            $body += $mark + $name + (' ' * $pad) + $tail
+            $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii
         } else {
             $body += $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
         }
@@ -1053,6 +1057,33 @@ function Get-PickerFrame {
     $leftWidth = if ($wide) { [Math]::Max(28, [int](($Width - 2) * 0.4)) } else { $Width - 2 }
     $rightWidth = ($Width - 2) - $leftWidth - 1
 
+    # Shared by both list loops below (narrow and wide) so the label/where/what computation is not
+    # duplicated a third time. A nested function, not a scriptblock, so it needs no .GetNewClosure()
+    # to see $Scope/$Now/$g/$Ascii/$leftWidth/$Index from Get-PickerFrame's own scope.
+    function New-SessionRow {
+        param($Item, $RowIndex)
+        $mark = if ($RowIndex -eq $Index) { " $($g.Cursor) " } else { '   ' }
+        # Under -Scope project every row IS the same project - naming it on each one is pure
+        # noise, so it is dropped here and the room it frees goes to the snippet below.
+        $where = if ($Scope -eq 'project') { '' } else { $Item.Project }
+        if ($Item.Worktree) { $where = "$($g.Worktree) $($Item.Worktree)" }
+        $age = Format-RelativeAge -From $Item.Modified -Now $Now
+        $what = if ($Item.LastUser) { $Item.LastUser } elseif ($Item.Title) { $Item.Title } else { '' }
+        # The project alone does not identify a session: on this machine twelve consecutive rows
+        # are all the same repository. The snippet is what makes the list scannable.
+        $room = $leftWidth - $mark.Length - $age.Length - 2
+        $label = $where
+        # Minor (fix round 1): with $where dropped to '' under -Scope project, the old fixed
+        # '  ' separator left the label starting with two dead spaces nobody could read anything
+        # into. Built from only the non-empty parts, and the freed width goes to the snippet -
+        # reclaiming, not just hiding, the columns -Scope project frees.
+        if ($what -and $room -gt ($where.Length + 4)) {
+            $sep = if ($where) { '  ' } else { '' }
+            $label = $where + $sep + (Limit-Line -Text $what -Max ($room - $where.Length - $sep.Length))
+        }
+        return (New-ListRow -Mark $mark -Label $label -Age $age -Width $leftWidth -Ascii:$Ascii -TrailingSpace)
+    }
+
     if (-not $wide) {
         # 6 rows reserved for the preview, BEFORE the viewport is sized: one header (project,
         # worktree, message count, date - the columns the narrow list has no room for), one
@@ -1063,29 +1094,7 @@ function Get-PickerFrame {
 
         $list = @()
         for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
-            $s = $items[$i]
-            $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
-            # Under -Scope project every row IS the same project - naming it on each one is pure
-            # noise, so it is dropped here and the room it frees goes to the snippet below.
-            $where = if ($Scope -eq 'project') { '' } else { $s.Project }
-            if ($s.Worktree) { $where = "$($g.Worktree) $($s.Worktree)" }
-            $age = Format-RelativeAge -From $s.Modified -Now $Now
-            $what = if ($s.LastUser) { $s.LastUser } elseif ($s.Title) { $s.Title } else { '' }
-            # The project alone does not identify a session: on this machine twelve consecutive rows
-            # are all the same repository. The snippet is what makes the list scannable.
-            $room = $leftWidth - $mark.Length - $age.Length - 2
-            $label = $where
-            # Minor (fix round 1): with $where dropped to '' under -Scope project, the old fixed
-            # '  ' separator left the label starting with two dead spaces nobody could read anything
-            # into. Built from only the non-empty parts, and the freed width goes to the snippet -
-            # reclaiming, not just hiding, the columns -Scope project frees.
-            if ($what -and $room -gt ($where.Length + 4)) {
-                $sep = if ($where) { '  ' } else { '' }
-                $label = $where + $sep + (Limit-Line -Text $what -Max ($room - $where.Length - $sep.Length))
-            }
-            $pad = [Math]::Max(1, $leftWidth - $mark.Length - $label.Length - $age.Length - 1)
-            $list += $mark + (Limit-Line -Text $label -Max ($leftWidth - $mark.Length - $age.Length - 2)) +
-                     (' ' * $pad) + $age + ' '
+            $list += New-SessionRow -Item $items[$i] -RowIndex $i
         }
 
         # Single column: the selected session's preview goes underneath the list.
@@ -1120,25 +1129,7 @@ function Get-PickerFrame {
     $vp = Get-Viewport -Count $items.Count -Index $Index -Visible $bodyRows
     $list = @()
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
-        $s = $items[$i]
-        $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
-        # Same drop as the narrow branch above - every row is the same project under -Scope project.
-        $where = if ($Scope -eq 'project') { '' } else { $s.Project }
-        if ($s.Worktree) { $where = "$($g.Worktree) $($s.Worktree)" }
-        $age = Format-RelativeAge -From $s.Modified -Now $Now
-        $what = if ($s.LastUser) { $s.LastUser } elseif ($s.Title) { $s.Title } else { '' }
-        # The project alone does not identify a session: on this machine twelve consecutive rows
-        # are all the same repository. The snippet is what makes the list scannable.
-        $room = $leftWidth - $mark.Length - $age.Length - 2
-        $label = $where
-        # Same reclaim as the narrow branch above.
-        if ($what -and $room -gt ($where.Length + 4)) {
-            $sep = if ($where) { '  ' } else { '' }
-            $label = $where + $sep + (Limit-Line -Text $what -Max ($room - $where.Length - $sep.Length))
-        }
-        $pad = [Math]::Max(1, $leftWidth - $mark.Length - $label.Length - $age.Length - 1)
-        $list += $mark + (Limit-Line -Text $label -Max ($leftWidth - $mark.Length - $age.Length - 2)) +
-                 (' ' * $pad) + $age + ' '
+        $list += New-SessionRow -Item $items[$i] -RowIndex $i
     }
 
     $s = $items[$Index]
