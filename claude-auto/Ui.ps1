@@ -512,7 +512,25 @@ function Expand-SessionPage {
     try { $page = @(& $FetchMore $offset $Scope) }
     catch [System.ArgumentException] { throw }
     catch [System.Management.Automation.ParameterBindingException] { throw }
-    catch { $page = @() }
+    catch {
+        $page = @()
+        # Same log the launcher's UI try/catch writes (claude-auto.ps1), for the same reason: a
+        # fetcher failure here used to vanish with nothing in the launcher log but start/ui/decision/
+        # exit. $RunId is script-scope in the launcher, not in this file, so read it defensively;
+        # tests load Ui.ps1 on its own (no Env.ps1), so skip silently when the function is not there.
+        if (Get-Command Write-LauncherLog -ErrorAction SilentlyContinue) {
+            $logArgs = @{
+                Stage = 'error'
+                Data  = @{
+                    where   = 'Expand-SessionPage'
+                    type    = $_.Exception.GetType().Name
+                    message = $_.Exception.Message.Substring(0, [Math]::Min(300, $_.Exception.Message.Length))
+                }
+            }
+            if ($script:RunId) { $logArgs.RunId = $script:RunId }
+            $null = Write-LauncherLog @logArgs
+        }
+    }
     $seen = @{}
     foreach ($s in $Sessions) { $seen["$($s.SessionId)|$($s.Path)"] = $true }
     $added = @($page | Where-Object { $_ -and -not $seen["$($_.SessionId)|$($_.Path)"] })

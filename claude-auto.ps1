@@ -380,6 +380,25 @@ if ($UseUi) {
             # The flag lets the Preview block downstream report the cancellation instead.
             if ($Preview) { $previewPickerCancelled = $true; break }
         }
+    } catch {
+        # The morning crash this exists for: the picker block died with "not recognized" and the
+        # launcher log carried nothing about it - only start/ui/decision/exit. Log before rethrow so
+        # behaviour on the console stays identical to today; the logger is silent by contract
+        # (Write-LauncherLog, Env.ps1) so this never adds console noise of its own. Non-terminating
+        # errors are not caught here - fine for now.
+        # -not $Preview, same guard as the 'start'/'cancelled' stages above: a preview run's scripted
+        # key queue is EXPECTED to run out and throw (that is how the finite key list ends a preview),
+        # and preview must stay side-effect-free - caught live running tests\preview.ps1 during this
+        # change, which wrote real 'error' records to the owner's actual launcher log.
+        if (-not $Preview) {
+            $null = Write-LauncherLog -Stage 'error' -RunId $RunId -Data @{
+                where    = 'ui'
+                type     = $_.Exception.GetType().Name
+                message  = $_.Exception.Message.Substring(0, [Math]::Min(300, $_.Exception.Message.Length))
+                position = "$($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber)"
+            }
+        }
+        throw
     } finally {
         $null = Close-ClaudeConsoleInput -State $mouse
         if ($alt) { Exit-AltBuffer }

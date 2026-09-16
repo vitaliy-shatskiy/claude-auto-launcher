@@ -646,7 +646,21 @@ $projActionWrite = @($launcherAst.FindAll({ param($n) $n -is [System.Management.
     "$($n.Left.Extent.Text)" -eq '$state.ProjectAction' }, $true))
 Assert-Equal 0 $projActionWrite.Count 'and nothing parks the chosen action on the launch state for Prefs.ps1 to pick up'
 
-if ($script:Ran -ne 132) { Write-Host "COULD NOT RUN: expected 132 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the UI block logs an error before it fails --------------------------------------------------
+# The morning crash this exists for: the picker block died with "not recognized" and the launcher
+# log (Write-LauncherLog, Env.ps1) carried nothing about it - only start/ui/decision/exit. Pinned as
+# SOURCE, like the blocks above, because the try/finally around the picker loop has a console and no
+# suite can drive it into throwing for real. Positive control: the try/finally itself must be found.
+$uiTry = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and
+    "$($n.Finally.Extent.Text)" -match 'Close-ClaudeConsoleInput' }, $true))
+Assert-Equal 1 $uiTry.Count 'claude-auto.ps1 has exactly one try/finally that closes the console input'
+$uiCatch = @($uiTry[0].CatchClauses)
+Assert-Equal 1 $uiCatch.Count 'and it has exactly one catch clause'
+$uiCatchText = "$($uiCatch[0].Body.Extent.Text)"
+Assert-True ($uiCatchText -match "Write-LauncherLog\s+-Stage\s+'error'") 'the catch logs an error record before failing'
+Assert-True ($uiCatchText -match '(?s)Write-LauncherLog.*throw') 'and rethrows after logging, so console behaviour stays identical to today'
+
+if ($script:Ran -ne 136) { Write-Host "COULD NOT RUN: expected 136 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

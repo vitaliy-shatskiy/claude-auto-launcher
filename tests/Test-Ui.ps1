@@ -15,6 +15,17 @@ try {
     Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
 } catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
 
+# Env.ps1 is dot-sourced above (for the model-label helpers) so its REAL Write-LauncherLog is in
+# scope too, and Expand-SessionPage's error-logging catch (Ui.ps1) now calls it on every IO-failure
+# fixture in this file, including the ones that predate that catch. Defined here, before any test
+# runs, so nothing in this file - old or new - appends to the owner's real launcher log; function
+# lookup is last-wins in this scope, so this simply shadows Env.ps1's definition for the whole file.
+$script:loggedCalls = @()
+function Write-LauncherLog {
+    param([string]$Stage, [hashtable]$Data = @{}, [string]$RunId, [string]$Root)
+    $script:loggedCalls += [pscustomobject]@{ Stage = $Stage; Data = $Data }
+}
+
 $script:Failed = 0
 $script:Ran = 0
 function Assert-Equal {
@@ -2886,8 +2897,18 @@ $n2Io = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) throw 
 Assert-Equal 0 $n2Io.Added 'an IO failure still ends the paging quietly'
 Assert-Equal $true $n2Io.Exhausted 'and marks the list exhausted rather than taking the picker down'
 
+# The same IO failure must also reach the launcher log - the morning crash this exists for left
+# nothing there but start/ui/decision/exit. Write-LauncherLog is stubbed at the top of this file
+# (Env.ps1's own definition never runs here), so this reads what Expand-SessionPage recorded
+# instead of writing to the real log file.
+$script:loggedCalls = @()
+$null = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) throw [IO.IOException]::new('the projects root vanished') } -Fetched 1
+$n2ErrLogs = @($script:loggedCalls | Where-Object { $_.Stage -eq 'error' })
+Assert-Equal 1 $n2ErrLogs.Count 'and the IO failure logs exactly one error record'
+Assert-Equal 'Expand-SessionPage' $n2ErrLogs[0].Data.where 'tagged with where it happened'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1013) { Write-Host "COULD NOT RUN: expected 1013 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1015) { Write-Host "COULD NOT RUN: expected 1015 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
