@@ -3207,6 +3207,13 @@ try {
     $uiFilterRecs = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.ContainsKey('filter') })
     Assert-Equal 'open,close,open,clear' (($uiFilterRecs | ForEach-Object { $_.Data.filter }) -join ',') 'and each says which of the three it was'
     Assert-Equal '1,2' ((@($uiFilterRecs | Where-Object { $_.Data.ContainsKey('filterLength') }) | ForEach-Object { $_.Data.filterLength }) -join ',') 'with the LENGTH of the filter each close was carrying'
+    # Clearing the filter sends the cursor home, and the record is written after that has happened -
+    # so the index it reports has to be captured before the reset or every clear claims row 0.
+    $script:uiRecords = @()
+    $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', '/', 'Escape', 'Escape'))
+    $uiClearRow = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.filter -eq 'clear' })[0]
+    Assert-Equal 1 $uiClearRow.Data.index 'and the clear record names the row the cursor was on, not the 0 the clear moved it to'
 
     # The two mouse gestures that write a record, driven over a REAL frame's row map so the
     # coordinates are the ones a click actually arrives in.
@@ -3236,6 +3243,111 @@ try {
         'key:project:doubleclick -> action,button,index,key,screen'
         'screen:project:leave -> filterLength,index,ms,name,phase,rows'
     ) -join ' | ') ((& $uiFields) -join ' | ') 'and the double click record names the row button and the action it committed'
+
+    # The PICKER's own records. The 11-record run above drives Tab and Escape only; everything else
+    # this screen writes - the fork, the three filter records, a double click, and the two presses
+    # that write NOTHING AT ALL - is pinned here, in the same shape and against the same contract.
+    $pkFake = @(
+        [pscustomobject]@{ SessionId = 'pk000001'; Project = 'gamma'; Slug = 'G'; Worktree = $null; Modified = (Get-Date '2026-09-16 09:00'); SizeBytes = 4096; PromptCount = 4; Title = 'alpha one'; LastUser = 'u'; LastAssistant = 'a' }
+        [pscustomobject]@{ SessionId = 'pk000002'; Project = 'gamma'; Slug = 'G'; Worktree = $null; Modified = (Get-Date '2026-09-16 08:00'); SizeBytes = 4096; PromptCount = 4; Title = 'beta two';  LastUser = 'u'; LastAssistant = 'a' }
+    )
+    # Tab THEN f: the fork record must carry the scope the owner was looking at when he pressed it,
+    # not the one the picker opened in - which is what makes `scope` a field of every record here
+    # rather than of the screen ones alone.
+    $script:uiRecords = @()
+    $pkFork = Invoke-SessionPicker -Sessions $pkFake -ProjectSlug @('G') -ProjectName 'gamma' -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('Tab', 'f'))
+    Assert-Equal $true $pkFork.Fork 'f forks the selected session'
+    Assert-Equal (@(
+        'screen:picker:enter -> filterLength,index,name,phase,rows,scope'
+        'key:picker:Tab -> index,key,scope,screen'
+        'key:picker:f -> fork,index,key,scope,screen'
+        'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'the fork record says it forked, and rides the scope every picker record carries'
+
+    # Opening the filter and CLEARING it. The clear record is written after the handler ran, so the
+    # index it reports is the one the owner was standing on - not the 0 the clear resets him to.
+    $script:uiRecords = @()
+    $null = Invoke-SessionPicker -Sessions $pkFake -ProjectSlug @('G') -ProjectName 'gamma' -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow', '/', 'Escape', 'Escape'))
+    Assert-Equal (@(
+        'screen:picker:enter -> filterLength,index,name,phase,rows,scope'
+        'key:picker:/ -> filter,index,key,scope,screen'
+        'key:picker:Escape -> filter,filterLength,index,key,scope,screen'
+        'key:picker:Escape -> index,key,scope,screen'
+        'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'opening the picker filter and clearing it with Escape each carry exactly these fields'
+    $pkClear = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.filter -eq 'clear' })[0]
+    Assert-Equal 1 $pkClear.Data.index 'and the clear record names the row the cursor was on, not the 0 the clear moved it to'
+
+    # And CLOSING it with Enter, which keeps the filter: a different record, with the length of what
+    # was typed and never the text.
+    $script:uiRecords = @()
+    $null = Invoke-SessionPicker -Sessions $pkFake -ProjectSlug @('G') -ProjectName 'gamma' -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('/', 'b', 'e', 'Enter', 'Escape'))
+    Assert-Equal (@(
+        'screen:picker:enter -> filterLength,index,name,phase,rows,scope'
+        'key:picker:/ -> filter,index,key,scope,screen'
+        'key:picker:Enter -> filter,filterLength,index,key,scope,screen'
+        'key:picker:Escape -> index,key,scope,screen'
+        'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'two typed characters produce no records of their own - only the / that opened the box and the Enter that closed it'
+    $pkClose = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.filter -eq 'close' })[0]
+    Assert-Equal 2 $pkClose.Data.filterLength 'with the LENGTH of the filter it closed on'
+
+    # No key LEAKS past an open filter box. 'f' is the dangerous one: it forks, which starts a
+    # session, and typing a word with an f in it must never do that.
+    $script:uiRecords = @()
+    $pkLeak = Invoke-SessionPicker -Sessions $pkFake -ProjectSlug @('G') -ProjectName 'gamma' -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('/', 'f', 'Escape', 'Escape'))
+    Assert-True ($null -eq $pkLeak) 'an f typed into an open filter filters - it does not fork'
+    Assert-Equal (@(
+        'screen:picker:enter -> filterLength,index,name,phase,rows,scope'
+        'key:picker:/ -> filter,index,key,scope,screen'
+        'key:picker:Escape -> filter,filterLength,index,key,scope,screen'
+        'key:picker:Escape -> index,key,scope,screen'
+        'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'and leaves no key record for it either'
+
+    # `rows` means two different things on this screen, and both are the truth: on ENTER it is the
+    # page the picker was HANDED, on LEAVE what was on screen after the scope, the zero-prompt drop
+    # and the filter. Three handed in, one of them empty, two ever shown.
+    $pkC9 = @($pkFake[0],
+              [pscustomobject]@{ SessionId = 'pk000003'; Project = 'gamma'; Slug = 'G'; Worktree = $null; Modified = (Get-Date '2026-09-16 07:00'); SizeBytes = 4096; PromptCount = 0; Title = 'never started'; LastUser = ''; LastAssistant = '' },
+              $pkFake[1])
+    $script:uiRecords = @()
+    $null = Invoke-SessionPicker -Sessions $pkC9 -ProjectSlug @('G') -ProjectName 'gamma' -Draw {} -ReadKey (New-ScriptedKeyReader -Keys @('Escape'))
+    $pkEnterRec = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.phase -eq 'enter' })[0]
+    $pkLeaveRec = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.phase -eq 'leave' })[0]
+    Assert-Equal 3 $pkEnterRec.Data.rows 'the picker enter record counts the page it was HANDED, empty sessions included'
+    Assert-Equal 2 $pkLeaveRec.Data.rows 'and the leave record counts what was actually on screen'
+
+    # The two presses that decide NOTHING and say nothing: Enter and f on an empty list. A record
+    # there would claim a session was opened.
+    $script:uiRecords = @()
+    $pkEmpty = Invoke-SessionPicker -Sessions @() -ProjectSlug @('G') -ProjectName 'gamma' -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('Enter', 'f', 'Escape'))
+    Assert-True ($null -eq $pkEmpty) 'Enter and f on an empty picker open nothing'
+    Assert-Equal (@(
+        'screen:picker:enter -> filterLength,index,name,phase,rows,scope'
+        'key:picker:Escape -> index,key,scope,screen'
+        'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'and write no key record at all - only the Escape that left'
+
+    # The double click, over a REAL frame's row map so the coordinates are the ones a click arrives
+    # in. Second row: the record must name the row the pointer was on, not where the cursor started.
+    $pkMap = $null
+    $null = Get-PickerFrame -Sessions $pkFake -Index 0 -Filter '' -Scope 'project' -ProjectName 'gamma' -Width 80 -Height 24 -RowMap ([ref]$pkMap)
+    $pkMapDraw = { param($s, $i, $f, $sc, $pn) $pkMap }.GetNewClosure()
+    $script:uiRecords = @()
+    $wPkDbl = New-EventReader @((New-MouseEvent -X 4 -Y ($pkMap.FirstRowY + 1) -Left -Double))
+    $pkDbl = Invoke-SessionPicker -Sessions $pkFake -ProjectSlug @('G') -ProjectName 'gamma' -ReadKey $wPkDbl -Draw $pkMapDraw -Wait $wPkDbl -GetWindowTop { 0 }
+    Assert-Equal 'pk000002' $pkDbl.Session.SessionId 'a double click opens the row under the pointer'
+    Assert-Equal (@(
+        'screen:picker:enter -> filterLength,index,name,phase,rows,scope'
+        'key:picker:doubleclick -> button,index,key,scope,screen'
+        'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'and its record names the row button, the index it landed on and the scope'
 
     # The free path is the owner's own directory name - the one string on these screens that is
     # nobody's business but his. Read-ClaudeFreePath is driven directly here: the project screen's
@@ -3395,7 +3507,7 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
     }
 Assert-Equal 'dbl@2' $r 'a row double click moves the index to the clicked row before the handler picks'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1118) { Write-Host "COULD NOT RUN: expected 1118 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1133) { Write-Host "COULD NOT RUN: expected 1133 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
