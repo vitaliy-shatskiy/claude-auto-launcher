@@ -403,6 +403,11 @@ function Get-PhysicalDirectoryPath {
     # Memoised at the public entry only. A launcher run asks about the same two or three roots over
     # and over, and each ask walks the whole component chain; the answer cannot change inside one
     # short-lived process without somebody re-pointing a junction under it.
+    if ($Depth -eq 0) {
+        if ($null -eq $script:PhysicalPathMemo) { $script:PhysicalPathMemo = @{} }
+        $memoKey = $Path.ToLowerInvariant()
+        if ($script:PhysicalPathMemo.ContainsKey($memoKey)) { return $script:PhysicalPathMemo[$memoKey] }
+    }
     $p = $Path
     try {
         # $true = resolve the FINAL target: a chain of links must land on the real directory, not on
@@ -430,6 +435,7 @@ function Get-PhysicalDirectoryPath {
     # A drive root is 'C:\' and trimming it to 'C:' changes what it means; nothing else needs its
     # trailing separator.
     if ($p.Length -gt 3) { $p = $p.TrimEnd([char]92, [char]47) }
+    if ($Depth -eq 0) { $script:PhysicalPathMemo[$memoKey] = $p }
     return $p
 }
 
@@ -522,7 +528,9 @@ function Read-SessionsCache {
             # sharing), so the launcher's own cache read silently ate other launchers' writes.
             $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
                                   [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
-            try { $text = [IO.StreamReader]::new($fs).ReadToEnd() } finally { $fs.Dispose() }
+            $sr = $null
+            try { $sr = [IO.StreamReader]::new($fs); $text = $sr.ReadToEnd() }
+            finally { if ($sr) { $sr.Dispose() } else { $fs.Dispose() } }
             $cache = @{}
             ($text | ConvertFrom-Json -ErrorAction Stop).PSObject.Properties |
                 ForEach-Object { $cache[$_.Name] = $_.Value }

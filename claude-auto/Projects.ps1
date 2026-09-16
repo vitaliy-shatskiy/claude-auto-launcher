@@ -216,18 +216,21 @@ function Set-LaunchStartProject {
     $startInfo = Resolve-StartProject -Cwd $Cwd -Remembered "$($State.Project)" -Projects $Projects
     $State.Project = $startInfo.Path
     $State.ProjectSlug = ''
-    if ($null -ne $State.PSObject.Properties['ProjectSlugs']) { $State.ProjectSlugs = @() }
+    # Written unconditionally, exactly like Project and ProjectSlug above it. A guard on
+    # PSObject.Properties looked defensive and was worse: on a state that did not carry the property
+    # it SILENTLY dropped the write instead of failing (re-review 2026-09-16, W3). Add-Member -Force
+    # is one statement that sets it whether or not the property is already there.
+    $slugs = @()
     if ($State.Project) {
         $key = ConvertTo-ProjectKey $State.Project
         $hit = @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $key })
         if ($hit.Count -gt 0) {
             $State.ProjectSlug = $hit[0].Slug
             # EVERY slug of that directory: one row can carry several (Get-ProjectRegistry).
-            if ($null -ne $State.PSObject.Properties['ProjectSlugs']) {
-                $State.ProjectSlugs = @($hit | ForEach-Object { if ($_.Slugs) { $_.Slugs } else { $_.Slug } })
-            }
+            $slugs = @($hit | ForEach-Object { if ($_.Slugs) { $_.Slugs } else { $_.Slug } })
         }
     }
+    $State | Add-Member -NotePropertyName ProjectSlugs -NotePropertyValue $slugs -Force
     return $startInfo.Source
 }
 

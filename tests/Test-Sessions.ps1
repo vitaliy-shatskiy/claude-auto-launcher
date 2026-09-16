@@ -714,6 +714,18 @@ $snapWalk = @(@($snapP1) + @($snapP2) + @($snapP3) | ForEach-Object SessionId)
 Assert-Equal ($snapExpected -join ',') ($snapWalk -join ',') 'pages over the snapshot compose with no gap and no repeat, although a transcript was appended between two of them'
 $snapGone = @($snapshot) + @(Join-Path $snapDir 'never-existed.jsonl')
 Assert-Equal 6 (@(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Files $snapGone -Limit 100)).Count 'a transcript deleted since the snapshot was taken is dropped from the page, never fatal'
+# PRESENCE, not emptiness: an empty snapshot is "this scope holds nothing", and falling through to
+# the enumeration there is how a scoped picker was handed the whole account (re-review, C1).
+$snapEmpty = [string[]]@()
+Assert-Equal 0 (@(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Files $snapEmpty -Limit 100)).Count '-Files @() means the scope holds no transcripts, NOT that no snapshot was given'
+Assert-Equal 6 (@(Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Limit 100)).Count 'and the same call without -Files still enumerates the root'
+# A snapshot already carries its scope, so a slug beside it is a contradiction, not a refinement.
+$snapBoth = $false
+try { $null = Get-ClaudeSessions -ProjectsRoot $snapRoot -CachePath $snapCache -Files $snapshot -ProjectSlug 'C--src-shift' } catch { $snapBoth = $true }
+Assert-Equal $true $snapBoth '-ProjectSlug beside -Files is a parameter error, not a silently ignored argument'
+# The scope is a LIST: one directory can own several slug folders.
+Assert-Equal 6 (@(Get-ClaudeSessionFile -ProjectsRoot $snapRoot -ProjectSlug @('C--src-shift', 'C--src-absent'))).Count 'a multi-slug scope snapshots every one of its slug folders'
+Assert-Equal 0 (@(Get-ClaudeSessionFile -ProjectsRoot $snapRoot -ProjectSlug @('C--src-absent', 'C--src-gone'))).Count 'and a scope whose slugs hold nothing snapshots nothing'
 Remove-Item -LiteralPath $snapRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- the shared cache: who may prune it, and what happens when it is busy --------------------------
@@ -878,7 +890,7 @@ $pfEsc = Join-Path $pfDir 'eeee3333.jsonl'
 Assert-Equal 'escaped key prompt' (Get-ClaudeSessionSummary -Path $pfEsc -ProjectPath 'C:\src\pf').Title 'a \u-escaped type key is decoded by the parser, so the pre-filter must not skip the line on a literal miss'
 Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 162) { Write-Host "COULD NOT RUN: expected 162 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 167) { Write-Host "COULD NOT RUN: expected 167 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
