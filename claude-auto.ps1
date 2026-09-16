@@ -69,7 +69,11 @@ if ($ModulesOk) {
 # session rather than to no session. Loud on purpose: MCP servers and the account choice are gone
 # in this mode, and silently starting a crippled session would be worse than saying so.
 if (-not $ModulesOk) {
-    Write-Host "  starting WITHOUT profile choice, secrets or MCP config - fix the error above" -ForegroundColor Red
+    # The run id is on this line because it is the ONLY place it can be read for such a run: the
+    # records below are all this failure leaves, and `Show-LauncherRun.ps1 -Run <id>` is how they are
+    # read back. (-Last reaches them too, but a console line the owner can copy costs nothing.) The
+    # LOGGER stays silent - this branch already prints, which is why the id goes here and nowhere else.
+    Write-Host "  starting WITHOUT profile choice, secrets or MCP config - fix the error above (run $RunId)" -ForegroundColor Red
     # This branch exits, so it is the only chance to record WHICH module failed and why: the console
     # line above scrolls away under Claude's own output within seconds. Get-Command because Env.ps1
     # itself may be the module that did not load; -not $Preview because a preview run must stay

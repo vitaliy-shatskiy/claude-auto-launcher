@@ -719,13 +719,19 @@ Assert-Equal '"$($state.Project)"' $chosenFields['path'] 'beside the project it 
 # to the LOG, which is where a failure that only happens on the owner's machine has to land.
 $modLoadCall = @($logCalls | Where-Object { (& $pairsOf (& $argOf $_ 'Data'))['where'] -eq "'module-load'" })
 Assert-Equal 1 $modLoadCall.Count 'a module that fails to load leaves an error record of its own'
+# ...and the console line of that same branch carries the run id. Those records plus `start` are all
+# such a run leaves, and the console line is the only place their id can be read at the time.
+$fallbackSay = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+    "$($n.GetCommandName())" -eq 'Write-Host' -and "$($n.Extent.Text)" -match 'starting WITHOUT' }, $true))
+Assert-Equal 1 $fallbackSay.Count 'the bare-session fallback says so on the console'
+Assert-True ("$($fallbackSay[0].Extent.Text)" -match '\$RunId') 'and prints the run id with it'
 # Captured once, and before the screen: after the loop $state.Project is the final pick.
 $preselectAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     "$($n.Left.Extent.Text)" -eq '$preselectPath' }, $true))
 Assert-Equal 1 $preselectAssign.Count 'the preselected path is captured in exactly one place'
 Assert-True ($preselectAssign[0].Extent.StartOffset -lt $projScreenCall[0].Extent.StartOffset) 'and BEFORE the project screen runs, or it is just the final pick under another name'
 
-if ($script:Ran -ne 151) { Write-Host "COULD NOT RUN: expected 151 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 153) { Write-Host "COULD NOT RUN: expected 153 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

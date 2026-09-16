@@ -66,7 +66,11 @@ if (-not $records) { Write-Host 'no readable records (every record had an unusab
 if (-not $Run) {
     if (-not $Last) { Write-Host 'give -Run <id> or -Last'; exit 1 }
     $candidates = $records | Where-Object { $_.run } | Sort-Object { $_._ts } -Descending
-    if (-not $Any) { $uiRuns = ($candidates | Where-Object { $_.stage -eq 'ui' -or ($_.stage -eq 'decision' -and $_.useUi) } | Select-Object -ExpandProperty run -Unique); $candidates = $candidates | Where-Object { $uiRuns -contains $_.run } }
+    # A module-load failure counts as "reached the UI" for this purpose even though it never got
+    # there: the launcher exits through the bare-session fallback, writing no ui record and never
+    # reaching the decision, so without this the only trace of that failure is findable solely by an
+    # id nobody has (the fallback's console line now prints it, but that scrolls away in seconds).
+    if (-not $Any) { $uiRuns = ($candidates | Where-Object { $_.stage -eq 'ui' -or ($_.stage -eq 'decision' -and $_.useUi) -or ($_.stage -eq 'error' -and $_.where -eq 'module-load') } | Select-Object -ExpandProperty run -Unique); $candidates = $candidates | Where-Object { $uiRuns -contains $_.run } }
     $Run = ($candidates | Select-Object -First 1).run
     if (-not $Run) { Write-Host 'no run found'; exit 1 }
 }

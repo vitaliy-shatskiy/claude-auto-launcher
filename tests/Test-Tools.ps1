@@ -216,6 +216,26 @@ try {
     Assert-True ($scrJoined -notmatch 'phase=') 'and no phase= either'
     Assert-True ($scrJoined -notmatch 'screen=project') 'nor screen= on a key record'
 
+    # --- 6c. An ERROR-ONLY run has to be reachable (review W3). A module that fails to load takes the
+    # launcher out through the bare-session fallback: it never writes a ui record and never reaches
+    # the decision, so -Last used to skip it and the only trace of that failure was findable by an id
+    # nobody had. Its own root, so this cannot shift which run -Last picks anywhere else.
+    $modRoot = Join-Path $env:TEMP ("modload-launcher-logs-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force $modRoot | Out-Null
+    try {
+        Set-Content -LiteralPath (Join-Path $modRoot ('claude-auto-{0:yyyy-MM-dd}.jsonl' -f $today)) -Value @(
+            (@{ ts = (Fmt ($today.AddHours(7))); stage = 'start'; run = 'MOD999'; pid = 8001; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress),
+            (@{ ts = (Fmt ($today.AddHours(7).AddSeconds(1))); stage = 'error'; run = 'MOD999'; pid = 8001;
+                where = 'module-load'; module = 'Env.ps1'; type = 'ParseException'; message = 'missing closing brace' } | ConvertTo-Json -Compress)
+        )
+        $rMod = Invoke-Tool @('-Last', '-LogRoot', $modRoot)
+        Assert-Equal 0 $rMod.Code '-Last reaches a run whose only records are start and a module-load error'
+        $modJoined = $rMod.Out -join "`n"
+        Assert-True ($modJoined -match 'run MOD999') 'and names it'
+        Assert-True ($modJoined -match 'where=module-load') 'rendering the failure'
+        Assert-True ($modJoined -match 'module=Env\.ps1') 'with the module that caused it'
+    } finally { Remove-Item -LiteralPath $modRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
     # --- 7. The reader must not lock the file against a concurrent launcher append (item 6): open
     # it the same way the tool now does (Read, sharing ReadWrite) and prove a live append still works.
     $concurrentFile = Join-Path $root ('claude-auto-{0:yyyy-MM-dd}.jsonl' -f $today)
