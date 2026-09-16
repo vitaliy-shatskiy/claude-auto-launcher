@@ -26,6 +26,10 @@ param(
     [string]$Launcher = (Join-Path $PSScriptRoot '..\claude-auto.ps1'),
     [string]$FixtureConfig = (Join-Path $PSScriptRoot 'fixtures\config-preview.json'),
     [string]$Reference = (Join-Path $PSScriptRoot 'preview-reference.local.txt'),
+    # The real entry every launch goes through. Its invocation line is lifted into the scratch shim
+    # (New-ForwarderShim), so the second shape is this machine's actual forwarder shape, not a
+    # retyped guess at it.
+    [string]$Forwarder = (Join-Path $HOME 'bin\claude-auto.ps1'),
     # Capture a fresh reference from the launcher's current preview output instead of comparing.
     [switch]$Record
 )
@@ -46,7 +50,30 @@ $script:Runs = [ordered]@{
     # the actual regression guard, not merely "picker cancelled" (which reads identically whichever
     # way the scoping went).
     'switch-and-resume' = 'RightArrow,Enter,r,Escape'
+    # A project the account has NO sessions for must open an EMPTY picker, never the account's
+    # list. Reached through the 'current directory' row: Get-ProjectRegistry drops a slug
+    # directory with no *.jsonl outright ("No transcript, no path and no activity"), so a
+    # transcript-less project is never a row to select at all. Two fixture rows, then 's,s', lands
+    # on 'current directory', whose cwd is a fixture repo with no slug directory anywhere - over an
+    # account that HAS two sessions. Correct output is "0 sessions"; the failure it guards is that
+    # frame reading "2 sessions".
+    #
+    # What it does NOT cover, measured rather than assumed (review W2): a path outside the registry
+    # has no slugs, so claude-auto.ps1 hands the fetcher an EMPTY slug list and the fetch is
+    # unscoped - the filtering that empties this frame is the picker's own -ProjectName scope. The
+    # fetcher's two [string[]] casts are therefore not on this path: dropping both, dropping
+    # -Files entirely, and dropping the @() around the first page each leave this run GREEN
+    # (Get-ClaudeSessions keys on $PSBoundParameters.ContainsKey('Files'), presence not emptiness,
+    # and the snapshot reaches it through a VARIABLE, which cannot unroll). Those casts are pinned
+    # in source by Test-Maintenance instead, which is the only guard that can fail for them.
+    'unknown-project'   = 'RightArrow,Enter,s,s,r,Escape'
 }
+
+# Per-run working directory. Only the unknown-project run needs one (it is selected BY the cwd), and it
+# has to be a path with a fixed leaf - the picker frame prints that leaf as the project name, so
+# running from wherever the check happened to be invoked would put a machine-dependent word in the
+# reference. Filled in by Initialize-ProjectSlugFixture, which owns the tree it points into.
+$script:RunCwd = @{}
 
 # Fix round 1 (SURVIVING MUTANT, closed the reviewer's way): the project screen used to read the
 # REAL ~/.claude/projects registry with no fixture override at all, so this check could only ever
@@ -75,6 +102,15 @@ function Initialize-ProjectSlugFixture {
         if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
         New-Item -ItemType Directory -Force -Path $p | Out-Null
     }
+    # The DERIVED caches too (claude-auto-projects.json, claude-auto-sessions.json - both land beside
+    # the projects root, Get-ProjectRegistry and Get-SessionsCachePath). Wiping only the tree left
+    # them to accumulate across invocations and, worse, to carry state from the direct shape into the
+    # forwarder shape: two sequential runs over ONE fixture, the second always warm. They hold
+    # derived data only, so this is not a correctness fix - it is what keeps a difference between
+    # the shapes attributable to the shapes (review suspicion).
+    foreach ($c in @(Get-ChildItem -LiteralPath $Root -Filter 'claude-auto-*.json' -File -Force -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $c.FullName -Force -ErrorAction SilentlyContinue
+    }
     $repoA = Join-Path $reposRoot 'repo-a\Shared'
     $repoB = Join-Path $reposRoot 'repo-b\Shared'
     New-Item -ItemType Directory -Force -Path $repoA | Out-Null
@@ -100,6 +136,14 @@ function Initialize-ProjectSlugFixture {
     (Get-Item -LiteralPath (Join-Path $slugADir 'fixture-a.jsonl')).LastWriteTime = (Get-Date)
     (Get-Item -LiteralPath (Join-Path $slugBDir 'fixture-b.jsonl')).LastWriteTime = (Get-Date).AddMinutes(-5)
 
+    # A third repo with NO slug directory anywhere under the projects root: the empty-scope run is
+    # driven from inside it, so the picker opens on a project this account has never held a session
+    # for. Named 'Empty' because the picker frame prints the leaf as the project name and the
+    # reference has to be the same word on every machine.
+    $repoEmpty = Join-Path $reposRoot 'repo-c\Empty'
+    New-Item -ItemType Directory -Force -Path $repoEmpty | Out-Null
+    $script:RunCwd['unknown-project'] = $repoEmpty
+
     return $projectsRoot
 }
 # NOT called here at script load: the wipe/rebuild it does (Remove-Item -Recurse -Force outside the
@@ -121,18 +165,64 @@ function Initialize-ProjectSlugFixture {
 # printed in the frame's own title is what tells the two apart without completing a pick.
 $script:WantedPattern = 'launch args\s*:|command\s*:|remote\s*:|account\s*:|CLAUDE_CONFIG_DIR\s*:|argv count\s*:|picker cancelled|remote off for this session|crc |sessions|no sessions found'
 
+# The launcher is NOT started by its own path in real life. Everything that starts Claude Code -
+# Rider's plugin, claude-auto.cmd, PATH, the nightly audit - points at ~\bin\claude-auto.ps1, a
+# forwarder that runs `& $target @args`. That one level of indirection is not cosmetic: under
+# `pwsh -File claude-auto.ps1` the launcher's body IS the global scope, so its dot-sourced helpers
+# land in global session state; called as `& $target` the body gets a child script scope and they
+# do not. A .GetNewClosure() scriptblock resolves commands against GLOBAL only, so the session
+# picker's page fetcher threw "Get-ClaudeSessionFile is not recognized" through the forwarder and
+# ONLY through the forwarder - the shape every real launch uses and no check ever drove.
+#
+# Written per run rather than committed: it must point at whichever launcher is under test, and a
+# checked-in copy would rot against ~\bin\claude-auto.ps1. The invocation line is LIFTED from that
+# file rather than retyped, minus its missing-checkout fallback (irrelevant here - the guard above
+# already proved the launcher exists). No param() block, for the same reason the launcher has none:
+# adding one changes how --resume, --continue and -p bind.
+#
+# Lifted and not retyped because a retyped shim is unpinned: changed to `pwsh -File $target @args`
+# it ran the -File shape TWICE while the summary still reported "2 invocation shape(s)", leaving the
+# gate blind to the exact defect it exists for (review W1). Matched as a whole line, not searched
+# for as a substring, and a forwarder that no longer has that line STOPS this check (exit 2 through
+# the caller's catch) instead of silently weakening it.
+function New-ForwarderShim {
+    param(
+        [Parameter(Mandatory)][string]$LauncherPath,
+        [string]$Forwarder = (Join-Path $HOME 'bin\claude-auto.ps1')
+    )
+    if (-not (Test-Path -LiteralPath $Forwarder)) {
+        throw "the real forwarder is not at $Forwarder - the shim cannot be pinned against it"
+    }
+    $invocation = @(Get-Content -LiteralPath $Forwarder | Where-Object { $_ -match '^\s*&\s*\$target\s+@args\s*$' })
+    if ($invocation.Count -ne 1) {
+        throw "$Forwarder does not invoke the launcher as '& `$target @args' ($($invocation.Count) matching line(s)) - the shim this check builds would no longer be its shape"
+    }
+    $path = Join-Path $env:TEMP ('claude-auto-fwd-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
+    $literal = (Resolve-Path -LiteralPath $LauncherPath).Path.Replace("'", "''")
+    $text = "# Scratch forwarder - the invocation shape of ~\bin\claude-auto.ps1. Deliberately no param().`r`n" +
+            "`$target = '$literal'`r`n" +
+            $invocation[0].Trim() + "`r`n" +
+            "exit `$LASTEXITCODE`r`n"
+    [IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+    return $path
+}
+
 function Invoke-PreviewRun {
-    param([Parameter(Mandatory)][string]$Keys)
+    param([Parameter(Mandatory)][string]$Keys, [Parameter(Mandatory)][string]$LauncherPath, [string]$WorkingDirectory)
     $savedConfig = $env:CLAUDE_AUTO_CONFIG
     $savedProjectsRoot = $env:CLAUDE_AUTO_PROJECTS_ROOT
+    $pushed = $false
     try {
         $env:CLAUDE_AUTO_CONFIG = $FixtureConfig
         $env:CLAUDE_AUTO_PROJECTS_ROOT = $script:ProjectsFixtureRoot
-        $out = & pwsh -NoProfile -File $Preview -Keys $Keys -Launcher $Launcher -Full 2>&1
+        # The child inherits this, and the project screen's 'current directory' row is built from it.
+        if ($WorkingDirectory) { Push-Location -LiteralPath $WorkingDirectory; $pushed = $true }
+        $out = & pwsh -NoProfile -File $Preview -Keys $Keys -Launcher $LauncherPath -Full 2>&1
         $code = $LASTEXITCODE
         $filtered = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match $script:WantedPattern })
         return @($filtered) + @("preview.ps1 exit: $code")
     } finally {
+        if ($pushed) { Pop-Location }
         if ($null -eq $savedConfig) { Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue }
         else { $env:CLAUDE_AUTO_CONFIG = $savedConfig }
         if ($null -eq $savedProjectsRoot) { Remove-Item Env:CLAUDE_AUTO_PROJECTS_ROOT -ErrorAction SilentlyContinue }
@@ -141,12 +231,31 @@ function Invoke-PreviewRun {
 }
 
 function Get-AllRunOutput {
+    param([Parameter(Mandatory)][string]$LauncherPath)
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($name in $script:Runs.Keys) {
         $lines.Add("=== $name ===")
-        foreach ($l in (Invoke-PreviewRun -Keys $script:Runs[$name])) { $lines.Add($l) }
+        foreach ($l in (Invoke-PreviewRun -Keys $script:Runs[$name] -LauncherPath $LauncherPath -WorkingDirectory $script:RunCwd[$name])) { $lines.Add($l) }
     }
     return , @($lines)
+}
+
+# Positional, not set semantics: order (which run's block comes first, and each line within it) is
+# part of the decision path being pinned.
+#
+# Emits the differing pairs one by one and the caller wraps in @(). NOT `return , @($pairs)`: that
+# idiom plus the caller's own @() double-wraps - the pipeline unrolls the outer array and hands back
+# ONE object that is the whole pair list, so the report said "1 line(s) differ" and printed all
+# twenty line numbers on that one row (member enumeration). Caught by this check's own first run.
+function Compare-ToReference {
+    param($Reference, $Actual)
+    $ref = @($Reference); $act = @($Actual)
+    $max = [Math]::Max($ref.Count, $act.Count)
+    for ($i = 0; $i -lt $max; $i++) {
+        $e = if ($i -lt $ref.Count) { $ref[$i] } else { $null }
+        $a = if ($i -lt $act.Count) { $act[$i] } else { $null }
+        if ($e -cne $a) { [pscustomobject]@{ Line = $i + 1; Expected = $e; Actual = $a } }
+    }
 }
 
 if (-not (Test-Path -LiteralPath $Launcher)) {
@@ -165,7 +274,9 @@ if (-not (Test-Path -LiteralPath $FixtureConfig)) {
 if ($Record) {
     try {
         $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
-        $lines = Get-AllRunOutput
+        # Recorded from the DIRECT shape only. One reference, both shapes compared against it: that
+        # is what makes a shape-dependent defect a diff instead of two references drifting apart.
+        $lines = Get-AllRunOutput -LauncherPath $Launcher
         if ($lines.Count -eq 0) {
             Write-Host "CANNOT RECORD: the preview runs produced no output at all" -ForegroundColor Red
             exit 2
@@ -185,41 +296,51 @@ if (-not (Test-Path -LiteralPath $Reference)) {
     exit 2
 }
 
-try {
-    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
-    $actual = Get-AllRunOutput
-} catch {
-    Write-Host "CANNOT CHECK: $($_.Exception.Message)" -ForegroundColor Red
-    exit 2
-}
-
 $refLines = @(Get-Content -LiteralPath $Reference -ErrorAction SilentlyContinue)
 if ($refLines.Count -eq 0) {
     Write-Host "CANNOT CHECK: the reference at $Reference is empty" -ForegroundColor Red
     exit 2
 }
 
-# Positional, not set semantics: order (which run's block comes first, and each line within it) is
-# part of the decision path being pinned.
-$max = [Math]::Max($refLines.Count, $actual.Count)
-$pairs = @()
-for ($i = 0; $i -lt $max; $i++) {
-    $e = if ($i -lt $refLines.Count) { $refLines[$i] } else { $null }
-    $a = if ($i -lt $actual.Count) { $actual[$i] } else { $null }
-    if ($e -cne $a) { $pairs += [pscustomobject]@{ Line = $i + 1; Expected = $e; Actual = $a } }
-}
-
-if ($pairs.Count -eq 0) {
-    Write-Host "OK: preview decision summary unchanged ($($refLines.Count) comparable line(s), $($script:Runs.Count) run(s))" -ForegroundColor Green
-    exit 0
+$shim = $null
+try {
+    $shim = New-ForwarderShim -LauncherPath $Launcher -Forwarder $Forwarder
+    # Both shapes, same keys, same reference - and a fixture rebuilt BEFORE EACH of them. Sharing one
+    # tree across the two sequential passes left the second always warm and any mutation by the first
+    # invisible, so a difference between the shapes would not have been attributable to the shapes
+    # (review suspicion). Rebuilding is idempotent and costs one directory wipe.
+    # No @() around these calls: Get-AllRunOutput already returns `, @($lines)` and the pipeline
+    # unrolls that one wrapper - adding another would hand the comparer a single nested object.
+    $byShape = [ordered]@{}
+    # Direct first so a defect common to both reads as an ordinary regression, not a forwarder problem.
+    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
+    $byShape['direct'] = Get-AllRunOutput -LauncherPath $Launcher
+    $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
+    $byShape['forwarder'] = Get-AllRunOutput -LauncherPath $shim
+} catch {
+    Write-Host "CANNOT CHECK: $($_.Exception.Message)" -ForegroundColor Red
+    exit 2
+} finally {
+    if ($shim) { Remove-Item -LiteralPath $shim -Force -ErrorAction SilentlyContinue }
 }
 
 $none = '(no such line)'
-Write-Host "REGRESSION: the preview decision summary changed - $($pairs.Count) line(s) differ" -ForegroundColor Red
-foreach ($p in $pairs) {
-    Write-Host "  line $($p.Line)" -ForegroundColor Red
-    Write-Host "    expected: $(if ($null -eq $p.Expected) { $none } else { $p.Expected })" -ForegroundColor DarkGray
-    Write-Host "    actual  : $(if ($null -eq $p.Actual) { $none } else { $p.Actual })" -ForegroundColor Yellow
+$bad = 0
+foreach ($shape in $byShape.Keys) {
+    $pairs = @(Compare-ToReference -Reference $refLines -Actual $byShape[$shape])
+    if ($pairs.Count -eq 0) { continue }
+    $bad++
+    Write-Host "REGRESSION [$shape shape]: the preview decision summary changed - $($pairs.Count) line(s) differ" -ForegroundColor Red
+    foreach ($p in $pairs) {
+        Write-Host "  line $($p.Line)" -ForegroundColor Red
+        Write-Host "    expected: $(if ($null -eq $p.Expected) { $none } else { $p.Expected })" -ForegroundColor DarkGray
+        Write-Host "    actual  : $(if ($null -eq $p.Actual) { $none } else { $p.Actual })" -ForegroundColor Yellow
+    }
 }
-Write-Host "reference: $Reference" -ForegroundColor DarkGray
-exit 1
+
+if ($bad -gt 0) {
+    Write-Host "reference: $Reference" -ForegroundColor DarkGray
+    exit 1
+}
+Write-Host "OK: preview decision summary unchanged ($($refLines.Count) comparable line(s), $($script:Runs.Count) run(s), $($byShape.Count) invocation shape(s))" -ForegroundColor Green
+exit 0
