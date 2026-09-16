@@ -21,6 +21,13 @@ $script:C = @{
     BrightWhite  = "$([char]27)[97m"
     # Claude Code's own warm accent, as a 256-colour index so it survives terminals without truecolor.
     Accent       = "$([char]27)[38;5;209m"
+    # Footer-button caps (Task 6, spec D1): idle is a dim inverse block, hover/selected the same
+    # warm accent as Accent above but as a filled background so the button reads as PRESSABLE
+    # rather than merely tinted text.
+    ButtonBg     = "$($script:E)[48;5;238m"
+    ButtonFg     = "$($script:E)[38;5;250m"
+    AccentBg     = "$($script:E)[48;5;209m"
+    AccentFg     = "$($script:E)[38;5;232m"
 }
 
 function Test-ColorSupported {

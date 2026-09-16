@@ -390,12 +390,14 @@ function Add-HintColor {
     # original line exactly, which the suite asserts - and it cannot mis-fire on a label that
     # happens to contain the same word as a key.
     #
-    # -HasHover singles out ONE clickable span for the Claude-accent tint instead of the ordinary
-    # reverse-video block, so a hovered footer button visibly differs from every other one. Matched
-    # by (Key, Char) rather than position: those two fields are what New-HintFooter gives every hint
-    # to keep it unique, and they survive a footer that wraps onto a second line where a plain
-    # column offset would not.
-    param([string]$Line, [array]$Spans, [switch]$Enabled, [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '')
+    # -HasHover singles out ONE clickable span for the accent-filled cap; -Selected (Task 6, spec
+    # D1) does the same for every span naming the action the field currently reads, so the button
+    # that Enter will run is always lit even with the mouse elsewhere. Both match by (Key, Char)
+    # rather than position: those two fields are what New-HintFooter gives every hint to keep it
+    # unique, and they survive a footer that wraps onto a second line where a plain column offset
+    # would not. Idle buttons get the DIM inverse block (ButtonBg/ButtonFg), never bare reverse
+    # video - a footer full of white blocks read as one undifferentiated wall of buttons.
+    param([string]$Line, [array]$Spans, [switch]$Enabled, [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '', [array]$Selected = @())
     if (-not $Enabled -or -not $Line -or -not $Spans) { return $Line }
     $c = $script:C
     $out = ''
@@ -403,13 +405,16 @@ function Add-HintColor {
     foreach ($s in ($Spans | Sort-Object KeyStart)) {
         if ($s.KeyStart -lt $cursor -or $s.KeyEnd -ge $Line.Length) { continue }
         $out += $c.Dim + $Line.Substring($cursor, $s.KeyStart - $cursor) + $c.Reset
-        $isHovered = $HasHover -and $s.Start -ge 0 -and $s.Key -eq $HoverKey -and $s.Char -eq $HoverChar
-        $tint =
-            if ($isHovered) { $c.Accent + $c.Bold }
-            elseif ($s.Start -ge 0) { $c.Reverse + $c.Bold }
-            else { $c.Dim }
-        $out += $tint + $Line.Substring($s.KeyStart, $s.KeyEnd - $s.KeyStart + 1) + $c.Reset
+        $isHovered  = $HasHover -and $s.Start -ge 0 -and $s.Key -eq $HoverKey -and $s.Char -eq $HoverChar
+        $isSelected = $s.Start -ge 0 -and @($Selected | Where-Object { $_.Key -eq $s.Key -and $_.Char -eq $s.Char }).Count -gt 0
+        $capTint   = if ($isHovered -or $isSelected) { $c.AccentBg + $c.AccentFg } elseif ($s.Start -ge 0) { $c.ButtonBg + $c.ButtonFg } else { $c.Dim }
+        $labelTint = if ($isHovered -or $isSelected) { $c.Bold } else { $c.Dim }
+        $out += $capTint + $Line.Substring($s.KeyStart, $s.KeyEnd - $s.KeyStart + 1) + $c.Reset
         $cursor = $s.KeyEnd + 1
+        if ($s.End -ge 0 -and $s.End -ge $cursor) {
+            $out += $labelTint + $Line.Substring($cursor, $s.End - $cursor + 1) + $c.Reset
+            $cursor = $s.End + 1
+        }
     }
     if ($cursor -lt $Line.Length) { $out += $c.Dim + $Line.Substring($cursor) + $c.Reset }
     return $out
@@ -427,9 +432,9 @@ function Complete-PickerFrame {
         [int]$Width, [hashtable]$Glyphs, [switch]$Color, $RowMap,
         [ValidateSet('picker', 'launch')][string]$Body = 'picker',
         # Forwarded to Add-HintColor untouched. Every existing caller omits these, so every existing
-        # frame paints exactly as before - only a caller that names a hovered (Key, Char) pair
-        # changes what comes out.
-        [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = ''
+        # frame paints exactly as before - only a caller that names a hovered (Key, Char) pair, or a
+        # -Selected list, changes what comes out.
+        [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '', [array]$Selected = @()
     )
     $footerLines = @($Footer.Lines)
     if ($footerLines.Count -eq 0) { $footerLines = @([pscustomobject]@{ Text = $Footer.Text; Spans = @($Footer.Spans) }) }
@@ -454,7 +459,7 @@ function Complete-PickerFrame {
         $l = Limit-Line -Text $all[$i] -Max $Width
         # The footer is painted by column span, not by pattern: its words ('row', 'value', 'start')
         # are ordinary English and a pattern-based rule would tint them wherever else they appear.
-        if ($i -ge $footerIndex) { $painted += Add-HintColor -Line $l -Spans $footerLines[$i - $footerIndex].Spans -Enabled:$Color -HasHover:$HasHover -HoverKey $HoverKey -HoverChar $HoverChar }
+        if ($i -ge $footerIndex) { $painted += Add-HintColor -Line $l -Spans $footerLines[$i - $footerIndex].Spans -Enabled:$Color -HasHover:$HasHover -HoverKey $HoverKey -HoverChar $HoverChar -Selected $Selected }
         elseif ($Body -eq 'launch') { $painted += Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
         else { $painted += Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
     }
@@ -894,7 +899,17 @@ function Get-ProjectFrame {
             }
         }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar)
+    # The footer button naming the CURRENT action is lit even with the mouse elsewhere (spec D1):
+    # Enter runs whatever the field says, so that button should never look idle. 'new' lights
+    # nothing - there is no 'n' hotkey on this footer, only the enter/run button, and lighting
+    # 'enter' here would light it for every action, not just new (W3).
+    $selected = switch (Step-ProjectAction -Action $Action -Delta 0) {
+        'continue' { @(@{ Key = ''; Char = 'c' }) }
+        'resume'   { @(@{ Key = ''; Char = 'r' }) }
+        'worktree' { @(@{ Key = ''; Char = 't' }) }
+        default    { @() }
+    }
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar -Selected $selected)
 }
 
 function Get-SessionExchange {

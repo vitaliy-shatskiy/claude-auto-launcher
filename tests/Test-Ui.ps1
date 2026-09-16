@@ -1534,10 +1534,12 @@ Assert-Equal 3 $script:launchFrames.Count 'three moves cost two frames past the 
 $hPlain = @($script:launchFrames[0] -split "`n")[$hmapProbe.FooterY + $hSpanEnter.Line]
 $hOnEnter = @($script:launchFrames[1] -split "`n")[$hmapProbe.FooterY + $hSpanEnter.Line]
 $hOnU = @($script:launchFrames[2] -split "`n")[$hmapProbe.FooterY + $hSpanU.Line]
-Assert-True (-not $hPlain.Contains($script:C.Accent)) 'no footer button is accent-tinted before the mouse moves'
-Assert-True ($hOnEnter.Contains($script:C.Accent)) 'hovering "enter next" paints its cap with the accent colour'
+# Task 6 correction: hover moved off the plain-text $C.Accent tint onto the AccentBg/AccentFg
+# cap fill (spec D1), so these fingerprint the new escape rather than the old one.
+Assert-True (-not $hPlain.Contains($script:C.AccentBg)) 'no footer button is accent-tinted before the mouse moves'
+Assert-True ($hOnEnter.Contains($script:C.AccentBg)) 'hovering "enter next" paints its cap with the accent colour'
 Assert-Equal (Remove-AnsiColor $hPlain) (Remove-AnsiColor $hOnEnter) 'and repaints the same plain text - only the colour moved'
-Assert-True ($hOnU.Contains($script:C.Accent)) 'moving on to "u maintenance" tints that one instead'
+Assert-True ($hOnU.Contains($script:C.AccentBg)) 'moving on to "u maintenance" tints that one instead'
 Assert-True ($script:launchFrames[1] -ne $script:launchFrames[2]) 'so the two hovered frames differ - the accent follows the hovered button, not a fixed spot'
 
 # --- switching tabs carries the rows with it (owner ask 2026-09-04) ---------------------------
@@ -1648,10 +1650,10 @@ $plainFooter = (New-HintFooter -Glyphs (Get-Glyphs) -Hints @(
     @{ Token = 'esc';   Label = 'quit';  Clickable = $true; Key = 'Escape'; Char = '' }))
 $paintedFooter = Add-HintColor -Line $plainFooter.Text -Spans $plainFooter.Spans -Enabled
 Assert-Equal $plainFooter.Text ($paintedFooter -replace "$([char]27)\[[0-9;]*m", '') 'stripping the colour off the footer returns it unchanged'
-# The literal escape, not $script:C.Reverse: .Contains($script:C.Reverse) would pass vacuously if
-# Reverse were ever present-and-EMPTY ('' is contained in anything) - only a missing key (Contains
-# $null -> False) would have caught that trap, not an empty one.
-Assert-Equal $true ($paintedFooter.Contains("$([char]27)[7m")) 'the key caps are painted reverse video'
+# Task 6 correction: idle caps are the dim button background now, never bare reverse video (spec
+# D1) - the literal escape, not $script:C.ButtonBg, so a Theme entry that went missing (Contains
+# $null -> False) would still be caught rather than passing vacuously.
+Assert-Equal $true ($paintedFooter.Contains("$([char]27)[48;5;238m")) 'the key caps are painted with the dim button background'
 Assert-Equal $plainFooter.Text (Add-HintColor -Line $plainFooter.Text -Spans $plainFooter.Spans) 'colour disabled leaves the footer exactly as it was'
 
 # --- footer hotkeys render as BUTTONS (Task 4). A clickable token gets a cell of its own -
@@ -1674,15 +1676,16 @@ $plain4 = New-HintFooter -Glyphs $g4 -Plain -Hints @(
 Assert-True ($plain4.Text -match '\[enter\] start') 'without colour the cap is bracketed'
 
 $painted4 = Add-HintColor -Line $f4.Text -Spans $f4.Spans -Enabled
-# Not [regex]::Escape($script:C.Reverse) -match ... : Escape($null) silently returns '', and an
-# empty pattern matches ANY string - a missing Reverse code would pass this check by accident.
-Assert-True ((-not [string]::IsNullOrEmpty($script:C.Reverse)) -and $painted4.Contains($script:C.Reverse)) 'the cap is painted reverse video'
+# Not [regex]::Escape($script:C.ButtonBg) -match ... : Escape($null) silently returns '', and an
+# empty pattern matches ANY string - a missing ButtonBg code would pass this check by accident.
+Assert-True ((-not [string]::IsNullOrEmpty($script:C.ButtonBg)) -and $painted4.Contains($script:C.ButtonBg)) 'the idle cap is painted with the dim button background'
 Assert-Equal $f4.Text (Remove-AnsiColor $painted4) 'painting stays reversible'
-# Task 6 correction 4: nothing above pins WHERE the reverse-video escape lands - moving the tint
+# Task 6 correction 4: nothing above pins WHERE the button-cap escape lands - moving the tint
 # (Add-HintColor, Screens.ps1) off the key cap onto the preceding gap text survives every assertion
 # above (both still find the escape and both still strip back to plain text). Pin it directly: the
-# Reverse+Bold escape must be followed immediately by the cap text itself (' enter '), not the gap.
-Assert-True ($painted4.Contains($script:C.Reverse + $script:C.Bold + ' enter ' + $script:C.Reset)) 'the reverse-video escape paints the key cap itself, not the gap before it'
+# ButtonBg+ButtonFg escape must be followed immediately by the cap text itself (' enter '), not the
+# gap - and idle stays dim, never bare reverse video (spec D1).
+Assert-True ($painted4.Contains($script:C.ButtonBg + $script:C.ButtonFg + ' enter ' + $script:C.Reset)) 'the button-cap escape paints the key cap itself, not the gap before it'
 
 # The width fact the padded and bracketed forms share (1 + token + 1, either way): they cannot
 # wrap to a different number of lines, so $script:MinHeight cannot diverge between colour and
@@ -2571,7 +2574,7 @@ try {
     $footerLineHoverC = $frameHoverC[$hoverMapC.FooterY]
     $footerLineHoverR = $frameHoverR[$hoverMapR.FooterY]
     Assert-Equal (Remove-AnsiColor $footerLineNoHover) (Remove-AnsiColor $footerLineHoverC) 'hovering repaints the footer line without changing its plain text'
-    Assert-True ($footerLineHoverC.Contains($script:C.Accent)) 'hovering the c footer button paints its cap with the accent colour'
+    Assert-True ($footerLineHoverC.Contains($script:C.AccentBg)) 'hovering the c footer button paints its cap with the accent colour'
     Assert-True (-not $footerLineNoHover.Contains($script:C.Accent)) 'no button is accent-tinted when nothing is hovered'
     Assert-True ($footerLineHoverC -ne $footerLineHoverR) 'hovering a different button paints a different frame - the accent follows the hover index, not a fixed spot'
     $typingFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Filter 'al' -Typing -Cwd $tmpCwd -Width 100 -Height 24)
@@ -2831,6 +2834,25 @@ try {
     $f80 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$map80))
     Assert-True (($f80 -join "`n").Contains('a/d action')) 'the footer names the keys that step the field at 80 columns'
     Assert-Equal 2 $map80.FooterLines 'and still fits the two footer lines the screen already had at 80 columns'
+
+    # --- footer buttons: dim by default, accent on hover and on the selected action (Task 6, spec D1) ---
+    $g6 = Get-Glyphs
+    $f6 = New-HintFooter -Glyphs $g6 -Hints @(@{ Token = 'c'; Label = 'continue'; Clickable = $true; Key = ''; Char = 'c' }; @{ Token = 'r'; Label = 'resume'; Clickable = $true; Key = ''; Char = 'r' })
+    $plain6 = Add-HintColor -Line $f6.Text -Spans $f6.Spans -Enabled
+    Assert-True ($plain6.Contains($script:C.ButtonBg)) 'an idle button cap is painted with the dim button background'
+    Assert-True (-not $plain6.Contains($script:C.Reverse)) 'and never with bare reverse video (white)'
+    $sel6 = Add-HintColor -Line $f6.Text -Spans $f6.Spans -Enabled -Selected @(@{ Key = ''; Char = 'r' })
+    Assert-True ($sel6.Contains($script:C.AccentBg + $script:C.AccentFg + ' r ')) "the selected action's cap is accent"
+    Assert-True ($sel6.Contains($script:C.ButtonBg + $script:C.ButtonFg + ' c ')) 'while the other stays dim'
+    $hov6 = Add-HintColor -Line $f6.Text -Spans $f6.Spans -Enabled -HasHover -HoverKey '' -HoverChar 'c'
+    Assert-True ($hov6.Contains($script:C.AccentBg + $script:C.AccentFg + ' c ')) 'and a hovered button is accent too'
+    Assert-Equal $f6.Text (Remove-AnsiColor $sel6) 'painting never changes the text'
+    $map6 = $null
+    $lines6 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'resume' -Color -RowMap ([ref]$map6))
+    Assert-True (($lines6 -join "`n").Contains($script:C.AccentBg + $script:C.AccentFg + ' r ')) 'the project footer marks the button of the action the field names'
+    $mapNew6 = $null
+    $linesNew6 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'new' -Color -RowMap ([ref]$mapNew6))
+    Assert-True (-not (($linesNew6 -join "`n").Contains($script:C.AccentBg + $script:C.AccentFg))) "-Action 'new' lights no button"
 
     # The extra row is absorbed by the list viewport, never by MinHeight (which is measured off the
     # LAUNCH frame alone - Test-Maintenance pins it): fit AND clamp, the pair the picker and project
@@ -3584,7 +3606,7 @@ Assert-True ($null -eq $r) 'a resize does not end the screen'
 Assert-Equal 'Escape' ($script:sawKeys -join ',') 'and no handler ever sees it - only the Escape behind it'
 Assert-Equal 2 $draws 'the resize costs exactly one redraw and one more wait'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1145) { Write-Host "COULD NOT RUN: expected 1145 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1153) { Write-Host "COULD NOT RUN: expected 1153 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
