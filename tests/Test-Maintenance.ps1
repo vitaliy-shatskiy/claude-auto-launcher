@@ -658,7 +658,11 @@ $uiCatch = @($uiTry[0].CatchClauses)
 Assert-Equal 1 $uiCatch.Count 'and it has exactly one catch clause'
 $uiCatchText = "$($uiCatch[0].Body.Extent.Text)"
 Assert-True ($uiCatchText -match "Write-LauncherLog\s+-Stage\s+'error'") 'the catch logs an error record before failing'
-Assert-True ($uiCatchText -match '(?s)Write-LauncherLog.*throw') 'and rethrows after logging, so console behaviour stays identical to today'
+# A text-match regex here (Write-LauncherLog.*throw) is satisfied by the catch's own COMMENT
+# mentioning "throw" - deleting the real throw statement would survive it. Pin the actual last
+# statement of the catch body instead.
+$uiCatchStatements = @($uiCatch[0].Body.Statements)
+Assert-True ($uiCatchStatements[-1] -is [System.Management.Automation.Language.ThrowStatementAst]) 'and rethrows after logging - measured: an error escaping try/finally exits 0, through catch { ...; throw } it exits 1, so console text is identical but the exit code becomes 1 (the forwarder propagates $LASTEXITCODE)'
 
 if ($script:Ran -ne 136) { Write-Host "COULD NOT RUN: expected 136 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }

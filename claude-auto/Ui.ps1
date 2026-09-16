@@ -516,9 +516,12 @@ function Expand-SessionPage {
         $page = @()
         # Same log the launcher's UI try/catch writes (claude-auto.ps1), for the same reason: a
         # fetcher failure here used to vanish with nothing in the launcher log but start/ui/decision/
-        # exit. $RunId is script-scope in the launcher, not in this file, so read it defensively;
-        # tests load Ui.ps1 on its own (no Env.ps1), so skip silently when the function is not there.
-        if (Get-Command Write-LauncherLog -ErrorAction SilentlyContinue) {
+        # exit. $RunId and $Preview are script-scope in the launcher, not in this file, so read them
+        # defensively; tests load Ui.ps1 on its own (no Env.ps1), so skip silently when the function
+        # is not there. -not $script:Preview: a preview run can hit this same IOException reading
+        # real session files, and preview must stay side-effect-free - the same fact that made the
+        # launcher's own UI catch guard on -not $Preview.
+        if ((Get-Command Write-LauncherLog -ErrorAction SilentlyContinue) -and -not $script:Preview) {
             $logArgs = @{
                 Stage = 'error'
                 Data  = @{

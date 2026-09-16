@@ -382,9 +382,13 @@ if ($UseUi) {
         }
     } catch {
         # The morning crash this exists for: the picker block died with "not recognized" and the
-        # launcher log carried nothing about it - only start/ui/decision/exit. Log before rethrow so
-        # behaviour on the console stays identical to today; the logger is silent by contract
-        # (Write-LauncherLog, Env.ps1) so this never adds console noise of its own. Non-terminating
+        # launcher log carried nothing about it - only start/ui/decision/exit. Log before rethrow;
+        # the logger is silent by contract (Write-LauncherLog, Env.ps1) so this never adds console
+        # noise of its own - console TEXT stays identical to today. The exit CODE does not: measured,
+        # an error escaping the bare try/finally that used to be here exits 0, while through
+        # catch { ...; throw } it exits 1. That is correct, not a regression - the forwarder
+        # (~\bin\claude-auto.ps1's `& $target @args`) propagates $LASTEXITCODE, so a UI crash should
+        # read as a failure to whatever called the launcher, not as a clean exit. Non-terminating
         # errors are not caught here - fine for now.
         # -not $Preview, same guard as the 'start'/'cancelled' stages above: a preview run's scripted
         # key queue is EXPECTED to run out and throw (that is how the finite key list ends a preview),

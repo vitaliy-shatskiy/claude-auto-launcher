@@ -2907,8 +2907,18 @@ $n2ErrLogs = @($script:loggedCalls | Where-Object { $_.Stage -eq 'error' })
 Assert-Equal 1 $n2ErrLogs.Count 'and the IO failure logs exactly one error record'
 Assert-Equal 'Expand-SessionPage' $n2ErrLogs[0].Data.where 'tagged with where it happened'
 
+# Preview must stay side-effect-free (the same fact that made claude-auto.ps1's own UI catch guard
+# on -not $Preview): a preview run can hit this same IOException reading real session files, and
+# must never write a real record to the owner's launcher log. $script:Preview is the launcher's own
+# script-scope variable, same as $script:RunId above - set and restored around this one probe only.
+$script:Preview = $true
+$script:loggedCalls = @()
+$null = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) throw [IO.IOException]::new('the projects root vanished') } -Fetched 1
+Assert-Equal 0 $script:loggedCalls.Count 'and a preview run logs nothing for the same IO failure'
+$script:Preview = $false
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1015) { Write-Host "COULD NOT RUN: expected 1015 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1016) { Write-Host "COULD NOT RUN: expected 1016 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
