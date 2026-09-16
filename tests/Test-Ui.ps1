@@ -96,6 +96,39 @@ Assert-True ($narrow.EndsWith(' 2 d')) 'and the age still survives'
 $noTail = New-ListRow -Mark '   ' -Label 'name' -Tail 'C:\very\long\path\that\cannot\fit' -Age '1 h' -Width 20
 Assert-True (-not $noTail.Contains('C:\')) 'a tail with fewer than 9 cells of room is dropped rather than cut to nothing'
 
+# Review fix round 1, Minor: the literal row, not just its width - the label-clamp reserve bug
+# (C1: subtracting $ageCol, which already carries the separator, AND 2) left the total width
+# correct (pad silently absorbed the missing cell) but clamped the label one cell too early. A
+# label sized to exactly the OLD reserve (Width - mark - age.Length - 2) must come through whole.
+$label49 = 'x' * 49
+$literalRow = New-ListRow -Mark '   ' -Label $label49 -Tail '' -Age '37 min' -Width 60
+Assert-Equal ('   ' + $label49 + '  37 min') $literalRow 'a label sized exactly to the old reserve is not clamped a cell early - the literal row, not just its width, pins the reserve arithmetic'
+
+# Review fix round 1, C2(a) (declared, pinned per controller ruling R3): a CJK label is measured
+# in DISPLAY CELLS (Get-DisplayWidth), not .Length, so a 10-character wide-glyph label still
+# leaves the age column standing - the old inline code's .Length undercount let New-Box's own
+# clamp eat the age off the end of an overlong raw line instead.
+$cjkRow = New-ListRow -Mark '   ' -Label ('あ' * 10) -Tail '' -Age '5 min' -Width 40
+Assert-Equal 40 (Get-DisplayWidth -Text $cjkRow) 'a CJK label is measured in display cells, not .Length, so the row still fills the width exactly'
+Assert-True ($cjkRow.EndsWith(' 5 min')) 'and the age column survives instead of being eaten off the end'
+
+# Review fix round 1, C2(b) (declared, pinned per controller ruling R3): -Ascii now reaches
+# Limit-Line for every column New-ListRow builds - the old inline project-row code never passed
+# it through, so a project row in ASCII mode still emitted U+2026.
+$asciiRow = New-ListRow -Mark '   ' -Label ('y' * 70) -Tail '' -Age '1 h' -Width 30 -Ascii
+Assert-True ($asciiRow.Contains('~')) '-Ascii reaches the label truncation - a clamped label renders ~, not the old hardcoded ellipsis'
+
+# Review fix round 1, Minor: the tail's PRESENCE/ABSENCE is the pin, not the width (width alone
+# cannot tell "tail dropped" from "tail cut to fit") - proves the label is clamped BEFORE the tail
+# is sized, so a 70-character label at width 40 leaves no room for even a 4-cell tail.
+Assert-True (-not $narrow.Contains('C:\p')) 'the label is clamped before the tail gets its room, so a 70-char label drops the tail entirely rather than leaving it a sliver'
+
+# Review fix round 1, Important: with no -Age (the cwd row) the old inline code filled only
+# $inner - 1 cells, one cell of right gutter before the box border. New-ListRow without -Age must
+# reproduce that gutter, not fill the row edge to edge.
+$cwdGutterRow = New-ListRow -Mark '   ' -Label 'name' -Tail 'C:\verylongpath\that\gets\cut' -Width 20
+Assert-Equal 19 (Get-DisplayWidth -Text $cwdGutterRow) 'no -Age (the cwd row) leaves one cell of right gutter, one cell short of -Width'
+
 # --- screen 1 -----------------------------------------------------------------------------
 
 # Enter alone must reproduce today's launcher exactly: work account, remote on, new session.
@@ -3112,7 +3145,7 @@ try {
 # (review W5).
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1058) { Write-Host "COULD NOT RUN: expected 1058 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1064) { Write-Host "COULD NOT RUN: expected 1064 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

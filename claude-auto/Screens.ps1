@@ -657,11 +657,21 @@ function New-ListRow {
     # than before it (' ' + age) - a difference from the project rows that predates this function
     # and is kept verbatim rather than reflowed, since the byte-identity rule covers text, not taste.
     param([string]$Mark = '   ', [string]$Label = '', [string]$Tail = '', [string]$Age = '', [int]$Width, [switch]$Ascii, [switch]$TrailingSpace)
+    $ageW = Get-DisplayWidth -Text $Age
     $ageCol = if ($Age) { if ($TrailingSpace) { $Age + ' ' } else { ' ' + $Age } } else { '' }
-    $label = Limit-Line -Text $Label -Max ([Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $ageCol) - 2)) -Ascii:$Ascii
+    # Review fix round 1 (C1): the reserve here is mark + a 1-cell minimum pad + the age's OWN
+    # width, same as the old inline code (`$inner - $mark.Length - $age.Length - 2`) - using
+    # $ageCol's width instead double-counts the separator $ageCol already carries and clamps the
+    # label one cell too early (an "…" that used to fit no longer does).
+    $label = Limit-Line -Text $Label -Max ([Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - $ageW - 2)) -Ascii:$Ascii
     $room = $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $ageCol) - 3
     $tail = if ($Tail -and $room -gt 8) { Limit-Line -Text $Tail -Max $room -Ascii:$Ascii } else { '' }
-    $pad = [Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $tail) - (Get-DisplayWidth -Text $ageCol))
+    # Review fix round 1 (Important): with no -Age (the cwd row) the old inline code filled only
+    # $inner - 1 cells, leaving one cell of right gutter before the box border. An age column
+    # spends that cell on the separator already folded into $ageCol; without one, nothing does -
+    # so only the no-age case reserves it here.
+    $gutter = if ($Age) { 0 } else { 1 }
+    $pad = [Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $tail) - (Get-DisplayWidth -Text $ageCol) - $gutter)
     return $Mark + $label + (' ' * $pad) + $tail + $ageCol
 }
 
