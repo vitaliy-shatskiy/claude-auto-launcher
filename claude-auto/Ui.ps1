@@ -236,16 +236,16 @@ function Invoke-ScreenLoop {
         [switch]$Silent
     )
     $loopH = $Handlers
-    $loopIsCtrl = { param($k) [bool]($k.Modifiers -band [System.ConsoleModifiers]::Control) }
+    $loopIsCtrl = { param($loopK) [bool]($loopK.Modifiers -band [System.ConsoleModifiers]::Control) }
     # LogFields rides on EVERY record of the screen (the picker's scope), evaluated once per record.
-    $loopFields = { param($s) $loopBag = @{}; if ($loopH.LogFields) { $loopAdd = & $loopH.LogFields $s; if ($loopAdd) { foreach ($k in $loopAdd.Keys) { $loopBag[$k] = $loopAdd[$k] } } }; $loopBag }
+    $loopFields = { param($s) $loopBag = @{}; if ($loopH.LogFields) { $loopAdd = & $loopH.LogFields $s; if ($loopAdd) { foreach ($loopK in $loopAdd.Keys) { $loopBag[$loopK] = $loopAdd[$loopK] } } }; $loopBag }
     $loopRows = { param($s) if ($loopH.Rows) { [int](& $loopH.Rows $s) } else { 0 } }
     $loopLogKey = {
         param($s, [string]$Key, [hashtable]$Extra = @{})
         if ($Silent) { return }
         $loopData = @{ screen = $Screen; key = $Key; index = [int]$s.Index }
-        $loopAdd = & $loopFields $s; foreach ($k in $loopAdd.Keys) { $loopData[$k] = $loopAdd[$k] }
-        foreach ($k in $Extra.Keys) { $loopData[$k] = $Extra[$k] }
+        $loopAdd = & $loopFields $s; foreach ($loopK in $loopAdd.Keys) { $loopData[$loopK] = $loopAdd[$loopK] }
+        foreach ($loopK in $Extra.Keys) { $loopData[$loopK] = $Extra[$loopK] }
         $null = Write-UiLog -Stage 'key' -Data $loopData
     }
     # The handler return contract in ONE place: @{ NoLog = $true } writes no record for this key (the
@@ -256,8 +256,8 @@ function Invoke-ScreenLoop {
         param($s, [string]$Key, $Res, [hashtable]$Base = @{})
         if ($Res -is [hashtable] -and $Res.NoLog) { return }
         $loopBag = @{}
-        foreach ($k in $Base.Keys) { $loopBag[$k] = $Base[$k] }
-        if ($Res -is [hashtable] -and $Res.Log) { foreach ($k in $Res.Log.Keys) { $loopBag[$k] = $Res.Log[$k] } }
+        foreach ($loopK in $Base.Keys) { $loopBag[$loopK] = $Base[$loopK] }
+        if ($Res -is [hashtable] -and $Res.Log) { foreach ($loopK in $Res.Log.Keys) { $loopBag[$loopK] = $Res.Log[$loopK] } }
         $null = & $loopLogKey $s $Key $loopBag
     }
     $loopEnteredAt = Get-Date
@@ -269,9 +269,9 @@ function Invoke-ScreenLoop {
         $loopCount = if ($loopH.ScreenRows) { [int](& $loopH.ScreenRows $s $Phase) } else { [int](& $loopRows $s) }
         $loopData = @{ name = $Screen; phase = $Phase; rows = $loopCount; index = [int]$s.Index }
         if ($Phase -eq 'leave') { $loopData.ms = [int]((Get-Date) - $loopEnteredAt).TotalMilliseconds }
-        $loopAdd = & $loopFields $s; foreach ($k in $loopAdd.Keys) { $loopData[$k] = $loopAdd[$k] }
+        $loopAdd = & $loopFields $s; foreach ($loopK in $loopAdd.Keys) { $loopData[$loopK] = $loopAdd[$loopK] }
         # ScreenFields ride on enter/leave only - the project screen's and the picker's filterLength.
-        if ($loopH.ScreenFields) { $loopMore = & $loopH.ScreenFields $s; if ($loopMore) { foreach ($k in $loopMore.Keys) { $loopData[$k] = $loopMore[$k] } } }
+        if ($loopH.ScreenFields) { $loopMore = & $loopH.ScreenFields $s; if ($loopMore) { foreach ($loopK in $loopMore.Keys) { $loopData[$loopK] = $loopMore[$loopK] } } }
         $null = Write-UiLog -Stage 'screen' -Data $loopData
     }
     $loopFinish = { param($s, $Res) $null = & $loopLogScreen $s 'leave'; $Res.Result }
@@ -299,7 +299,7 @@ function Invoke-ScreenLoop {
             if ($loopKey.WheelUp -or $loopKey.WheelDown) {
                 $loopDelta = if ($loopKey.WheelUp) { -1 } else { 1 }
                 if ($loopH.Wheel) { $null = & $loopH.Wheel $State $loopDelta }
-                else { $loopN = & $loopRows $State; $State.Index = [Math]::Max(0, [Math]::Min($loopN - 1, $State.Index + $loopDelta)) }
+                else { $loopN = & $loopRows $State; if ($loopN -gt 0) { $State.Index = [Math]::Max(0, [Math]::Min($loopN - 1, $State.Index + $loopDelta)) } }
                 continue
             }
             $loopHit = Get-HitAt -RowMap $loopMap -X $loopKey.X -Y $loopKey.Y -WindowTop $loopTop
@@ -320,6 +320,10 @@ function Invoke-ScreenLoop {
                 $loopKey = New-SyntheticKey -Key $loopHit.Footer.Key -Char $loopHit.Footer.Char   # falls through to the key path
             } else {
                 if ($loopKey.IsDoubleClick -and $loopH.DoubleClick -and $loopHit.Kind -eq 'row') {
+                    # Move first, pick second - the invariant both list screens keep today (the
+                    # index is set to the clicked row before the pick runs), so a DoubleClick
+                    # handler reads $s.Index and never has to re-derive the row from the hit.
+                    $State.Index = $loopHit.Row
                     $loopRes = & $loopH.DoubleClick $State $loopHit
                     $null = & $loopLogRes $State 'doubleclick' $loopRes @{ button = 'row' }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
@@ -365,6 +369,7 @@ function Invoke-ScreenLoop {
             # otherwise reach `& $null`, which throws rather than doing nothing.
             $loopRes = if ($loopBack) { if ($loopH.Left) { & $loopH.Left $State } } else { if ($loopH.Right) { & $loopH.Right $State } }
             if ($loopH.LogArrows) { $null = & $loopLogRes $State $(if ($loopBack) { 'LeftArrow' } else { 'RightArrow' }) $loopRes }
+            if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
         } elseif ($loopName -eq 'Enter') {
             $loopRes = if ($loopH.Enter) { & $loopH.Enter $State } else { $null }
             $null = & $loopLogRes $State 'Enter' $loopRes
@@ -389,6 +394,7 @@ function Invoke-ScreenLoop {
         }
     }
 }
+
 function Invoke-LaunchScreen {
     # Returns the finished state, or $null when the user pressed Esc. -Draw is injected so tests
     # pass an empty scriptblock and assert only the state that comes out.

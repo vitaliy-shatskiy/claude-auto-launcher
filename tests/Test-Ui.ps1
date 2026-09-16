@@ -3283,8 +3283,18 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
 Assert-Equal 'enter@1' $r 'a row click moves the index and a footer click becomes Enter'
 Assert-Equal 'row:1' ($clicked -join ',') 'the Click handler saw the row hit'
 Assert-Equal 3 $draws 'four events, three draws: the move inside the same button skipped one'
+# A double click on a ROW: the loop moves the cursor to the clicked row BEFORE the handler runs.
+# Both list screens select then pick today ($index = $target, then the pick), so a DoubleClick
+# handler that reads $s.Index must see the row the owner hit, not where the cursor happened to be.
+$dq = [System.Collections.Queue]::new()
+$dq.Enqueue([pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 3; Left = $true; IsMove = $false; IsDoubleClick = $true; WheelUp = $false; WheelDown = $false })
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $dq.Dequeue() } -Draw { $map } -Handlers @{
+        Rows        = { 3 }
+        DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
+    }
+Assert-Equal 'dbl@2' $r 'a row double click moves the index to the clicked row before the handler picks'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1100) { Write-Host "COULD NOT RUN: expected 1100 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1101) { Write-Host "COULD NOT RUN: expected 1101 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
