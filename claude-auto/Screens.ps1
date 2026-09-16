@@ -411,9 +411,13 @@ function Add-HintColor {
         $labelTint = if ($isHovered -or $isSelected) { $c.Bold } else { $c.Dim }
         $out += $capTint + $Line.Substring($s.KeyStart, $s.KeyEnd - $s.KeyStart + 1) + $c.Reset
         $cursor = $s.KeyEnd + 1
-        if ($s.End -ge 0 -and $s.End -ge $cursor) {
-            $out += $labelTint + $Line.Substring($cursor, $s.End - $cursor + 1) + $c.Reset
-            $cursor = $s.End + 1
+        # Clamped to the (possibly Limit-Line-truncated) line: Complete-PickerFrame paints against
+        # the UNFILTERED span list (only its own row-map bookkeeping filters End -lt Length), so a
+        # span measured on the full text can outrun a footer cut short at low width.
+        if ($s.End -ge $cursor -and $cursor -lt $Line.Length) {
+            $labelEnd = [Math]::Min($s.End, $Line.Length - 1)
+            $out += $labelTint + $Line.Substring($cursor, $labelEnd - $cursor + 1) + $c.Reset
+            $cursor = $labelEnd + 1
         }
     }
     if ($cursor -lt $Line.Length) { $out += $c.Dim + $Line.Substring($cursor) + $c.Reset }

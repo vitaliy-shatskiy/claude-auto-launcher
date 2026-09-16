@@ -27,6 +27,14 @@ Assert-Equal "$E[32m" (Get-PercentColor -Percent 15) '15% is green'
 Assert-Equal 'plain' (Remove-AnsiColor -Text ($script:C.Accent + 'plain' + $script:C.Reset)) 'accent escapes strip cleanly'
 Assert-Equal 'ab' (Remove-AnsiColor -Text ("a$E[38;5;209mb")) 'partial 256-colour escape strips cleanly'
 
+# Footer-button palette (Task 6, spec D1), pinned by the LITERAL escape rather than through
+# $script:C.* - the Test-Ui suite only ever compares $script:C.ButtonBg to itself, so a typo in
+# one digit here (e.g. 48;5;208m) would still be self-consistent and stay green there.
+Assert-Equal "$E[48;5;238m" $script:C.ButtonBg 'ButtonBg is the dim inverse background'
+Assert-Equal "$E[38;5;250m" $script:C.ButtonFg 'ButtonFg is the dim inverse foreground'
+Assert-Equal "$E[48;5;209m" $script:C.AccentBg 'AccentBg is the warm accent background'
+Assert-Equal "$E[38;5;232m" $script:C.AccentFg 'AccentFg is the warm accent foreground'
+
 # Bars are plain text of exactly the requested width - they are laid out before colour exists.
 $bar = New-Bar -Percent 50 -Width 8
 Assert-Equal 8 $bar.Length 'a bar is exactly the requested width'
@@ -88,7 +96,7 @@ $env:CLAUDE_AUTO_ASCII = '1'
 Assert-Equal $true (Test-AsciiRequired) 'CLAUDE_AUTO_ASCII=1 forces ASCII glyphs'
 if ($null -eq $savedASCII) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedASCII }
 
-if ($script:Ran -ne 25) { Write-Host "COULD NOT RUN: expected 25 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 29) { Write-Host "COULD NOT RUN: expected 29 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

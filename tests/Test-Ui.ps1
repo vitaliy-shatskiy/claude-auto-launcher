@@ -2575,7 +2575,10 @@ try {
     $footerLineHoverR = $frameHoverR[$hoverMapR.FooterY]
     Assert-Equal (Remove-AnsiColor $footerLineNoHover) (Remove-AnsiColor $footerLineHoverC) 'hovering repaints the footer line without changing its plain text'
     Assert-True ($footerLineHoverC.Contains($script:C.AccentBg)) 'hovering the c footer button paints its cap with the accent colour'
-    Assert-True (-not $footerLineNoHover.Contains($script:C.Accent)) 'no button is accent-tinted when nothing is hovered'
+    # Task 6 correction (R12): the footer never emits bare $C.Accent any more (only the AccentBg
+    # fill) - checking for Accent here could never fail. Fingerprint the escape the footer really
+    # emits, like the launch twin at line ~1539.
+    Assert-True (-not $footerLineNoHover.Contains($script:C.AccentBg)) 'no button is accent-tinted when nothing is hovered'
     Assert-True ($footerLineHoverC -ne $footerLineHoverR) 'hovering a different button paints a different frame - the accent follows the hover index, not a fixed spot'
     $typingFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Filter 'al' -Typing -Cwd $tmpCwd -Width 100 -Height 24)
     Assert-True (($typingFrame -join "`n").Contains('filter: al_')) 'typing shows the filter text with a trailing cursor'
@@ -2853,6 +2856,20 @@ try {
     $mapNew6 = $null
     $linesNew6 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'new' -Color -RowMap ([ref]$mapNew6))
     Assert-True (-not (($linesNew6 -join "`n").Contains($script:C.AccentBg + $script:C.AccentFg))) "-Action 'new' lights no button"
+
+    # --- Task 6 fix round 1: Add-HintColor must not throw when painted against a TRUNCATED line
+    # carrying the FULL (untruncated) span list. Complete-PickerFrame paints exactly this shape: it
+    # Limit-Lines the footer text but hands Add-HintColor the unfiltered spans (only its own
+    # row-map bookkeeping filters End -lt footerText.Length) - a span whose label runs past the cut
+    # must not blow up Substring. ---
+    $f7 = New-HintFooter -Glyphs (Get-Glyphs) -Hints @(@{ Token = 'enter'; Label = 'run this long action here'; Clickable = $true; Key = 'Enter'; Char = '' })
+    $cut7 = Limit-Line -Text $f7.Text -Max 20
+    Assert-True ($cut7.Length -lt $f7.Text.Length) 'the fixture line is genuinely shorter than the span list was measured against'
+    $thrown7 = $false
+    try { $painted7 = Add-HintColor -Line $cut7 -Spans $f7.Spans -Enabled } catch { $thrown7 = $true }
+    Assert-Equal $false $thrown7 'painting a truncated line against the full (untruncated) span list does not throw'
+    Assert-True ($painted7.Contains($script:C.ButtonBg)) 'the cap still paints even though its label was cut short'
+    Assert-Equal $cut7 (Remove-AnsiColor $painted7) 'and the truncated text comes back unchanged'
 
     # The extra row is absorbed by the list viewport, never by MinHeight (which is measured off the
     # LAUNCH frame alone - Test-Maintenance pins it): fit AND clamp, the pair the picker and project
@@ -3606,7 +3623,7 @@ Assert-True ($null -eq $r) 'a resize does not end the screen'
 Assert-Equal 'Escape' ($script:sawKeys -join ',') 'and no handler ever sees it - only the Escape behind it'
 Assert-Equal 2 $draws 'the resize costs exactly one redraw and one more wait'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1153) { Write-Host "COULD NOT RUN: expected 1153 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1157) { Write-Host "COULD NOT RUN: expected 1157 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
