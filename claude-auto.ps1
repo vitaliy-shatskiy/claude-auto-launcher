@@ -266,15 +266,22 @@ if ($UseUi) {
                 }
                 exit 0
             }
+            # EIGHT parameters, and both of the last two forwarded. A renderer one short does not
+            # fail: the extra arguments land in $args and the action field draws 'new' on every
+            # frame while the loop is on 'resume' - which is exactly what a preview run showed
+            # before these lines existed. Test-Maintenance pins the shape as source, because this
+            # scriptblock has a console and no suite can drive it.
             $projDraw = {
-                param($p, $i, $f, $t, $h, $n)
+                param($p, $i, $f, $t, $h, $n, $a, $oa)
                 $w, $hh = & $size
                 $pmap = $null
                 & $paint (Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Cwd $LaunchCwd `
+                          -Action $a -OnAction:$oa `
                           -Width $w -Height $hh -Color:$useColor -Ascii:$ascii -RowMap ([ref]$pmap))
                 $pmap
             }
             $chosen = Invoke-ProjectScreen -Projects $projects -Cwd $LaunchCwd -Initial "$($state.Project)" `
+                      -InitialAction "$($state.ProjectAction)" `
                       -ReadKey $KeySource -Wait $wait -Draw $projDraw -ReadPath $readClaudePath
             # Escape at the project screen goes back to the launch screen, exactly as Escape at the
             # session picker already does. Preview cannot loop - its key list is finite - so it breaks.
@@ -283,6 +290,10 @@ if ($UseUi) {
             $state.ProjectSlug = $chosen.Slug
             $state.ProjectSlugs = @($chosen.Slugs)
             $state.Action = $chosen.Action
+            # And onto the field's own state, which Prefs.ps1 remembers per account. Two properties
+            # rather than one: $Action describes THIS launch (Reset-LaunchTab and Save-LaunchPrefs
+            # both refuse to remember it), $ProjectAction describes the habit the screen opens on.
+            $state.ProjectAction = $chosen.Action
             if ($state.Action -ne 'resume') { break }
 
             $projectName = Split-Path -Path $state.Project -Leaf

@@ -568,7 +568,35 @@ $guardOf = {
 Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
 Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
 
-if ($script:Ran -ne 114) { Write-Host "COULD NOT RUN: expected 114 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the project screen's action field reaches the SCREEN, not only the loop ------------------------
+# Test-Ui drives the loop and proves the field works; what no suite can drive is the launcher's own
+# renderer, which has a console. A renderer that takes six parameters where the loop passes eight
+# does not fail - the extras land in $args - so the field draws 'new' on every frame while the loop
+# is on 'resume'. That is not hypothetical: a preview run rendered exactly that before these lines
+# existed. Pinned through the AST rather than a text match, like the two blocks above, with a
+# positive control on each anchor (the call/assignment must be found at all).
+$projScreenCall = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+    "$($n.GetCommandName())" -eq 'Invoke-ProjectScreen' }, $true))
+Assert-Equal 1 $projScreenCall.Count 'claude-auto.ps1 opens the project screen in exactly one place'
+Assert-True ("$($projScreenCall[0].Extent.Text)" -match '-InitialAction') 'and seeds its action field from the account''s remembered choice, or the preference is written and never read'
+
+$projDrawAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    "$($n.Left.Extent.Text)" -eq '$projDraw' }, $true))
+Assert-Equal 1 $projDrawAssign.Count 'and builds the project renderer in exactly one place'
+$projDrawText = "$($projDrawAssign[0].Right.Extent.Text)"
+Assert-True ($projDrawText -match '-Action\s+\$') 'the renderer forwards the action field to Get-ProjectFrame'
+Assert-True ($projDrawText -match '-OnAction:\$') 'and which row the cursor is parked on'
+$projDrawParams = @($projDrawAssign[0].Right.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParamBlockAst] }, $true))
+Assert-Equal 1 $projDrawParams.Count 'the renderer declares a parameter block'
+Assert-Equal 8 @($projDrawParams[0].Parameters).Count 'with all eight parameters the loop passes - one short and the field silently draws "new" forever'
+
+# The chosen action travels back onto the launch state, or Prefs.ps1 has nothing to remember.
+$projActionWrite = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    "$($n.Left.Extent.Text)" -eq '$state.ProjectAction' }, $true))
+Assert-Equal 1 $projActionWrite.Count 'the chosen action is written back onto the launch state exactly once'
+Assert-True ("$($projActionWrite[0].Right.Extent.Text)" -match 'chosen\.Action') 'from the screen''s own result, not from anything the launch screen holds'
+
+if ($script:Ran -ne 123) { Write-Host "COULD NOT RUN: expected 123 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
