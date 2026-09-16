@@ -2706,8 +2706,18 @@ Assert-Equal 10 $e2eAll.Count 'Tab widens to the account and gets a full page'
 Assert-Equal 10 @($e2eAll | Where-Object { $_.Slug -eq 'C--src-busy' }).Count 'of the newest sessions, whatever project they belong to'
 Remove-Item -LiteralPath $e2eRoot -Recurse -Force -ErrorAction SilentlyContinue
 
+# Paging is disabled only when the filter can see NOTHING - not merely when it hides something.
+$w1Rows = @((& $pgRow 'w1a'), (& $pgRow 'w1b'))
+$w1Rows[0].Title = 'alpha one'
+$w1Rows[1].Title = 'beta two'
+$script:w1Asked = 0
+$w1Fetch = { param($have, $scope) $script:w1Asked++; @((& $pgRow "w1n$have")) }
+$null = Invoke-SessionPicker -Sessions $w1Rows -FetchMore $w1Fetch -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('/', 'a', 'l', 'p', 'h', 'a', 'Enter', 'DownArrow', 'DownArrow', 'Escape'))
+Assert-True ($script:w1Asked -gt 0) 'a filter that hides one of two loaded rows still pages - a session matching it one page deeper must be reachable'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 952) { Write-Host "COULD NOT RUN: expected 952 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 953) { Write-Host "COULD NOT RUN: expected 953 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

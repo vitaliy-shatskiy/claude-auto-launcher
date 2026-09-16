@@ -577,10 +577,12 @@ function Invoke-SessionPicker {
         # PowerShell binding error. Found via tests\check-preview.ps1's empty-fixture-account run.
         $resumable = @(Select-ResumableSessions -Sessions $pool)
         $items = Select-SessionMatch -Sessions $resumable -Filter $filter
-        # Paging is for "I have seen everything loaded and want more", never for "the filter hides
-        # what is loaded": with a filter that matches nothing, every Down was a synchronous cold
-        # disk page that could not change the frame (adversarial review 2026-09-16, D4).
-        $canPage = [bool]$FetchMore -and -not $bucket.Exhausted -and $items.Count -ge $resumable.Count
+        # Paging stops only when the fetcher is out of rows, or when the filter can see NOTHING at
+        # all - the case where every Down was a synchronous cold disk page that could not change the
+        # frame (adversarial review 2026-09-16, D4). Gating on "the filter hides nothing" instead
+        # (`$items.Count -ge $resumable.Count`) went too far: one hidden row stopped every fetch, so
+        # a session matching the filter one page deeper was unreachable (re-review, W1).
+        $canPage = [bool]$FetchMore -and -not $bucket.Exhausted -and -not ($items.Count -eq 0 -and $resumable.Count -gt 0)
         if ($index -ge $items.Count) { $index = [Math]::Max(0, $items.Count - 1) }
         $rowMap = & $Draw $pool $index $filter $scope $ProjectName
         $key = & $Wait
