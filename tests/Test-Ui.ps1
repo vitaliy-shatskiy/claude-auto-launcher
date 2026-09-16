@@ -3527,6 +3527,21 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
 Assert-Equal 'enter@1' $r 'a row click moves the index and a footer click becomes Enter'
 Assert-Equal 'row:1' ($clicked -join ',') 'the Click handler saw the row hit'
 Assert-Equal 3 $draws 'four events, three draws: the move inside the same button skipped one'
+# C2: a double click on a FOOTER button is ignored outright. The first press already became that
+# button's key, so turning the doubleclick-flagged record into a second synthetic press fires the
+# action twice - which is how one gesture on the free-path row ran -ReadPath twice. Every screen
+# nulled the footer hit on a double click in its own loop before Task 5; the rule is the loop's now.
+$fq = [System.Collections.Queue]::new()
+$fq.Enqueue((New-MouseEvent -X 3 -Y 6 -Left -Double))   # the doubleclick record over 'enter'
+$fq.Enqueue((New-MouseEvent -X 3 -Y 6 -Left))           # a plain press over the same button
+$fq.Enqueue($esc)
+$script:footerEnters = 0
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $fq.Dequeue() } -Draw { $map } -Handlers @{
+        Rows  = { 3 }
+        Enter = { param($s) $script:footerEnters++; $null }
+    }
+Assert-True ($null -eq $r) 'the footer double-click run ends on the Escape behind it'
+Assert-Equal 1 $script:footerEnters 'a double click on a footer button presses nothing - only the plain press after it reaches Enter'
 # A double click on a ROW: the loop moves the cursor to the clicked row BEFORE the handler runs.
 # Both list screens select then pick today ($index = $target, then the pick), so a DoubleClick
 # handler that reads $s.Index must see the row the owner hit, not where the cursor happened to be.
@@ -3550,8 +3565,19 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
         DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
     }
 Assert-Equal 'dbl@4' $r 'a row double click on a Rows[]-shaped map moves the index to that row''s own Index, not to the row object'
+# A resize is not a key: the loop redraws and waits again, and no handler ever sees it. Every screen
+# skipped it in its own loop before Task 5; the skip is the loop's now, for all four. Without it the
+# maintenance screen's OnKey would read a window drag as a press and disarm an armed confirm.
+$zq = [System.Collections.Queue]::new(); $zq.Enqueue('resize'); $zq.Enqueue($esc)
+$script:sawKeys = @()
+$draws = 0
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $zq.Dequeue() } `
+    -Draw { param($s) $script:draws++; $null } -Handlers @{ OnKey = { param($s, $k) $script:sawKeys += "$($k.Key)"; $false } }
+Assert-True ($null -eq $r) 'a resize does not end the screen'
+Assert-Equal 'Escape' ($script:sawKeys -join ',') 'and no handler ever sees it - only the Escape behind it'
+Assert-Equal 2 $draws 'the resize costs exactly one redraw and one more wait'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1139) { Write-Host "COULD NOT RUN: expected 1139 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1144) { Write-Host "COULD NOT RUN: expected 1144 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
