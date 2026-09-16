@@ -2716,8 +2716,29 @@ $null = Invoke-SessionPicker -Sessions $w1Rows -FetchMore $w1Fetch -Draw {} `
         -ReadKey (New-ScriptedKeyReader -Keys @('/', 'a', 'l', 'p', 'h', 'a', 'Enter', 'DownArrow', 'DownArrow', 'Escape'))
 Assert-True ($script:w1Asked -gt 0) 'a filter that hides one of two loaded rows still pages - a session matching it one page deeper must be reachable'
 
+# A fetcher that fails because the WORLD changed ends the paging; one that fails because it is
+# MISWIRED must not be swallowed. Get-ClaudeSessions throws an ArgumentException for -ProjectSlug
+# beside -Files, and a catch-all here would turn that into "this scope has no more rows" - the same
+# silence a scoped picker opening on the whole account hid behind (re-review 2, N2).
+$n2Row = & $pgRow 'n2a'
+$n2Arg = $false
+try { $null = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) throw [ArgumentException]::new('-ProjectSlug cannot be combined with -Files') } -Fetched 1 }
+catch [System.ArgumentException] { $n2Arg = $true }
+catch { }
+Assert-True $n2Arg 'a MISWIRED fetcher (ArgumentException) propagates instead of reading as the end of the list'
+# A binding failure, raised without touching the filesystem: handing a [int] parameter a word.
+# NOT `Get-ClaudeSessions -NoSuchParameter` - that function has no [CmdletBinding()], so an unknown
+# parameter lands in $args and the call RUNS, against the real projects root and its shared cache.
+$n2Bind = $false
+try { $null = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) & { param([int]$X) $X } -X 'not-an-int' } -Fetched 1 }
+catch { $n2Bind = ($_.Exception -is [System.Management.Automation.ParameterBindingException]) }
+Assert-True $n2Bind 'and so does a parameter-binding failure'
+$n2Io = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) throw [IO.IOException]::new('the projects root vanished') } -Fetched 1
+Assert-Equal 0 $n2Io.Added 'an IO failure still ends the paging quietly'
+Assert-Equal $true $n2Io.Exhausted 'and marks the list exhausted rather than taking the picker down'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 953) { Write-Host "COULD NOT RUN: expected 953 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 957) { Write-Host "COULD NOT RUN: expected 957 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

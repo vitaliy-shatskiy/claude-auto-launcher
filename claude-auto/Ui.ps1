@@ -467,7 +467,15 @@ function Expand-SessionPage {
     )
     $offset = if ($Fetched -ge 0) { $Fetched } else { @($Sessions).Count }
     $page = @()
-    try { $page = @(& $FetchMore $offset $Scope) } catch { $page = @() }
+    # A fetcher that fails because the WORLD changed - a projects root that vanished, a transcript
+    # that went away mid-read - ends the paging rather than the picker. A fetcher that fails because
+    # it is MISWIRED does not: an ArgumentException or a binding failure is a programming error, and
+    # swallowing it turns a scoped picker that can no longer page into one that quietly stops, which
+    # is the same silence C1 hid behind for a whole round (re-review 2 2026-09-16, N2).
+    try { $page = @(& $FetchMore $offset $Scope) }
+    catch [System.ArgumentException] { throw }
+    catch [System.Management.Automation.ParameterBindingException] { throw }
+    catch { $page = @() }
     $seen = @{}
     foreach ($s in $Sessions) { $seen["$($s.SessionId)|$($s.Path)"] = $true }
     $added = @($page | Where-Object { $_ -and -not $seen["$($_.SessionId)|$($_.Path)"] })
