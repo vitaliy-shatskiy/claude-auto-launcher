@@ -258,9 +258,9 @@ function Invoke-ProjectScreen {
         [string]$InitialAction = 'new',
         [Parameter(Mandatory)][scriptblock]$ReadKey,
         [scriptblock]$Draw = {
-            param($p, $i, $f, $t, $h, $n, $a, $oa)
+            param($p, $i, $f, $t, $h, $n, $a)
             $map = $null
-            Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Action $a -OnAction:$oa -Cwd $Cwd -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
+            Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Action $a -Cwd $Cwd -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
             $map
         },
         [scriptblock]$Wait = { & $ReadKey },
@@ -276,11 +276,11 @@ function Invoke-ProjectScreen {
     $rowMap = $null
     $rows = @()
     $index = 0
-    # The action field, and whether the cursor is parked on it. $onAction is a FLAG rather than one
-    # more index into $rows on purpose: the field is the last cursor stop but it must not consume
-    # the list highlight, or arrowing down to it would silently change which directory Enter commits.
-    $action = if ($InitialAction -in (Get-ProjectActions)) { $InitialAction } else { (Get-ProjectActions)[0] }
-    $onAction = $false
+    # The action field is an INDICATOR, not a cursor stop (review W2/W3): Left/Right and a/d step it
+    # from every row, so it never needs focus - and the focus state it used to have could only be
+    # entered from the LAST list row, which parked the commit on 'enter a path...' and made the
+    # arrows-only path end at a Read-Host prompt.
+    $action = Step-ProjectAction -Action $InitialAction -Delta 0
     # The remembered project starts under the cursor rather than at the top: arriving at this screen
     # and pressing Enter must reproduce the last launch. Compared through ConvertTo-ProjectKey, not
     # raw string equality: -Initial is whatever the caller last stored, which may differ from the
@@ -363,7 +363,7 @@ function Invoke-ProjectScreen {
     while ($true) {
         $rows = & $rowsOf $filter
         if ($index -ge $rows.Count) { $index = [Math]::Max(0, $rows.Count - 1) }
-        if ($needDraw) { $rowMap = & $Draw $Projects $index $filter $typing $hover $notice $action $onAction }
+        if ($needDraw) { $rowMap = & $Draw $Projects $index $filter $typing $hover $notice $action }
         $needDraw = $true
         $key = & $Wait
         if ("$key" -eq 'resize') { continue }
@@ -394,12 +394,12 @@ function Invoke-ProjectScreen {
                 if ($hint) { $synthetic = New-SyntheticKey -Key $hint.Key -Char $hint.Char }
                 # The action field sits below the last list row and is NOT in RowCount, so
                 # Get-ClaudeMouseRow answers $null for it - which is what lets this branch own it
-                # without a special case inside the row hit test. A click anywhere on the field
-                # focuses it; a click on a cap also steps it, through the SAME stepper the arrows
-                # use, because a click that assigned a value directly would be a second
-                # implementation of the field waiting to drift (the launch screen's own rule).
+                # without a special case inside the row hit test. A click on a cap steps the field
+                # through the SAME stepper the arrows use, because a click that assigned a value
+                # directly would be a second implementation of the field waiting to drift (the
+                # launch screen's own rule). A click elsewhere on the row does nothing: the field
+                # has no focus to take, and it must never move the selection.
                 elseif ($rowMap.Action -and ($key.Y - $top) -eq $rowMap.Action.Y) {
-                    $onAction = $true
                     $cell = @($rowMap.Action.Cells | Where-Object { $key.X -ge $_.Start -and $key.X -le $_.End })
                     if ($cell.Count -gt 0) { $action = Step-ProjectAction -Action $action -Delta $cell[0].Delta }
                 }
@@ -413,7 +413,6 @@ function Invoke-ProjectScreen {
                         # presses close enough to register as one gesture are unambiguous intent.
                         if ($target -ge 0 -and $target -lt $rows.Count) {
                             $index = $target
-                            $onAction = $false
                             if ($key.IsDoubleClick) {
                                 # The FIELD, not a hardcoded 'new': the gesture means "this row,
                                 # that action", and two answers to "what does a commit do here"
@@ -453,21 +452,15 @@ function Invoke-ProjectScreen {
             continue
         }
 
-        # Up/Down walk the list and then the action field, which is the last stop. Reaching it does
-        # not move $index: the list keeps its own mark and the frame shows it, so Enter there commits
-        # exactly the row the screen still points at.
-        if ($name -eq 'UpArrow'   -or (Test-ClaudeHotkey -Key $key -Char 'w')) {
-            if ($onAction) { $onAction = $false } elseif ($index -gt 0) { $index-- }
-        }
-        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) {
-            if (-not $onAction) { if ($index -lt $rows.Count - 1) { $index++ } else { $onAction = $true } }
-        }
-        # Left/Right cycle the field from ANY row - the owner asked for arrows to be enough, and
-        # walking down to the field first would be two more keystrokes for the commonest choice.
-        # a/d only while the field HAS focus: on a list row they keep whatever they mean there
-        # (nothing, on this screen), so adding them cannot shadow a key this screen already uses.
+        # Up/Down walk the LIST and stop at the free-path row, exactly as before the field existed.
+        if ($name -eq 'UpArrow'   -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
+        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($index -lt $rows.Count - 1) { $index++ } }
+        # Left/Right - and a/d, unconditionally (review W3) - cycle the field from ANY row. Every
+        # other screen with a cursor treats a/d as Left/Right and the launch footer says so; a
+        # trained key that silently does nothing on some rows is worse than no key at all. Nothing
+        # else on this screen binds either one.
         elseif ($name -eq 'LeftArrow' -or $name -eq 'RightArrow' -or
-                ($onAction -and ((Test-ClaudeHotkey -Key $key -Char 'a') -or (Test-ClaudeHotkey -Key $key -Char 'd')))) {
+                (Test-ClaudeHotkey -Key $key -Char 'a') -or (Test-ClaudeHotkey -Key $key -Char 'd')) {
             $back = ($name -eq 'LeftArrow') -or (Test-ClaudeHotkey -Key $key -Char 'a')
             $action = Step-ProjectAction -Action $action -Delta $(if ($back) { -1 } else { 1 })
         }

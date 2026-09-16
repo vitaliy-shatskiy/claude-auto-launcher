@@ -266,17 +266,17 @@ if ($UseUi) {
                 }
                 exit 0
             }
-            # EIGHT parameters, and both of the last two forwarded. A renderer one short does not
-            # fail: the extra arguments land in $args and the action field draws 'new' on every
-            # frame while the loop is on 'resume' - which is exactly what a preview run showed
-            # before these lines existed. Test-Maintenance pins the shape as source, because this
-            # scriptblock has a console and no suite can drive it.
+            # SEVEN parameters, and the last one forwarded. A renderer one short does not fail: the
+            # extra argument lands in $args and the action field draws 'new' on every frame while
+            # the loop is on 'resume' - which is exactly what a preview run showed before this line
+            # existed. Test-Maintenance pins the shape as source, because this scriptblock has a
+            # console and no suite can drive it.
             $projDraw = {
-                param($p, $i, $f, $t, $h, $n, $a, $oa)
+                param($p, $i, $f, $t, $h, $n, $a)
                 $w, $hh = & $size
                 $pmap = $null
                 & $paint (Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Cwd $LaunchCwd `
-                          -Action $a -OnAction:$oa `
+                          -Action $a `
                           -Width $w -Height $hh -Color:$useColor -Ascii:$ascii -RowMap ([ref]$pmap))
                 $pmap
             }

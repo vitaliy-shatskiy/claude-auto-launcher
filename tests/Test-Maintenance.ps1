@@ -637,17 +637,16 @@ $projDrawAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.A
 Assert-Equal 1 $projDrawAssign.Count 'and builds the project renderer in exactly one place'
 $projDrawText = "$($projDrawAssign[0].Right.Extent.Text)"
 Assert-True ($projDrawText -match '-Action\s+\$') 'the renderer forwards the action field to Get-ProjectFrame'
-Assert-True ($projDrawText -match '-OnAction:\$') 'and which row the cursor is parked on'
 $projDrawParams = @($projDrawAssign[0].Right.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParamBlockAst] }, $true))
 Assert-Equal 1 $projDrawParams.Count 'the renderer declares a parameter block'
-Assert-Equal 8 @($projDrawParams[0].Parameters).Count 'with all eight parameters the loop passes - one short and the field silently draws "new" forever'
+Assert-Equal 7 @($projDrawParams[0].Parameters).Count 'with all seven parameters the loop passes - one short and the field silently draws "new" forever'
 
 # Nothing writes the chosen action onto the launch state, because nothing may remember it.
 $projActionWrite = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     "$($n.Left.Extent.Text)" -eq '$state.ProjectAction' }, $true))
 Assert-Equal 0 $projActionWrite.Count 'and nothing parks the chosen action on the launch state for Prefs.ps1 to pick up'
 
-if ($script:Ran -ne 133) { Write-Host "COULD NOT RUN: expected 133 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 132) { Write-Host "COULD NOT RUN: expected 132 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -154,6 +154,11 @@ function Step-ProjectAction {
     # steps from the FIRST rather than travelling on: this string decides which flags reach `claude`.
     param([string]$Action, [int]$Delta)
     $values = $script:ProjectActions
+    # Canonicalised ONCE, here, and every caller steps by 0 to get the same answer: PowerShell's
+    # -in and -eq are case-INsensitive while [Array]::IndexOf is not, so 'RESUME' used to pass every
+    # validation, render as '< RESUME >', and then step to 'continue' instead of 'worktree'
+    # (review W4).
+    $Action = @($values | Where-Object { $_ -eq $Action })[0]
     $i = [Array]::IndexOf($values, $Action)
     if ($i -lt 0) { $i = 0 }
     $i = ($i + $Delta) % $values.Count
@@ -667,10 +672,10 @@ function Get-ProjectFrame {
         # title and cleared by the loop on the next key, so the reason a press did nothing is never
         # silent.
         [string]$Notice = '',
-        # The action field under the list, and whether the cursor is parked on it (2026-09-16). A
-        # value outside Get-ProjectActions renders as the first one rather than being printed raw.
+        # The action field under the list (2026-09-16). An INDICATOR, never a cursor stop, so it
+        # takes no focus parameter. A value outside Get-ProjectActions renders as the first one
+        # rather than being printed raw.
         [string]$Action = 'new',
-        [switch]$OnAction,
         [ref]$RowMap
     )
     if ($RowMap) { $RowMap.Value = [pscustomobject]@{ FirstRowY = 0; RowCount = 0; Start = 0 } }
@@ -740,12 +745,7 @@ function Get-ProjectFrame {
     $body = @()
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
         $r = $rows[$i]
-        # With the field focused the highlighted row keeps a mark of its OWN rather than the cursor:
-        # two cursors on one screen is a guess about which row Enter obeys, and Enter obeys this one.
-        $mark =
-            if ($i -ne $Index) { '   ' }
-            elseif ($OnAction) { " $($g.On) " }
-            else { " $($g.Cursor) " }
+        $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
         if ($r.Kind -eq 'project') {
             $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
             $name = $r.Item.Name
@@ -776,11 +776,13 @@ function Get-ProjectFrame {
 
     # The action field: one launch-screen-style row under the list, in Get-LaunchFrame's own
     # collapsed form ('<option>' between two caps), so the whole screen is driveable with the arrows
-    # and Enter and no hotkey has to be memorised. It is the LAST cursor stop and it never moves the
-    # list highlight - the caps are the only thing on it a click can act on.
-    $actionMark  = if ($OnAction) { " $($g.Cursor) " } else { '   ' }
+    # and Enter and no hotkey has to be memorised. It carries no cursor: the arrows step it from
+    # every row, and the caps are the only thing on it a click can act on.
+    $actionMark  = '   '
     $actionLabel = 'action'.PadRight(8)
-    $actionText  = if ($Action -in $script:ProjectActions) { $Action } else { $script:ProjectActions[0] }
+    # Through the same canonicaliser the stepper uses, so what is DRAWN and what Right steps from
+    # can never be two different strings (review W4: 'RESUME' rendered, then stepped from 'new').
+    $actionText  = Step-ProjectAction -Action $Action -Delta 0
     $body += $actionMark + $actionLabel + "$($g.LAngle) $actionText $($g.RAngle)"
 
     $lines = New-Box -Lines $body -Width $Width -Title $title -Ascii:$Ascii

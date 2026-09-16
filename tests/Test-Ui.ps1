@@ -2552,39 +2552,34 @@ try {
     $pAct5b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -InitialAction 'rm -rf' -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
     Assert-Equal 'new' $pAct5b.Action 'an -InitialAction outside the four falls back to new'
 
-    # Up/Down reach the field and come back. The field is the LAST stop and it does not move the
-    # list highlight, so what Enter would commit never changes under the cursor.
+    # Down STOPS at the free-path row, as it did before the field existed (review W2): the field is
+    # an indicator, never a cursor stop. Five downs and the cursor is still on the last list row -
+    # which is what keeps the arrows-only path off a Read-Host prompt nobody asked for.
     $script:actNav = New-Object System.Collections.Generic.List[object]
-    $navDraw = { param($p, $i, $f, $t, $h, $n, $a, $oa) $script:actNav.Add([pscustomobject]@{ Index = $i; Action = "$a"; OnAction = [bool]$oa }); $null }
+    $navDraw = { param($p, $i, $f, $t, $h, $n, $a) $script:actNav.Add([pscustomobject]@{ Index = $i; Action = "$a" }); $null }
     $pAct6 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 's', 's', 'w', 'Escape')) -Draw $navDraw
     Assert-True ($null -eq $pAct6) 'the navigation run ends with Escape'
     Assert-Equal 7 $script:actNav.Count 'one draw per key handled'
-    Assert-Equal $false $script:actNav[0].OnAction 'the screen opens on the list, not on the field'
+    Assert-Equal 0 $script:actNav[0].Index 'the screen opens on the first row'
     Assert-Equal 3 $script:actNav[3].Index 'three downs reach the last list row (alpha, beta, current directory, enter a path)'
-    Assert-Equal $false $script:actNav[3].OnAction 'and that is still a list row'
-    Assert-Equal $true $script:actNav[4].OnAction 'the fourth down lands on the action field'
-    Assert-Equal $true $script:actNav[5].OnAction 'a further down stays there - it is the last cursor stop'
-    Assert-Equal 3 $script:actNav[5].Index 'and the list highlight does not move while the field has focus'
-    Assert-Equal $false $script:actNav[6].OnAction 'up returns to the list'
-    Assert-Equal 3 $script:actNav[6].Index 'on the row it came from'
+    Assert-Equal 3 $script:actNav[4].Index 'a fourth down goes no further - there is no row past it'
+    Assert-Equal 3 $script:actNav[5].Index 'nor a fifth'
+    Assert-Equal 2 $script:actNav[6].Index 'and up moves back into the list one row at a time'
 
-    # a/d step the field, but only while it has focus: on a list row they keep their current
-    # meaning on this screen, which is nothing at all.
+    # a/d step the field from ANY row, unconditionally (review W3): every other screen with a cursor
+    # treats them as Left/Right, and a trained key that works on some rows only is worse than none.
     $pAct7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('d', 'Enter')) -Draw {}
-    Assert-Equal 'new' $pAct7.Action 'd on a list row does not step the field'
-    Assert-Equal $tmpAlpha $pAct7.Path 'and does not move the selection either'
+    Assert-Equal 'continue' $pAct7.Action 'd on a project row steps the field, like RightArrow'
+    Assert-Equal $tmpAlpha $pAct7.Path 'and does not move the selection'
 
     $actScratch = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-act-$([Guid]::NewGuid().ToString('N'))")
     New-Item -ItemType Directory -Path $actScratch | Out-Null
     try {
-        $pAct8 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 's', 'd', 'Enter', 'Escape')) -Draw {} -ReadPath { $actScratch }
-        Assert-Equal 'continue' $pAct8.Action 'd on the focused field steps it right, like RightArrow'
-        $pAct9 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 's', 'a', 'Enter', 'Escape')) -Draw {} -ReadPath { $actScratch }
-        Assert-Equal 'worktree' $pAct9.Action 'a on the focused field steps it left, wrapping'
-
-        # Enter while the field has focus commits the row the list still marks - arriving by Down
-        # that is the free-path row, which is exactly what the frame shows, so Enter is never a guess.
-        Assert-Equal (Resolve-Path -LiteralPath $actScratch).Path $pAct9.Path 'Enter on the field commits the row the list still marks - the free-path row it arrived from'
+        $pAct8 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('a', 'Enter')) -Draw {}
+        Assert-Equal 'worktree' $pAct8.Action 'a on a project row steps it left, wrapping, like LeftArrow'
+        $pAct9 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 'd', 'Enter', 'Escape')) -Draw {} -ReadPath { $actScratch }
+        Assert-Equal 'continue' $pAct9.Action 'and on the free-path row too - there is no row where the key is dead'
+        Assert-Equal (Resolve-Path -LiteralPath $actScratch).Path $pAct9.Path 'which still prompts for the path first'
 
         # Enter on the free-path row prompts FIRST and then runs the selected action.
         $pAct10 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'RightArrow', 's', 's', 's', 'Enter', 'Escape')) -Draw {} -ReadPath { $actScratch }
@@ -2618,13 +2613,18 @@ try {
     Assert-Equal 1 $mapAct.Action.Cells[1].Delta 'the right cap steps forward'
     Assert-True ($fAct[$mapAct.Action.Y].Substring($mapAct.Action.Cells[0].Start, 1) -eq "$($gg.LAngle)") 'the left cap cell covers the left cap glyph'
     Assert-True ($fAct[$mapAct.Action.Y].Substring($mapAct.Action.Cells[1].Start, 1) -eq "$($gg.RAngle)") 'and the right cap cell the right one'
-    Assert-True ($fActText -match ([regex]::Escape(" $($gg.Cursor) alpha"))) 'with the field unfocused the cursor is on the list'
+    Assert-True ($fActText -match ([regex]::Escape(" $($gg.Cursor) alpha"))) 'the cursor is on the list - the field never takes it'
+    Assert-True (-not ($fActText -match ([regex]::Escape("$($gg.Cursor) action")))) 'and the field carries no cursor of its own, on any frame'
 
-    $fFocus = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'resume' -OnAction)
-    $fFocusText = $fFocus -join "`n"
-    Assert-True ($fFocusText -match ([regex]::Escape("$($gg.Cursor) action"))) 'with the field focused the cursor sits on it'
-    Assert-True ($fFocusText -match ([regex]::Escape(" $($gg.On) alpha"))) 'and the row Enter would commit keeps a mark of its own, so the two are never confused'
-    Assert-True (-not ($fFocusText -match ([regex]::Escape(" $($gg.Cursor) alpha")))) 'there is exactly one cursor on the screen'
+    # W4: the field is drawn through the SAME canonicaliser it is stepped with, so a hand-supplied
+    # 'RESUME' cannot render one string and step from another (PowerShell's -in and -eq are
+    # case-insensitive; [Array]::IndexOf is not).
+    $fCase = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'RESUME')
+    Assert-True (($fCase -join "`n").Contains("$($gg.LAngle) resume $($gg.RAngle)")) "a differently-cased action renders as the canonical one, never raw"
+    Assert-Equal 'worktree' (Step-ProjectAction -Action 'RESUME' -Delta 1) 'and steps from where it is shown - forward off resume is worktree, not continue'
+    Assert-Equal 'resume' (Step-ProjectAction -Action 'ReSuMe' -Delta 0) 'stepping by zero is the canonicaliser every caller shares'
+    $pCase = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -InitialAction 'RESUME' -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'Enter')) -Draw {}
+    Assert-Equal 'worktree' $pCase.Action 'and the loop seeds from the canonical value too, so one RightArrow reaches worktree'
 
     # The footer names the arrows - measured at 80 columns rather than guessed: the hint may not
     # cost the project footer a line it did not need before.
@@ -2887,7 +2887,7 @@ Assert-Equal 0 $n2Io.Added 'an IO failure still ends the paging quietly'
 Assert-Equal $true $n2Io.Exhausted 'and marks the list exhausted rather than taking the picker down'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1014) { Write-Host "COULD NOT RUN: expected 1014 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1013) { Write-Host "COULD NOT RUN: expected 1013 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
