@@ -26,6 +26,10 @@ param(
     [string]$Launcher = (Join-Path $PSScriptRoot '..\claude-auto.ps1'),
     [string]$FixtureConfig = (Join-Path $PSScriptRoot 'fixtures\config-preview.json'),
     [string]$Reference = (Join-Path $PSScriptRoot 'preview-reference.local.txt'),
+    # The real entry every launch goes through. Its invocation line is lifted into the scratch shim
+    # (New-ForwarderShim), so the second shape is this machine's actual forwarder shape, not a
+    # retyped guess at it.
+    [string]$Forwarder = (Join-Path $HOME 'bin\claude-auto.ps1'),
     # Capture a fresh reference from the launcher's current preview output instead of comparing.
     [switch]$Record
 )
@@ -131,17 +135,33 @@ $script:WantedPattern = 'launch args\s*:|command\s*:|remote\s*:|account\s*:|CLAU
 # ONLY through the forwarder - the shape every real launch uses and no check ever drove.
 #
 # Written per run rather than committed: it must point at whichever launcher is under test, and a
-# checked-in copy would rot against ~\bin\claude-auto.ps1. The invocation is copied from that file
-# line for line, minus its missing-checkout fallback (irrelevant here - the guard above already
-# proved the launcher exists). No param() block, for the same reason the launcher has none:
+# checked-in copy would rot against ~\bin\claude-auto.ps1. The invocation line is LIFTED from that
+# file rather than retyped, minus its missing-checkout fallback (irrelevant here - the guard above
+# already proved the launcher exists). No param() block, for the same reason the launcher has none:
 # adding one changes how --resume, --continue and -p bind.
+#
+# Lifted and not retyped because a retyped shim is unpinned: changed to `pwsh -File $target @args`
+# it ran the -File shape TWICE while the summary still reported "2 invocation shape(s)", leaving the
+# gate blind to the exact defect it exists for (review W1). Matched as a whole line, not searched
+# for as a substring, and a forwarder that no longer has that line STOPS this check (exit 2 through
+# the caller's catch) instead of silently weakening it.
 function New-ForwarderShim {
-    param([Parameter(Mandatory)][string]$LauncherPath)
+    param(
+        [Parameter(Mandatory)][string]$LauncherPath,
+        [string]$Forwarder = (Join-Path $HOME 'bin\claude-auto.ps1')
+    )
+    if (-not (Test-Path -LiteralPath $Forwarder)) {
+        throw "the real forwarder is not at $Forwarder - the shim cannot be pinned against it"
+    }
+    $invocation = @(Get-Content -LiteralPath $Forwarder | Where-Object { $_ -match '^\s*&\s*\$target\s+@args\s*$' })
+    if ($invocation.Count -ne 1) {
+        throw "$Forwarder does not invoke the launcher as '& `$target @args' ($($invocation.Count) matching line(s)) - the shim this check builds would no longer be its shape"
+    }
     $path = Join-Path $env:TEMP ('claude-auto-fwd-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
     $literal = (Resolve-Path -LiteralPath $LauncherPath).Path.Replace("'", "''")
     $text = "# Scratch forwarder - the invocation shape of ~\bin\claude-auto.ps1. Deliberately no param().`r`n" +
             "`$target = '$literal'`r`n" +
-            "& `$target @args`r`n" +
+            $invocation[0].Trim() + "`r`n" +
             "exit `$LASTEXITCODE`r`n"
     [IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
     return $path
@@ -241,7 +261,7 @@ if ($refLines.Count -eq 0) {
 $shim = $null
 try {
     $script:ProjectsFixtureRoot = Initialize-ProjectSlugFixture
-    $shim = New-ForwarderShim -LauncherPath $Launcher
+    $shim = New-ForwarderShim -LauncherPath $Launcher -Forwarder $Forwarder
     # Both shapes, same keys, same fixture, same reference. Direct first so a defect common to both
     # reads as an ordinary regression rather than as a forwarder problem.
     # No @() around these calls: Get-AllRunOutput already returns `, @($lines)` and the pipeline

@@ -531,6 +531,33 @@ Assert-True ($launcherSrc -match '\$getSessionFile = Get-Command Get-ClaudeSessi
 Assert-True ($launcherSrc -match '\$getSessions = Get-Command Get-ClaudeSessions') 'and Get-ClaudeSessions too'
 Assert-True ($fetchBlock -match '&\s*\$getSessionFile ') 'and the fetcher calls the resolved command object rather than looking the name up inside its module scope'
 Assert-True ($fetchBlock -match '&\s*\$getSessions ') 'both of them'
+
+# --- check-preview's forwarder shim really is a FORWARDER ------------------------------------------
+# The second invocation shape is only worth running if the shim still runs `& $target @args`. Changed
+# to `pwsh -File $target @args` it drives the -File shape twice and the summary still says "2
+# invocation shape(s)" - green against the very defect it exists for (review W1). The real generator
+# is lifted out of check-preview.ps1 and RUN here (same technique as checkpoint's $extraArgs above),
+# so this asserts the text that check actually writes, not a copy of it that could drift.
+$cpvSrc = Get-Content -LiteralPath "$PSScriptRoot\check-preview.ps1" -Raw
+Assert-True ($cpvSrc -match '(?ms)^function New-ForwarderShim \{.*?^\}') 'check-preview.ps1 builds its forwarder shim in a function'
+. ([scriptblock]::Create($Matches[0]))
+$shimTmp = Join-Path $env:TEMP ('claude-auto-shimtest-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $shimTmp | Out-Null
+# A FIXTURE forwarder, never the machine's own ~\bin copy: this must assert the same thing on a
+# clone that has no launcher installed at all.
+$fwdGood = Join-Path $shimTmp 'forwarder-good.ps1'
+$fwdBad = Join-Path $shimTmp 'forwarder-bad.ps1'
+[IO.File]::WriteAllText($fwdGood, "`$target = 'x'`r`n& `$target @args`r`nexit `$LASTEXITCODE`r`n", (New-Object System.Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText($fwdBad, "`$target = 'x'`r`npwsh -NoProfile -File `$target @args`r`nexit `$LASTEXITCODE`r`n", (New-Object System.Text.UTF8Encoding($false)))
+$shimMade = New-ForwarderShim -LauncherPath "$PSScriptRoot\..\claude-auto.ps1" -Forwarder $fwdGood
+$shimText = Get-Content -LiteralPath $shimMade -Raw
+Assert-True ($shimText -match '(?m)^&\s*\$target\s+@args\s*$') 'the shim it writes invokes the launcher as & $target @args - the forwarder shape'
+Assert-True ($shimText -notmatch '-File') 'and never as pwsh -File, which would run the -File shape twice and report it as two'
+$threw = $false
+try { $null = New-ForwarderShim -LauncherPath "$PSScriptRoot\..\claude-auto.ps1" -Forwarder $fwdBad } catch { $threw = $true }
+Assert-Equal $true $threw 'a forwarder that no longer invokes it that way STOPS the check instead of quietly weakening it'
+Remove-Item -LiteralPath $shimMade -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $shimTmp -Recurse -Force -ErrorAction SilentlyContinue
 Assert-True ($launcherSrc -match '-Sessions @\(&\s*\$fetchNextPage 0 \$pickerSlugs\)') 'the picker''s FIRST page comes from the same scoped fetcher, so it cannot open empty on the chosen project'
 
 # --- the gate must really run what its rows claim ---------------------------------------------------
@@ -579,7 +606,7 @@ $guardOf = {
 Assert-True ((& $guardOf $cdCall[0]) -match 'Preview') 'the cd is guarded on -Preview'
 Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secrets import, so a preview run performs neither'
 
-if ($script:Ran -ne 118) { Write-Host "COULD NOT RUN: expected 118 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 122) { Write-Host "COULD NOT RUN: expected 122 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
