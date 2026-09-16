@@ -397,7 +397,9 @@ function Invoke-ScreenLoop {
 
 function Invoke-LaunchScreen {
     # Returns the finished state, or $null when the user pressed Esc. -Draw is injected so tests
-    # pass an empty scriptblock and assert only the state that comes out.
+    # pass an empty scriptblock and assert only the state that comes out. Draw, wait, resize, the
+    # mouse, the arrows, Enter/Escape and the log records are Invoke-ScreenLoop's; what is left
+    # here is what the LAUNCH screen alone does.
     param(
         [Parameter(Mandatory)]$State,
         [Parameter(Mandatory)][scriptblock]$ReadKey,
@@ -420,105 +422,88 @@ function Invoke-LaunchScreen {
         # comes back. Default returns $false so every existing caller that omits it is unaffected.
         [scriptblock]$OnKey = { param($k) $false }
     )
-    # What the owner saw and for how long. A plain scriptblock, never .GetNewClosure(): a closure
-    # binds to its own dynamic module and resolves commands against GLOBAL session state only, which
-    # is the forwarder-only failure claude-auto.ps1's fetcher block documents at length. This one
-    # reads $State at INVOCATION, so it always reports the row the loop is actually on.
-    $enteredAt = Get-Date
-    $leave = {
-        param([string]$Key)
-        Write-UiLog -Stage 'key' -Data @{ screen = 'launch'; key = $Key; index = [int]$State.Row }
-        Write-UiLog -Stage 'screen' -Data @{ name = 'launch'; phase = 'leave'
-                                             ms = [int]((Get-Date) - $enteredAt).TotalMilliseconds
-                                             rows = @(Get-LaunchRows).Count; index = [int]$State.Row }
-    }
-    Write-UiLog -Stage 'screen' -Data @{ name = 'launch'; phase = 'enter'; rows = @(Get-LaunchRows).Count; index = [int]$State.Row }
-    while ($true) {
-        $rowMap = & $Draw $State
-        $key = & $Wait
-        if ("$key" -eq 'resize') { continue }
+    # A handler is a plain scriptblock run from INSIDE Invoke-ScreenLoop, and PowerShell resolves
+    # its names against that scope first: $Draw, $State, $Wait and $GetWindowTop there are the
+    # LOOP's parameters, not these (`Draw = { param($s) & $Draw $s.State }` recurses into itself).
+    # So every one a handler needs is aliased to a name the loop does not have, and this screen's
+    # own state travels as $s.State - never read as $State.
+    $paintLaunch = $Draw
+    $askCaller = $OnKey
+    $tabPrefs = $Prefs
 
-        # Mouse. A click on a row selects it; a click on one of its option cells selects that value
-        # as well, which is what makes this a menu rather than a picture of one. Nothing here can
-        # START a session - only Enter does that - so a stray click costs at most a changed setting
-        # the owner can see on the very next frame.
-        if ($key -and $key.Kind -eq 'mouse') {
-            $rows = @(Get-LaunchRows)
-            $synthetic = $null
-            if ($key.WheelUp) { if ($State.Row -gt 0) { $State.Row-- }; continue }
-            if ($key.WheelDown) { if ($State.Row -lt $rows.Count - 1) { $State.Row++ }; continue }
-            if ($key.Left -and -not $key.IsMove -and $rowMap) {
-                $hit = Get-HitAt -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop (& $GetWindowTop)
-                if ($hit.Kind -eq 'footer') { $synthetic = New-SyntheticKey -Key $hit.Footer.Key -Char $hit.Footer.Char }
-                elseif ($hit.Kind -eq 'cell' -or $hit.Kind -eq 'row') {
-                    $State.Row = $hit.Row.Index
-                    if ($hit.Kind -eq 'cell') {
-                        # Walk to the clicked value with the SAME stepper the arrow keys use, one
-                        # step at a time. Assigning the value directly would skip whatever changing
-                        # a row is supposed to do, and the two paths would drift apart silently.
-                        $values = @($rows[$hit.Row.Index].Values)
-                        $from = [Array]::IndexOf($values, $State.($hit.Row.Name))
-                        $to = [Array]::IndexOf($values, $hit.Value)
-                        # Captured before the first step, not after the last: a click on a tab may
-                        # walk two accounts, and the stash belongs to the one the click started on.
-                        $leaving = $State.Account
-                        if ($from -ge 0 -and $to -ge 0 -and $from -ne $to) {
-                            $dir = if ($to -lt $from) { -1 } else { 1 }
-                            for ($n = 0; $n -lt [Math]::Abs($to - $from); $n++) {
-                                $State = Step-LaunchValue -State $State -Delta $dir
-                            }
-                        }
-                        if ($hit.Row.Name -eq 'Account') { $State = Switch-LaunchTab -State $State -From $leaving -Prefs $Prefs -Rows $rows }
-                    }
-                }
-            }
-            # A footer click becomes its key and falls through to the handlers below - including
-            # $OnKey, which is how clicking 'u maintenance' opens the maintenance screen through
-            # exactly the path the letter u takes.
-            if (-not $synthetic) { continue }
-            $key = $synthetic
-        }
-
-        if (& $OnKey $key) { continue }
-        $name = "$($key.Key)"
-
-        # if/elseif rather than switch: inside a while loop, `continue` in a PowerShell switch
-        # continues the LOOP rather than leaving the branch, which is a trap worth not setting.
-        # Ctrl+R, not a bare 'r': one keystroke flattens all seven rows, the hint is not in the
-        # footer, and the flattened state used to be saved - so a stray keypress read as "my settings
-        # reset themselves" (reproduced with `tests\preview.ps1 -Keys r,Enter`).
-        # Matched on .Key so it survives a non-Latin keyboard layout, where the character would arrive
-        # as something else entirely while the virtual key stays R.
-        #
-        # Reset-LaunchTab, not New-LaunchState, since the rows became per account (2026-09-04): a
-        # whole-state reset would flatten every tab's stash, which is the same "my settings reset
-        # themselves" failure one level up.
-        if ($key.Key -eq [System.ConsoleKey]::R -and ($key.Modifiers -band [System.ConsoleModifiers]::Control)) { $State = Reset-LaunchTab -State $State }
-        # WASD navigates alongside the arrows on every screen with a cursor (2026-09-09): w/a/s/d
-        # go through Test-ClaudeHotkey (Input.ps1), never -eq, so a shifted or Cyrillic-layout key
-        # is judged by the same modifier/case guards as every other hotkey.
-        elseif ($name -eq 'UpArrow' -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($State.Row -gt 0) { $State.Row-- } }
-        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($State.Row -lt (Get-LaunchRows).Count - 1) { $State.Row++ } }
+    # One walk of the stepper - $Count steps of $Delta - and the tab switch the account row is. The
+    # arrows walk one step and a click on a cell walks to it, both through the SAME stepper: a
+    # direct assignment would skip whatever changing a row is supposed to do, and the two paths
+    # would drift apart silently.
+    $walkRow = {
+        param($s, [int]$Delta, [int]$Count)
+        # Captured before the first step, not after the last: a click on a tab may walk two
+        # accounts, and the stash belongs to the one the walk started on.
+        $leaving = $s.State.Account
+        for ($n = 0; $n -lt $Count; $n++) { $s.State = Step-LaunchValue -State $s.State -Delta $Delta }
         # The account row is a tab strip: stepping it is a tab switch, and the five habit rows have
         # to travel with it. Every other row steps and nothing else happens.
-        elseif ($name -eq 'LeftArrow' -or $name -eq 'RightArrow' -or
-                (Test-ClaudeHotkey -Key $key -Char 'a') -or (Test-ClaudeHotkey -Key $key -Char 'd')) {
-            $leaving = $State.Account
-            $back = ($name -eq 'LeftArrow') -or (Test-ClaudeHotkey -Key $key -Char 'a')
-            $State = Step-LaunchValue -State $State -Delta $(if ($back) { -1 } else { 1 })
-            if ((Get-LaunchRows)[$State.Row].Name -eq 'Account') { $State = Switch-LaunchTab -State $State -From $leaving -Prefs $Prefs -Rows (Get-LaunchRows) }
+        if ((Get-LaunchRows)[$s.State.Row].Name -eq 'Account') {
+            $s.State = Switch-LaunchTab -State $s.State -From $leaving -Prefs $tabPrefs -Rows (Get-LaunchRows)
         }
-        # DECISIVE keys only (Enter, Escape/Ctrl+C): a row step changes a setting the next frame
-        # shows anyway, while these two END the screen. A footer click has already become its
-        # synthetic key above, so clicking 'enter start' lands here as Enter - one record, one path.
-        elseif ($name -eq 'Enter') { & $leave 'Enter'; return $State }
-        # Ctrl+C is read as input (TreatControlCAsInput, set in Enter-AltBuffer) and treated exactly
-        # like Escape, so the `finally` that restores the alternate buffer still runs.
-        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) {
-            & $leave $(if ($name -eq 'Escape') { 'Escape' } else { 'Ctrl+C' })
-            return $null
-        }
+        $s.Index = [int]$s.State.Row
     }
+
+    $st = @{ Index = [int]$State.Row; Hover = -1; HoverRow = -1; Typing = $false; State = $State }
+    return (Invoke-ScreenLoop -Screen 'launch' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
+        -Draw { param($s) & $paintLaunch $s.State } -Handlers @{
+        # The cursor lives in two places - the loop's Index, and the state's Row that the frame
+        # draws and Step-LaunchValue steps. Index wins here; a handler that replaces the state
+        # copies Row back onto Index itself. Hover reaches the frame the same way (spec D3).
+        Before = { param($s) $s.State.Row = $s.Index; $s.State.Hover = $s.Hover }
+        Rows   = { @(Get-LaunchRows).Count }
+        Left   = { param($s) $null = & $walkRow $s (-1) 1 }
+        Right  = { param($s) $null = & $walkRow $s 1 1 }
+        # DECISIVE keys only: a row step changes a setting the next frame shows anyway, while Enter
+        # and Escape END the screen. A footer click has already become its synthetic key inside the
+        # loop, so clicking 'enter next' lands here as Enter - one record, one path.
+        Enter  = { param($s) @{ Done = $true; Result = $s.State } }
+        # A click on a row selects it; a click on one of its option cells selects that value as
+        # well, which is what makes this a menu rather than a picture of one. Nothing here can
+        # START a session - only Enter does - so a stray click costs at most a changed setting the
+        # owner can see on the very next frame.
+        Click = {
+            param($s, $hit)
+            if ($hit.Kind -ne 'row' -and $hit.Kind -ne 'cell') { return }
+            $s.Index = [int]$hit.Row.Index
+            $s.State.Row = $s.Index
+            if ($hit.Kind -ne 'cell') { return }
+            $values = @((Get-LaunchRows)[$hit.Row.Index].Values)
+            $from = [Array]::IndexOf($values, $s.State.($hit.Row.Name))
+            $to = [Array]::IndexOf($values, $hit.Value)
+            $steps = 0
+            $dir = 1
+            if ($from -ge 0 -and $to -ge 0 -and $from -ne $to) {
+                $dir = if ($to -lt $from) { -1 } else { 1 }
+                $steps = [Math]::Abs($to - $from)
+            }
+            $null = & $walkRow $s $dir $steps
+        }
+        # The caller's hook FIRST - that is how clicking 'u maintenance' opens the maintenance
+        # screen through exactly the path the letter u takes - and ctrl+r after it.
+        # Ctrl+R, not a bare 'r': one keystroke flattens all seven rows, the hint is not in the
+        # footer, and the flattened state used to be saved - so a stray keypress read as "my
+        # settings reset themselves" (reproduced with `tests\preview.ps1 -Keys r,Enter`). Matched on
+        # .Key so it survives a non-Latin keyboard layout, where the character would arrive as
+        # something else entirely while the virtual key stays R. Reset-LaunchTab, not
+        # New-LaunchState, since the rows became per account: a whole-state reset would flatten
+        # every tab's stash, which is the same failure one level up.
+        OnKey = {
+            param($s, $k)
+            if (& $askCaller $k) { return $true }
+            if ($k.Key -eq [System.ConsoleKey]::R -and ($k.Modifiers -band [System.ConsoleModifiers]::Control)) {
+                $s.State = Reset-LaunchTab -State $s.State
+                $s.Index = [int]$s.State.Row
+                return $true
+            }
+            return $false
+        }
+    })
 }
 
 function Invoke-ProjectScreen {

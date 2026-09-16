@@ -1504,6 +1504,42 @@ $w = New-EventReader @((New-MouseEvent -Y $lmap.FooterY -X 3 -Left), $esc)
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal '' "$out" 'the arrow hint is not clickable - it names two directions and a click cannot mean one'
 
+# --- Hover on the launch screen (spec D3). The shared loop tracks the footer button under the mouse
+# on the state, Get-LaunchFrame paints THAT button with the accent, and a move that does not change
+# the button is not worth a frame. Driven through the real painter: a draw-count assertion alone
+# would still pass with the hover paint reverted. ---
+$hmapProbe = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Color -RowMap ([ref]$hmapProbe)
+$hSpanEnter = @($hmapProbe.Footer | Where-Object { $_.Key -eq 'Enter' })[0]
+$hSpanU = @($hmapProbe.Footer | Where-Object { $_.Char -eq 'u' })[0]
+$script:launchFrames = New-Object System.Collections.Generic.List[string]
+# NOT .GetNewClosure(): a closure binds $script: to its own bubble, so the list below would collect
+# into a copy nobody reads - the trap the project screen's counting draw documents.
+$hDraw = {
+    param($s)
+    $hmap = $null
+    $lines = Get-LaunchFrame -State $s -Width 100 -Height 30 -Color -RowMap ([ref]$hmap)
+    $script:launchFrames.Add(($lines -join "`n"))
+    $hmap
+}
+$w = New-EventReader @(
+    (New-MouseEvent -Y ($hmapProbe.FooterY + $hSpanEnter.Line) -X $hSpanEnter.Start -Move),        # onto 'enter next'
+    (New-MouseEvent -Y ($hmapProbe.FooterY + $hSpanEnter.Line) -X ($hSpanEnter.Start + 1) -Move),  # same button
+    (New-MouseEvent -Y ($hmapProbe.FooterY + $hSpanU.Line) -X $hSpanU.Start -Move),                # onto 'u maintenance'
+    $esc
+)
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $hDraw -Wait $w -GetWindowTop { 0 }
+Assert-True ($null -eq $out) 'the launch hover run still ends on Escape'
+Assert-Equal 3 $script:launchFrames.Count 'three moves cost two frames past the first: the move inside the same button drew nothing'
+$hPlain = @($script:launchFrames[0] -split "`n")[$hmapProbe.FooterY + $hSpanEnter.Line]
+$hOnEnter = @($script:launchFrames[1] -split "`n")[$hmapProbe.FooterY + $hSpanEnter.Line]
+$hOnU = @($script:launchFrames[2] -split "`n")[$hmapProbe.FooterY + $hSpanU.Line]
+Assert-True (-not $hPlain.Contains($script:C.Accent)) 'no footer button is accent-tinted before the mouse moves'
+Assert-True ($hOnEnter.Contains($script:C.Accent)) 'hovering "enter next" paints its cap with the accent colour'
+Assert-Equal (Remove-AnsiColor $hPlain) (Remove-AnsiColor $hOnEnter) 'and repaints the same plain text - only the colour moved'
+Assert-True ($hOnU.Contains($script:C.Accent)) 'moving on to "u maintenance" tints that one instead'
+Assert-True ($script:launchFrames[1] -ne $script:launchFrames[2]) 'so the two hovered frames differ - the accent follows the hovered button, not a fixed spot'
+
 # --- switching tabs carries the rows with it (owner ask 2026-09-04) ---------------------------
 # The five habit rows are per account. Stepping the account row parks the current answers under the
 # account being LEFT and loads the arriving one's - otherwise switching tabs merely to read another
@@ -3294,7 +3330,7 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
     }
 Assert-Equal 'dbl@2' $r 'a row double click moves the index to the clicked row before the handler picks'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1101) { Write-Host "COULD NOT RUN: expected 1101 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1108) { Write-Host "COULD NOT RUN: expected 1108 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

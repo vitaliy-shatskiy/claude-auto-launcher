@@ -114,6 +114,9 @@ function New-LaunchState {
     [pscustomobject]@{
         Account = $script:DefaultAccount; Model = 'default'; Effort = 'default'; Advisor = 'default'
         Permission = 'default'; Remote = 'on'; Action = 'new'; Mode = 'normal'; Row = 0
+        # The footer button the mouse is over, -1 for none. On the STATE because the screen's -Draw
+        # takes the state and nothing else, so that is the only channel a hover has to the frame.
+        Hover = -1
         # Per-tab state (Prefs.ps1). Profiles is this session's stash of the five habit rows per
         # account; Restored/RestoredAge are recomputed on every tab switch, which is why the frame
         # reads them from here rather than from a copy the launcher captured before the screen.
@@ -645,7 +648,22 @@ function Get-LaunchFrame {
         @{ Token = 'u';          Label = 'maintenance'; Clickable = $true; Key = '';       Char = 'u' }
         @{ Token = 'esc';        Label = 'quit';        Clickable = $true; Key = 'Escape'; Char = '' }
     )
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch)
+    # Which (Key, Char) pair $State.Hover names, if any - looked up on the SAME clickable-span order
+    # Complete-PickerFrame later flattens into RowMap.Footer, so index N here is index N there. A
+    # state that carries no Hover at all (a hand-built fixture) hovers nothing.
+    $hoverKey = ''
+    $hoverChar = ''
+    $hasHover = $false
+    $hover = if ($null -ne $State.Hover) { [int]$State.Hover } else { -1 }
+    if ($hover -ge 0) {
+        $clickable = @($footer.Lines | ForEach-Object { $_.Spans } | Where-Object { $_.Start -ge 0 })
+        if ($hover -lt $clickable.Count) {
+            $hoverKey = $clickable[$hover].Key
+            $hoverChar = $clickable[$hover].Char
+            $hasHover = $true
+        }
+    }
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar)
 }
 
 function New-ListRow {
