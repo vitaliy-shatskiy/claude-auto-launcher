@@ -2128,8 +2128,11 @@ $scroll30 = @(1..30 | ForEach-Object { [pscustomobject]@{ Slug = "S$_"; Path = "
 $mapScroll = $null
 $null = @(Get-ProjectFrame -Projects $scroll30 -Index 29 -Cwd 'C:\somewhere' -Width 78 -Height 24 -RowMap ([ref]$mapScroll))
 Assert-Equal 1 $mapScroll.FirstRowY 'the scrolled row map still sits just under the box top border'
-Assert-Equal 19 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
-Assert-Equal 13 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
+# 18 and 14, not 19 and 13, since the action field joined the box (2026-09-16): the field's row comes
+# out of the LIST's viewport, which is the whole point of putting it inside the box - the frame still
+# fits the same terminal, one list row further down.
+Assert-Equal 18 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
+Assert-Equal 14 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
 Assert-True ($f6Text -match 'continue') 'the footer advertises continue'
 # Plain (no -Color) hints are bracketed like every other screen's footer - '[t] worktree',
 # never ' t worktree' - see the picker's '[f] fork' etc. at 50 columns. The brief's own sample
@@ -2516,6 +2519,150 @@ try {
     $upperCKey = [System.ConsoleKeyInfo]::new([char]'C', [System.ConsoleKey]::C, $false, $false, $false)
     $pUpperC = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-MixedKeyReader -Keys @($upperCKey, 'Escape')) -Draw {}
     Assert-True ($null -eq $pUpperC) 'an uppercase C does not fire continue - the same case guard every hotkey has'
+
+    # --- The action field (owner ask 2026-09-16: arrows and Enter must be enough) ------------------
+    # The project screen kept every hotkey and gained a launch-screen-style row under the list:
+    # 'action  < new >', cycled with Left/Right from ANY row. Enter then runs what it says, so the
+    # whole screen is driveable with four arrows and Enter - which is what the owner asked for -
+    # while c/r/t keep firing immediately and set the field, so the screen says what just happened.
+    $gg = Get-Glyphs
+
+    Assert-Equal 'new,continue,resume,worktree' ((Get-ProjectActions) -join ',') 'the field cycles the four actions claude-auto.ps1 already dispatches on, in that order'
+    Assert-Equal 'continue' (Step-ProjectAction -Action 'new' -Delta 1) 'the stepper moves forward'
+    Assert-Equal 'worktree' (Step-ProjectAction -Action 'new' -Delta -1) 'and wraps backwards, like Step-LaunchValue'
+    Assert-Equal 'new' (Step-ProjectAction -Action 'not-an-action' -Delta 0) 'a value outside the four falls back to the first rather than travelling on'
+
+    # Left/Right from a LIST row: the owner never has to walk down to the field to use it.
+    $pAct1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'Enter')) -Draw {}
+    Assert-Equal 'continue' $pAct1.Action 'RightArrow on a project row steps the field, and Enter runs what it says'
+    Assert-Equal $tmpAlpha $pAct1.Path 'on the highlighted project, which the arrow did not move'
+    $pAct2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'RightArrow', 'Enter')) -Draw {}
+    Assert-Equal 'resume' $pAct2.Action 'two rights reach resume'
+    $pAct3 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'RightArrow', 'RightArrow', 'RightArrow', 'Enter')) -Draw {}
+    Assert-Equal 'new' $pAct3.Action 'four rights wrap back to new'
+    $pAct4 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('LeftArrow', 'Enter')) -Draw {}
+    Assert-Equal 'worktree' $pAct4.Action 'one left from new wraps to worktree'
+
+    # -InitialAction seeds it from the remembered preference, and is validated there too: the value
+    # arrives from an ordinary text file (Prefs.ps1) and ends up deciding a command line.
+    $pAct5 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -InitialAction 'resume' -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal 'resume' $pAct5.Action '-InitialAction seeds the field, so Enter alone reproduces the last launch'
+    $pAct5b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -InitialAction 'rm -rf' -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal 'new' $pAct5b.Action 'an -InitialAction outside the four falls back to new'
+
+    # Up/Down reach the field and come back. The field is the LAST stop and it does not move the
+    # list highlight, so what Enter would commit never changes under the cursor.
+    $script:actNav = New-Object System.Collections.Generic.List[object]
+    $navDraw = { param($p, $i, $f, $t, $h, $n, $a, $oa) $script:actNav.Add([pscustomobject]@{ Index = $i; Action = "$a"; OnAction = [bool]$oa }); $null }
+    $pAct6 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 's', 's', 'w', 'Escape')) -Draw $navDraw
+    Assert-True ($null -eq $pAct6) 'the navigation run ends with Escape'
+    Assert-Equal 7 $script:actNav.Count 'one draw per key handled'
+    Assert-Equal $false $script:actNav[0].OnAction 'the screen opens on the list, not on the field'
+    Assert-Equal 3 $script:actNav[3].Index 'three downs reach the last list row (alpha, beta, current directory, enter a path)'
+    Assert-Equal $false $script:actNav[3].OnAction 'and that is still a list row'
+    Assert-Equal $true $script:actNav[4].OnAction 'the fourth down lands on the action field'
+    Assert-Equal $true $script:actNav[5].OnAction 'a further down stays there - it is the last cursor stop'
+    Assert-Equal 3 $script:actNav[5].Index 'and the list highlight does not move while the field has focus'
+    Assert-Equal $false $script:actNav[6].OnAction 'up returns to the list'
+    Assert-Equal 3 $script:actNav[6].Index 'on the row it came from'
+
+    # a/d step the field, but only while it has focus: on a list row they keep their current
+    # meaning on this screen, which is nothing at all.
+    $pAct7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('d', 'Enter')) -Draw {}
+    Assert-Equal 'new' $pAct7.Action 'd on a list row does not step the field'
+    Assert-Equal $tmpAlpha $pAct7.Path 'and does not move the selection either'
+
+    $actScratch = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-act-$([Guid]::NewGuid().ToString('N'))")
+    New-Item -ItemType Directory -Path $actScratch | Out-Null
+    try {
+        $pAct8 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 's', 'd', 'Enter', 'Escape')) -Draw {} -ReadPath { $actScratch }
+        Assert-Equal 'continue' $pAct8.Action 'd on the focused field steps it right, like RightArrow'
+        $pAct9 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 's', 's', 'a', 'Enter', 'Escape')) -Draw {} -ReadPath { $actScratch }
+        Assert-Equal 'worktree' $pAct9.Action 'a on the focused field steps it left, wrapping'
+
+        # Enter while the field has focus commits the row the list still marks - arriving by Down
+        # that is the free-path row, which is exactly what the frame shows, so Enter is never a guess.
+        Assert-Equal (Resolve-Path -LiteralPath $actScratch).Path $pAct9.Path 'Enter on the field commits the row the list still marks - the free-path row it arrived from'
+
+        # Enter on the free-path row prompts FIRST and then runs the selected action.
+        $pAct10 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'RightArrow', 's', 's', 's', 'Enter', 'Escape')) -Draw {} -ReadPath { $actScratch }
+        Assert-Equal 'resume' $pAct10.Action 'Enter on the free-path row runs the selected action, not a hardcoded new'
+        Assert-Equal (Resolve-Path -LiteralPath $actScratch).Path $pAct10.Path 'after prompting for the path'
+    } finally { Remove-Item -LiteralPath $actScratch -Recurse -Force -ErrorAction SilentlyContinue }
+
+    # c/r/t still fire immediately AND set the field. Driven on the VANISHED fixture so the pick is
+    # rejected and the loop draws again - the only way to see the field the press left behind.
+    $script:actHot = New-Object System.Collections.Generic.List[string]
+    $hotDraw = { param($p, $i, $f, $t, $h, $n, $a, $oa) $script:actHot.Add("$a"); $null }
+    $pAct11 = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('t', 'Escape')) -Draw $hotDraw
+    Assert-True ($null -eq $pAct11) 'the hotkey-on-a-vanished-row run ends with Escape'
+    Assert-Equal 'new' $script:actHot[0] 'the field starts at new'
+    Assert-Equal 'worktree' $script:actHot[1] 't sets the field as well as firing it - the screen shows what happened'
+    $script:actHot = New-Object System.Collections.Generic.List[string]
+    $null = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('c', 'Escape')) -Draw $hotDraw
+    Assert-Equal 'continue' $script:actHot[1] 'c does too'
+    $script:actHot = New-Object System.Collections.Generic.List[string]
+    $null = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('r', 'Escape')) -Draw $hotDraw
+    Assert-Equal 'resume' $script:actHot[1] 'and so does r'
+
+    # --- the field on the FRAME: a launch-screen-style row under the list, with clickable caps ---
+    $mapAct = $null
+    $fAct = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'resume' -RowMap ([ref]$mapAct))
+    $fActText = $fAct -join "`n"
+    Assert-True ($fActText.Contains("$($gg.LAngle) resume $($gg.RAngle)")) 'the field shows the selected action between the caps the launch screen collapses its own rows to'
+    Assert-True ($fAct[$mapAct.Action.Y].Contains('action')) 'the row map points at the line the field was drawn on'
+    Assert-Equal 2 @($mapAct.Action.Cells).Count 'both caps are click cells'
+    Assert-Equal (-1) $mapAct.Action.Cells[0].Delta 'the left cap steps back'
+    Assert-Equal 1 $mapAct.Action.Cells[1].Delta 'the right cap steps forward'
+    Assert-True ($fAct[$mapAct.Action.Y].Substring($mapAct.Action.Cells[0].Start, 1) -eq "$($gg.LAngle)") 'the left cap cell covers the left cap glyph'
+    Assert-True ($fAct[$mapAct.Action.Y].Substring($mapAct.Action.Cells[1].Start, 1) -eq "$($gg.RAngle)") 'and the right cap cell the right one'
+    Assert-True ($fActText -match ([regex]::Escape(" $($gg.Cursor) alpha"))) 'with the field unfocused the cursor is on the list'
+
+    $fFocus = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'resume' -OnAction)
+    $fFocusText = $fFocus -join "`n"
+    Assert-True ($fFocusText -match ([regex]::Escape("$($gg.Cursor) action"))) 'with the field focused the cursor sits on it'
+    Assert-True ($fFocusText -match ([regex]::Escape(" $($gg.On) alpha"))) 'and the row Enter would commit keeps a mark of its own, so the two are never confused'
+    Assert-True (-not ($fFocusText -match ([regex]::Escape(" $($gg.Cursor) alpha")))) 'there is exactly one cursor on the screen'
+
+    # The footer names the arrows - measured at 80 columns rather than guessed: the hint may not
+    # cost the project footer a line it did not need before.
+    $map80 = $null
+    $f80 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$map80))
+    Assert-True (($f80 -join "`n").Contains("$($gg.LAngle) $($gg.RAngle) action")) 'the footer names the arrows at 80 columns'
+    Assert-Equal 2 $map80.FooterLines 'and still fits the two footer lines the screen already had at 80 columns'
+
+    # The extra row is absorbed by the list viewport, never by MinHeight (which is measured off the
+    # LAUNCH frame alone - Test-Maintenance pins it): fit AND clamp, the pair the picker and project
+    # screens are already held to further down this file.
+    $actBig = @(1..40 | ForEach-Object { [pscustomobject]@{ Slug = "ab$_"; Path = "C:\Users\sample-user\Projects\project-name-$_"; Name = "project-name-$_"; Worktree = $null; LastActivity = (Get-Date).AddHours(-$_) } })
+    $actFit = @(Get-ProjectFrame -Projects $actBig -Index 5 -Cwd 'C:\x' -Width 50 -Height $script:MinHeight -Action 'worktree')
+    Assert-True ($actFit.Count -le ($script:MinHeight - 1)) 'a 40-project frame WITH the field still leaves the headroom row at MinHeight'
+    Assert-True (($actFit -join "`n") -match 'known') 'and it is a REAL render at MinHeight, not the too-small stub'
+    Assert-True (($actFit -join "`n").Contains("$($gg.LAngle) worktree $($gg.RAngle)")) 'with the field on it - the row is never the one dropped to make it fit'
+    $actUnbounded = @(Get-ProjectFrame -Projects $actBig -Index 5 -Cwd 'C:\x' -Width 50 -Height 200 -Action 'worktree')
+    Assert-True ($actUnbounded.Count -gt $actFit.Count) 'and it still clamps - more lines when given the room'
+
+    # --- mouse: a click on a cap steps the field, exactly like a click on a launch-screen option
+    # cell, and it does not disturb which row Enter would commit. ---
+    $capMap = $null
+    $null = Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$capMap)
+    $capDraw = { param($p, $i, $f, $t, $h, $n, $a, $oa) $capMap }.GetNewClosure()
+    $capRight = $capMap.Action.Cells[1]
+    $wCap = New-EventReader @((New-MouseEvent -X $capRight.Start -Y $capMap.Action.Y -Left), $enterKey)
+    $pCap = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wCap -Draw $capDraw -Wait $wCap -GetWindowTop { 0 }
+    Assert-Equal 'continue' $pCap.Action 'clicking the right cap steps the field forward'
+    Assert-Equal $tmpAlpha $pCap.Path 'without moving the selection off the highlighted project'
+    $capLeft = $capMap.Action.Cells[0]
+    $wCap2 = New-EventReader @((New-MouseEvent -X $capLeft.Start -Y $capMap.Action.Y -Left), $enterKey)
+    $pCap2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wCap2 -Draw $capDraw -Wait $wCap2 -GetWindowTop { 0 }
+    Assert-Equal 'worktree' $pCap2.Action 'clicking the left cap steps it back, wrapping'
+
+    # A double click on a row commits the FIELD, not a hardcoded 'new'.
+    $rightArrowKey = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::RightArrow, $false, $false, $false)
+    $wDbl = New-EventReader @($rightArrowKey, (New-MouseEvent -Y 5 -Left -Double), $esc)
+    $pDbl = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wDbl -Draw $pDraw -Wait $wDbl -GetWindowTop { 0 }
+    Assert-Equal 'continue' $pDbl.Action 'a double click commits whatever the field says'
+    Assert-Equal $tmpBeta $pDbl.Path 'on the row it landed on'
 } finally {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tmpCwd -Recurse -Force -ErrorAction SilentlyContinue
@@ -2738,7 +2885,7 @@ Assert-Equal 0 $n2Io.Added 'an IO failure still ends the paging quietly'
 Assert-Equal $true $n2Io.Exhausted 'and marks the list exhausted rather than taking the picker down'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 957) { Write-Host "COULD NOT RUN: expected 957 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1012) { Write-Host "COULD NOT RUN: expected 1012 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

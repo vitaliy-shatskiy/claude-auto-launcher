@@ -133,7 +133,32 @@ function New-LaunchState {
         # picker scopes on the whole set - otherwise half a project's sessions are unreachable from
         # the screen that just named it (adversarial review 2026-09-16, A12).
         ProjectSlugs = @()
+        # What the project screen's action field is set to (2026-09-16). Remembered per account
+        # (Prefs.ps1) because it describes a HABIT, unlike $Action which describes one launch and is
+        # never persisted. $Action still carries the launch itself - the project screen's result
+        # sets it in claude-auto.ps1 - so this is the seed, not a second source of truth.
+        ProjectAction = 'new'
     }
+}
+
+# The project screen's action field. Exactly the values claude-auto.ps1 already dispatches on
+# (Get-LaunchArgs' switch, and its own `if ($state.Action -ne 'resume')`), so the field can never
+# produce one the rest of the launcher has not heard of.
+$script:ProjectActions = @('new', 'continue', 'resume', 'worktree')
+
+function Get-ProjectActions { return $script:ProjectActions }
+
+function Step-ProjectAction {
+    # Wraps in both directions, exactly like Step-LaunchValue - with four values, wrapping is fewer
+    # keystrokes. A value that is not one of the four (a hand-edited prefs file, a caller's typo)
+    # steps from the FIRST rather than travelling on: this string decides which flags reach `claude`.
+    param([string]$Action, [int]$Delta)
+    $values = $script:ProjectActions
+    $i = [Array]::IndexOf($values, $Action)
+    if ($i -lt 0) { $i = 0 }
+    $i = ($i + $Delta) % $values.Count
+    if ($i -lt 0) { $i += $values.Count }
+    return $values[$i]
 }
 
 function Step-LaunchValue {
@@ -642,6 +667,10 @@ function Get-ProjectFrame {
         # title and cleared by the loop on the next key, so the reason a press did nothing is never
         # silent.
         [string]$Notice = '',
+        # The action field under the list, and whether the cursor is parked on it (2026-09-16). A
+        # value outside Get-ProjectActions renders as the first one rather than being printed raw.
+        [string]$Action = 'new',
+        [switch]$OnAction,
         [ref]$RowMap
     )
     if ($RowMap) { $RowMap.Value = [pscustomobject]@{ FirstRowY = 0; RowCount = 0; Start = 0 } }
@@ -669,6 +698,11 @@ function Get-ProjectFrame {
 
     $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
         @{ Token = 'w/s';   Label = 'move';     Clickable = $false }
+        # Not clickable, for the reason the launch screen's own arrow hints are not: the token names
+        # two directions and a click on it cannot mean one of them. MEASURED before it was added -
+        # at 50, 80 and 100 columns the project footer wraps onto exactly the same number of lines
+        # with it as without, so it costs the list no row anywhere.
+        @{ Token = "$($g.LAngle) $($g.RAngle)"; Label = 'action'; Clickable = $false }
         @{ Token = 'enter'; Label = 'new';      Clickable = $true; Key = 'Enter';  Char = '' }
         @{ Token = 'c';     Label = 'continue'; Clickable = $true; Key = '';       Char = 'c' }
         @{ Token = 'r';     Label = 'resume';   Clickable = $true; Key = '';       Char = 'r' }
@@ -690,8 +724,12 @@ function Get-ProjectFrame {
         }
     }
 
-    # Box top + box bottom + headroom + the footer's own lines, exactly like Get-PickerFrame.
-    $bodyRows = [Math]::Max(3, $Height - 3 - @($footer.Lines).Count)
+    # Box top + box bottom + headroom + the footer's own lines, exactly like Get-PickerFrame, MINUS
+    # the action field's own row. The field is drawn inside the box under the list, so the row it
+    # costs comes out of the LIST's viewport - never out of $script:MinHeight, which is measured off
+    # the launch frame alone (see the constant's own comment) and which this screen must keep
+    # fitting under with a registry of any size.
+    $bodyRows = [Math]::Max(3, $Height - 4 - @($footer.Lines).Count)
     if ($Index -ge $rows.Count) { $Index = [Math]::Max(0, $rows.Count - 1) }
     $vp = Get-Viewport -Count $rows.Count -Index $Index -Visible $bodyRows
     $inner = $Width - 2
@@ -699,7 +737,12 @@ function Get-ProjectFrame {
     $body = @()
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
         $r = $rows[$i]
-        $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
+        # With the field focused the highlighted row keeps a mark of its OWN rather than the cursor:
+        # two cursors on one screen is a guess about which row Enter obeys, and Enter obeys this one.
+        $mark =
+            if ($i -ne $Index) { '   ' }
+            elseif ($OnAction) { " $($g.On) " }
+            else { " $($g.Cursor) " }
         if ($r.Kind -eq 'project') {
             $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
             $name = $r.Item.Name
@@ -728,12 +771,35 @@ function Get-ProjectFrame {
         }
     }
 
+    # The action field: one launch-screen-style row under the list, in Get-LaunchFrame's own
+    # collapsed form ('<option>' between two caps), so the whole screen is driveable with the arrows
+    # and Enter and no hotkey has to be memorised. It is the LAST cursor stop and it never moves the
+    # list highlight - the caps are the only thing on it a click can act on.
+    $actionMark  = if ($OnAction) { " $($g.Cursor) " } else { '   ' }
+    $actionLabel = 'action'.PadRight(8)
+    $actionText  = if ($Action -in $script:ProjectActions) { $Action } else { $script:ProjectActions[0] }
+    $body += $actionMark + $actionLabel + "$($g.LAngle) $actionText $($g.RAngle)"
+
     $lines = New-Box -Lines $body -Width $Width -Title $title -Ascii:$Ascii
     if ($RowMap) {
+        $firstRowY = $lines.Count - $body.Count - 1
+        # +1 for the box's own left border, which New-Box puts in front of every body line: these
+        # are FRAME columns, the coordinates a click arrives in.
+        $capLeftX  = 1 + $actionMark.Length + $actionLabel.Length
+        $capRightX = $capLeftX + 3 + $actionText.Length
         $RowMap.Value = [pscustomobject]@{
-            FirstRowY = $lines.Count - $body.Count - 1
+            # RowCount stays the LIST's own, so the field is never hit-tested as a project row
+            # (Get-ClaudeMouseRow returns $null for it and the caller falls through to the field).
+            FirstRowY = $firstRowY
             RowCount  = $vp.Visible
             Start     = $vp.Start
+            Action    = [pscustomobject]@{
+                Y = $firstRowY + $vp.Visible
+                Cells = @(
+                    [pscustomobject]@{ Start = $capLeftX;  End = $capLeftX + 1;  Delta = -1 }
+                    [pscustomobject]@{ Start = $capRightX; End = $capRightX + 1; Delta = 1 }
+                )
+            }
         }
     }
     return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar)
