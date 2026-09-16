@@ -180,6 +180,39 @@ function Switch-LaunchTab {
     return (Switch-LaunchAccount -State $State -To $to -Prefs $Prefs -Rows $Rows)
 }
 
+function Get-HitAt {
+    # Where a click landed, for BOTH row-map shapes: the launch/maintenance map (Rows[] with Cells)
+    # and the list map (FirstRowY/RowCount/Start, optional Action row). Footer first, then the
+    # action row, then a list row or a launch row and its option cell. Replaces the four inline
+    # hit tests the loops carried (the launch screen's own copy never used Get-ClaudeMouseRow).
+    param($RowMap, [int]$X, [int]$Y, [int]$WindowTop = 0)
+    $none = [pscustomobject]@{ Kind = 'none'; Footer = $null; FooterIndex = -1; Row = $null; Cell = $null; Value = $null }
+    if (-not $RowMap) { return $none }
+    $hint = Get-ClaudeFooterHit -RowMap $RowMap -X $X -Y $Y -WindowTop $WindowTop
+    if ($hint) { return [pscustomobject]@{ Kind = 'footer'; Footer = $hint; FooterIndex = [Array]::IndexOf(@($RowMap.Footer), $hint); Row = $null; Cell = $null; Value = $null } }
+    # A distinct name, not $y: PowerShell variable names are case-insensitive, so $y would be the
+    # SAME variable as the -Y parameter and silently clobber it - breaking the FirstRowY branch
+    # below, which needs the raw, unadjusted $Y (Get-ClaudeMouseRow does its own WindowTop math).
+    $rowY = $Y - $WindowTop
+    if ($null -ne $RowMap.PSObject.Properties['Action'] -and $RowMap.Action -and $rowY -eq $RowMap.Action.Y) {
+        $cell = @($RowMap.Action.Cells | Where-Object { $X -ge $_.Start -and $X -le $_.End })
+        return [pscustomobject]@{ Kind = 'action'; Footer = $null; FooterIndex = -1; Row = $null; Cell = $(if ($cell.Count) { $cell[0] } else { $null }); Value = $(if ($cell.Count) { $cell[0].Value } else { $null }) }
+    }
+    if ($null -ne $RowMap.PSObject.Properties['Rows']) {
+        $hit = @($RowMap.Rows | Where-Object { $_.Y -eq $rowY })
+        if ($hit.Count -eq 0) { return $none }
+        $cell = @($hit[0].Cells | Where-Object { $X -ge $_.Start -and $X -le $_.End })
+        if ($cell.Count -gt 0) { return [pscustomobject]@{ Kind = 'cell'; Footer = $null; FooterIndex = -1; Row = $hit[0]; Cell = $cell[0]; Value = $cell[0].Value } }
+        return [pscustomobject]@{ Kind = 'row'; Footer = $null; FooterIndex = -1; Row = $hit[0]; Cell = $null; Value = $null }
+    }
+    if ($null -ne $RowMap.PSObject.Properties['FirstRowY']) {
+        $row = Get-ClaudeMouseRow -Y $Y -FirstRowY $RowMap.FirstRowY -RowCount $RowMap.RowCount -WindowTop $WindowTop
+        if ($null -eq $row) { return $none }
+        return [pscustomobject]@{ Kind = 'row'; Footer = $null; FooterIndex = -1; Row = [int]($RowMap.Start + $row); Cell = $null; Value = $null }
+    }
+    return $none
+}
+
 function Invoke-LaunchScreen {
     # Returns the finished state, or $null when the user pressed Esc. -Draw is injected so tests
     # pass an empty scriptblock and assert only the state that comes out.
@@ -233,20 +266,17 @@ function Invoke-LaunchScreen {
             if ($key.WheelUp) { if ($State.Row -gt 0) { $State.Row-- }; continue }
             if ($key.WheelDown) { if ($State.Row -lt $rows.Count - 1) { $State.Row++ }; continue }
             if ($key.Left -and -not $key.IsMove -and $rowMap) {
-                $y = $key.Y - (& $GetWindowTop)
-                $hint = Get-ClaudeFooterHit -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop (& $GetWindowTop)
-                if ($hint) { $synthetic = New-SyntheticKey -Key $hint.Key -Char $hint.Char }
-                $hit = if ($hint) { @() } else { @($rowMap.Rows | Where-Object { $_.Y -eq $y }) }
-                if ($hit.Count -gt 0) {
-                    $State.Row = $hit[0].Index
-                    $cell = @($hit[0].Cells | Where-Object { $key.X -ge $_.Start -and $key.X -le $_.End })
-                    if ($cell.Count -gt 0) {
+                $hit = Get-HitAt -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop (& $GetWindowTop)
+                if ($hit.Kind -eq 'footer') { $synthetic = New-SyntheticKey -Key $hit.Footer.Key -Char $hit.Footer.Char }
+                elseif ($hit.Kind -eq 'cell' -or $hit.Kind -eq 'row') {
+                    $State.Row = $hit.Row.Index
+                    if ($hit.Kind -eq 'cell') {
                         # Walk to the clicked value with the SAME stepper the arrow keys use, one
                         # step at a time. Assigning the value directly would skip whatever changing
                         # a row is supposed to do, and the two paths would drift apart silently.
-                        $values = @($rows[$hit[0].Index].Values)
-                        $from = [Array]::IndexOf($values, $State.($hit[0].Name))
-                        $to = [Array]::IndexOf($values, $cell[0].Value)
+                        $values = @($rows[$hit.Row.Index].Values)
+                        $from = [Array]::IndexOf($values, $State.($hit.Row.Name))
+                        $to = [Array]::IndexOf($values, $hit.Value)
                         # Captured before the first step, not after the last: a click on a tab may
                         # walk two accounts, and the stash belongs to the one the click started on.
                         $leaving = $State.Account
@@ -256,7 +286,7 @@ function Invoke-LaunchScreen {
                                 $State = Step-LaunchValue -State $State -Delta $dir
                             }
                         }
-                        if ($hit[0].Name -eq 'Account') { $State = Switch-LaunchTab -State $State -From $leaving -Prefs $Prefs -Rows $rows }
+                        if ($hit.Row.Name -eq 'Account') { $State = Switch-LaunchTab -State $State -From $leaving -Prefs $Prefs -Rows $rows }
                     }
                 }
             }

@@ -3195,8 +3195,29 @@ try {
 # Test-Maintenance.ps1, beside the other claude-auto.ps1 AST pins - this file drives the screens
 # (review W5).
 
+# --- Get-HitAt: one hit test for every screen -----------------------------------------------------
+$lm = [pscustomobject]@{ Rows = @([pscustomobject]@{ Index = 2; Name = 'Effort'; Y = 7; Cells = @([pscustomobject]@{ Start = 15; End = 20; Value = 'high' }) })
+                         FooterY = 12; Footer = @([pscustomobject]@{ Start = 4; End = 12; Key = 'Enter'; Char = ''; Line = 0 }) ; FooterLines = 1 }
+Assert-Equal 'footer' (Get-HitAt -RowMap $lm -X 6 -Y 12).Kind 'a click on a footer button is a footer hit'
+Assert-Equal 'Enter' (Get-HitAt -RowMap $lm -X 6 -Y 12).Footer.Key 'carrying its key'
+Assert-Equal 'cell' (Get-HitAt -RowMap $lm -X 17 -Y 7).Kind 'a click inside an option cell is a cell hit'
+Assert-Equal 'high' (Get-HitAt -RowMap $lm -X 17 -Y 7).Value 'with the value'
+Assert-Equal 'row' (Get-HitAt -RowMap $lm -X 2 -Y 7).Kind 'a click on the row outside any cell is a row hit'
+Assert-Equal 2 (Get-HitAt -RowMap $lm -X 2 -Y 7).Row.Index 'naming the launch row'
+Assert-Equal 'none' (Get-HitAt -RowMap $lm -X 2 -Y 3).Kind 'and a click nowhere is none'
+$pm = [pscustomobject]@{ FirstRowY = 2; RowCount = 5; Start = 10; FooterY = 20; Footer = @(); FooterLines = 1
+                         Action = [pscustomobject]@{ Y = 7; Cells = @([pscustomobject]@{ Start = 12; End = 18; Value = 'resume' }) } }
+Assert-Equal 13 (Get-HitAt -RowMap $pm -X 5 -Y 5).Row 'a list map answers the ABSOLUTE row index (Start + visible row)'
+Assert-Equal 'action' (Get-HitAt -RowMap $pm -X 14 -Y 7).Kind 'the action row is its own kind'
+Assert-Equal 'resume' (Get-HitAt -RowMap $pm -X 14 -Y 7).Value 'with the clicked value'
+Assert-Equal 'none' (Get-HitAt -RowMap $pm -X 5 -Y 8).Kind 'and the row after the last visible one is none'
+Assert-Equal 13 (Get-HitAt -RowMap $pm -X 5 -Y 15 -WindowTop 10).Row 'window top is subtracted from a screen-buffer Y'
+# Launch-map (Rows[]) case for the SAME WindowTop subtraction, so a mutation that drops it from the
+# Rows branch specifically (rather than the FirstRowY branch above) is caught too.
+Assert-Equal 2 (Get-HitAt -RowMap $lm -X 2 -Y 10 -WindowTop 3).Row.Index 'and WindowTop is subtracted for a launch row too'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1078) { Write-Host "COULD NOT RUN: expected 1078 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1091) { Write-Host "COULD NOT RUN: expected 1091 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
