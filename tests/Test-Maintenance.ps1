@@ -692,6 +692,14 @@ $pairsOf = {
 $logCalls = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
     "$($n.GetCommandName())" -eq 'Write-LauncherLog' }, $true))
 Assert-True ($logCalls.Count -ge 4) 'claude-auto.ps1 writes launcher log records at all'
+# The run id (and with it $LaunchStartedAt) moved above the module loop so a module that fails to
+# load can be logged under this run - which silently added the dot-sourcing of twelve modules to
+# every later `ms`. The cost gets its own field rather than a comment nobody would find, so a `ms`
+# read months from now can still be told apart from the work it is supposed to measure (review W4).
+$startCall = @($logCalls | Where-Object { "$((& $argOf $_ 'Stage').Value)" -eq 'start' })
+Assert-Equal 1 $startCall.Count 'claude-auto.ps1 writes exactly one start record'
+$startFields = & $pairsOf (& $argOf $startCall[0] 'Data')
+Assert-True ($startFields.ContainsKey('moduleMs')) 'which says how much of every later ms was spent loading the modules'
 $uiRecCall = @($logCalls | Where-Object { "$((& $argOf $_ 'Stage').Value)" -eq 'ui' })
 Assert-Equal 1 $uiRecCall.Count 'and exactly one of them is the ui record'
 $uiRecData = & $argOf $uiRecCall[0] 'Data'
@@ -731,7 +739,7 @@ $preselectAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.
 Assert-Equal 1 $preselectAssign.Count 'the preselected path is captured in exactly one place'
 Assert-True ($preselectAssign[0].Extent.StartOffset -lt $projScreenCall[0].Extent.StartOffset) 'and BEFORE the project screen runs, or it is just the final pick under another name'
 
-if ($script:Ran -ne 153) { Write-Host "COULD NOT RUN: expected 153 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 155) { Write-Host "COULD NOT RUN: expected 155 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

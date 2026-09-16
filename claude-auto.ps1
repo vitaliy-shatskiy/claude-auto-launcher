@@ -57,6 +57,11 @@ foreach ($m in @('Config.ps1', 'Env.ps1', 'Remote.ps1', 'Sessions.ps1', 'Project
                             message = $_.Exception.Message.Substring(0, [Math]::Min(300, $_.Exception.Message.Length)) }
     }
 }
+# $LaunchStartedAt is taken two statements above, so this IS the dot-sourcing cost - measured at
+# 222-242 ms for the twelve modules on this machine. It gets a field of its own because moving the
+# clock above the loop silently added that to every later `ms` in the log: without this, a `ui` ms
+# read months from now cannot be told apart from the work it is supposed to measure.
+$ModuleMs = [int]((Get-Date) - $LaunchStartedAt).TotalMilliseconds
 $UiOk = $ModulesOk
 if ($ModulesOk) {
     Set-LaunchRoster -Accounts $Accounts -Remote:([bool]$LauncherConfig.Remote) -Default $CanonicalAccount
@@ -114,6 +119,8 @@ if (-not $Preview) {
     Remove-OldLauncherLogs
     $null = Write-LauncherLog -Stage 'start' -RunId $RunId -Data @{
         cwd              = $PWD.Path
+        # How much of every `ms` in this run is module loading - see $ModuleMs above.
+        moduleMs         = $ModuleMs
         args             = @($args)
         inputRedirected  = [Console]::IsInputRedirected
         outputRedirected = [Console]::IsOutputRedirected
@@ -465,6 +472,8 @@ if ($UseUi) {
 
     # How long the menu was on screen, and what it returned. A launch that never gets past here
     # leaves `start` with no `ui`, which separates "stuck in the menu" from "started and died".
+    # `ms` counts from $LaunchStartedAt, which sits ABOVE the module loop (so a module that fails to
+    # load carries this run's id) - subtract the `start` record's moduleMs to get the menu alone.
     if (-not $Preview) {
         $null = Write-LauncherLog -Stage 'ui' -RunId $RunId -Data @{
             ms       = [int]((Get-Date) - $LaunchStartedAt).TotalMilliseconds
