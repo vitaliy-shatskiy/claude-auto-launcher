@@ -539,30 +539,31 @@ function Get-LaunchFrame {
                 })
                 if (($prefix + $labelPart + ($cells -join $joiner)).Length -le $inner) { break }
             }
-        } else {
-            $joiner = ' '
-            $cells = @(foreach ($v in $row.Values) {
-                $text = Get-RowOptionText -Row $row -Key $v -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel
-                if ($v -eq $current) { "$($g.On) [$text]" } else { "$($g.Off) $text" }
+            # Column spans for each tab, measured off the same strings that were just joined. A click
+            # inside one of these means "this account", which is what makes the strip a menu rather
+            # than a picture of one.
+            $line = $prefix + $labelPart + ($cells -join $joiner)
+            $spans = @(Measure-CellSpans -Pieces $cells -Joiner $joiner -StartX (Get-DisplayWidth -Text ($prefix + $labelPart)))
+            $cellHits = @(for ($c = 0; $c -lt $spans.Count; $c++) {
+                [pscustomobject]@{ Start = $spans[$c].Start; End = $spans[$c].End; Value = $row.Values[$c] }
             })
+        } else {
+            # Every other row is a radio row, drawn by the builder the project screen's action field
+            # uses too: one layout, one set of click cells, no second copy to drift.
+            $optionLabels = @{}
+            foreach ($v in $row.Values) {
+                $optionLabels[$v] = Get-RowOptionText -Row $row -Key $v -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel
+            }
+            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values @($row.Values) -Current $current -Glyphs $g -Labels $optionLabels -MaxWidth $inner
+            $line = $radio.Text
+            $cellHits = @($radio.Cells)
         }
 
-        # Column spans for each option, measured off the same strings that are about to be joined.
-        # A click inside one of these means "this value", which is what makes the screen a menu
-        # rather than a picture of one.
-        $cellHits = @()
-        $cursorX = $prefix.Length + $labelPart.Length
-        for ($c = 0; $c -lt @($cells).Count; $c++) {
-            $len = @($cells)[$c].Length
-            $cellHits += [pscustomobject]@{ Start = $cursorX; End = $cursorX + $len - 1; Value = $row.Values[$c] }
-            $cursorX += $len + $joiner.Length
-        }
-        $line = $prefix + $labelPart + ($cells -join $joiner)
         # The model row's human-readable labels ('Sonnet 5[1M]', a resolved 'default (...)') can
-        # outgrow the box before Limit-Line ever truncates it - and a mid-word cut there is exactly
+        # outgrow the box even in New-RadioRow's compact form - and a mid-word cut there is exactly
         # what this exists to avoid. Collapse to the selected value alone, marked with ‹ › to say
         # more options exist off-screen (the footer already explains left/right cycles them).
-        if ($line.Length -gt $inner) {
+        if ((Get-DisplayWidth -Text $line) -gt $inner) {
             $selText = Get-RowOptionText -Row $row -Key $current -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel
             $line = $prefix + $labelPart + "$($g.LAngle) $selText $($g.RAngle)"
             # Collapsed: the other options are not on screen, so there is nothing to click. The ROW
@@ -675,6 +676,55 @@ function New-ListRow {
     return $Mark + $label + (' ' * $pad) + $tail + $ageCol
 }
 
+function Measure-CellSpans {
+    # Start/End (inclusive) frame columns for a list of pieces about to be joined, measured in
+    # DISPLAY CELLS - Get-DisplayWidth, never .Length, for the reason Theme.ps1 records. The account
+    # tab strip and every radio row need exactly this arithmetic; written twice, the two copies drift
+    # the first time a joiner changes and the drift shows up as clicks landing on the wrong value.
+    param([string[]]$Pieces = @(), [string]$Joiner = ' ', [int]$StartX = 0)
+    $spans = @()
+    $x = $StartX
+    $joinerWidth = Get-DisplayWidth -Text $Joiner
+    foreach ($p in $Pieces) {
+        $w = Get-DisplayWidth -Text $p
+        $spans += [pscustomobject]@{ Start = $x; End = $x + $w - 1 }
+        $x += $w + $joinerWidth
+    }
+    return @($spans)
+}
+
+function New-RadioRow {
+    # One option row: 'label  ○ a  ● [b]  ○ c' with a click cell per value. The launch screen drew
+    # this inline; the project screen's action field now uses the same row, so a value never has to
+    # be discovered behind ‹ › caps and nothing on the row moves when the value changes.
+    # -MaxWidth: when the full form does not fit, the COMPACT form drops the On/Off glyphs and keeps
+    # only the brackets ('label  a  [b]  c'); the cells still cover each value. Measured in cells
+    # (Get-DisplayWidth), never .Length - Theme's rule.
+    param([string]$Prefix = '   ', [string]$Label, [Parameter(Mandatory)][string[]]$Values, [string]$Current,
+          [Parameter(Mandatory)][hashtable]$Glyphs, [hashtable]$Labels = @{}, [int]$LabelWidth = 12, [int]$MaxWidth = 0)
+    $labelPart = $Label.PadRight($LabelWidth)
+    $build = {
+        param([bool]$Compact)
+        $pieces = @(foreach ($v in $Values) {
+            $text = if ($Labels.ContainsKey($v)) { $Labels[$v] } else { $v }
+            if ($Compact) { if ($v -eq $Current) { "[$text]" } else { "$text" } }
+            elseif ($v -eq $Current) { "$($Glyphs.On) [$text]" }
+            else { "$($Glyphs.Off) $text" }
+        })
+        # Spans off the pieces themselves, not off the joined line: the value a click means is the
+        # piece it lands in, and re-finding it in the finished string would match the wrong one the
+        # first time two values share a prefix.
+        $spans = @(Measure-CellSpans -Pieces $pieces -Joiner ' ' -StartX (Get-DisplayWidth -Text ($Prefix + $labelPart)))
+        $cells = @(for ($i = 0; $i -lt $pieces.Count; $i++) {
+            [pscustomobject]@{ Start = $spans[$i].Start; End = $spans[$i].End; Value = $Values[$i] }
+        })
+        [pscustomobject]@{ Text = ($Prefix + $labelPart + ($pieces -join ' ')); Cells = $cells }
+    }
+    $full = & $build $false
+    if ($MaxWidth -le 0 -or (Get-DisplayWidth -Text $full.Text) -le $MaxWidth) { return $full }
+    return (& $build $true)
+}
+
 function Get-ProjectFrame {
     # Where the session will run, and what it will do there. Pure like every builder in this file.
     # The pinned rows (current directory, enter a path) sit after the registry so the common case -
@@ -731,8 +781,9 @@ function Get-ProjectFrame {
         # Not clickable, for the reason the launch screen's own arrow hints are not: the token names
         # two directions and a click on it cannot mean one of them. MEASURED before it was added -
         # at 50, 80 and 100 columns the project footer wraps onto exactly the same number of lines
-        # with it as without, so it costs the list no row anywhere.
-        @{ Token = "$($g.LAngle) $($g.RAngle)"; Label = 'action'; Clickable = $false }
+        # with it as without, so it costs the list no row anywhere. 'a/d' rather than the caps: the
+        # caps are no longer drawn on the field, and the launch screen names the same pair of keys.
+        @{ Token = 'a/d'; Label = 'action'; Clickable = $false }
         # 'run', not 'new', since the action field landed: Enter runs whatever the field says, and a
         # footer reading 'new' beside a field reading 'resume' advertises a key that does something
         # else - the one failure New-HintFooter's whole data-driven shape exists to prevent.
@@ -785,24 +836,19 @@ function Get-ProjectFrame {
         }
     }
 
-    # The action field: one launch-screen-style row under the list, in Get-LaunchFrame's own
-    # collapsed form ('<option>' between two caps), so the whole screen is driveable with the arrows
-    # and Enter and no hotkey has to be memorised. It carries no cursor: the arrows step it from
-    # every row, and the caps are the only thing on it a click can act on.
-    $actionMark  = '   '
-    $actionLabel = 'action'.PadRight(8)
-    # Through the same canonicaliser the stepper uses, so what is DRAWN and what Right steps from
-    # can never be two different strings (review W4: 'RESUME' rendered, then stepped from 'new').
-    $actionText  = Step-ProjectAction -Action $Action -Delta 0
-    $body += $actionMark + $actionLabel + "$($g.LAngle) $actionText $($g.RAngle)"
+    # The action field: one launch-screen-style RADIO row under the list, drawn by the same
+    # New-RadioRow every launch row goes through, so the whole screen is driveable with the arrows
+    # and Enter and no hotkey has to be memorised. Every value is on the row, marked and clickable -
+    # nothing has to be discovered by pressing, and nothing on the row moves when the value changes
+    # (spec D2). It carries no cursor: the arrows step it from every row.
+    # -Current through the same canonicaliser the stepper uses, so what is DRAWN and what Right steps
+    # from can never be two different strings (review W4: 'RESUME' rendered, then stepped from 'new').
+    $radio = New-RadioRow -Prefix '   ' -Label 'action' -Values (Get-ProjectActions) -Current (Step-ProjectAction -Action $Action -Delta 0) -Glyphs $g -LabelWidth 8 -MaxWidth $inner
+    $body += $radio.Text
 
     $lines = New-Box -Lines $body -Width $Width -Title $title -Ascii:$Ascii
     if ($RowMap) {
         $firstRowY = $lines.Count - $body.Count - 1
-        # +1 for the box's own left border, which New-Box puts in front of every body line: these
-        # are FRAME columns, the coordinates a click arrives in.
-        $capLeftX  = 1 + $actionMark.Length + $actionLabel.Length
-        $capRightX = $capLeftX + 3 + $actionText.Length
         $RowMap.Value = [pscustomobject]@{
             # RowCount stays the LIST's own, so the field is never hit-tested as a project row
             # (Get-ClaudeMouseRow returns $null for it and the caller falls through to the field).
@@ -811,10 +857,11 @@ function Get-ProjectFrame {
             Start     = $vp.Start
             Action    = [pscustomobject]@{
                 Y = $firstRowY + $vp.Visible
-                Cells = @(
-                    [pscustomobject]@{ Start = $capLeftX;  End = $capLeftX + 1;  Delta = -1 }
-                    [pscustomobject]@{ Start = $capRightX; End = $capRightX + 1; Delta = 1 }
-                )
+                # +1 for the box's own left border, which New-Box puts in front of every body line:
+                # these are FRAME columns, the coordinates a click arrives in.
+                Cells = @($radio.Cells | ForEach-Object {
+                    [pscustomobject]@{ Start = $_.Start + 1; End = $_.End + 1; Value = $_.Value }
+                })
             }
         }
     }

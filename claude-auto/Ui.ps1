@@ -484,16 +484,20 @@ function Invoke-ProjectScreen {
                 if ($hint) { $synthetic = New-SyntheticKey -Key $hint.Key -Char $hint.Char }
                 # The action field sits below the last list row and is NOT in RowCount, so
                 # Get-ClaudeMouseRow answers $null for it - which is what lets this branch own it
-                # without a special case inside the row hit test. A click on a cap steps the field
+                # without a special case inside the row hit test. A click on a value WALKS to it
                 # through the SAME stepper the arrows use, because a click that assigned a value
                 # directly would be a second implementation of the field waiting to drift (the
                 # launch screen's own rule). A click elsewhere on the row does nothing: the field
                 # has no focus to take, and it must never move the selection.
                 elseif ($rowMap.Action -and ($key.Y - $top) -eq $rowMap.Action.Y) {
                     $cell = @($rowMap.Action.Cells | Where-Object { $key.X -ge $_.Start -and $key.X -le $_.End })
-                    if ($cell.Count -gt 0) {
-                        $action = Step-ProjectAction -Action $action -Delta $cell[0].Delta
-                        # A cap click is decisive in the brief's sense: it changes what Enter will DO.
+                    if ($cell.Count -gt 0 -and $cell[0].Value -ne $action) {
+                        # Walk to the clicked value with the SAME stepper the arrows use.
+                        $values = @(Get-ProjectActions)
+                        $from = [Array]::IndexOf($values, $action); $to = [Array]::IndexOf($values, $cell[0].Value)
+                        $dir = if ($to -lt $from) { -1 } else { 1 }
+                        for ($n = 0; $n -lt [Math]::Abs($to - $from); $n++) { $action = Step-ProjectAction -Action $action -Delta $dir }
+                        # Selecting a value is decisive in the brief's sense: it changes what Enter will DO.
                         & $logKey 'click' @{ button = 'action'; action = $action }
                     }
                 }

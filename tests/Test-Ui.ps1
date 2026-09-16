@@ -1938,7 +1938,7 @@ foreach ($h in @($script:MinHeight, 50)) {
     $pjfText = $pjf -join "`n"
     # '[enter] run', not '[enter] new': Enter runs whatever the action field says, and the arrow
     # hint that names the field has to survive the narrowest terminal like every other one.
-    foreach ($hint in @('w/s move', "$($tabGlyphs.LAngle) $($tabGlyphs.RAngle) action", '[enter] run', '[c] continue', '[r] resume', '[t] worktree', '[/] filter', '[esc] back')) {
+    foreach ($hint in @('w/s move', 'a/d action', '[enter] run', '[c] continue', '[r] resume', '[t] worktree', '[/] filter', '[esc] back')) {
         Assert-Equal $true $pjfText.Contains($hint) "50x${h} project: the hint '$hint' is readable"
     }
     Assert-Equal $true ($pjf.Count -le ($h - 1)) "50x${h} project: $($pjf.Count) lines leave the headroom row"
@@ -2682,17 +2682,38 @@ try {
     $null = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('r', 'Escape')) -Draw $hotDraw
     Assert-Equal 'resume' $script:actHot[1] 'and so does r'
 
-    # --- the field on the FRAME: a launch-screen-style row under the list, with clickable caps ---
+    # --- New-RadioRow: the one option row both screens draw -----------------------------------------
+    # The launch screen drew this inline; the action field now uses the same row, so a value is never
+    # hidden behind ‹ › caps and nothing on the row moves when the value changes (spec D2).
+    $g = Get-Glyphs
+    $rr = New-RadioRow -Prefix '   ' -Label 'action' -Values @('new','continue','resume','worktree') -Current 'resume' -Glyphs $g
+    Assert-Equal ('   ' + 'action'.PadRight(12) + "$($g.Off) new $($g.Off) continue $($g.On) [resume] $($g.Off) worktree") $rr.Text 'a radio row renders like a launch-screen row: the current value bracketed and marked On'
+    Assert-Equal 4 @($rr.Cells).Count 'one click cell per value'
+    Assert-Equal 'resume' $rr.Cells[2].Value 'cells carry the value they select'
+    Assert-Equal $rr.Text.IndexOf("$($g.On) [resume]") $rr.Cells[2].Start 'measured on the plain text'
+
+    # --- the field on the FRAME: that radio row under the list, one click cell per value ------------
     $mapAct = $null
     $fAct = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'resume' -RowMap ([ref]$mapAct))
     $fActText = $fAct -join "`n"
-    Assert-True ($fActText.Contains("$($gg.LAngle) resume $($gg.RAngle)")) 'the field shows the selected action between the caps the launch screen collapses its own rows to'
+    Assert-True ([bool]($fActText -match "action\s+$([regex]::Escape("$($g.Off)")) new")) 'the action field is a radio row'
     Assert-True ($fAct[$mapAct.Action.Y].Contains('action')) 'the row map points at the line the field was drawn on'
-    Assert-Equal 2 @($mapAct.Action.Cells).Count 'both caps are click cells'
-    Assert-Equal (-1) $mapAct.Action.Cells[0].Delta 'the left cap steps back'
-    Assert-Equal 1 $mapAct.Action.Cells[1].Delta 'the right cap steps forward'
-    Assert-True ($fAct[$mapAct.Action.Y].Substring($mapAct.Action.Cells[0].Start, 1) -eq "$($gg.LAngle)") 'the left cap cell covers the left cap glyph'
-    Assert-True ($fAct[$mapAct.Action.Y].Substring($mapAct.Action.Cells[1].Start, 1) -eq "$($gg.RAngle)") 'and the right cap cell the right one'
+    Assert-Equal 4 @($mapAct.Action.Cells).Count 'with four click cells'
+    Assert-Equal 'worktree' $mapAct.Action.Cells[3].Value 'each naming its value'
+    Assert-True (-not (($fAct -join "`n").Contains("$($g.LAngle) resume $($g.RAngle)"))) 'and the caps are gone'
+    # The spans are FRAME columns (the box border included), so a click arrives inside the value it
+    # names - the property the whole field rests on, asserted against the drawn line itself.
+    $wtCell = $mapAct.Action.Cells[3]
+    Assert-Equal "$($g.Off) worktree" ($fAct[$mapAct.Action.Y].Substring($wtCell.Start, $wtCell.End - $wtCell.Start + 1)) 'a cell span covers exactly its own value on the line as drawn'
+
+    # At MinWidth the full row does not fit the box, so the COMPACT form drops the glyphs and keeps
+    # the brackets: every value still readable, still clickable, and no value discovered behind a cap.
+    $mapNarrow = $null
+    $fNarrow = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 50 -Height 24 -Action 'resume' -RowMap ([ref]$mapNarrow))
+    $narrowAct = $fNarrow[$mapNarrow.Action.Y]
+    Assert-True ($narrowAct.Contains('[resume]')) 'at 50 columns the action row still brackets the current value'
+    Assert-True (-not $narrowAct.Contains("$($g.On)")) 'and drops the radio glyphs, which is what makes it fit'
+    Assert-Equal 4 @($mapNarrow.Action.Cells).Count 'the compact row is still four click cells'
     Assert-True ($fActText -match ([regex]::Escape(" $($gg.Cursor) alpha"))) 'the cursor is on the list - the field never takes it'
     Assert-True (-not ($fActText -match ([regex]::Escape("$($gg.Cursor) action")))) 'and the field carries no cursor of its own, on any frame'
 
@@ -2700,7 +2721,7 @@ try {
     # 'RESUME' cannot render one string and step from another (PowerShell's -in and -eq are
     # case-insensitive; [Array]::IndexOf is not).
     $fCase = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'RESUME')
-    Assert-True (($fCase -join "`n").Contains("$($gg.LAngle) resume $($gg.RAngle)")) "a differently-cased action renders as the canonical one, never raw"
+    Assert-True (($fCase -join "`n").Contains("$($gg.On) [resume]")) "a differently-cased action renders as the canonical one, never raw"
     Assert-Equal 'worktree' (Step-ProjectAction -Action 'RESUME' -Delta 1) 'and steps from where it is shown - forward off resume is worktree, not continue'
     Assert-Equal 'resume' (Step-ProjectAction -Action 'ReSuMe' -Delta 0) 'stepping by zero is the canonicaliser every caller shares'
     $pCase = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -InitialAction 'RESUME' -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'Enter')) -Draw {}
@@ -2710,7 +2731,7 @@ try {
     # cost the project footer a line it did not need before.
     $map80 = $null
     $f80 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$map80))
-    Assert-True (($f80 -join "`n").Contains("$($gg.LAngle) $($gg.RAngle) action")) 'the footer names the arrows at 80 columns'
+    Assert-True (($f80 -join "`n").Contains('a/d action')) 'the footer names the keys that step the field at 80 columns'
     Assert-Equal 2 $map80.FooterLines 'and still fits the two footer lines the screen already had at 80 columns'
 
     # The extra row is absorbed by the list viewport, never by MinHeight (which is measured off the
@@ -2720,24 +2741,30 @@ try {
     $actFit = @(Get-ProjectFrame -Projects $actBig -Index 5 -Cwd 'C:\x' -Width 50 -Height $script:MinHeight -Action 'worktree')
     Assert-True ($actFit.Count -le ($script:MinHeight - 1)) 'a 40-project frame WITH the field still leaves the headroom row at MinHeight'
     Assert-True (($actFit -join "`n") -match 'known') 'and it is a REAL render at MinHeight, not the too-small stub'
-    Assert-True (($actFit -join "`n").Contains("$($gg.LAngle) worktree $($gg.RAngle)")) 'with the field on it - the row is never the one dropped to make it fit'
+    Assert-True (($actFit -join "`n").Contains('[worktree]')) 'with the field on it - the row is never the one dropped to make it fit'
     $actUnbounded = @(Get-ProjectFrame -Projects $actBig -Index 5 -Cwd 'C:\x' -Width 50 -Height 200 -Action 'worktree')
     Assert-True ($actUnbounded.Count -gt $actFit.Count) 'and it still clamps - more lines when given the room'
 
-    # --- mouse: a click on a cap steps the field, exactly like a click on a launch-screen option
-    # cell, and it does not disturb which row Enter would commit. ---
+    # --- mouse: a click on a VALUE selects it, exactly like a click on a launch-screen option cell,
+    # and it does not disturb which row Enter would commit. The loop walks there with the same
+    # stepper the arrows use, so the click and the keys can never be two implementations. ---
     $capMap = $null
     $null = Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$capMap)
     $capDraw = { param($p, $i, $f, $t, $h, $n, $a, $oa) $capMap }.GetNewClosure()
-    $capRight = $capMap.Action.Cells[1]
-    $wCap = New-EventReader @((New-MouseEvent -X $capRight.Start -Y $capMap.Action.Y -Left), $enterKey)
+    $capNext = $capMap.Action.Cells[1]
+    $wCap = New-EventReader @((New-MouseEvent -X $capNext.Start -Y $capMap.Action.Y -Left), $enterKey)
     $pCap = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wCap -Draw $capDraw -Wait $wCap -GetWindowTop { 0 }
-    Assert-Equal 'continue' $pCap.Action 'clicking the right cap steps the field forward'
+    Assert-Equal 'continue' $pCap.Action 'clicking a value selects it'
     Assert-Equal $tmpAlpha $pCap.Path 'without moving the selection off the highlighted project'
-    $capLeft = $capMap.Action.Cells[0]
-    $wCap2 = New-EventReader @((New-MouseEvent -X $capLeft.Start -Y $capMap.Action.Y -Left), $enterKey)
+    $capLast = $capMap.Action.Cells[3]
+    $wCap2 = New-EventReader @((New-MouseEvent -X $capLast.End -Y $capMap.Action.Y -Left), $enterKey)
     $pCap2 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wCap2 -Draw $capDraw -Wait $wCap2 -GetWindowTop { 0 }
-    Assert-Equal 'worktree' $pCap2.Action 'clicking the left cap steps it back, wrapping'
+    Assert-Equal 'worktree' $pCap2.Action 'clicking the far value reaches it in one click, wherever it sits on the row'
+    # A click on the row but outside every cell leaves the field alone - the field has no focus to
+    # take, and the caps that used to be the only clickable thing are gone.
+    $wCap3 = New-EventReader @((New-MouseEvent -X 1 -Y $capMap.Action.Y -Left), $enterKey)
+    $pCap3 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wCap3 -Draw $capDraw -Wait $wCap3 -GetWindowTop { 0 }
+    Assert-Equal 'new' $pCap3.Action 'a click on the row between the cells changes nothing'
 
     # A double click on a row commits the FIELD, not a hardcoded 'new'.
     $rightArrowKey = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::RightArrow, $false, $false, $false)
@@ -3145,7 +3172,7 @@ try {
 # (review W5).
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1064) { Write-Host "COULD NOT RUN: expected 1064 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1071) { Write-Host "COULD NOT RUN: expected 1071 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
