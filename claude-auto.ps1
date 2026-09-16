@@ -280,11 +280,15 @@ if ($UseUi) {
                 # never uppercase - an uppercase U from a terminal that reports the mouse as text
                 # would open maintenance on a hover (caught live 2026-08-25).
                 if (Test-ClaudeHotkey -Key $k -Char 'u') {
+                    # THREE parameters, and the last one forwarded - same rule as $projDraw below:
+                    # a renderer one short does not fail, the extra argument lands in $args and the
+                    # hovered footer button simply never lights. Test-Maintenance pins the shape as
+                    # source, because this scriptblock has a console and no suite can drive it.
                     $mdraw = {
-                        param($info, $status)
+                        param($info, $status, $hv)
                         $w, $h = & $size
                         $mmap = $null
-                        & $paint (Get-MaintenanceFrame -Info $info -Width $w -Height $h -Status $status -Color:$useColor -Ascii:$ascii -RowMap ([ref]$mmap) -Actions $LauncherConfig.MaintenanceActions)
+                        & $paint (Get-MaintenanceFrame -Info $info -Width $w -Height $h -Status $status -Hover $hv -Color:$useColor -Ascii:$ascii -RowMap ([ref]$mmap) -Actions $LauncherConfig.MaintenanceActions)
                         $mmap
                     }
                     Invoke-MaintenanceScreen -ReadKey $KeySource -Wait $wait -Draw $mdraw -Actions $LauncherConfig.MaintenanceActions -Drain { $null = Clear-ClaudeInputQueue -State $mouse }
@@ -334,15 +338,17 @@ if ($UseUi) {
             if ($state.Action -ne 'resume') { break }
 
             $projectName = Split-Path -Path $state.Project -Leaf
+            # SIX parameters, and the last one forwarded - same rule as $projDraw above: one short
+            # and the hovered footer button never lights, silently (the extra lands in $args).
             $pdraw = {
-                param($s, $i, $f, $scope, $name)
+                param($s, $i, $f, $scope, $name, $hv)
                 $w, $h = & $size
                 # The row map is the ONLY thing this returns: $paint writes through
                 # [Console]::Write / Write-Host and emits nothing to the pipeline. The picker needs
                 # it to turn a click into a session, and it comes from the renderer so the two can
                 # never disagree about which line holds which row.
                 $map = $null
-                & $paint (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $scope -ProjectName $name -Width $w -Height $h -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
+                & $paint (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $scope -ProjectName $name -Hover $hv -Width $w -Height $h -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
                 $map
             }
             # deferred review finding: this used to call Get-ClaudeSessions with no root at all,

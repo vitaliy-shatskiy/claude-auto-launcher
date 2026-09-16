@@ -129,6 +129,24 @@ Assert-True (-not $narrow.Contains('C:\p')) 'the label is clamped before the tai
 $cwdGutterRow = New-ListRow -Mark '   ' -Label 'name' -Tail 'C:\verylongpath\that\gets\cut' -Width 20
 Assert-Equal 19 (Get-DisplayWidth -Text $cwdGutterRow) 'no -Age (the cwd row) leaves one cell of right gutter, one cell short of -Width'
 
+# --- A1 (spec D4): -PathTail middle-truncates, and only where the caller says the tail is a path.
+# Cut from the right, two sibling paths render the identical prefix and the column says nothing.
+$deepTailA = 'C:\Users\sample\Desktop\Projects\workspace\alpha'
+$deepTailB = 'C:\Users\sample\Desktop\Projects\workspace\beta'
+$pathRowA = New-ListRow -Mark '   ' -Label 'p' -Tail $deepTailA -Age '4 min' -Width 46 -PathTail
+$pathRowB = New-ListRow -Mark '   ' -Label 'p' -Tail $deepTailB -Age '4 min' -Width 46 -PathTail
+$plainRowA = New-ListRow -Mark '   ' -Label 'p' -Tail $deepTailA -Age '4 min' -Width 46
+$plainRowB = New-ListRow -Mark '   ' -Label 'p' -Tail $deepTailB -Age '4 min' -Width 46
+Assert-Equal 46 (Get-DisplayWidth -Text $pathRowA) '-PathTail still fills exactly the width it is given'
+Assert-True ($pathRowA.Contains('\alpha')) 'a middle-truncated path keeps its leaf on the row'
+Assert-True ($pathRowA.Contains('C:\')) 'and its drive'
+Assert-True ($pathRowA -ne $pathRowB) 'two sibling deep paths render DIFFERENT rows'
+# The positive control on that: WITHOUT the switch the very same two rows are byte-identical, which
+# is the defect D4 names. It also pins that the snippet column (the picker's) is untouched - a
+# snippet is read from the left and cutting its middle throws away the half anybody reads.
+Assert-Equal $plainRowA $plainRowB 'without -PathTail the same two paths are byte-identical - the right cut is what D4 replaces'
+Assert-True (-not $plainRowA.Contains('\alpha')) 'and a right cut drops the leaf entirely'
+
 # --- screen 1 -----------------------------------------------------------------------------
 
 # Enter alone must reproduce today's launcher exactly: work account, remote on, new session.
@@ -1489,6 +1507,34 @@ $pHoverPickClear = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHove
 Assert-True ($null -eq $pHoverPickClear) 'the footer-row-footer hover run still ends with Escape'
 Assert-Equal 4 $script:hoverPickClearDraws 'four draws: initial, the footer light, the row move that must clear it, and the footer light again - a stale Hover left over from the row move would wrongly skip that fourth redraw'
 
+# --- A2 (spec D1/D3): the PICKER footer lights the button under the mouse. Get-PickerFrame took no
+# -Hover at all before this, so the loop kept $s.Hover and forced a full repaint per footer-button
+# crossing for a byte-identical frame - measured 4 draws, 1 distinct. Rendered with -Color, the only
+# mode in which Add-HintColor paints anything at all.
+$pkHoverProbe = $null
+$null = Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 100 -Height 24 -Color -RowMap ([ref]$pkHoverProbe)
+$pkSpanA = @($pkHoverProbe.Footer | Where-Object { $_.Char -eq '/' })[0]
+$pkSpanB = @($pkHoverProbe.Footer | Where-Object { $_.Char -eq 'f' })[0]
+$script:pkHoverFrames = New-Object System.Collections.Generic.List[string]
+$pkHoverDraw = {
+    param($s, $i, $f, $sc, $pn, $hv)
+    $map = $null
+    $lines = Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -Hover $hv -Width 100 -Height 24 -Color -RowMap ([ref]$map)
+    $script:pkHoverFrames.Add(($lines -join "`n"))
+    $map
+}
+$wPkHover = New-EventReader @(
+    (New-MouseEvent -X $pkSpanA.Start -Y ($pkHoverProbe.FooterY + $pkSpanA.Line) -Move),
+    (New-MouseEvent -X $pkSpanB.Start -Y ($pkHoverProbe.FooterY + $pkSpanB.Line) -Move),
+    $hoverPickEsc
+)
+$pkHoverOut = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wPkHover -Draw $pkHoverDraw -Wait $wPkHover -GetWindowTop { 0 }
+Assert-True ($null -eq $pkHoverOut) 'the picker footer-hover sweep still ends with Escape'
+Assert-Equal 3 $script:pkHoverFrames.Count 'three picker frames were drawn: initial, hover-/, hover-f'
+Assert-Equal 3 (@($script:pkHoverFrames | Select-Object -Unique).Count) 'and all three are DISTINCT - before -Hover reached Get-PickerFrame the three were byte-identical'
+Assert-True ($script:pkHoverFrames[1].Contains($script:C.AccentBg)) 'the hovered picker button gets the accent cap'
+Assert-True (-not $script:pkHoverFrames[0].Contains($script:C.AccentBg)) 'and nothing is accent-tinted before the mouse arrives'
+
 # --- Mouse on the launch screen. Same seams, and the assertion that matters most is that a click
 # on an option CELL selects that value - the difference between a menu and a picture of one. ---
 $launchState = New-LaunchState
@@ -1775,6 +1821,38 @@ $paddedWrap = New-HintFooter -Glyphs $g4 -Width 30 -Hints $widthHints
 $bracketWrap = New-HintFooter -Glyphs $g4 -Width 30 -Plain -Hints $widthHints
 Assert-Equal @($paddedWrap.Lines).Count @($bracketWrap.Lines).Count 'the padded and bracketed forms wrap to the same number of lines'
 
+# --- A3: the footer wraps on CELLS, not .Length. A configured maintenance action may carry any
+# label the config gives it, and a CJK one counts one code unit per two drawn cells - so the line
+# was laid out as fitting, overflowed -Width, and Complete-PickerFrame cut it, which DROPS every
+# span past the cut (its own comment) and leaves a half-drawn hint nobody can click.
+# EIGHT wide characters, not the six the review wrote: at 50 columns the maintenance footer carries
+# this hint at 28 cells into its second line, so the wrap decision only differs between .Length and
+# cells for a label of 7..12 wide characters - at six BOTH arithmetics wrap and the mutation is
+# invisible. Eight sits in the middle of that window.
+$cjkLabel = ([string][char]0x8A2D + [string][char]0x5B9A + [string][char]0x753B + [string][char]0x9762) * 2   # 8 chars, 16 cells
+$cjkHints = @(
+    @{ Token = 'u'; Label = 'update';      Clickable = $true; Key = ''; Char = 'u' }
+    @{ Token = 'r'; Label = 'rename swap'; Clickable = $true; Key = ''; Char = 'r' }
+    @{ Token = 'd'; Label = 'doctor';      Clickable = $true; Key = ''; Char = 'd' }
+    @{ Token = 'm'; Label = 'mcp list';    Clickable = $true; Key = ''; Char = 'm' }
+    @{ Token = 'p'; Label = 'prune';       Clickable = $true; Key = ''; Char = 'p' }
+    @{ Token = 'i'; Label = $cjkLabel;     Clickable = $true; Key = ''; Char = 'i' }
+    @{ Token = 'esc'; Label = 'back';      Clickable = $true; Key = 'Escape'; Char = '' }
+)
+# Get-FrameWidth -Width 50 is 49 - the width the frame actually hands New-HintFooter.
+$cjkFooter = New-HintFooter -Glyphs (Get-Glyphs) -Width 49 -Plain -Hints $cjkHints
+Assert-Equal 0 @($cjkFooter.Lines | Where-Object { (Get-DisplayWidth -Text $_.Text) -gt 49 }).Count 'a footer with a CJK label wraps BEFORE the hint that would overflow - no line is wider than -Width in CELLS'
+Assert-Equal 7 @($cjkFooter.Lines | ForEach-Object { $_.Spans }).Count 'and every hint still gets a span'
+# And at the FRAME, where the drop actually bites: Complete-PickerFrame truncates each footer line
+# and keeps only the spans that survived it, so an overflowing line loses the hint's click cell.
+$cjkActions = @([pscustomobject]@{ Key = 'i'; Label = $cjkLabel; Script = (Join-Path $PSScriptRoot 'fixtures\config-four.json'); ConfirmTwice = $true })
+$cjkInfo = [pscustomobject]@{ Matches = $true; NewestVersion = '2.1.233'; InstalledHash = 'A'; NewestHash = 'A'; VersionCount = 3; BinPath = 'x'; VersionsBytes = 0 }
+$cjkMap = $null
+$cjkFrame = @(Get-MaintenanceFrame -Info $cjkInfo -Width 50 -Height 24 -RowMap ([ref]$cjkMap) -Actions $cjkActions)
+Assert-Equal 'u,r,d,m,p,i,Escape' ((@($cjkMap.Footer | ForEach-Object { if ($_.Char) { $_.Char } else { $_.Key } })) -join ',') 'at 50 columns with a CJK action label every hint still has a click span - none was cut away'
+Assert-Equal 0 @($cjkFrame | Where-Object { (Get-DisplayWidth -Text (Remove-AnsiColor $_)) -gt 49 }).Count 'and no rendered line reaches the last console column'
+Assert-True (($cjkFrame -join "`n").Contains($cjkLabel)) 'and the label itself is drawn whole, not half a glyph'
+
 # --- Maintenance screen. It has no rows to select, so the mouse does exactly one thing there. The
 # assertion works by EVENT BUDGET: the reader holds a single event, so a click that is honoured
 # leaves on the first pass, and one that is ignored asks for a second event and throws. That is what
@@ -1797,6 +1875,34 @@ $w = New-EventReader @((New-MouseEvent -Y ($mmap.FooterY + $escSpan.Line) -X $es
 $threw = $false
 try { Invoke-MaintenanceScreen -ReadKey $w -Draw $mDraw -Wait $w -GetWindowTop { 0 } } catch { $threw = $true }
 Assert-Equal $false $threw 'clicking "esc back" leaves the maintenance screen on the first event'
+
+# --- A2 (spec D1/D3), the maintenance twin: every hint on this screen is a button, so it is the
+# screen where an unlit hover is most obviously missing. The loop already kept $s.Hover here (no
+# Hover handler - the default footer branch does it); it simply never reached the frame.
+# -Info $fakeInfo inside the draw on purpose: Invoke-MaintenanceScreen hands its own
+# Get-ClaudeInstallInfo down, and what THIS renders must not depend on the machine it runs on.
+$mtHoverProbe = $null
+$null = Get-MaintenanceFrame -Info $fakeInfo -Width 100 -Height 24 -Color -RowMap ([ref]$mtHoverProbe) -Actions $cfgActions
+$mtSpanA = Get-HintSpan -Map $mtHoverProbe -Char 'd'
+$mtSpanB = Get-HintSpan -Map $mtHoverProbe -Char 'p'
+$script:mtHoverFrames = New-Object System.Collections.Generic.List[string]
+$mtHoverDraw = {
+    param($info, $status, $hv)
+    $map = $null
+    $lines = Get-MaintenanceFrame -Info $fakeInfo -Status $status -Hover $hv -Width 100 -Height 24 -Color -RowMap ([ref]$map) -Actions $cfgActions
+    $script:mtHoverFrames.Add(($lines -join "`n"))
+    $map
+}
+$wMtHover = New-EventReader @(
+    (New-MouseEvent -X $mtSpanA.Start -Y ($mtHoverProbe.FooterY + $mtSpanA.Line) -Move),
+    (New-MouseEvent -X $mtSpanB.Start -Y ($mtHoverProbe.FooterY + $mtSpanB.Line) -Move),
+    $esc
+)
+Invoke-MaintenanceScreen -ReadKey $wMtHover -Draw $mtHoverDraw -Wait $wMtHover -GetWindowTop { 0 } -Actions $cfgActions
+Assert-Equal 3 $script:mtHoverFrames.Count 'three maintenance frames were drawn: initial, hover-d, hover-p'
+Assert-Equal 3 (@($script:mtHoverFrames | Select-Object -Unique).Count) 'and all three are DISTINCT - before -Hover reached Get-MaintenanceFrame the three were byte-identical'
+Assert-True ($script:mtHoverFrames[1].Contains($script:C.AccentBg)) 'the hovered maintenance button gets the accent cap'
+Assert-True (-not $script:mtHoverFrames[0].Contains($script:C.AccentBg)) 'and nothing is accent-tinted before the mouse arrives'
 
 # A click one column past a span must NOT leave - proving the hit test is what decided it, not the
 # mere arrival of a mouse event. 'esc' no longer works for this: it is now ALONE on the wrapped
@@ -2444,6 +2550,28 @@ Assert-True ((($lf6 -join "`n")).Contains('5 min')) 'a long project path is capp
 $longNameProjs6 = @([pscustomobject]@{ Slug = 'N'; Path = 'C:\p'; Name = ('n' * 60); Worktree = $null; LastActivity = (Get-Date).AddMinutes(-5) })
 $lnFrame6 = @(Get-ProjectFrame -Projects $longNameProjs6 -Index 0 -Cwd 'C:\x' -Width 50 -Height 24)
 Assert-True ((($lnFrame6 -join "`n")).Contains('5 min')) 'a long project name is clamped so the age survives at 50 columns'
+
+# A1 (spec D4), at the FRAME: two projects under one deep root must not render the same path column
+# at 50 columns. Cut from the right - what New-ListRow did before -PathTail - both rows read
+# 'C:\Users\sample\Desktop\Projects...' and the column that is supposed to say WHICH project is a
+# picture of one. Both fixtures carry the SAME name on purpose, so the path column is the only
+# thing that can tell the two rows apart - a differing name would let this pass with both paths
+# still rendered identically.
+$d4Now = Get-Date
+$d4Projs = @(
+    [pscustomobject]@{ Slug = 'd4a'; Name = 'alpha'; Worktree = $null; LastActivity = $d4Now.AddMinutes(-5)
+                       Path = 'C:\Users\sample\Desktop\Projects\workspace\services\alpha' }
+    [pscustomobject]@{ Slug = 'd4b'; Name = 'alpha'; Worktree = $null; LastActivity = $d4Now.AddMinutes(-5)
+                       Path = 'C:\Users\sample\Desktop\Projects\workspace\services\beta' }
+)
+$d4Map = $null
+$d4Frame = @(Get-ProjectFrame -Projects $d4Projs -Index 0 -Cwd 'C:\x' -Width 50 -Height 20 -Now $d4Now -RowMap ([ref]$d4Map))
+# Rows 1 and 2 are the two projects - row 0 is the pinned current-directory row.
+$d4RowA = Remove-AnsiColor $d4Frame[$d4Map.RowYs[1]]
+$d4RowB = Remove-AnsiColor $d4Frame[$d4Map.RowYs[2]]
+Assert-True ($d4RowA -ne $d4RowB) 'two projects under the same deep root render DIFFERENT rows at 50 columns'
+Assert-True ($d4RowA.Contains('\alpha') -and $d4RowB.Contains('\beta')) 'because each path keeps its own leaf'
+Assert-True ($d4RowA.Contains('C:\') -and $d4RowB.Contains('C:\')) 'and both still start at the drive'
 
 # --- Invoke-ProjectScreen (Task 7, fix round 2): the project screen input loop, with throttled
 # hover. Driven entirely through injected seams - none of this needs a terminal.
@@ -3950,7 +4078,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1237) { Write-Host "COULD NOT RUN: expected 1237 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1260) { Write-Host "COULD NOT RUN: expected 1260 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

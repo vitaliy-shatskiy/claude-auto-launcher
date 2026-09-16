@@ -74,6 +74,31 @@ Assert-Equal $true ((Get-DisplayWidth -Text (Limit-Line -Text ($script:CJK * 8) 
 Assert-Equal 0 (Get-LoneSurrogateCount -Text (Limit-Line -Text ('ab' + $script:Emoji + 'cd') -Max 4)) 'truncation never cuts a surrogate pair in half'
 Assert-Equal $true ((Get-DisplayWidth -Text (Limit-Line -Text ($script:Emoji * 10) -Max 7)) -le 7) 'an emoji run is truncated to the cell width'
 
+# --- middle truncation for a path (spec D4) ------------------------------------------------
+# Cut from the RIGHT, every deep path under one root renders as the identical prefix, so the column
+# that is supposed to say WHICH project says nothing. 60 cells into 30 is the shape the project
+# screen actually hits at 50 columns.
+$deepPath = 'C:\Users\sample\Desktop\Projects\alpha'     # 38 cells
+$deeper = 'C:\Users\sample\Desktop\Projects\workspace\services\alpha'
+Assert-Equal 57 (Get-DisplayWidth -Text $deeper) 'the deep-path fixture is 57 cells wide - well past the budget below'
+$cut30 = Limit-Path -Text $deeper -Max 30
+Assert-Equal $true ((Get-DisplayWidth -Text $cut30) -le 30) 'a 60-cell path cut to 30 fits the budget'
+Assert-Equal $true ($cut30.EndsWith('\alpha')) 'and keeps its leaf, which is the half that tells two rows apart'
+Assert-Equal $true ($cut30.StartsWith('C:\')) 'and still starts with the drive, which is the half that says where it is'
+Assert-Equal 1 (@($cut30.ToCharArray() | Where-Object { [int]$_ -eq 0x2026 }).Count) 'with exactly one marker between the two'
+# Two paths under the SAME root differ after the cut - the whole point of D4.
+$sibA = Limit-Path -Text 'C:\Users\sample\Desktop\Projects\workspace\alpha' -Max 30
+$sibB = Limit-Path -Text 'C:\Users\sample\Desktop\Projects\workspace\beta' -Max 30
+Assert-Equal $true ($sibA -ne $sibB) 'two deep paths under one root stay distinguishable after the cut'
+Assert-Equal $deepPath (Limit-Path -Text $deepPath -Max 40) 'a path that already fits is untouched'
+Assert-Equal '' (Limit-Path -Text $null -Max 20) 'null text becomes an empty string'
+# A leaf too long for the budget keeps its own END rather than pushing the head out entirely.
+$longLeaf = Limit-Path -Text ('C:\root\' + ('n' * 60)) -Max 20
+Assert-Equal $true ((Get-DisplayWidth -Text $longLeaf) -le 20) 'a path whose LEAF alone overflows still fits the budget'
+Assert-Equal $true ($longLeaf.StartsWith('C')) 'and still starts with the drive'
+Assert-Equal 0 (Get-LoneSurrogateCount -Text (Limit-Path -Text ('C:\a\' + ($script:Emoji * 10) + '\' + ($script:Emoji * 10)) -Max 12)) 'middle truncation never cuts a surrogate pair in half'
+Assert-Equal $true ((Get-DisplayWidth -Text (Limit-Path -Text ('C:\a\' + ($script:CJK * 30)) -Max 21)) -le 21) 'a CJK path is cut by cells, not code units'
+
 # --- word wrap ---------------------------------------------------------------------------
 $w = Split-TextLines -Text 'the quick brown fox jumps over the lazy dog' -Width 12
 Assert-Equal 0 (@($w | Where-Object { $_.Length -gt 12 }).Count) 'no wrapped line exceeds the width'
@@ -238,6 +263,14 @@ $asciiBox = @(New-Box -Lines @('a very long line that will certainly not fit in 
 Assert-Equal 0 (Get-NonAsciiCount -Lines $asciiBox) 'an ASCII box carries no character above ASCII, the truncation marker included'
 Assert-Equal 20 (Get-DisplayWidth -Text $asciiBox[1]) 'the ASCII marker still fills the row to the box width'
 Assert-Equal 0 (Get-NonAsciiCount -Lines @(Limit-Line -Text 'abcdefgh' -Max 4)) 'ASCII mode truncates a bare line with an ASCII marker'
+# The middle-truncation marker comes from the same Get-Ellipsis, so -Ascii covers it too - one
+# glyph set per frame, or a project row is half mojibake on a cp866 console. The ASCII marker is
+# Get-Ellipsis's own '~' and stays exactly ONE cell: a three-dot '...' would spend two cells the
+# truncation arithmetic never reserved and every row built on it would overflow.
+$asciiPath = Limit-Path -Text 'C:\Users\sample\Desktop\Projects\workspace\alpha' -Max 24 -Ascii
+Assert-Equal 0 (Get-NonAsciiCount -Lines @($asciiPath)) 'ASCII mode middle-truncates a path with an ASCII marker'
+Assert-Equal $true ($asciiPath.Contains('~')) 'which is the one-cell marker Get-Ellipsis hands every other helper'
+Assert-Equal $true ($asciiPath.EndsWith('\alpha')) 'and the leaf survives there too'
 Assert-Equal 0 (Get-NonAsciiCount -Lines @(Split-TextLines -Text 'one two three four five six seven' -Width 10 -MaxLines 2)) 'ASCII mode caps a wrap with an ASCII marker'
 # The override channel, asserted without asking what the runner's console code page is: with the
 # marker pinned, the ambient decision must not win. This is how the launcher hands its own -Ascii
@@ -251,7 +284,7 @@ Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line th
 if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
 $script:Ellipsis = [string][char]0x2026
 
-if ($script:Ran -ne 84) { Write-Host "COULD NOT RUN: expected 84 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 99) { Write-Host "COULD NOT RUN: expected 99 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

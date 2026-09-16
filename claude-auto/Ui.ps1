@@ -898,10 +898,13 @@ function Invoke-SessionPicker {
         # $Draw RETURNS the row map when it can - where the session rows landed on screen - so a
         # click can be turned into an index by the same arithmetic that drew them. A Draw that
         # returns nothing (every existing test injects one) simply leaves the mouse inert.
+        # SIX parameters since the picker footer learned to light its hovered button (spec D1): a
+        # renderer one short does not fail - the extra argument lands in $args - it simply never
+        # lights anything, which is what the pre-D1 screen did.
         [scriptblock]$Draw = {
-            param($s, $i, $f, $sc, $pn)
+            param($s, $i, $f, $sc, $pn, $hv)
             $map = $null
-            Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
+            Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -Hover $hv -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
             $map
         },
         [scriptblock]$Wait = { & $ReadKey },
@@ -1123,7 +1126,7 @@ function Invoke-SessionPicker {
         $handlers.Tab = { param($s) $s.Scope = $(if ($s.Scope -eq 'project') { 'all' } else { 'project' }); $s.Index = 0; @{ Log = @{ scope = $s.Scope } } }
     }
     return (Invoke-ScreenLoop -Screen 'picker' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
-        -Draw { param($s) & $paintPicker $s.Pool $s.Index $s.Filter $s.Scope $pickerTitle } -Handlers $handlers)
+        -Draw { param($s) & $paintPicker $s.Pool $s.Index $s.Filter $s.Scope $pickerTitle $s.Hover } -Handlers $handlers)
 }
 
 function ConvertTo-StatusText {
@@ -1171,10 +1174,12 @@ function Invoke-MaintenanceScreen {
     param(
         [Parameter(Mandatory)][scriptblock]$ReadKey,
         [scriptblock]$Wait = { & $ReadKey },
+        # THREE parameters since this footer learned to light its hovered button (spec D1) - see
+        # Invoke-SessionPicker's own renderer for why one short is silent rather than fatal.
         [scriptblock]$Draw = {
-            param($info, $status)
+            param($info, $status, $hv)
             $map = $null
-            Get-MaintenanceFrame -Info $info -Status $status -RowMap ([ref]$map) -Actions $Actions | ForEach-Object { Write-Host $_ }
+            Get-MaintenanceFrame -Info $info -Status $status -Hover $hv -RowMap ([ref]$map) -Actions $Actions | ForEach-Object { Write-Host $_ }
             $map
         },
         [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
@@ -1230,7 +1235,7 @@ function Invoke-MaintenanceScreen {
             $s.Status = "confirm: press $($chosen.Key) again to run $($chosen.Label) (the screen will sit still while it runs)"
         } else {
             $s.Status = "running $($chosen.Label)..."
-            $null = & $paintMaint $s.Info $s.Status
+            $null = & $paintMaint $s.Info $s.Status $s.Hover
             $s.Status = (& $runMaint { (Invoke-MaintenanceScript -ScriptPath $chosen.Script -Label $chosen.Label -Runner $scriptRunner).Message })
         }
     }
@@ -1247,14 +1252,14 @@ function Invoke-MaintenanceScreen {
     # and adds the virtual key and the Cyrillic letter on the same physical key (owner, 2026-09-02:
     # the keys must work on the Russian and Ukrainian layouts).
     $maintKeys = @{
-        'u' = { param($s) $s.Status = 'running claude update...'; $null = & $paintMaint $s.Info $s.Status; $s.Status = (& $runMaint { (Invoke-ClaudeUpdate).Message }) }
+        'u' = { param($s) $s.Status = 'running claude update...'; $null = & $paintMaint $s.Info $s.Status $s.Hover; $s.Status = (& $runMaint { (Invoke-ClaudeUpdate).Message }) }
         'r' = { param($s) $s.Status = (& $runMaint { (Repair-ClaudeBinaryByRename).Message }) }
         # No Select-Object -Last 3 on either of these. Both reports put what matters at the TOP -
         # doctor's version, path, install method and last update attempt; the mcp list's first
         # servers - so keeping the last three lines showed doctor's closing boilerplate and one
         # arbitrary server, which is why both keys looked like they did nothing.
-        'd' = { param($s) $s.Status = 'running claude doctor...'; $null = & $paintMaint $s.Info $s.Status; $s.Status = (& $runMaint { Invoke-ClaudeCommandText -Arguments @('doctor') }) }
-        'm' = { param($s) $s.Status = 'running claude mcp list...'; $null = & $paintMaint $s.Info $s.Status; $s.Status = (& $runMaint { Invoke-ClaudeCommandText -Arguments @('mcp', 'list') }) }
+        'd' = { param($s) $s.Status = 'running claude doctor...'; $null = & $paintMaint $s.Info $s.Status $s.Hover; $s.Status = (& $runMaint { Invoke-ClaudeCommandText -Arguments @('doctor') }) }
+        'm' = { param($s) $s.Status = 'running claude mcp list...'; $null = & $paintMaint $s.Info $s.Status $s.Hover; $s.Status = (& $runMaint { Invoke-ClaudeCommandText -Arguments @('mcp', 'list') }) }
         'p' = {
             param($s)
             if ($s.WasPending -ne 'p' -or $s.TooFast) { $s.Pending = 'p'; $s.PendingAt = $s.Now; $s.Status = "confirm: press p again to delete all but the 2 newest builds" }
@@ -1348,5 +1353,5 @@ function Invoke-MaintenanceScreen {
     # The install info is refreshed by the DRAW, so the frame and the info on it are always the same
     # pass - exactly as they were when the draw sat at the top of this function's own loop.
     $null = Invoke-ScreenLoop -Screen 'maintenance' -State $maintState -Wait $Wait -GetWindowTop $GetWindowTop -Silent `
-        -Draw { param($s) $s.Info = Get-ClaudeInstallInfo; & $paintMaint $s.Info $s.Status } -Handlers $maintHandlers
+        -Draw { param($s) $s.Info = Get-ClaudeInstallInfo; & $paintMaint $s.Info $s.Status $s.Hover } -Handlers $maintHandlers
 }

@@ -366,7 +366,12 @@ function New-HintFooter {
         $piece = $token
         if ($h.Label) { $piece += ' ' + $h.Label }
         $hasContent = $text.Length -gt 2
-        if ($Width -gt 0 -and $hasContent -and ($text.Length + $sep.Length + $piece.Length) -gt $Width) {
+        # The wrap is a CELL budget, never .Length - Theme.ps1's rule, and this line was the last
+        # place on the screen still measuring the other way. A configured maintenance action with a
+        # CJK label counts one code unit per two drawn cells, so the line was laid out as fitting,
+        # overflowed -Width, and Complete-PickerFrame then cut it - dropping the spans past the cut
+        # (see its own comment) and leaving a half-drawn hint nobody could click.
+        if ($Width -gt 0 -and $hasContent -and ((Get-DisplayWidth -Text $text) + (Get-DisplayWidth -Text $sep) + (Get-DisplayWidth -Text $piece)) -gt $Width) {
             $lines += [pscustomobject]@{ Text = $text; Spans = @($spans) }
             $text = '  '
             $spans = @()
@@ -431,6 +436,22 @@ function Add-HintColor {
     }
     if ($cursor -lt $Line.Length) { $out += $c.Dim + $Line.Substring($cursor) + $c.Reset }
     return $out
+}
+
+function Get-FooterHover {
+    # Which (Key, Char) pair a hovered footer-button INDEX names, or "nothing hovered". The index is
+    # into the SAME clickable-span order Complete-PickerFrame later flattens into RowMap.Footer, so
+    # index N here is index N there - which is what lets a loop hand straight back the index
+    # Get-HitAt gave it. Add-HintColor matches on (Key, Char) rather than on a column, so this
+    # survives a footer that wraps onto a second line.
+    # ONE copy for all four screens (spec D1/D3): written per screen, the copies drift the first time
+    # the span bookkeeping changes and a button lights on the wrong hint.
+    param([Parameter(Mandatory)]$Footer, [int]$Hover = -1)
+    $none = [pscustomobject]@{ HasHover = $false; Key = ''; Char = '' }
+    if ($Hover -lt 0) { return $none }
+    $clickable = @($Footer.Lines | ForEach-Object { $_.Spans } | Where-Object { $_.Start -ge 0 })
+    if ($Hover -ge $clickable.Count) { return $none }
+    return [pscustomobject]@{ HasHover = $true; Key = $clickable[$Hover].Key; Char = $clickable[$Hover].Char }
 }
 
 function Complete-PickerFrame {
@@ -677,22 +698,9 @@ function Get-LaunchFrame {
         @{ Token = 'u';          Label = 'maintenance'; Clickable = $true; Key = '';       Char = 'u' }
         @{ Token = 'esc';        Label = 'quit';        Clickable = $true; Key = 'Escape'; Char = '' }
     )
-    # Which (Key, Char) pair $State.Hover names, if any - looked up on the SAME clickable-span order
-    # Complete-PickerFrame later flattens into RowMap.Footer, so index N here is index N there. A
-    # state that carries no Hover at all (a hand-built fixture) hovers nothing.
-    $hoverKey = ''
-    $hoverChar = ''
-    $hasHover = $false
-    $hover = if ($null -ne $State.Hover) { [int]$State.Hover } else { -1 }
-    if ($hover -ge 0) {
-        $clickable = @($footer.Lines | ForEach-Object { $_.Spans } | Where-Object { $_.Start -ge 0 })
-        if ($hover -lt $clickable.Count) {
-            $hoverKey = $clickable[$hover].Key
-            $hoverChar = $clickable[$hover].Char
-            $hasHover = $true
-        }
-    }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar)
+    # A state that carries no Hover at all (a hand-built fixture) hovers nothing.
+    $hov = Get-FooterHover -Footer $footer -Hover $(if ($null -ne $State.Hover) { [int]$State.Hover } else { -1 })
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char)
 }
 
 function New-ListRow {
@@ -709,8 +717,11 @@ function New-ListRow {
     # finished row - which it cannot do reliably: a path is not a word, and inside a box the age is
     # not at the end of the line either. The markers cost no cells, so everything below still
     # measures the same (Theme.ps1, Add-DimSpanColor).
+    # -PathTail (spec D4): the tail is a PATH, so cut it in the MIDDLE and keep its leaf. Only the
+    # caller knows which it is - the project rows pass paths, the picker's rows pass a conversation
+    # snippet, and middle-truncating a snippet cuts away the one half of it anybody reads.
     param([string]$Mark = '   ', [string]$Label = '', [string]$Tail = '', [string]$Age = '', [int]$Width, [switch]$Ascii, [switch]$TrailingSpace,
-          [switch]$DimTail, [switch]$DimAge)
+          [switch]$DimTail, [switch]$DimAge, [switch]$PathTail)
     $ageW = Get-DisplayWidth -Text $Age
     $ageCol = if ($Age) { if ($TrailingSpace) { $Age + ' ' } else { ' ' + $Age } } else { '' }
     # Review fix round 1 (C1): the reserve here is mark + a 1-cell minimum pad + the age's OWN
@@ -719,7 +730,10 @@ function New-ListRow {
     # label one cell too early (an "…" that used to fit no longer does).
     $label = Limit-Line -Text $Label -Max ([Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - $ageW - 2)) -Ascii:$Ascii
     $room = $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $ageCol) - 3
-    $tail = if ($Tail -and $room -gt 8) { Limit-Line -Text $Tail -Max $room -Ascii:$Ascii } else { '' }
+    $tail =
+        if (-not $Tail -or $room -le 8) { '' }
+        elseif ($PathTail) { Limit-Path -Text $Tail -Max $room -Ascii:$Ascii }
+        else { Limit-Line -Text $Tail -Max $room -Ascii:$Ascii }
     # Review fix round 1 (Important): with no -Age (the cwd row) the old inline code filled only
     # $inner - 1 cells, leaving one cell of right gutter before the box border. An age column
     # spends that cell on the separator already folded into $ageCol; without one, nothing does -
@@ -866,19 +880,7 @@ function Get-ProjectFrame {
         @{ Token = '/';     Label = 'filter';   Clickable = $true; Key = '';       Char = '/' }
         @{ Token = 'esc';   Label = 'back';     Clickable = $true; Key = 'Escape'; Char = '' }
     )
-    # Which (Key, Char) pair -Hover names, if any - looked up on the SAME clickable-span order that
-    # Complete-PickerFrame will later flatten into RowMap.Footer, so index N here is index N there.
-    $hoverKey = ''
-    $hoverChar = ''
-    $hasHover = $false
-    if ($Hover -ge 0) {
-        $clickable = @($footer.Lines | ForEach-Object { $_.Spans } | Where-Object { $_.Start -ge 0 })
-        if ($Hover -lt $clickable.Count) {
-            $hoverKey = $clickable[$Hover].Key
-            $hoverChar = $clickable[$Hover].Char
-            $hasHover = $true
-        }
-    }
+    $hov = Get-FooterHover -Footer $footer -Hover $Hover
 
     # Box top + box bottom + headroom + the footer's own lines, exactly like Get-PickerFrame, MINUS
     # the action field's own row. The field is drawn inside the box under the list, so the row it
@@ -910,11 +912,11 @@ function Get-ProjectFrame {
             $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
             $name = $r.Item.Name
             if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
-            $body += New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge
+            $body += New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail
         } elseif ($r.Kind -eq 'cwd') {
             # The reader must see which directory the row means - rendered like a project row's
             # name+path columns, minus the age no pinned row has a real LastActivity for.
-            $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail
+            $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail -PathTail
             # And the blank line UNDER it: the current directory is a group of its own, so the eye
             # stops there instead of reading it as the first entry of the registry (spec D6). Not
             # when the next visible row is the free-path row - it brings its own separator, and both
@@ -981,7 +983,7 @@ function Get-ProjectFrame {
         'worktree' { @(@{ Key = ''; Char = 't' }) }
         default    { @() }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar -Selected $selected)
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char -Selected $selected)
 }
 
 function Get-SessionExchange {
@@ -1172,6 +1174,10 @@ function Get-PickerFrame {
         # Display label for the title under -Scope project ONLY (fix round 1, IMPORTANT 3) - falls
         # back to the generic "this project" when the caller knows a slug but not a display name.
         [string]$ProjectName = '',
+        # -Hover names a clickable footer-button INDEX, -1 for none - the same contract
+        # Get-ProjectFrame and Get-LaunchFrame carry (spec D1/D3). Without it this screen kept the
+        # hover state and repainted a byte-identical frame for every footer-button crossing.
+        [int]$Hover = -1,
         # Where the session rows landed, for hit-testing a mouse click. Filled by the SAME code that
         # renders them - the alternative is a second copy of the viewport arithmetic, and the two
         # would eventually disagree about which index sits on which line, which is precisely the
@@ -1221,6 +1227,9 @@ function Get-PickerFrame {
     }
     $hints += @{ Token = 'esc'; Label = 'back'; Clickable = $true; Key = 'Escape'; Char = '' }
     $footer = New-HintFooter -Glyphs $g -Width $frameWidth -Plain:(-not $Color) -Hints $hints
+    # Resolved once, before the three returns below: the empty-list branch is the one that gets
+    # forgotten when the footer changes, which is why Complete-PickerFrame exists at all.
+    $hov = Get-FooterHover -Footer $footer -Hover $Hover
 
     if ($items.Count -eq 0) {
         $emptyMsg =
@@ -1228,7 +1237,7 @@ function Get-PickerFrame {
             elseif ($hiddenCount -gt 0) { "  all $hiddenCount sessions here are empty - nothing to resume" }
             else { '  no sessions found' }
         $lines = New-Box -Lines @('', $emptyMsg, '') -Width $frameWidth -Title $title -Ascii:$Ascii
-        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap)
+        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char)
     }
 
     # Box top + box bottom + one headroom row + the footer's lines (one on a wide terminal, more
@@ -1308,7 +1317,7 @@ function Get-PickerFrame {
                 Start     = $vp.Start
             }
         }
-        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap)
+        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char)
     }
 
     $vp = Get-Viewport -Count $items.Count -Index $Index -Visible $bodyRows
@@ -1345,11 +1354,15 @@ function Get-PickerFrame {
             Start     = $vp.Start
         }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap)
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char)
 }
 
 function Get-MaintenanceFrame {
-    param($Info, [int]$Width = 78, [int]$Height = 24, [string]$Status = '', [switch]$Color, [switch]$Ascii, [ref]$RowMap, [object[]]$Actions = @())
+    # -Hover names a clickable footer-button INDEX, -1 for none - the same contract the other three
+    # frames carry (spec D1/D3). Every hint on this screen is a button, so it is the screen where an
+    # unlit hover is most obviously missing.
+    param($Info, [int]$Width = 78, [int]$Height = 24, [string]$Status = '', [switch]$Color, [switch]$Ascii, [ref]$RowMap, [object[]]$Actions = @(),
+          [int]$Hover = -1)
     if ($RowMap) { $RowMap.Value = [pscustomobject]@{ Rows = @() } }
     if ($Width -lt $script:MinWidth -or $Height -lt $script:MinHeight) {
         return (Get-TooSmallFrame -Width $Width -Height $Height)
@@ -1380,6 +1393,7 @@ function Get-MaintenanceFrame {
     }
     $hints += @{ Token = 'esc'; Label = 'back'; Clickable = $true; Key = 'Escape'; Char = '' }
     $footer = New-HintFooter -Glyphs $g -Width $frameWidth -Plain:(-not $Color) -Hints $hints
+    $hov = Get-FooterHover -Footer $footer -Hover $Hover
 
     $body = @(
         "  installed   $($Info.BinPath)",
@@ -1410,5 +1424,5 @@ function Get-MaintenanceFrame {
     }
 
     $lines = New-Box -Lines $body -Width $boxWidth -Title 'maintenance' -Ascii:$Ascii
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap)
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char)
 }

@@ -103,6 +103,53 @@ function Limit-Line {
     return (Limit-Cells -Text $Text -Max ($Max - 1)) + (Get-Ellipsis -Ascii:$Ascii)
 }
 
+function Limit-CellsRight {
+    # The longest SUFFIX of $Text that fits $Max CELLS, cut only between whole characters - the
+    # mirror of Limit-Cells, for the one caller that needs the END of a string rather than its head.
+    param([string]$Text, [int]$Max)
+    if (-not $Text -or $Max -le 0) { return '' }
+    $start = $Text.Length
+    $w = 0
+    while ($start -gt 0) {
+        $len = if ($start -ge 2 -and [char]::IsLowSurrogate($Text[$start - 1]) -and [char]::IsHighSurrogate($Text[$start - 2])) { 2 } else { 1 }
+        $piece = $Text.Substring($start - $len, $len)
+        $cw = Get-DisplayWidth -Text $piece
+        if (($w + $cw) -gt $Max) { break }
+        $w += $cw
+        $start -= $len
+    }
+    return $Text.Substring($start)
+}
+
+function Limit-Path {
+    # MIDDLE truncation for a path (spec D4): head + marker + tail. Limit-Line cuts from the right,
+    # and every deep path under one root then renders as the identical prefix - at 50 columns the
+    # whole project column reads 'C:\Users\...\Desktop\Projects…' and identifies nothing.
+    #
+    # The LEAF is what tells two rows apart, so the budget is spent on it first and the head takes
+    # what is left; a leaf too long for the budget keeps its own tail instead. At least one cell is
+    # always left for the head, because the drive is the half of a path that says WHERE it is.
+    # Measured in CELLS throughout, never .Length - Theme.ps1's rule, same as Limit-Line.
+    param([string]$Text, [int]$Max, [switch]$Ascii)
+    if (-not $Text) { return '' }
+    if ((Get-DisplayWidth -Text $Text) -le $Max) { return $Text }
+    # Below two cells there is no room for a head, a marker and a tail at once; falling back to the
+    # plain right cut is what Limit-Line would have done anyway.
+    if ($Max -le 3) { return (Limit-Line -Text $Text -Max $Max -Ascii:$Ascii) }
+    $mark = Get-Ellipsis -Ascii:$Ascii        # exactly one cell, always (see Get-Ellipsis)
+    $budget = $Max - 1
+    $tailMax = $budget - 1
+    # The last separator and everything after it: '\alpha', not 'alpha'. Keeping the separator is
+    # what makes '…\alpha' read as a path fragment rather than as a word glued to the marker.
+    $cut = $Text.LastIndexOfAny([char[]]@('\', '/'))
+    $leaf = if ($cut -ge 0) { $Text.Substring($cut) } else { '' }
+    $tail =
+        if ($leaf -and (Get-DisplayWidth -Text $leaf) -le $tailMax) { $leaf }
+        else { Limit-CellsRight -Text $Text -Max $tailMax }
+    $head = Limit-Cells -Text $Text -Max ($budget - (Get-DisplayWidth -Text $tail))
+    return $head + $mark + $tail
+}
+
 function Split-TextLines {
     # Word wrap for preview text. A token longer than the pane is cut rather than dropped, because
     # a pasted url or a stack frame is exactly the case where the first characters still identify it.
