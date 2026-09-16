@@ -2120,20 +2120,23 @@ $w = New-EventReader @($pKey, $pKey, $esc)
 Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner $fakeRunner -RecordTime { $null }
 Assert-Equal 1 $script:pruneRuns 'with no arrival stamp available the confirm behaves exactly as it did before'
 
-# --- C1: this screen has NO cursor, so no arrow ALIAS may shadow a menu key --------------------
-# Its handler table carries no Rows, and that is what keeps the loop's w/a/s/d aliases inert here:
-# 'd' is doctor rather than a right-arrow, and a configured action may sit on 's' or 'w' without
+# --- C1: this screen has neither cursor nor stepper, so no arrow ALIAS may shadow a menu key ----
+# Its handler table carries no Rows and no Left/Right, and the loop gates the aliases on exactly
+# those two: w/s on $loopHasCursor ([bool]$h.Rows), a/d on $loopHasLR ([bool]($h.Left -or $h.Right)).
+# So 'd' is doctor rather than a right-arrow, and a configured action may sit on 's' or 'w' without
 # the cursor eating the press. `claude doctor` shells out through Invoke-ClaudeCommandText, so that
-# one function is shadowed for the rest of this file - function lookup is last-wins in this scope
-# and nothing below calls it.
+# one function is shadowed for the three assertions that need it and PUT BACK straight after -
+# function lookup is last-wins in this scope, and a shadow left standing would follow the product
+# function through every test written below it, forever.
 $script:doctorRuns = 0
+$realCommandText = ${function:Invoke-ClaudeCommandText}
 function Invoke-ClaudeCommandText { param([string[]]$Arguments) $script:doctorRuns++; "doctor report for $($Arguments -join ' ')" }
 $dKey = [System.ConsoleKeyInfo]::new([char]'d', [System.ConsoleKey]::D, $false, $false, $false)
 $sKeyMaint = [System.ConsoleKeyInfo]::new([char]'s', [System.ConsoleKey]::S, $false, $false, $false)
 $wKeyMaint = [System.ConsoleKeyInfo]::new([char]'w', [System.ConsoleKey]::W, $false, $false, $false)
 $w = New-EventReader @($dKey, $esc)
 Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner { throw 'must not run' }
-Assert-Equal 1 $script:doctorRuns 'd runs claude doctor on the maintenance screen - no cursor here, so no a/d alias shadows the menu key'
+Assert-Equal 1 $script:doctorRuns 'd runs claude doctor on the maintenance screen - no Left/Right handler here, so no a/d alias shadows the menu key'
 Assert-Equal $true ($script:lastStatus -match '^doctor report') 'and what the command printed is what the screen shows'
 # w and s with nothing bound to them: no throw, no action, nothing on the status line.
 $script:doctorRuns = 0
@@ -2141,6 +2144,10 @@ $w = New-EventReader @($wKeyMaint, $sKeyMaint, $esc)
 Invoke-MaintenanceScreen -ReadKey $w -Draw $statusDraw -Wait $w -GetWindowTop { 0 } -Actions $cfgActions -Runner { throw 'must not run' }
 Assert-Equal 0 $script:doctorRuns 'w and s press nothing at all on this screen'
 Assert-Equal '' $script:lastStatus 'and the status stays empty - neither letter ran anything'
+# The product function is back: every assertion that needed the counter has run, and nothing below
+# this line should see a stub where Ui.ps1's own Invoke-ClaudeCommandText belongs.
+${function:Invoke-ClaudeCommandText} = $realCommandText
+Assert-Equal $true ("${function:Invoke-ClaudeCommandText}" -match 'claude @Arguments') 'the stubbed Invoke-ClaudeCommandText is put back - the rest of this file sees the product one'
 # The falsifiable half: an action CONFIGURED on s (or w) runs from that key. Give this screen a
 # cursor and the same press would be a Down, and the action would never run.
 $script:actionRuns = @()
@@ -3577,7 +3584,7 @@ Assert-True ($null -eq $r) 'a resize does not end the screen'
 Assert-Equal 'Escape' ($script:sawKeys -join ',') 'and no handler ever sees it - only the Escape behind it'
 Assert-Equal 2 $draws 'the resize costs exactly one redraw and one more wait'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1144) { Write-Host "COULD NOT RUN: expected 1144 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1145) { Write-Host "COULD NOT RUN: expected 1145 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -1188,8 +1188,10 @@ function Invoke-MaintenanceScreen {
         }
     }
     foreach ($maintCfg in $actionList) {
-        # A key the table already holds is a built-in, and an action with no key at all would put an
-        # empty -Char in front of the matcher on every keypress.
+        # A key the table already holds is a built-in. An action with NO key is dropped rather than
+        # registered: Test-ClaudeHotkey's -Char is a Mandatory [string], so an empty one does not
+        # merely fail to match - it throws at parameter binding, and from this table it would throw
+        # on every single keypress, taking the launch screen behind this one down with it.
         if ($null -eq $maintCfg -or -not $maintCfg.Key) { continue }
         if ($maintKeys.ContainsKey([string]$maintCfg.Key)) { continue }
         $maintKeys[[string]$maintCfg.Key] = $maintAction
