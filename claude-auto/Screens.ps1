@@ -148,34 +148,31 @@ $script:ProjectActions = @('new', 'continue', 'resume', 'worktree')
 
 function Get-ProjectActions { return $script:ProjectActions }
 
-function Step-ProjectAction {
-    # Wraps in both directions, exactly like Step-LaunchValue - with four values, wrapping is fewer
-    # keystrokes. A value that is not one of the four (a hand-edited prefs file, a caller's typo)
-    # steps from the FIRST rather than travelling on: this string decides which flags reach `claude`.
-    param([string]$Action, [int]$Delta)
-    $values = $script:ProjectActions
-    # Canonicalised ONCE, here, and every caller steps by 0 to get the same answer: PowerShell's
-    # -in and -eq are case-INsensitive while [Array]::IndexOf is not, so 'RESUME' used to pass every
-    # validation, render as '< RESUME >', and then step to 'continue' instead of 'worktree'
-    # (review W4).
-    $Action = @($values | Where-Object { $_ -eq $Action })[0]
-    $i = [Array]::IndexOf($values, $Action)
+function Step-Option {
+    # The one wrap-stepper. Both the launch rows and the project action field used to carry a copy
+    # of this arithmetic; a fix to one (the case-canonicalisation, review W4) had to be made twice.
+    # Canonicalised once: -in/-eq are case-insensitive, [Array]::IndexOf is not, so 'RESUME' used to
+    # pass validation and then step from index 0.
+    param([Parameter(Mandatory)][string[]]$Values, [string]$Current, [int]$Delta)
+    $canon = @($Values | Where-Object { $_ -eq $Current })
+    $i = if ($canon.Count -gt 0) { [Array]::IndexOf($Values, $canon[0]) } else { 0 }
     if ($i -lt 0) { $i = 0 }
-    $i = ($i + $Delta) % $values.Count
-    if ($i -lt 0) { $i += $values.Count }
-    return $values[$i]
+    $i = ($i + $Delta) % $Values.Count
+    if ($i -lt 0) { $i += $Values.Count }
+    return $Values[$i]
+}
+
+function Step-ProjectAction {
+    # Thin wrapper: the values are the four the launcher dispatches on (Get-LaunchArgs).
+    param([string]$Action, [int]$Delta)
+    return (Step-Option -Values $script:ProjectActions -Current $Action -Delta $Delta)
 }
 
 function Step-LaunchValue {
-    # Values wrap in both directions; with two- and six-item rows, wrapping is fewer keystrokes.
+    # Thin wrapper: steps the row under the cursor and writes the result back onto the state.
     param($State, [int]$Delta)
     $row = $script:Rows[$State.Row]
-    $values = $row.Values
-    $i = [Array]::IndexOf($values, $State.($row.Name))
-    if ($i -lt 0) { $i = 0 }
-    $i = ($i + $Delta) % $values.Count
-    if ($i -lt 0) { $i += $values.Count }
-    $State.($row.Name) = $values[$i]
+    $State.($row.Name) = Step-Option -Values @($row.Values) -Current $State.($row.Name) -Delta $Delta
     return $State
 }
 

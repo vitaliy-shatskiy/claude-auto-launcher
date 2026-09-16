@@ -2545,6 +2545,15 @@ try {
     Assert-Equal 'worktree' (Step-ProjectAction -Action 'new' -Delta -1) 'and wraps backwards, like Step-LaunchValue'
     Assert-Equal 'new' (Step-ProjectAction -Action 'not-an-action' -Delta 0) 'a value outside the four falls back to the first rather than travelling on'
 
+    # --- Step-Option: the one wrap-stepper both screens use ---------------------------------------------
+    $vals = @('new', 'continue', 'resume', 'worktree')
+    Assert-Equal 'continue' (Step-Option -Values $vals -Current 'new' -Delta 1) 'Step-Option steps forward'
+    Assert-Equal 'worktree' (Step-Option -Values $vals -Current 'new' -Delta -1) 'and wraps backwards from the first'
+    Assert-Equal 'new' (Step-Option -Values $vals -Current 'worktree' -Delta 1) 'and wraps forwards from the last'
+    Assert-Equal 'resume' (Step-Option -Values $vals -Current 'RESUME' -Delta 0) 'a differently-cased value canonicalises to the list''s spelling'
+    Assert-Equal 'continue' (Step-Option -Values $vals -Current 'bogus' -Delta 1) 'an unknown value steps from the first'
+    Assert-Equal 'new' (Step-Option -Values $vals -Current 'new' -Delta 8) 'a delta larger than the list wraps by modulo'
+
     # Left/Right from a LIST row: the owner never has to walk down to the field to use it.
     $pAct1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'Enter')) -Draw {}
     Assert-Equal 'continue' $pAct1.Action 'RightArrow on a project row steps the field, and Enter runs what it says'
@@ -3076,7 +3085,7 @@ try {
 # (review W5).
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1043) { Write-Host "COULD NOT RUN: expected 1043 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1049) { Write-Host "COULD NOT RUN: expected 1049 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
