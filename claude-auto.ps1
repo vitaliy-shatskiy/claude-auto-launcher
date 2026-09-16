@@ -281,7 +281,6 @@ if ($UseUi) {
                 $pmap
             }
             $chosen = Invoke-ProjectScreen -Projects $projects -Cwd $LaunchCwd -Initial "$($state.Project)" `
-                      -InitialAction "$($state.ProjectAction)" `
                       -ReadKey $KeySource -Wait $wait -Draw $projDraw -ReadPath $readClaudePath
             # Escape at the project screen goes back to the launch screen, exactly as Escape at the
             # session picker already does. Preview cannot loop - its key list is finite - so it breaks.
@@ -290,10 +289,9 @@ if ($UseUi) {
             $state.ProjectSlug = $chosen.Slug
             $state.ProjectSlugs = @($chosen.Slugs)
             $state.Action = $chosen.Action
-            # And onto the field's own state, which Prefs.ps1 remembers per account. Two properties
-            # rather than one: $Action describes THIS launch (Reset-LaunchTab and Save-LaunchPrefs
-            # both refuse to remember it), $ProjectAction describes the habit the screen opens on.
-            $state.ProjectAction = $chosen.Action
+            # And nowhere else: the chosen action is NOT remembered (review W1). Prefs.ps1's header
+            # states the rule - an action describes one launch, not a habit - and a remembered
+            # 'worktree' would make the next launch's reflexive Enter create a git worktree.
             if ($state.Action -ne 'resume') { break }
 
             $projectName = Split-Path -Path $state.Project -Leaf

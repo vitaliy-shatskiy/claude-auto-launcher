@@ -628,7 +628,9 @@ Assert-True ((& $guardOf $secretsCall[0]) -match 'Preview') 'and so is the secre
 $projScreenCall = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
     "$($n.GetCommandName())" -eq 'Invoke-ProjectScreen' }, $true))
 Assert-Equal 1 $projScreenCall.Count 'claude-auto.ps1 opens the project screen in exactly one place'
-Assert-True ("$($projScreenCall[0].Extent.Text)" -match '-InitialAction') 'and seeds its action field from the account''s remembered choice, or the preference is written and never read'
+# No -InitialAction assertion, and none on a written-back action: the field is NOT remembered
+# (review W1). It opens at 'new' on every launch, which is what -InitialAction's own default gives.
+Assert-True (-not ("$($projScreenCall[0].Extent.Text)" -match '-InitialAction')) 'and does NOT seed the action field from anything persisted - an action describes one launch, not a habit'
 
 $projDrawAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     "$($n.Left.Extent.Text)" -eq '$projDraw' }, $true))
@@ -640,13 +642,12 @@ $projDrawParams = @($projDrawAssign[0].Right.FindAll({ param($n) $n -is [System.
 Assert-Equal 1 $projDrawParams.Count 'the renderer declares a parameter block'
 Assert-Equal 8 @($projDrawParams[0].Parameters).Count 'with all eight parameters the loop passes - one short and the field silently draws "new" forever'
 
-# The chosen action travels back onto the launch state, or Prefs.ps1 has nothing to remember.
+# Nothing writes the chosen action onto the launch state, because nothing may remember it.
 $projActionWrite = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     "$($n.Left.Extent.Text)" -eq '$state.ProjectAction' }, $true))
-Assert-Equal 1 $projActionWrite.Count 'the chosen action is written back onto the launch state exactly once'
-Assert-True ("$($projActionWrite[0].Right.Extent.Text)" -match 'chosen\.Action') 'from the screen''s own result, not from anything the launch screen holds'
+Assert-Equal 0 $projActionWrite.Count 'and nothing parks the chosen action on the launch state for Prefs.ps1 to pick up'
 
-if ($script:Ran -ne 134) { Write-Host "COULD NOT RUN: expected 134 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 133) { Write-Host "COULD NOT RUN: expected 133 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -399,63 +399,6 @@ $st3 = New-LaunchState; $st3.Project = 'C:\somewhere'
 $st3 = Reset-LaunchTab -State $st3
 Assert-Equal 'C:\somewhere' $st3.Project 'ctrl+r does not clear the chosen project'
 
-# --- ProjectAction: the project screen's action field, remembered per account (owner ask
-# 2026-09-16) ------------------------------------------------------------------------------------
-# Remembered like Project and for the same reason - it describes a habit, not one launch - and
-# handled by its own explicit lines rather than through $ProfileFields, because it is validated
-# against the project screen's four actions (Get-ProjectActions) and not against a launch-screen
-# row's option list. Never marked restored: the '*' legend names launch-screen rows, and this field
-# lives on the project screen where the restored value IS its own feedback.
-Assert-Equal 'new' (New-LaunchState).ProjectAction 'a fresh state starts the action field at new'
-
-$tmpPA = New-PrefsPath; $paths += $tmpPA
-$pa1 = New-LaunchState; $pa1.Account = 'work'; $pa1.ProjectAction = 'resume'
-$savedPA = Save-LaunchPrefs -State $pa1 -Path $tmpPA -NowMs 4000
-Assert-Equal 'resume' $savedPA.Profiles['work']['ProjectAction'] 'the chosen action is saved under the account'
-$readPA = Read-LaunchPrefs -Path $tmpPA
-Assert-Equal 'resume' $readPA.Profiles['work']['ProjectAction'] 'and read back'
-$mergedPA = Merge-LaunchPrefs -State (New-LaunchState) -Prefs $readPA -Rows $rows
-Assert-Equal 'resume' $mergedPA.State.ProjectAction 'a remembered action is restored'
-Assert-Equal $false (@($mergedPA.Restored) -contains 'ProjectAction') 'but is never marked restored - it is not a launch-screen row'
-
-# The prefs file is ordinary hand-editable text and this value decides which flags reach `claude`
-# (-c, -w, --resume), so it is validated against the four actions exactly as every row value is
-# validated against its own option list.
-$badPA = @{ Version = 2; Account = 'work'; Profiles = @{ work = @{ ProjectAction = '--dangerously-skip-permissions' } } }
-$mergedBadPA = Merge-LaunchPrefs -State (New-LaunchState) -Prefs $badPA -Rows $rows
-Assert-Equal 'new' $mergedBadPA.State.ProjectAction 'a value outside the four is ignored, never carried into the launch'
-
-# Silence carries the previous answer forward, exactly like Project and like a row left at 'default'.
-$pa2 = New-LaunchState; $pa2.Account = 'work'; $pa2.ProjectAction = ''
-$carriedPA = Save-LaunchPrefs -State $pa2 -Path $tmpPA -NowMs 5000
-Assert-Equal 'resume' $carriedPA.Profiles['work']['ProjectAction'] 'a save with no action carries the remembered one forward'
-# An invalid action must not be written forward into the file either: Save is the other half of the
-# same threat model Merge guards, and a launcher that wrote one would make the guard above cosmetic.
-$pa3 = New-LaunchState; $pa3.Account = 'work'; $pa3.ProjectAction = 'not-an-action'
-$rejectedPA = Save-LaunchPrefs -State $pa3 -Path $tmpPA -NowMs 6000
-Assert-Equal 'resume' $rejectedPA.Profiles['work']['ProjectAction'] 'an action outside the four is not written - the previous answer stands'
-
-# It rides the tab switch alongside Project: without this, one account's action leaks into another.
-$swPA = New-LaunchState; $swPA.Account = 'work'; $swPA.ProjectAction = 'worktree'
-$paFile = @{ Version = 2; Account = 'work'; Profiles = @{ personal = @{ ProjectAction = 'continue' } } }
-$swPA = Switch-LaunchAccount -State $swPA -To 'personal' -Prefs $paFile -Rows $rows
-Assert-Equal 'continue' $swPA.ProjectAction 'switching to personal loads PERSONAL''s own action from the file, not work''s'
-Assert-Equal 'worktree' $swPA.Profiles['work']['ProjectAction'] 'leaving work parked its own action in the stash'
-$swPA = Switch-LaunchAccount -State $swPA -To 'work' -Prefs $paFile -Rows $rows
-Assert-Equal 'worktree' $swPA.ProjectAction 'and switching back reloads it from the stash, not personal''s leftover'
-$swPA2 = New-LaunchState; $swPA2.Account = 'work'; $swPA2.ProjectAction = 'resume'
-$swPA2 = Switch-LaunchAccount -State $swPA2 -To 'personal' -Prefs @{} -Rows $rows
-Assert-Equal 'new' $swPA2.ProjectAction 'an account with nothing remembered opens at new rather than inheriting the tab just left'
-$swBadPA = New-LaunchState; $swBadPA.Account = 'work'
-$swBadPA = Switch-LaunchAccount -State $swBadPA -To 'personal' -Prefs @{ Version = 2; Profiles = @{ personal = @{ ProjectAction = 'bogus' } } } -Rows $rows
-Assert-Equal 'new' $swBadPA.ProjectAction 'a hand-edited action in another account''s profile is rejected on arrival too'
-
-# ctrl+r resets the VALUES of the active tab; the action field is outside $ProfileFields for the
-# same reason Project is - losing your place is not part of "reset the values".
-$stPA = New-LaunchState; $stPA.ProjectAction = 'resume'
-$stPA = Reset-LaunchTab -State $stPA
-Assert-Equal 'resume' $stPA.ProjectAction 'ctrl+r does not clear the chosen action'
-
 # --- CLAUDE_AUTO_PREFS override (deferred review finding) -------------------------------------
 # The test harness must never read or write the owner's real ~/.claude/claude-auto-prefs.json:
 # Get-LaunchPrefsPath honours this variable, same shape as Get-LauncherConfigPath's
@@ -618,7 +561,7 @@ Assert-Equal $ssRem $ss3.Project 'a neutral cwd falls through to rule 2 - the ar
 $script:LaunchStartContext = $null
 Remove-Item -LiteralPath $ssRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 145) { Write-Host "COULD NOT RUN: expected 145 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 131) { Write-Host "COULD NOT RUN: expected 131 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

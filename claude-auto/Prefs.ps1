@@ -5,9 +5,7 @@
 # the habit, and the shared record made it expensive. Now the account lives at the top level and
 # the five habit rows live under it.
 #
-# Action is excluded: it describes one launch, not a habit - but ProjectAction, the project screen's
-# own field, IS remembered, on its own lines further down (like Project, it is validated against
-# something other than a launch-screen row's option list). Safe mode is excluded because it
+# Action is excluded: it describes one launch, not a habit. Safe mode is excluded because it
 # disables CLAUDE.md, skills, plugins, hooks and MCP - a value that persisted silently would cripple
 # later sessions in a way nobody would think to look for. 'stop server' is excluded because it is an
 # action, not a state (remembered as 'off' - see Save-LaunchPrefs).
@@ -194,16 +192,6 @@ function Save-LaunchPrefs {
         if ($proj) { $entry['Project'] = $proj }
         elseif ($prevEntry.ContainsKey('Project')) { $entry['Project'] = $prevEntry['Project'] }
 
-        # The project screen's action field, per account, on the same terms: not a $ProfileFields
-        # row (it is validated against Get-ProjectActions, not against a row's option list), so it
-        # carries its own line, and silence leaves the previous answer standing. Unlike Project it
-        # is VALIDATED on the way out as well as on the way in: this string becomes a `claude` flag
-        # (-c, -w, --resume), and a Save that could seed the file with a value Merge has to reject
-        # would make Merge's guard cosmetic.
-        $pAction = "$($State.ProjectAction)"
-        if ($pAction -and $pAction -in (Get-ProjectActions)) { $entry['ProjectAction'] = $pAction }
-        elseif ($prevEntry.ContainsKey('ProjectAction')) { $entry['ProjectAction'] = $prevEntry['ProjectAction'] }
-
         $data = @{ Version = 2; Account = $account; SavedAtMs = $NowMs; Profiles = $prev.Profiles }
         $data.Profiles[$account] = $entry
 
@@ -289,12 +277,6 @@ function Merge-LaunchPrefs {
         # ruling).
         $rp = "$($entry['Project'])"
         if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) { $State.Project = $rp }
-        # Validated against the project screen's four actions, and NOT added to $restored - for the
-        # same reason Project is not: that list marks LAUNCH-SCREEN rows so the "* restored (<age>),
-        # ctrl+r resets" legend stays true, and this field lives on the project screen, where the
-        # restored value is its own feedback.
-        $pa = "$($entry['ProjectAction'])"
-        if ($pa -and $pa -in (Get-ProjectActions)) { $State.ProjectAction = $pa }
         $age = Get-PrefsAgeText -SavedAtMs $entry['SavedAtMs'] -NowMs $NowMs
     }
     if (-not $age) { $age = Get-PrefsAgeText -SavedAtMs $Prefs['SavedAtMs'] -NowMs $NowMs }
@@ -338,10 +320,7 @@ function Switch-LaunchAccount {
     # like Project. Previously only Project was handled - harmless only because Set-LaunchStartProject
     # (Projects.ps1) or the project screen's own result always overwrites it again before the session
     # picker ever reads it, but a latent inconsistency is still a bug waiting for its assumption to move.
-    # ProjectAction travels with Project for the reason Project itself had to: left off the
-    # park/reload it stays one property on $State that every switch carries UNCHANGED into the
-    # arriving account, and the launch there writes one account's action into another's profile.
-    $stash = @{ Restored = @($State.Restored); RestoredAge = "$($State.RestoredAge)"; Project = "$($State.Project)"; ProjectSlug = "$($State.ProjectSlug)"; ProjectAction = "$($State.ProjectAction)" }
+    $stash = @{ Restored = @($State.Restored); RestoredAge = "$($State.RestoredAge)"; Project = "$($State.Project)"; ProjectSlug = "$($State.ProjectSlug)" }
     foreach ($f in $script:ProfileFields) { $stash[$f] = $State.$f }
     $State.Profiles[$State.Account] = $stash
 
@@ -352,7 +331,6 @@ function Switch-LaunchAccount {
     $State.RestoredAge = ''
     $State.Project = ''
     $State.ProjectSlug = ''
-    $State.ProjectAction = $fresh.ProjectAction
 
     if ($State.Profiles.ContainsKey($To)) {
         $entry = $State.Profiles[$To]
@@ -364,11 +342,6 @@ function Switch-LaunchAccount {
             $State.Project = $rp
             $State.ProjectSlug = "$($entry['ProjectSlug'])"
         }
-        # Validated on reload from the STASH too, not only from the file: a stash is in-memory state
-        # from this run, but the rule that an unvalidated action never reaches the launch has one
-        # implementation, not two.
-        $pa = "$($entry['ProjectAction'])"
-        if ($pa -and $pa -in (Get-ProjectActions)) { $State.ProjectAction = $pa }
         # The spec's start selection is re-decided here, not only before the loop: see
         # Update-LaunchStartSelection (Projects.ps1).
         return (Update-LaunchStartSelection -State $State)
@@ -394,8 +367,6 @@ function Switch-LaunchAccount {
             # The FILE never wrote a slug (it is derived, never persisted) - '' here, correctly.
             $State.ProjectSlug = "$($entry['ProjectSlug'])"
         }
-        $pa = "$($entry['ProjectAction'])"
-        if ($pa -and $pa -in (Get-ProjectActions)) { $State.ProjectAction = $pa }
     }
     return (Update-LaunchStartSelection -State $State)
 }

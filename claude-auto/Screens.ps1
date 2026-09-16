@@ -133,11 +133,11 @@ function New-LaunchState {
         # picker scopes on the whole set - otherwise half a project's sessions are unreachable from
         # the screen that just named it (adversarial review 2026-09-16, A12).
         ProjectSlugs = @()
-        # What the project screen's action field is set to (2026-09-16). Remembered per account
-        # (Prefs.ps1) because it describes a HABIT, unlike $Action which describes one launch and is
-        # never persisted. $Action still carries the launch itself - the project screen's result
-        # sets it in claude-auto.ps1 - so this is the seed, not a second source of truth.
-        ProjectAction = 'new'
+        # No ProjectAction here, deliberately (review W1, 2026-09-16): the project screen's action
+        # field is NOT remembered. Prefs.ps1's own header states the rule - an action describes one
+        # launch, not a habit - and a remembered 'worktree' would turn the next launch's reflexive
+        # Enter into a git worktree. The field starts at 'new' every time; $Action still carries the
+        # launch itself, set from the screen's result in claude-auto.ps1.
     }
 }
 
