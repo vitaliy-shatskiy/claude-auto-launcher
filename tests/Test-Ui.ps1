@@ -2826,6 +2826,22 @@ try {
     $pCap3 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wCap3 -Draw $capDraw -Wait $wCap3 -GetWindowTop { 0 }
     Assert-Equal 'new' $pCap3.Action 'a click on the row between the cells changes nothing'
 
+    # The click WALKS to the clicked value with the arrows' own stepper rather than assigning it.
+    # Nothing else can see the difference - both spellings land on the same value, and every cell
+    # value is already canonical - so the walk is pinned by the number of Step-ProjectAction calls
+    # one click costs. Shadowing a function and putting it back is the same dance the logging
+    # section does with Write-LauncherLog; $capDraw returns a stored map and never renders, so no
+    # frame's own canonicalisation is counted here.
+    $stepReal = (Get-Command Step-ProjectAction -CommandType Function).ScriptBlock
+    $script:stepCalls = 0
+    function Step-ProjectAction { param([string]$Action, [int]$Delta = 0) $script:stepCalls++; & $stepReal -Action $Action -Delta $Delta }
+    $capFar = $capMap.Action.Cells[3]
+    $wWalk = New-EventReader @((New-MouseEvent -X $capFar.Start -Y $capMap.Action.Y -Left), $enterKey)
+    $pWalk = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWalk -Draw $capDraw -Wait $wWalk -GetWindowTop { 0 }
+    Set-Item Function:Step-ProjectAction $stepReal
+    Assert-Equal 4 $script:stepCalls 'clicking the far value walks there one step at a time: the -InitialAction canonicalisation plus three steps from new to worktree'
+    Assert-Equal 'worktree' $pWalk.Action 'and the walk lands on the value that was clicked'
+
     # A double click on a row commits the FIELD, not a hardcoded 'new'.
     $rightArrowKey = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::RightArrow, $false, $false, $false)
     $wDbl = New-EventReader @($rightArrowKey, (New-MouseEvent -Y 5 -Left -Double), $esc)
@@ -3172,6 +3188,55 @@ try {
     $uiClose = @($uiKeys | Where-Object { $_.Data.filter -eq 'clear' })[0]
     Assert-Equal $sentinel.Length $uiClose.Data.filterLength 'only its LENGTH does'
 
+    # The project screen's records the 11-record run above never reaches: the filter box opening and
+    # BOTH ways it closes, a click on the action field, and a double click on a row. Same contract,
+    # same shape of assertion - a migrated screen that drops `filterLength`, `button` or `action`
+    # traces identically and is caught only here.
+    $script:uiRecords = @()
+    $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -Draw {} `
+        -ReadKey (New-ScriptedKeyReader -Keys @('/', 'a', 'Enter', '/', 'b', 'Escape', 'Escape'))
+    Assert-Equal (@(
+        'screen:project:enter -> filterLength,index,name,phase,rows'
+        'key:project:/ -> filter,index,key,screen'
+        'key:project:Enter -> filter,filterLength,index,key,screen'
+        'key:project:/ -> filter,index,key,screen'
+        'key:project:Escape -> filter,filterLength,index,key,screen'
+        'key:project:Escape -> index,key,screen'
+        'screen:project:leave -> filterLength,index,ms,name,phase,rows'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'opening the filter, closing it with Enter and clearing it with Escape each carry exactly these fields'
+    $uiFilterRecs = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.ContainsKey('filter') })
+    Assert-Equal 'open,close,open,clear' (($uiFilterRecs | ForEach-Object { $_.Data.filter }) -join ',') 'and each says which of the three it was'
+    Assert-Equal '1,2' ((@($uiFilterRecs | Where-Object { $_.Data.ContainsKey('filterLength') }) | ForEach-Object { $_.Data.filterLength }) -join ',') 'with the LENGTH of the filter each close was carrying'
+
+    # The two mouse gestures that write a record, driven over a REAL frame's row map so the
+    # coordinates are the ones a click actually arrives in.
+    $uiMap = $null
+    $null = Get-ProjectFrame -Projects $uiProjs -Index 0 -Cwd $uiLogProj -Width 80 -Height 24 -RowMap ([ref]$uiMap)
+    $uiMapDraw = { param($p, $i, $f, $t, $h, $n, $a) $uiMap }.GetNewClosure()
+    $script:uiRecords = @()
+    $uiCell = $uiMap.Action.Cells[1]
+    $wUiClick = New-EventReader @((New-MouseEvent -X $uiCell.Start -Y $uiMap.Action.Y -Left), $esc)
+    $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey $wUiClick -Draw $uiMapDraw -Wait $wUiClick -GetWindowTop { 0 }
+    Assert-Equal (@(
+        'screen:project:enter -> filterLength,index,name,phase,rows'
+        'key:project:click -> action,button,index,key,screen'
+        'key:project:Escape -> index,key,screen'
+        'screen:project:leave -> filterLength,index,ms,name,phase,rows'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'a click on the action field records which button was clicked and what it selected'
+    $uiClickRec = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'click' })[0]
+    Assert-Equal 'action' $uiClickRec.Data.button 'the button it names is the action field, not a footer one'
+    Assert-Equal 'continue' $uiClickRec.Data.action 'and it carries the value the click walked to'
+
+    $script:uiRecords = @()
+    $wUiDbl = New-EventReader @((New-MouseEvent -X 4 -Y $uiMap.FirstRowY -Left -Double), $esc)
+    $uiDbl = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey $wUiDbl -Draw $uiMapDraw -Wait $wUiDbl -GetWindowTop { 0 }
+    Assert-Equal $uiLogProj $uiDbl.Path 'a double click on the first row commits it'
+    Assert-Equal (@(
+        'screen:project:enter -> filterLength,index,name,phase,rows'
+        'key:project:doubleclick -> action,button,index,key,screen'
+        'screen:project:leave -> filterLength,index,ms,name,phase,rows'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'and the double click record names the row button and the action it committed'
+
     # The free path is the owner's own directory name - the one string on these screens that is
     # nobody's business but his. Read-ClaudeFreePath is driven directly here: the project screen's
     # -ReadPath is injected by every other test, so this is the only place the real prompt runs.
@@ -3330,7 +3395,7 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
     }
 Assert-Equal 'dbl@2' $r 'a row double click moves the index to the clicked row before the handler picks'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1108) { Write-Host "COULD NOT RUN: expected 1108 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1118) { Write-Host "COULD NOT RUN: expected 1118 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -510,9 +510,12 @@ function Invoke-ProjectScreen {
     # Where the session runs and what it does there. Returns @{ Path; Action; Slug } or $null on
     # Escape. Escape at this screen means "back to the launch screen", never "start anyway".
     #
-    # Slug rides along because two repositories can share a folder name: the session picker (a
-    # later task) scopes sessions by slug, never by path, so an ambiguous name must never silently
-    # fall back to the wrong project's sessions.
+    # Slug rides along because two repositories can share a folder name: the session picker scopes
+    # sessions by slug, never by path, so an ambiguous name must never silently fall back to the
+    # wrong project's sessions.
+    #
+    # Draw, wait, resize, the mouse, the arrows, Enter/Escape, the hotkeys and every log record are
+    # Invoke-ScreenLoop's; what is left here is what the PROJECT screen alone does.
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects,
         [string]$Cwd = '',
@@ -535,39 +538,25 @@ function Invoke-ProjectScreen {
         # block on a console prompt.
         [scriptblock]$ReadPath = { Read-Host '  path' }
     )
-    $filter = ''
-    $typing = $false
-    $hover = -1
-    $notice = ''
-    $rowMap = $null
-    $rows = @()
-    $index = 0
-    # The action field is an INDICATOR, not a cursor stop (review W2/W3): Left/Right and a/d step it
-    # from every row, so it never needs focus - and the focus state it used to have could only be
-    # entered from the LAST list row, which parked the commit on 'enter a path...' and made the
-    # arrows-only path end at a Read-Host prompt.
-    $action = Step-ProjectAction -Action $InitialAction -Delta 0
-    # The remembered project starts under the cursor rather than at the top: arriving at this screen
-    # and pressing Enter must reproduce the last launch. Compared through ConvertTo-ProjectKey, not
-    # raw string equality: -Initial is whatever the caller last stored, which may differ from the
-    # registry's own spelling by case or slash direction (fix round 2, reviewer: 'c:/w/beta/' silently
-    # preselected the wrong row under a bare [Array]::IndexOf).
-    if ($Initial) {
-        $initialKey = ConvertTo-ProjectKey $Initial
-        $at = [Array]::IndexOf(@($Projects | ForEach-Object { ConvertTo-ProjectKey $_.Path }), $initialKey)
-        if ($at -ge 0) { $index = $at }
-    }
+    # A handler is a plain scriptblock run from INSIDE Invoke-ScreenLoop, and PowerShell resolves
+    # its names against THAT scope first: $Draw, $State, $Wait and $GetWindowTop there are the
+    # LOOP's parameters, not these ones. So every parameter a handler needs is aliased to a name
+    # the loop does not have, and everything this screen keeps travels on $s.
+    $paintProject = $Draw
+    $askPath = $ReadPath
+    $projectList = $Projects
+    $cwdPath = $Cwd
 
     # Mirrors Get-ProjectFrame's row assembly. Kept here rather than exported so the frame stays
     # pure; the two are pinned against each other by the RowCount assertion in Test-Ui. Slug rides
     # along on a project row so a pick never has to look the project back up by (ambiguous) name.
-    $rowsOf = {
-        param($f)
-        $items = @(Select-ProjectMatch -Projects $Projects -Filter $f)
-        $r = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug; Slugs = @(if ($_.Slugs) { $_.Slugs } else { $_.Slug }) } })
-        $r += [pscustomobject]@{ Kind = 'cwd';  Path = $Cwd; Slug = ''; Slugs = @() }
-        $r += [pscustomobject]@{ Kind = 'path'; Path = '';   Slug = ''; Slugs = @() }
-        return @($r)
+    $rowsFor = {
+        param([string]$f)
+        $items = @(Select-ProjectMatch -Projects $projectList -Filter $f)
+        $built = @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug; Slugs = @(if ($_.Slugs) { $_.Slugs } else { $_.Slug }) } })
+        $built += [pscustomobject]@{ Kind = 'cwd';  Path = $cwdPath; Slug = ''; Slugs = @() }
+        $built += [pscustomobject]@{ Kind = 'path'; Path = '';       Slug = ''; Slugs = @() }
+        return @($built)
     }
 
     # The pinned rows carry no slug of their own - the directory they resolve to may still be a
@@ -576,210 +565,178 @@ function Invoke-ProjectScreen {
     # its own comment for why a second, ad-hoc one here would eventually drift from it.
     # Returns EVERY slug of that directory: Get-ProjectRegistry merges the slug folders of one real
     # directory onto one row, and the picker must reach all of them.
-    $slugOf = {
+    $slugsFor = {
         param([string]$Path)
         if (-not $Path) { return @() }
-        $key = ConvertTo-ProjectKey $Path
-        $hit = @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $key })
-        if ($hit.Count -gt 0) { return @($hit | ForEach-Object { if ($_.Slugs) { $_.Slugs } else { $_.Slug } }) }
+        $wanted = ConvertTo-ProjectKey $Path
+        $same = @($projectList | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $wanted })
+        if ($same.Count -gt 0) { return @($same | ForEach-Object { if ($_.Slugs) { $_.Slugs } else { $_.Slug } }) }
         return @()
     }
 
-    # Resolves the current row into the result the caller returns. Hoisted out of the loop (fix
-    # round 2, minor: it does not close over anything the loop body does not already hold, and a
-    # scriptblock literal re-evaluated every iteration was pointless allocation) - $rows/$index still
-    # resolve to whatever the loop most recently set, since this is an ordinary scriptblock, not a
-    # closure snapshot.
+    # Resolves the row under the cursor into the result the caller returns.
     #
-    # EVERY row kind is checked for existence now (fix round 2, IMPORTANT 1): Prefs.ps1's remembered-
+    # EVERY row kind is checked for existence (fix round 2, IMPORTANT 1): Prefs.ps1's remembered-
     # project guard makes the identical call the other way ("this value becomes a Set-Location
     # target"), and this screen's lifetime is a second window on top of that - long enough for
     # `git worktree remove` in another terminal to invalidate a row the registry still lists. Only
     # the free-path row additionally resolves the path: a registry or cwd path is already in its
     # canonical form, and resolving it here would be pointless.
-    $pick = {
-        # -How is carried on the RESULT rather than logged here: the launcher's `ui` record answers
-        # "how did this launch choose its project" from one field, and a pick that is REJECTED (a
-        # path that no longer exists) must not leave a chosen=... record behind claiming otherwise.
-        param([string]$Action, [string]$How = 'enter')
-        $r = $rows[$index]
-        $path = $r.Path
-        $slugs = @($r.Slugs)
-        if ($r.Kind -eq 'path') { $path = ("$(& $ReadPath)").Trim('"', ' ') }
+    #
+    # -How is carried on the RESULT rather than logged: the launcher's `ui` record answers "how did
+    # this launch choose its project" from one field, and a pick that is REJECTED (a path that no
+    # longer exists) must not leave a chosen=... record behind claiming otherwise.
+    $pickRow = {
+        param($s, [string]$How = 'enter')
+        $row = @($s.Rows)[$s.Index]
+        $target = $row.Path
+        $slugs = @($row.Slugs)
+        if ($row.Kind -eq 'path') { $target = ("$(& $askPath)").Trim('"', ' ') }
         # A NUL in a typed path makes Test-Path raise a non-terminating ArgumentException instead of
         # answering $false, and at the default $ErrorActionPreference a four-line red dump lands on
-        # the screen in place of this loop's own "path not found" notice (adversarial review
+        # the screen in place of this screen's own "path not found" notice (adversarial review
         # 2026-09-16, A6). The decision was always right; only the output was wrong.
-        if (-not $path -or $path.IndexOf([char]0) -ge 0) { return $null }
-        if (-not (Test-Path -LiteralPath $path -PathType Container)) { return $null }
-        if ($r.Kind -eq 'path') {
-            $path = (Resolve-Path -LiteralPath $path).Path
-            $slugs = @(& $slugOf $path)
-        } elseif ($r.Kind -eq 'cwd') {
-            $slugs = @(& $slugOf $path)
+        if (-not $target -or $target.IndexOf([char]0) -ge 0) { return $null }
+        if (-not (Test-Path -LiteralPath $target -PathType Container)) { return $null }
+        if ($row.Kind -eq 'path') {
+            $target = (Resolve-Path -LiteralPath $target).Path
+            $slugs = @(& $slugsFor $target)
+        } elseif ($row.Kind -eq 'cwd') {
+            $slugs = @(& $slugsFor $target)
         }
-        return [pscustomobject]@{ Path = $path; Action = $Action; How = $How; Slug = $(if ($slugs.Count -gt 0) { $slugs[0] } else { '' }); Slugs = $slugs }
+        return [pscustomobject]@{ Path = $target; Action = $s.Action; How = $How; Slug = $(if ($slugs.Count -gt 0) { $slugs[0] } else { '' }); Slugs = $slugs }
     }
 
-    # The screen's own log. $index, $rows and $filter are read at INVOCATION (plain scriptblocks, no
-    # .GetNewClosure() - see Invoke-LaunchScreen), so both report what the loop currently holds.
-    # filterLength, never $filter: a filter is often a pasted PATH, and the log is not the place for it.
-    $enteredAt = Get-Date
-    $logKey = {
-        param([string]$Key, [hashtable]$Extra = @{})
-        $d = @{ screen = 'project'; key = $Key; index = [int]$index }
-        foreach ($k in $Extra.Keys) { $d[$k] = $Extra[$k] }
-        Write-UiLog -Stage 'key' -Data $d
+    # One pick, one notice, one record shape: Enter, a hotkey and a double click differ only in the
+    # How they carry onto the result. A rejected pick still writes its key record - the press did
+    # happen - and leaves the notice the next frame shows.
+    $commit = {
+        param($s, [string]$How)
+        $picked = & $pickRow $s $How
+        if ($picked) { return @{ Done = $true; Result = $picked; Log = @{ action = $s.Action } } }
+        $s.Notice = 'path not found'
+        return @{ Log = @{ action = $s.Action } }
     }
-    $logLeave = {
-        Write-UiLog -Stage 'screen' -Data @{ name = 'project'; phase = 'leave'
-                                             ms = [int]((Get-Date) - $enteredAt).TotalMilliseconds
-                                             rows = @($rows).Count; index = [int]$index; filterLength = $filter.Length }
+
+    # The remembered project starts under the cursor rather than at the top: arriving at this screen
+    # and pressing Enter must reproduce the last launch. Compared through ConvertTo-ProjectKey, not
+    # raw string equality: -Initial is whatever the caller last stored, which may differ from the
+    # registry's own spelling by case or slash direction (fix round 2, reviewer: 'c:/w/beta/' silently
+    # preselected the wrong row under a bare [Array]::IndexOf).
+    $startIndex = 0
+    if ($Initial) {
+        $initialKey = ConvertTo-ProjectKey $Initial
+        $at = [Array]::IndexOf(@($Projects | ForEach-Object { ConvertTo-ProjectKey $_.Path }), $initialKey)
+        if ($at -ge 0) { $startIndex = $at }
     }
-    Write-UiLog -Stage 'screen' -Data @{ name = 'project'; phase = 'enter'
-                                         rows = @(& $rowsOf $filter).Count; index = [int]$index; filterLength = $filter.Length }
 
-    # Hover is a REDUCTION, not a cost: a plain top-of-loop draw (as every mouse move already forces
-    # on the launch and session screens) would redraw on every motion event regardless of this flag,
-    # so the flag has to gate the draw call itself. $true means "the coming top-of-loop draw may
-    # run"; only a mouse move that lands on the SAME footer button as last time ever clears it -
-    # every other path (including a move that changes the hovered button) leaves it set, so a real
-    # hover change still redraws exactly once.
-    $needDraw = $true
-
-    while ($true) {
-        $rows = & $rowsOf $filter
-        if ($index -ge $rows.Count) { $index = [Math]::Max(0, $rows.Count - 1) }
-        if ($needDraw) { $rowMap = & $Draw $Projects $index $filter $typing $hover $notice $action }
-        $needDraw = $true
-        $key = & $Wait
-        if ("$key" -eq 'resize') { continue }
-
-        if ($key -and $key.Kind -eq 'mouse') {
-            $synthetic = $null
-            if ($key.WheelUp)   { if ($index -gt 0) { $index-- } ; continue }
-            if ($key.WheelDown) { if ($index -lt $rows.Count - 1) { $index++ } ; continue }
-            $top = & $GetWindowTop
-            # Hover: only a CHANGE of the hovered button is worth a frame. A move inside the same
-            # button - the overwhelming majority of motion events - skips the NEXT draw entirely,
-            # which is strictly less work than this loop did before hover existed.
-            if ($key.IsMove) {
-                $hit = Get-ClaudeFooterHit -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop $top
-                $now = if ($hit) { [Array]::IndexOf(@($rowMap.Footer), $hit) } else { -1 }
-                if ($now -eq $hover) { $needDraw = $false; continue }
-                $hover = $now
-                continue
+    # The action field is an INDICATOR, not a cursor stop (review W2/W3): Left/Right and a/d step it
+    # from every row, so it never needs focus - and the focus state it used to have could only be
+    # entered from the LAST list row, which parked the commit on 'enter a path...' and made the
+    # arrows-only path end at a Read-Host prompt.
+    $st = @{ Index = $startIndex; Hover = -1; HoverRow = -1; Typing = $false
+             Filter = ''; Notice = ''; Action = (Step-ProjectAction -Action $InitialAction -Delta 0); Rows = @() }
+    return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
+        -Draw { param($s) & $paintProject $projectList $s.Index $s.Filter $s.Typing $s.Hover $s.Notice $s.Action } -Handlers @{
+        # The filter decides the rows, so they are rebuilt before every frame and the cursor is
+        # clamped to whatever survived it.
+        Before = {
+            param($s)
+            $s.Rows = @(& $rowsFor $s.Filter)
+            if ($s.Index -ge @($s.Rows).Count) { $s.Index = [Math]::Max(0, @($s.Rows).Count - 1) }
+        }
+        # Up/Down walk the LIST and stop at the free-path row, exactly as before the field existed:
+        # the action row is not a cursor stop and is not counted here.
+        Rows = { param($s) @($s.Rows).Count }
+        # A new KEY retires the previous rejection notice - it explains the press that just
+        # happened, not every press after it. OnKey is the only hook on the KEY path, and every
+        # mouse-only path (a move, the wheel, a row select, a double click) returns before it, so
+        # hovering away from a shown notice cannot wipe it before it is read (fix round 3,
+        # coordinator ruling). Never consumed: this hook clears, it decides nothing.
+        OnKey = { param($s, $k) $s.Notice = ''; $false }
+        # The filter box owns every key while it is open - which is what keeps 'c' from firing
+        # continue in the middle of a word. The two ways it CLOSES are recorded; the characters
+        # between them are not, and neither is Backspace. That is the whole difference between a
+        # launcher log and a keylogger - and it is what keeps a file open per keystroke out of here.
+        Type = {
+            param($s, $k)
+            $typed = "$($k.Key)"
+            if ($typed -eq 'Enter') {
+                $s.Typing = $false
+                return @{ Log = @{ key = 'Enter'; filter = 'close'; filterLength = $s.Filter.Length } }
             }
-            # -not IsMove (fix round 2, IMPORTANT 2): a drag is Left set WITH IsMove, and without
-            # this guard it fell through as a press on every position it passed over. IsDoubleClick
-            # is excluded from the FOOTER-hit branch only (mirrors Invoke-MaintenanceScreen: a
-            # physical double click reaches this loop as TWO records, a plain press then one flagged
-            # IsDoubleClick, and treating the second one as a second footer press fired the action -
-            # and, if it read the free-path row, called -ReadPath - a second time).
-            if ($key.Left -and -not $key.IsMove -and $rowMap) {
-                $hint = if ($key.IsDoubleClick) { $null } else { Get-ClaudeFooterHit -RowMap $rowMap -X $key.X -Y $key.Y -WindowTop $top }
-                if ($hint) { $synthetic = New-SyntheticKey -Key $hint.Key -Char $hint.Char }
-                # The action field sits below the last list row and is NOT in RowCount, so
-                # Get-ClaudeMouseRow answers $null for it - which is what lets this branch own it
-                # without a special case inside the row hit test. A click on a value WALKS to it
-                # through the SAME stepper the arrows use, because a click that assigned a value
-                # directly would be a second implementation of the field waiting to drift (the
-                # launch screen's own rule). A click elsewhere on the row does nothing: the field
-                # has no focus to take, and it must never move the selection.
-                elseif ($rowMap.Action -and ($key.Y - $top) -eq $rowMap.Action.Y) {
-                    $cell = @($rowMap.Action.Cells | Where-Object { $key.X -ge $_.Start -and $key.X -le $_.End })
-                    if ($cell.Count -gt 0 -and $cell[0].Value -ne $action) {
-                        # Walk to the clicked value with the SAME stepper the arrows use.
-                        $values = @(Get-ProjectActions)
-                        $from = [Array]::IndexOf($values, $action); $to = [Array]::IndexOf($values, $cell[0].Value)
-                        $dir = if ($to -lt $from) { -1 } else { 1 }
-                        for ($n = 0; $n -lt [Math]::Abs($to - $from); $n++) { $action = Step-ProjectAction -Action $action -Delta $dir }
-                        # Selecting a value is decisive in the brief's sense: it changes what Enter will DO.
-                        & $logKey 'click' @{ button = 'action'; action = $action }
-                    }
-                }
-                else {
-                    $row = Get-ClaudeMouseRow -Y $key.Y -FirstRowY $rowMap.FirstRowY -RowCount $rowMap.RowCount -WindowTop $top
-                    if ($null -ne $row) {
-                        $target = $rowMap.Start + $row
-                        # A single click only MOVES. Starting a session on a stray click is the one
-                        # mistake nobody forgives - the same rule the session picker follows. A
-                        # DOUBLE click is the session picker's own exception to that rule: two
-                        # presses close enough to register as one gesture are unambiguous intent.
-                        if ($target -ge 0 -and $target -lt $rows.Count) {
-                            $index = $target
-                            if ($key.IsDoubleClick) {
-                                # The FIELD, not a hardcoded 'new': the gesture means "this row,
-                                # that action", and two answers to "what does a commit do here"
-                                # would disagree the first time one of them changed.
-                                & $logKey 'doubleclick' @{ button = 'row'; action = $action }
-                                $r = & $pick $action 'mouse'
-                                if ($r) { & $logLeave; return $r } else { $notice = 'path not found' }
-                            }
-                        }
-                    }
-                }
+            if ($typed -eq 'Escape' -or ($k.Key -eq 'C' -and ($k.Modifiers -band [System.ConsoleModifiers]::Control))) {
+                # Built BEFORE the filter is dropped: the record says how long what was cleared was.
+                $cleared = @{ Log = @{ key = 'Escape'; filter = 'clear'; filterLength = $s.Filter.Length } }
+                $s.Typing = $false
+                $s.Filter = ''
+                $s.Index = 0
+                return $cleared
             }
-            if (-not $synthetic) { continue }
-            $key = $synthetic
-        }
-
-        # A new KEY event retires the previous rejection notice - it explains the press that just
-        # happened, not every press after it. Set again below if THIS key also fails a pick. This
-        # point is reached only by a genuine keyboard event or a mouse click that just became a
-        # synthetic one (a footer hit): every purely mouse path above it - a move, the wheel, a
-        # plain row-select click, a double click handled inline - already `continue`d without
-        # passing through here, so hovering away from a shown notice cannot wipe it before it is
-        # read (fix round 3, coordinator ruling).
-        $notice = ''
-        $name = "$($key.Key)"
-
-        if ($typing) {
-            # The two ways a filter closes are logged; the characters between them are not, and
-            # Backspace is not either. That is the whole difference between a launcher log and a
-            # keylogger - and it is also what keeps the file open per keystroke out of this loop.
-            if ($name -eq 'Enter') { & $logKey 'Enter' @{ filter = 'close'; filterLength = $filter.Length }; $typing = $false }
-            elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { & $logKey 'Escape' @{ filter = 'clear'; filterLength = $filter.Length }; $typing = $false; $filter = ''; $index = 0 }
-            elseif ($name -eq 'Backspace') { if ($filter.Length -gt 0) { $filter = $filter.Substring(0, $filter.Length - 1) } }
-            # \ / : added (fix round 2, minor): Select-ProjectMatch's documented purpose is matching
-            # a PASTED path literally, and a path is not a path without its separators and drive
-            # colon.
-            elseif ($key.KeyChar -and ([char]::IsLetterOrDigit($key.KeyChar) -or $key.KeyChar -in @(' ', '-', '.', '_', '\', '/', ':'))) {
-                $filter += $key.KeyChar
-                $index = 0
+            if ($typed -eq 'Backspace') {
+                if ($s.Filter.Length -gt 0) { $s.Filter = $s.Filter.Substring(0, $s.Filter.Length - 1) }
+                return $true
             }
-            continue
+            # \ / : are filter characters (fix round 2, minor): Select-ProjectMatch's documented
+            # purpose is matching a PASTED path literally, and a path is not a path without its
+            # separators and drive colon.
+            if ($k.KeyChar -and ([char]::IsLetterOrDigit($k.KeyChar) -or $k.KeyChar -in @(' ', '-', '.', '_', '\', '/', ':'))) {
+                $s.Filter += $k.KeyChar
+                $s.Index = 0
+            }
+            # Everything else is SWALLOWED while typing, exactly as the inline branch did: the box
+            # holds the keyboard until it closes.
+            return $true
         }
-
-        # Up/Down walk the LIST and stop at the free-path row, exactly as before the field existed.
-        if ($name -eq 'UpArrow'   -or (Test-ClaudeHotkey -Key $key -Char 'w')) { if ($index -gt 0) { $index-- } }
-        elseif ($name -eq 'DownArrow' -or (Test-ClaudeHotkey -Key $key -Char 's')) { if ($index -lt $rows.Count - 1) { $index++ } }
-        # Left/Right - and a/d, unconditionally (review W3) - cycle the field from ANY row. Every
-        # other screen with a cursor treats a/d as Left/Right and the launch footer says so; a
-        # trained key that silently does nothing on some rows is worse than no key at all. Nothing
-        # else on this screen binds either one.
-        elseif ($name -eq 'LeftArrow' -or $name -eq 'RightArrow' -or
-                (Test-ClaudeHotkey -Key $key -Char 'a') -or (Test-ClaudeHotkey -Key $key -Char 'd')) {
-            $back = ($name -eq 'LeftArrow') -or (Test-ClaudeHotkey -Key $key -Char 'a')
-            $action = Step-ProjectAction -Action $action -Delta $(if ($back) { -1 } else { 1 })
-            # Logged as the DIRECTION, never as the character: a/d and the arrows mean the same
-            # thing here, and on a Cyrillic layout the character would be a different letter anyway.
-            & $logKey $(if ($back) { 'LeftArrow' } else { 'RightArrow' }) @{ action = $action }
+        # Left/Right - and a/d, from ANY row (review W3) - cycle the field. Logged as the DIRECTION,
+        # never as the character: a/d and the arrows mean the same thing here, and on a Cyrillic
+        # layout the character would be a different letter anyway (LogArrows).
+        Left  = { param($s) $s.Action = Step-ProjectAction -Action $s.Action -Delta -1; @{ Log = @{ action = $s.Action } } }
+        Right = { param($s) $s.Action = Step-ProjectAction -Action $s.Action -Delta 1;  @{ Log = @{ action = $s.Action } } }
+        LogArrows = $true
+        Enter = { param($s) & $commit $s 'enter' }
+        # The hotkeys fire immediately AND set the field: the press is the answer, and the screen
+        # has to say what just happened - which matters most exactly when the pick is REJECTED and
+        # the screen draws again with the field the press left behind.
+        Hotkeys = @{
+            'c' = { param($s) $s.Action = 'continue'; & $commit $s 'hotkey' }
+            'r' = { param($s) $s.Action = 'resume';   & $commit $s 'hotkey' }
+            't' = { param($s) $s.Action = 'worktree'; & $commit $s 'hotkey' }
+            '/' = { param($s) $s.Typing = $true; @{ Log = @{ filter = 'open' } } }
         }
-        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) {
-            & $logKey $(if ($name -eq 'Escape') { 'Escape' } else { 'Ctrl+C' })
-            & $logLeave
-            return $null
+        Click = {
+            param($s, $hit)
+            # The action field sits below the last list row and is NOT in RowCount, so it arrives as
+            # its own hit kind. A click on a VALUE walks there through the SAME stepper the arrows
+            # use, because a click that assigned a value directly would be a second implementation
+            # of the field waiting to drift (the launch screen's own rule). A click elsewhere on the
+            # row does nothing (W5): the field has no focus to take, and it must never move the
+            # selection.
+            if ($hit.Kind -eq 'action') {
+                if ($null -eq $hit.Value -or $hit.Value -eq $s.Action) { return }
+                $values = @(Get-ProjectActions)
+                $from = [Array]::IndexOf($values, $s.Action)
+                $to = [Array]::IndexOf($values, $hit.Value)
+                $dir = if ($to -lt $from) { -1 } else { 1 }
+                for ($step = 0; $step -lt [Math]::Abs($to - $from); $step++) { $s.Action = Step-ProjectAction -Action $s.Action -Delta $dir }
+                # Selecting a value is decisive in the brief's sense: it changes what Enter will DO.
+                return @{ Log = @{ key = 'click'; button = 'action'; action = $s.Action } }
+            }
+            # A single click only MOVES. Starting a session on a stray click is the one mistake
+            # nobody forgives - the same rule the session picker follows.
+            if ($hit.Kind -eq 'row') { $s.Index = [int]$hit.Row }
+            return
         }
-        elseif ($name -eq 'Enter') { & $logKey 'Enter' @{ action = $action }; $r = & $pick $action 'enter';    if ($r) { & $logLeave; return $r } else { $notice = 'path not found' } }
-        # The hotkeys still fire immediately AND set the field: the press is the answer, and the
-        # screen has to say what just happened - which matters most exactly when the pick is
-        # REJECTED and the loop draws again with the field the press left behind.
-        elseif (Test-ClaudeHotkey -Key $key -Char 'c') { $action = 'continue'; & $logKey 'c' @{ action = $action }; $r = & $pick $action 'hotkey'; if ($r) { & $logLeave; return $r } else { $notice = 'path not found' } }
-        elseif (Test-ClaudeHotkey -Key $key -Char 'r') { $action = 'resume';   & $logKey 'r' @{ action = $action }; $r = & $pick $action 'hotkey'; if ($r) { & $logLeave; return $r } else { $notice = 'path not found' } }
-        elseif (Test-ClaudeHotkey -Key $key -Char 't') { $action = 'worktree'; & $logKey 't' @{ action = $action }; $r = & $pick $action 'hotkey'; if ($r) { & $logLeave; return $r } else { $notice = 'path not found' } }
-        elseif (Test-ClaudeHotkey -Key $key -Char '/') { & $logKey '/' @{ filter = 'open' }; $typing = $true }
-    }
+        # A double click is the exception to that rule: two presses close enough to register as one
+        # gesture are unambiguous intent. It commits the FIELD, not a hardcoded 'new' - the gesture
+        # means "this row, that action", and two answers to "what does a commit do here" would
+        # disagree the first time one of them changed. The loop has already moved the cursor to the
+        # clicked row, and ignores a double click on a footer button outright.
+        DoubleClick = { param($s, $hit) & $commit $s 'mouse' }
+        # filterLength, never the filter: a filter is often a pasted PATH, and the log is not the
+        # place for it. Screen records only - the key records carry what the key itself changed.
+        ScreenFields = { param($s) @{ filterLength = $s.Filter.Length } }
+    })
 }
 
 function Expand-SessionPage {
