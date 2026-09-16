@@ -252,9 +252,10 @@ function Invoke-ProjectScreen {
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects,
         [string]$Cwd = '',
         [string]$Initial = '',
-        # What the action field opens on - the account's remembered choice (Prefs.ps1's
-        # ProjectAction). Validated here rather than trusted: it arrives from an ordinary text file
-        # and decides which flags reach `claude`.
+        # What the action field opens on. Nothing persists it (review W1) - the launcher passes
+        # nothing and the default applies - but it stays a parameter so the suites can open the
+        # screen on any of the four. Canonicalised, never trusted: it decides which flags reach
+        # `claude`.
         [string]$InitialAction = 'new',
         [Parameter(Mandatory)][scriptblock]$ReadKey,
         [scriptblock]$Draw = {
