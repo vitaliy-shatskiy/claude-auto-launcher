@@ -3242,8 +3242,49 @@ Assert-Equal 13 (Get-HitAt -RowMap $pm -X 5 -Y 15 -WindowTop 10).Row 'window top
 # Rows branch specifically (rather than the FirstRowY branch above) is caught too.
 Assert-Equal 2 (Get-HitAt -RowMap $lm -X 2 -Y 10 -WindowTop 3).Row.Index 'and WindowTop is subtracted for a launch row too'
 
+
+# --- Invoke-ScreenLoop: the mechanics every screen shares -----------------------------------------
+$st = @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false; Log = @() }
+$draws = 0
+$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'DownArrow','DownArrow','UpArrow','Enter') `
+    -Draw { param($s) $script:draws++; $null } -Handlers @{
+        Rows  = { param($s) 3 }
+        Enter = { param($s) @{ Done = $true; Result = "row$($s.Index)" } }
+    }
+Assert-Equal 'row1' $r 'Up/Down move the index within Rows and Enter returns the handler''s result'
+Assert-Equal 4 $draws 'one draw per key'
+$st = @{ Index = 2; Hover = -1; HoverRow = -1; Typing = $false }
+$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'DownArrow','Escape') -Draw { $null } -Handlers @{ Rows = { 3 } }
+Assert-True ($null -eq $r) 'Escape returns $null by default'
+Assert-Equal 2 $st.Index 'and Down at the last row stays'
+# hotkeys through Test-ClaudeHotkey, a raw pre-hook, and a screen that has no cursor
+$seen = @()
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait (New-ScriptedKeyReader -Keys 'x','c','Escape') -Draw { $null } -Handlers @{
+        OnKey   = { param($s, $k) if ("$($k.KeyChar)" -eq 'x') { $script:seen += 'x'; return $true }; $false }
+        Hotkeys = @{ 'c' = { param($s) $script:seen += 'c'; $null } }
+    }
+Assert-Equal 'x,c' ($seen -join ',') 'OnKey consumes a raw key first; hotkeys dispatch by Test-ClaudeHotkey'
+# mouse: a footer click becomes its key; a row click reaches Click; hover only redraws on a change
+$map = [pscustomobject]@{ FirstRowY = 1; RowCount = 3; Start = 0; FooterY = 6; FooterLines = 1
+                          Footer = @([pscustomobject]@{ Start = 2; End = 8; Key = 'Enter'; Char = ''; Line = 0 }) }
+$mouse = @(
+    [pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 2; Left = $true; IsMove = $false; IsDoubleClick = $false; WheelUp = $false; WheelDown = $false }   # row 1
+    [pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 6; Left = $false; IsMove = $true; IsDoubleClick = $false; WheelUp = $false; WheelDown = $false }   # hover button 0
+    [pscustomobject]@{ Kind = 'mouse'; X = 4; Y = 6; Left = $false; IsMove = $true; IsDoubleClick = $false; WheelUp = $false; WheelDown = $false }   # same button: no redraw
+    [pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 6; Left = $true; IsMove = $false; IsDoubleClick = $false; WheelUp = $false; WheelDown = $false }   # click 'enter'
+)
+$q = [System.Collections.Queue]::new(); foreach ($m in $mouse) { $q.Enqueue($m) }
+$draws = 0; $clicked = @()
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $q.Dequeue() } -Draw { param($s) $script:draws++; $map } -Handlers @{
+        Rows  = { 3 }
+        Click = { param($s, $h) $script:clicked += "$($h.Kind):$($h.Row)"; $s.Index = $h.Row }
+        Enter = { param($s) @{ Done = $true; Result = "enter@$($s.Index)" } }
+    }
+Assert-Equal 'enter@1' $r 'a row click moves the index and a footer click becomes Enter'
+Assert-Equal 'row:1' ($clicked -join ',') 'the Click handler saw the row hit'
+Assert-Equal 3 $draws 'four events, three draws: the move inside the same button skipped one'
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1092) { Write-Host "COULD NOT RUN: expected 1092 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1100) { Write-Host "COULD NOT RUN: expected 1100 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

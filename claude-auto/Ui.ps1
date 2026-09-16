@@ -213,6 +213,182 @@ function Get-HitAt {
     return $none
 }
 
+function Invoke-ScreenLoop {
+    # The mechanics every screen shares - draw, wait, resize, the mouse, the arrows, Enter/Escape,
+    # hotkeys, the log records - written once. A screen is a handler table around it. Plain
+    # scriptblocks throughout: never .GetNewClosure() (the forwarder-shape trap, see claude-auto.ps1).
+    #
+    # Every local below is named loop*, and that is load-bearing. A handler is a plain scriptblock,
+    # so PowerShell resolves ITS variables against the scope that INVOKES it - this function - before
+    # the screen that wrote it. A local named $key, $rowsOf, $index or $logKey here would silently
+    # answer a handler reaching for the screen's own (measured: a screen helper named $rowsOf is
+    # shadowed outright). The PARAMETERS keep their interface names, so the rule for a handler is:
+    # never read $Screen/$State/$Draw/$Wait/$GetWindowTop/$Handlers/$Silent - it gets THIS loop's.
+    # A screen that must reach its own painter or state inside a handler keeps it under another name.
+    param(
+        [Parameter(Mandatory)][string]$Screen,
+        [Parameter(Mandatory)][hashtable]$State,
+        [Parameter(Mandatory)][scriptblock]$Draw,
+        [Parameter(Mandatory)][scriptblock]$Wait,
+        [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
+        [hashtable]$Handlers = @{},
+        # No screen/key records at all - the maintenance screen logs nothing today and keeps it so.
+        [switch]$Silent
+    )
+    $loopH = $Handlers
+    $loopIsCtrl = { param($k) [bool]($k.Modifiers -band [System.ConsoleModifiers]::Control) }
+    # LogFields rides on EVERY record of the screen (the picker's scope), evaluated once per record.
+    $loopFields = { param($s) $loopBag = @{}; if ($loopH.LogFields) { $loopAdd = & $loopH.LogFields $s; if ($loopAdd) { foreach ($k in $loopAdd.Keys) { $loopBag[$k] = $loopAdd[$k] } } }; $loopBag }
+    $loopRows = { param($s) if ($loopH.Rows) { [int](& $loopH.Rows $s) } else { 0 } }
+    $loopLogKey = {
+        param($s, [string]$Key, [hashtable]$Extra = @{})
+        if ($Silent) { return }
+        $loopData = @{ screen = $Screen; key = $Key; index = [int]$s.Index }
+        $loopAdd = & $loopFields $s; foreach ($k in $loopAdd.Keys) { $loopData[$k] = $loopAdd[$k] }
+        foreach ($k in $Extra.Keys) { $loopData[$k] = $Extra[$k] }
+        $null = Write-UiLog -Stage 'key' -Data $loopData
+    }
+    # The handler return contract in ONE place: @{ NoLog = $true } writes no record for this key (the
+    # picker's Enter and 'f' on an empty list log nothing today), @{ Log = @{ ... } } adds this
+    # record's own fields over $Base and over LogFields. Merged key by key, never `+`: adding two
+    # hashtables that share a key THROWS, and `button` beside a handler's own Log would do exactly that.
+    $loopLogRes = {
+        param($s, [string]$Key, $Res, [hashtable]$Base = @{})
+        if ($Res -is [hashtable] -and $Res.NoLog) { return }
+        $loopBag = @{}
+        foreach ($k in $Base.Keys) { $loopBag[$k] = $Base[$k] }
+        if ($Res -is [hashtable] -and $Res.Log) { foreach ($k in $Res.Log.Keys) { $loopBag[$k] = $Res.Log[$k] } }
+        $null = & $loopLogKey $s $Key $loopBag
+    }
+    $loopEnteredAt = Get-Date
+    $loopLogScreen = {
+        param($s, [string]$Phase)
+        if ($Silent) { return }
+        # ScreenRows only where the cursor bound is not the number to report (the picker: the page it
+        # was handed on enter, what survived the filter on leave); otherwise the cursor bound itself.
+        $loopCount = if ($loopH.ScreenRows) { [int](& $loopH.ScreenRows $s $Phase) } else { [int](& $loopRows $s) }
+        $loopData = @{ name = $Screen; phase = $Phase; rows = $loopCount; index = [int]$s.Index }
+        if ($Phase -eq 'leave') { $loopData.ms = [int]((Get-Date) - $loopEnteredAt).TotalMilliseconds }
+        $loopAdd = & $loopFields $s; foreach ($k in $loopAdd.Keys) { $loopData[$k] = $loopAdd[$k] }
+        # ScreenFields ride on enter/leave only - the project screen's and the picker's filterLength.
+        if ($loopH.ScreenFields) { $loopMore = & $loopH.ScreenFields $s; if ($loopMore) { foreach ($k in $loopMore.Keys) { $loopData[$k] = $loopMore[$k] } } }
+        $null = Write-UiLog -Stage 'screen' -Data $loopData
+    }
+    $loopFinish = { param($s, $Res) $null = & $loopLogScreen $s 'leave'; $Res.Result }
+    # Constant for the life of the screen, and a scriptblock allocation per keypress is exactly the
+    # per-keystroke cost these screens are built to avoid: w/a/s/d are ALIASES, live only when the
+    # screen has no hotkey of that letter and something for the arrow to do (C1 - the maintenance
+    # screen's 'd' is doctor, and a configured action may sit on any letter).
+    $loopAlias = { param([string]$c) (-not ($loopH.Hotkeys -and $loopH.Hotkeys.ContainsKey($c))) -and (Test-ClaudeHotkey -Key $loopKey -Char $c) }
+    $loopHasCursor = [bool]$loopH.Rows
+    $loopHasLR = [bool]($loopH.Left -or $loopH.Right)
+
+    if ($loopH.Before) { $null = & $loopH.Before $State }
+    $null = & $loopLogScreen $State 'enter'
+    $loopNeedDraw = $true
+    $loopMap = $null
+    while ($true) {
+        if ($loopH.Before) { $null = & $loopH.Before $State }
+        if ($loopNeedDraw) { $loopMap = & $Draw $State }
+        $loopNeedDraw = $true
+        $loopKey = & $Wait
+        if ("$loopKey" -eq 'resize') { continue }
+
+        if ($loopKey -and $loopKey.Kind -eq 'mouse') {
+            $loopTop = & $GetWindowTop
+            if ($loopKey.WheelUp -or $loopKey.WheelDown) {
+                $loopDelta = if ($loopKey.WheelUp) { -1 } else { 1 }
+                if ($loopH.Wheel) { $null = & $loopH.Wheel $State $loopDelta }
+                else { $loopN = & $loopRows $State; $State.Index = [Math]::Max(0, [Math]::Min($loopN - 1, $State.Index + $loopDelta)) }
+                continue
+            }
+            $loopHit = Get-HitAt -RowMap $loopMap -X $loopKey.X -Y $loopKey.Y -WindowTop $loopTop
+            if ($loopKey.IsMove) {
+                if ($loopH.Hover) { $loopNeedDraw = [bool](& $loopH.Hover $State $loopHit); continue }
+                # Default: only a CHANGE of hovered footer button is worth a frame (the project
+                # screen's throttle today). Row hover is a screen's own Hover handler (Task 10).
+                $loopBtn = if ($loopHit.Kind -eq 'footer') { $loopHit.FooterIndex } else { -1 }
+                if ($loopBtn -eq $State.Hover) { $loopNeedDraw = $false; continue }
+                $State.Hover = $loopBtn
+                continue
+            }
+            if (-not ($loopKey.Left -and -not $loopKey.IsMove)) { continue }
+            # A double click on a footer button is ignored outright: the first press already became
+            # its key, and a second synthetic press would fire the action twice (or -ReadPath twice).
+            if ($loopHit.Kind -eq 'footer') {
+                if ($loopKey.IsDoubleClick) { continue }
+                $loopKey = New-SyntheticKey -Key $loopHit.Footer.Key -Char $loopHit.Footer.Char   # falls through to the key path
+            } else {
+                if ($loopKey.IsDoubleClick -and $loopH.DoubleClick -and $loopHit.Kind -eq 'row') {
+                    $loopRes = & $loopH.DoubleClick $State $loopHit
+                    $null = & $loopLogRes $State 'doubleclick' $loopRes @{ button = 'row' }
+                    if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
+                } elseif ($loopHit.Kind -ne 'none' -and $loopH.Click) {
+                    $loopRes = & $loopH.Click $State $loopHit
+                    # A click that logs says so by naming its own key ('click'); one that does not
+                    # (a plain row select) leaves no record, exactly as the screens do today.
+                    if ($loopRes -is [hashtable] -and $loopRes.Log -and $loopRes.Log.key) {
+                        $loopName = [string]$loopRes.Log.key; $loopRes.Log.Remove('key')
+                        $null = & $loopLogRes $State $loopName $loopRes
+                    }
+                    if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
+                }
+                continue
+            }
+        }
+
+        if ($loopH.OnKey -and (& $loopH.OnKey $State $loopKey)) { continue }
+        $loopName = "$($loopKey.Key)"
+        if ($State.Typing -and $loopH.Type) {
+            # The Type handler owns every key while typing. It returns $null (not consumed), $true
+            # (consumed, nothing to log) or @{ Log = @{ key = 'Enter'; filter = 'close'; ... } } - the
+            # loop is the ONLY writer of key records, so a handler describes its record instead of
+            # writing one (the trace test pins the exact fields).
+            $loopTyped = & $loopH.Type $State $loopKey
+            if ($loopTyped) {
+                if ($loopTyped -is [hashtable] -and $loopTyped.Log -and $loopTyped.Log.key) {
+                    $loopName = [string]$loopTyped.Log.key; $loopTyped.Log.Remove('key')
+                    $null = & $loopLogRes $State $loopName $loopTyped
+                }
+                continue
+            }
+        }
+
+        # Named arrows always; the w/a/s/d aliases under the guard $loopAlias carries.
+        if ($loopName -eq 'UpArrow' -or ($loopHasCursor -and (& $loopAlias 'w'))) {
+            if ($loopH.Up) { $null = & $loopH.Up $State } elseif ($State.Index -gt 0) { $State.Index-- }
+        } elseif ($loopName -eq 'DownArrow' -or ($loopHasCursor -and (& $loopAlias 's'))) {
+            if ($loopH.Down) { $null = & $loopH.Down $State } elseif ($State.Index -lt (& $loopRows $State) - 1) { $State.Index++ }
+        } elseif ($loopHasLR -and ($loopName -eq 'LeftArrow' -or $loopName -eq 'RightArrow' -or (& $loopAlias 'a') -or (& $loopAlias 'd'))) {
+            $loopBack = ($loopName -eq 'LeftArrow') -or (& $loopAlias 'a')
+            # Guarded on the handler, not on $loopHasLR: a screen with only one of the two would
+            # otherwise reach `& $null`, which throws rather than doing nothing.
+            $loopRes = if ($loopBack) { if ($loopH.Left) { & $loopH.Left $State } } else { if ($loopH.Right) { & $loopH.Right $State } }
+            if ($loopH.LogArrows) { $null = & $loopLogRes $State $(if ($loopBack) { 'LeftArrow' } else { 'RightArrow' }) $loopRes }
+        } elseif ($loopName -eq 'Enter') {
+            $loopRes = if ($loopH.Enter) { & $loopH.Enter $State } else { $null }
+            $null = & $loopLogRes $State 'Enter' $loopRes
+            if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
+        } elseif ($loopName -eq 'Escape' -or ($loopKey.Key -eq 'C' -and (& $loopIsCtrl $loopKey))) {
+            $loopRes = if ($loopH.Escape) { & $loopH.Escape $State } else { @{ Done = $true; Result = $null } }
+            $null = & $loopLogRes $State $(if ($loopName -eq 'Escape') { 'Escape' } else { 'Ctrl+C' }) $loopRes
+            if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
+        } elseif ($loopName -eq 'Tab' -and $loopH.Tab) {
+            $loopRes = & $loopH.Tab $State
+            $null = & $loopLogRes $State 'Tab' $loopRes
+            if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
+        } elseif ($loopH.Hotkeys) {
+            foreach ($loopChar in $loopH.Hotkeys.Keys) {
+                if (Test-ClaudeHotkey -Key $loopKey -Char $loopChar) {
+                    $loopRes = & $loopH.Hotkeys[$loopChar] $State
+                    $null = & $loopLogRes $State $loopChar $loopRes
+                    if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
+                    break
+                }
+            }
+        }
+    }
+}
 function Invoke-LaunchScreen {
     # Returns the finished state, or $null when the user pressed Esc. -Draw is injected so tests
     # pass an empty scriptblock and assert only the state that comes out.
