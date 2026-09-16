@@ -60,6 +60,12 @@ try {
         (@{ ts = (Fmt ($yesterday.AddHours(11))); stage = 'start'; run = 'BBB222'; pid = 4002; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress),
         # D1 lives ONLY on yesterday's file - proves -Days 1 (today only) excludes it (N2).
         (@{ ts = (Fmt ($yesterday.AddHours(9))); stage = 'start'; run = 'D1'; pid = 6001; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress)
+        # A UI-stage run (item 3): screen transitions and the decisive keys between them. Dated
+        # EARLIEST of everything in the window on purpose, so adding it cannot change which run
+        # -Last or -Last -Any resolves to above.
+        (@{ ts = (Fmt ($yesterday.AddHours(8))); stage = 'screen'; run = 'SCR777'; pid = 4005; name = 'project'; phase = 'enter'; rows = 7; index = 0; filterLength = 0 } | ConvertTo-Json -Compress),
+        (@{ ts = (Fmt ($yesterday.AddHours(8).AddSeconds(3))); stage = 'key'; run = 'SCR777'; pid = 4005; screen = 'project'; key = 'r'; index = 2; action = 'resume' } | ConvertTo-Json -Compress),
+        (@{ ts = (Fmt ($yesterday.AddHours(8).AddSeconds(4))); stage = 'screen'; run = 'SCR777'; pid = 4005; name = 'project'; phase = 'leave'; ms = 3200; rows = 7; index = 2; filterLength = 0 } | ConvertTo-Json -Compress)
     )
     Set-Content -LiteralPath (Join-Path $root ('claude-auto-{0:yyyy-MM-dd}.jsonl' -f $yesterday)) -Value $fileA
 
@@ -192,6 +198,23 @@ try {
     # dumped a raw Where-Object error instead of answering.
     Assert-True (($r.Out -join "`n") -notmatch 'Where-Object') 'no raw Where-Object dump from the impossible filename date (-Run)'
     Assert-True (($rLast.Out -join "`n") -notmatch 'Where-Object') 'no raw Where-Object dump from the impossible filename date (-Last)'
+
+    # --- 6b. The UI stages read as a sentence, one line each (item 3). A `screen` record whose two
+    # leading fields print as name=project phase=enter is a dump; the point of this tool is that a
+    # run can be read by eye, and the timeline is mostly these records now.
+    $rScr = Invoke-Tool @('-Run', 'SCR777', '-LogRoot', $root)
+    Assert-Equal 0 $rScr.Code '-Run SCR777 (a UI-stage run) exits 0'
+    $scrJoined = $rScr.Out -join "`n"
+    $scrBody = @($rScr.Out | Where-Object { $_ -match '^\d{2}:\d{2}:\d{2}\.\d{3}\s+\+' })
+    Assert-Equal 3 $scrBody.Count 'one line per UI record, no more'
+    # \s+ between FIELDS (the tool separates them by two spaces, as it always has); the single space
+    # inside 'project enter' is the assertion - those two are one phrase, not two fields.
+    Assert-True ($scrJoined -match 'screen\s+project enter\s+rows=7\s+index=0\s+filterLength=0') 'a screen record renders as "screen  project enter rows=… index=…", in that field order'
+    Assert-True ($scrJoined -match 'screen\s+project leave\s+ms=3200\s+rows=7\s+index=2') 'and a leave record leads with how long the screen was up'
+    Assert-True ($scrJoined -match 'key\s+project r\s+index=2\s+action=resume') 'a key record renders as "key  <screen> <key>", then what it changed'
+    Assert-True ($scrJoined -notmatch 'name=project') 'the leading fields print BARE - no name= on a screen record'
+    Assert-True ($scrJoined -notmatch 'phase=') 'and no phase= either'
+    Assert-True ($scrJoined -notmatch 'screen=project') 'nor screen= on a key record'
 
     # --- 7. The reader must not lock the file against a concurrent launcher append (item 6): open
     # it the same way the tool now does (Read, sharing ReadWrite) and prove a live append still works.

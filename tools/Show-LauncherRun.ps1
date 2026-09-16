@@ -82,11 +82,28 @@ if ($mine.Count -eq 0) {
 $t0 = $mine[0]._ts
 Write-Output ("run {0}  pid {1}  {2:yyyy-MM-dd HH:mm:ss} (machine clock)" -f $Run, $mine[0].pid, $t0)
 $skip = @('ts', 'stage', 'run', 'pid', '_ts')
+# Field order per stage, and how many of the LEADING fields print bare (no key=). The timeline is
+# mostly screen/key records now, and `screen  project enter rows=7 index=0` reads as a sentence
+# where `name=project phase=enter rows=7` reads as a dump. A key not listed here still prints, as
+# key=value after the listed ones, so a field added to a record later is never silently dropped -
+# and a stage with no entry behaves exactly as this tool always did.
+$stageOrder = @{
+    screen = @('name', 'phase', 'ms', 'rows', 'index', 'filterLength', 'length', 'scope', 'rearmed')
+    key    = @('screen', 'key', 'index', 'action', 'button', 'filter', 'filterLength', 'scope', 'fork')
+    error  = @('where', 'module', 'type', 'message', 'position')
+}
+$stageBare = @{ screen = 2; key = 2 }
 foreach ($r in $mine) {
     $t = $r._ts
     $parts = @()
-    foreach ($k in $r.Keys) {
-        if ($skip -contains $k) { continue }
+    $lead = @()
+    $order = @(if ($stageOrder.ContainsKey("$($r.stage)")) { $stageOrder["$($r.stage)"] } else { @() })
+    # Indexing, not ContainsKey: an absent key yields $null on both a Hashtable and the ordered one
+    # ConvertFrom-Json -AsHashtable returns, and a null value is dropped below anyway.
+    $ordered = @($order | Where-Object { $null -ne $r[$_] })
+    $bare = $(if ($stageBare.ContainsKey("$($r.stage)")) { [int]$stageBare["$($r.stage)"] } else { 0 })
+    $shown = 0
+    foreach ($k in ($ordered + @($r.Keys | Where-Object { $skip -notcontains $_ -and $ordered -notcontains $_ }))) {
         $v = $r[$k]
         if ($null -eq $v) { continue }
         if ($k -eq 'parents' -and $v -is [System.Collections.IList]) { $v = ($v | ForEach-Object { "$($_.name)#$($_.pid)" }) -join ' <- ' }
@@ -98,8 +115,12 @@ foreach ($r in $mine) {
         # one-record-one-line contract: collapse it to a glyph before the 160-char truncation.
         $s = $s -replace "`r`n", ([string][char]0x23CE) -replace "`n", ([string][char]0x23CE) -replace "`r", ([string][char]0x23CE)
         if ($s.Length -gt 160) { $s = $s.Substring(0, 160) + '…' }
-        $parts += "$k=$s"
+        # The bare fields are ONE phrase ("project enter"), so they are joined by a single space and
+        # the two-space gap that separates fields goes after them, not between them.
+        if ($shown -lt $bare) { $lead += $s } else { $parts += "$k=$s" }
+        $shown++
     }
+    if ($lead.Count -gt 0) { $parts = @($lead -join ' ') + $parts }
     Write-Output ("{0:HH:mm:ss.fff} +{1,6:0.0}s  {2,-9} {3}" -f $t, ($t - $t0).TotalSeconds, $r.stage, ($parts -join '  '))
 }
 exit 0
