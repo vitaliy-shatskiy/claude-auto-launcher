@@ -841,6 +841,20 @@ $phAccB = Join-Path $phRoot 'accB'
 $null = New-Item -ItemType Junction -Path $phAccB -Target $phHome
 Assert-Equal $phProjects (Get-PhysicalDirectoryPath -Path (Join-Path $phAccB 'projects')) 'a junction on an INTERMEDIATE component is resolved too, not left as the caller spelled it'
 Assert-Equal (Get-SessionsCachePath -ProjectsRoot $phProjects) (Get-SessionsCachePath -ProjectsRoot (Join-Path $phAccB 'projects')) 'so a root reached through a junctioned profile root shares the one cache file'
+# The answer is MEMOISED for speed, and this launcher re-points junctions itself
+# (Repair-SharedJunction). Whatever does that has to be able to forget, or the memo keeps serving the
+# pre-repair target for the rest of the process (re-review 2 2026-09-16, N1).
+$phA = Join-Path $phRoot 'targetA'
+$phB = Join-Path $phRoot 'targetB'
+$phLink = Join-Path $phRoot 'moving-link'
+New-Item -ItemType Directory -Force -Path $phA, $phB | Out-Null
+$null = New-Item -ItemType Junction -Path $phLink -Target $phA
+Assert-Equal $phA (Get-PhysicalDirectoryPath -Path $phLink) 'a junction resolves to the target it points at'
+Remove-Item -LiteralPath $phLink -Force
+$null = New-Item -ItemType Junction -Path $phLink -Target $phB
+Assert-Equal $phA (Get-PhysicalDirectoryPath -Path $phLink) 'and keeps answering from the memo after it is re-pointed - which is what makes the memo fast'
+Clear-PhysicalDirectoryPathCache
+Assert-Equal $phB (Get-PhysicalDirectoryPath -Path $phLink) 'Clear-PhysicalDirectoryPathCache forgets it, so the next resolve sees the new target'
 Remove-Item -LiteralPath $phRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- the pre-filter: each half pinned on its own, and what it may not change -----------------------
@@ -890,7 +904,7 @@ $pfEsc = Join-Path $pfDir 'eeee3333.jsonl'
 Assert-Equal 'escaped key prompt' (Get-ClaudeSessionSummary -Path $pfEsc -ProjectPath 'C:\src\pf').Title 'a \u-escaped type key is decoded by the parser, so the pre-filter must not skip the line on a literal miss'
 Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 167) { Write-Host "COULD NOT RUN: expected 167 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 170) { Write-Host "COULD NOT RUN: expected 170 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -404,6 +404,12 @@ function Repair-SharedProfiles {
     param([switch]$Preview)
     if (-not $script:LauncherConfig.Sharing) { return }
     if ($Preview) { return }
+    # BEFORE anything below touches a junction. Repair-SharedJunction creates and re-points reparse
+    # points, and Get-PhysicalDirectoryPath (Sessions.ps1) memoises what it resolved - so without
+    # this the memo would answer with the pre-repair target for the rest of the process. Not live at
+    # the moment only because the session picker happens to run first, which is not a guarantee
+    # (re-review 2 2026-09-16, N1).
+    Clear-PhysicalDirectoryPathCache
     # Every account's root exists from the first launch onwards, so the owner can pick it and log in
     # rather than discovering a missing directory mid-launch.
     foreach ($r in $SecondaryRoots) {

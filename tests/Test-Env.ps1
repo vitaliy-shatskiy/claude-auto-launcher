@@ -13,7 +13,12 @@
 
 # The roster is derived at load, so the fixture must be named BEFORE the dot-source.
 $env:CLAUDE_AUTO_CONFIG = "$PSScriptRoot\fixtures\config-four.json"
-try { . (Join-Path $PSScriptRoot '..\claude-auto\Env.ps1') } catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
+try {
+    # Sessions.ps1 too: Repair-SharedProfiles clears Get-PhysicalDirectoryPath's memo before it
+    # re-points any junction, and the launcher always has both loaded.
+    . (Join-Path $PSScriptRoot '..\claude-auto\Sessions.ps1')
+    . (Join-Path $PSScriptRoot '..\claude-auto\Env.ps1')
+} catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
 
 # The body runs inside try/finally so a terminating error mid-suite cannot leak the fixture path.
 try {
@@ -480,7 +485,9 @@ try {
 
     # Off preview, the same setup DOES get repaired - proves the guard is the ONLY thing that changed,
     # not that Repair-SharedProfiles silently does nothing.
-    Repair-SharedProfiles 6>$null
+    $script:PhysicalPathMemo = @{ 'sentinel' = 'stale' }
+Repair-SharedProfiles 6>$null
+Assert 'Repair-SharedProfiles forgets the resolved-path memo before it re-points any junction' (-not $script:PhysicalPathMemo.ContainsKey('sentinel'))
     Assert 'not preview: the drifted copy is relinked to the newest'     ((Get-Content -LiteralPath (Join-Path $rootP 'settings.json') -Raw) -eq '{"model":"work"}')
     Assert 'not preview: the missing junction is created'                (Test-Path -LiteralPath (Join-Path $rootP 'projects'))
 } finally {
@@ -724,7 +731,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 149 } else { 145 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 150 } else { 146 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

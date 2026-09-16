@@ -401,8 +401,14 @@ function Get-PhysicalDirectoryPath {
     # resolved first and the leaf re-attached to whatever it resolved to.
     param([Parameter(Mandatory)][string]$Path, [int]$Depth = 0)
     # Memoised at the public entry only. A launcher run asks about the same two or three roots over
-    # and over, and each ask walks the whole component chain; the answer cannot change inside one
-    # short-lived process without somebody re-pointing a junction under it.
+    # and over, and each ask walks the whole component chain.
+    #
+    # ORDERING DEPENDENCY, not an assumption that reparse points never move: this launcher creates
+    # and re-points junctions itself (Repair-SharedJunction, via Repair-SharedProfiles), so the memo
+    # would answer with the pre-repair target for the rest of the process. Repair-SharedProfiles
+    # calls Clear-PhysicalDirectoryPathCache before it touches anything, which is what makes the memo
+    # safe - not the order the two happen to sit in today (the session picker runs before the repair;
+    # that is where this was NOT live, re-review 2 2026-09-16, N1).
     if ($Depth -eq 0) {
         if ($null -eq $script:PhysicalPathMemo) { $script:PhysicalPathMemo = @{} }
         $memoKey = $Path.ToLowerInvariant()
@@ -437,6 +443,13 @@ function Get-PhysicalDirectoryPath {
     if ($p.Length -gt 3) { $p = $p.TrimEnd([char]92, [char]47) }
     if ($Depth -eq 0) { $script:PhysicalPathMemo[$memoKey] = $p }
     return $p
+}
+
+function Clear-PhysicalDirectoryPathCache {
+    # Forgets what Get-PhysicalDirectoryPath resolved. Anything that CREATES or RE-POINTS a reparse
+    # point under a path this process has already resolved must call it first, or the memo keeps
+    # answering with the old target for the rest of the run.
+    $script:PhysicalPathMemo = @{}
 }
 
 function Get-SessionsCachePath {
