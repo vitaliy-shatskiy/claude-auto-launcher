@@ -575,6 +575,21 @@ function Invoke-ProjectScreen {
         return @($built)
     }
 
+    # Where the cursor belongs for a given filter text (R16). A filter is a SEARCH: once it narrows
+    # to at least one project, the cursor stands on the first match - row 1, the row under the
+    # current directory - so closing the box and pressing Enter runs what was searched for. An empty
+    # filter, or one nothing matches, leaves it on row 0: there is no match to stand on, and the cwd
+    # row is what Enter means on this screen with nothing chosen.
+    #
+    # Applied where the filter CHANGES rather than in Before, so the owner can still walk back onto
+    # the current directory with the cursor keys while a filter is open - a Before that re-parked
+    # every frame would make row 0 unreachable and 'w' look dead.
+    $parkOnMatch = {
+        param([string]$f)
+        if ($f -and @(Select-ProjectMatch -Projects $projectList -Filter $f).Count -gt 0) { return 1 }
+        return 0
+    }
+
     # The pinned rows carry no slug of their own - the directory they resolve to may still be a
     # known project (the cwd IS one, or a typed path resolves to one), and the session picker needs
     # to know that exactly. ConvertTo-ProjectKey (Projects.ps1) is the one shared normaliser - see
@@ -700,6 +715,9 @@ function Invoke-ProjectScreen {
             }
             if ($typed -eq 'Backspace') {
                 if ($s.Filter.Length -gt 0) { $s.Filter = $s.Filter.Substring(0, $s.Filter.Length - 1) }
+                # Re-parked on the way back as well: deleting to an empty filter puts the cursor home
+                # on the current directory, exactly where clearing it with Escape does.
+                $s.Index = & $parkOnMatch $s.Filter
                 return $true
             }
             # \ / : are filter characters (fix round 2, minor): Select-ProjectMatch's documented
@@ -707,7 +725,7 @@ function Invoke-ProjectScreen {
             # separators and drive colon.
             if ($k.KeyChar -and ([char]::IsLetterOrDigit($k.KeyChar) -or $k.KeyChar -in @(' ', '-', '.', '_', '\', '/', ':'))) {
                 $s.Filter += $k.KeyChar
-                $s.Index = 0
+                $s.Index = & $parkOnMatch $s.Filter
             }
             # Everything else is SWALLOWED while typing, exactly as the inline branch did: the box
             # holds the keyboard until it closes.

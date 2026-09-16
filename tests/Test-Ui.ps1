@@ -2436,10 +2436,10 @@ try {
     # "beta"), not 'be': 'be' is entirely hex digits and can match a 32-hex-digit GUID by chance
     # (measured P=11.41% here) - 't' cannot occur in a hex GUID at all, so 'eta' is reachable only
     # through the literal word "beta" (the Name AND now the fixed leaf of the Path).
-    # The 's' between the two Enters is Task 9's row order: the filter leaves the cursor at the top,
-    # which is the current directory, and the MATCH is the row under it.
-    $p6 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'e', 't', 'a', 'Enter', 's', 'Enter')) -Draw {}
-    Assert-Equal $tmpBeta $p6.Path 'typing in filter mode narrows instead of acting'
+    # No navigation between the two Enters (R16): the filter parks the cursor on its first match, so
+    # closing the box and pressing Enter launches what was searched for.
+    $p6 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'e', 't', 'a', 'Enter', 'Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p6.Path 'typing in filter mode narrows instead of acting, and Enter launches the single match'
 
     # A letter that IS a hotkey, typed while filtering, must only edit the filter text - never fire
     # the action. Proven by the run needing a further Escape to leave rather than acting on 'c'.
@@ -2672,7 +2672,7 @@ try {
     # end to end - typing alpha's own full path (colon and backslashes included) as the filter, then
     # Enter, picks alpha. ---
     $pathChars = @($tmpAlpha.ToCharArray() | ForEach-Object { "$_" })
-    $pFilterPath = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys (@('/') + $pathChars + @('Enter', 's', 'Enter'))) -Draw {}
+    $pFilterPath = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys (@('/') + $pathChars + @('Enter', 'Enter'))) -Draw {}
     Assert-Equal $tmpAlpha $pFilterPath.Path 'typing a full path (colon and backslashes included) as the filter matches it literally'
 
     # --- Coverage: the wheel moves the selection like w/s; Ctrl+C leaves like Escape; an uppercase C
@@ -3005,10 +3005,65 @@ try {
     $p9click = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w9 -Draw $click9Draw -Wait $w9 -GetWindowTop { 0 } -ReadPath { 'C:\this-click-must-never-reach-the-path-row-9f3a' }
     Assert-Equal $tmpBeta $p9click.Path 'a click on the row after a blank line picks THAT row - the gap is not hit-testable'
 
-    # D7: the two separators come out of the LIST's own budget, never out of the frame's height.
+    # D7: the two separators come out of the LIST's own budget, never out of the frame's height. At
+    # 50x20 a 40-project registry SCROLLS, so at most one gap is drawn at a time - the fit has to
+    # hold at both ends of the list, where a gap exists, as much as in the middle where none does.
     $m9t = $null
-    $tall9 = @(Get-ProjectFrame -Projects $longProjects -Index 20 -Cwd 'C:\x' -Width 50 -Height 20 -RowMap ([ref]$m9t))
-    Assert-True ($tall9.Count -le 19) 'a 40-project registry with both gaps still fits MinHeight with the headroom row'
+    $tall9 = @(Get-ProjectFrame -Projects $longProjects -Index 0 -Cwd 'C:\x' -Width 50 -Height 20 -RowMap ([ref]$m9t))
+    Assert-True ($tall9.Count -le 19) 'a 40-project registry at the top of the list - where the cwd gap is drawn - fits MinHeight with the headroom row'
+    $m9b = $null
+    $tall9b = @(Get-ProjectFrame -Projects $longProjects -Index 41 -Cwd 'C:\x' -Width 50 -Height 20 -RowMap ([ref]$m9b))
+    Assert-True ($tall9b.Count -le 19) 'and at the bottom of it, where the free-path gap is drawn instead'
+    $m9m = $null
+    $tall9m = @(Get-ProjectFrame -Projects $longProjects -Index 20 -Cwd 'C:\x' -Width 50 -Height 20 -RowMap ([ref]$m9m))
+    Assert-True ($tall9m.Count -le 19) 'and mid-scroll, where neither gap is drawn at all'
+    # R15: and all three are the SAME height. The gaps are drawn or not depending on where the
+    # viewport sits, so without reserved slots the box bottom and the whole footer jump a line the
+    # moment the list scrolls past a separator.
+    Assert-Equal $tall9.Count $tall9m.Count 'the frame keeps ONE height while scrolling: mid-scroll matches the top of the list'
+    Assert-Equal $tall9.Count $tall9b.Count 'and the bottom of the list matches it too'
+    # The both-gaps case, which only a registry that fits whole can produce: counted, not bounded -
+    # every row, the two blank lines, the action row, two box borders and the footer.
+    $m9s = $null
+    $short9 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$m9s))
+    Assert-Equal (@($m9s.RowYs).Count + 2 + 1 + 2 + $m9s.FooterLines) $short9.Count 'a registry that fits whole draws BOTH gaps: every row, two blank lines, the action row, two borders and the footer'
+
+    # R17: with nothing matching the filter the two pinned rows are neighbours, and only ONE
+    # separator may fire between them - both rules firing puts two blank lines in the box.
+    $m9e = $null
+    $null = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Filter 'zzz-matches-no-project' -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$m9e))
+    Assert-Equal 2 @($m9e.RowYs).Count 'a filter that matches nothing still leaves the two pinned rows'
+    Assert-Equal 1 ($m9e.RowYs[1] - $m9e.RowYs[0] - 1) 'with exactly one blank line between them'
+
+    # R13, second half: the bullet rule must not fire on a PROJECT whose name begins with the bullet
+    # character in the same column - the row shape alone does not separate them, the row's own text does.
+    $plus9Projs = @([pscustomobject]@{ Slug = 'P'; Name = '+ plus project'; Path = 'C:\w\plus'; Worktree = $null; LastActivity = (Get-Date) })
+    foreach ($ascii9 in $false, $true) {
+        $m9x = $null
+        $plus9 = @(Get-ProjectFrame -Projects $plus9Projs -Index 0 -Cwd 'C:\x' -Width 80 -Height 24 -Color -Ascii:$ascii9 -RowMap ([ref]$m9x))
+        $g9x = Get-Glyphs -Ascii:$ascii9
+        Assert-True (-not $plus9[$m9x.RowYs[1]].Contains($script:C.Magenta)) "a project whose name starts with the bullet character is not painted as a bullet (ascii=$ascii9)"
+        Assert-True ($plus9[$m9x.RowYs[-1]].Contains($script:C.Magenta + [string]$g9x.Bullet)) "while the free-path row's own bullet still is (ascii=$ascii9)"
+    }
+
+    # The speaker-attribution parking mark is a control character too, and it must not be one of the
+    # dim-span markers: the two rules only ever meet on a picker line, but they meet.
+    $spk9 = Add-PickerColor -Line ('   you ' + [string]$gg.RAngle + ' hello') -Enabled -Glyphs $gg
+    Assert-True ($spk9.Contains($script:C.BrightCyan + 'you ' + [string]$gg.RAngle)) 'the speaker attribution is parked and restored'
+    Assert-Equal 0 @($spk9.ToCharArray() | Where-Object { [int]$_ -lt 0x20 -and [int]$_ -ne 27 }).Count 'and no parking mark survives the paint - nor is it a marker the dim spans use'
+
+    # R16: a filter is a SEARCH. Once it narrows to at least one project the cursor sits on the first
+    # match, so Enter runs what was searched for rather than the current directory the cursor opened on.
+    $script:park9 = New-Object System.Collections.Generic.List[object]
+    $park9Draw = { param($p, $i, $f, $t, $h, $n, $a) $script:park9.Add([pscustomobject]@{ Index = $i; Filter = "$f" }); $null }
+    $p9park = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'e', 't', 'a', 'Escape', 'Escape')) -Draw $park9Draw
+    Assert-True ($null -eq $p9park) 'the filter-park run ends with Escape'
+    Assert-Equal 1 (@($script:park9 | Where-Object { $_.Filter -eq 'eta' })[0].Index) 'a filter with a match parks the cursor on that match, not on the current directory'
+    Assert-Equal 0 ($script:park9[-1].Index) 'and clearing the filter sends the cursor home to the current directory again'
+    $script:park9b = New-Object System.Collections.Generic.List[object]
+    $park9bDraw = { param($p, $i, $f, $t, $h, $n, $a) $script:park9b.Add([pscustomobject]@{ Index = $i; Filter = "$f" }); $null }
+    $null = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Escape')) -Draw $park9bDraw
+    Assert-Equal 0 (@($script:park9b | Where-Object { $_.Filter -eq 'z' })[0].Index) 'a filter that matches nothing parks nothing - there is no match to stand on'
 } finally {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tmpCwd -Recurse -Force -ErrorAction SilentlyContinue
@@ -3727,7 +3782,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1199) { Write-Host "COULD NOT RUN: expected 1199 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1216) { Write-Host "COULD NOT RUN: expected 1216 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

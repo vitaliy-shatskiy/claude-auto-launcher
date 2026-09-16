@@ -916,12 +916,22 @@ function Get-ProjectFrame {
             # name+path columns, minus the age no pinned row has a real LastActivity for.
             $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail
             # And the blank line UNDER it: the current directory is a group of its own, so the eye
-            # stops there instead of reading it as the first entry of the registry (spec D6).
-            if ($i -lt ($vp.Start + $vp.Visible - 1)) { $body += '' }
+            # stops there instead of reading it as the first entry of the registry (spec D6). Not
+            # when the next visible row is the free-path row - it brings its own separator, and both
+            # rules firing puts TWO blank lines in the box (reachable with any filter that matches
+            # nothing, and with an empty registry).
+            if ($i -lt ($vp.Start + $vp.Visible - 1) -and $rows[$i + 1].Kind -ne 'path') { $body += '' }
         } else {
             $body += $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
         }
     }
+
+    # The two separator slots are RESERVED, not merely spent (R15): which of them is drawn depends on
+    # where the viewport sits - both when the whole list fits, one at either end of a long list, none
+    # mid-scroll - so without this the box bottom and the whole footer would jump a line the moment
+    # the list scrolls past a separator. Padding to a height that does not depend on $Index is what
+    # keeps the frame still while the list moves inside it.
+    while ($body.Count -lt ($vp.Visible + 2)) { $body += '' }
 
     # The action field: one launch-screen-style RADIO row under the list, drawn by the same
     # New-RadioRow every launch row goes through, so the whole screen is driveable with the arrows
@@ -1107,20 +1117,23 @@ function Add-PickerColor {
     # it in the middle of the escape sequence this rule had just inserted. Substituting first and
     # restoring last keeps the two rules from ever seeing each other's output.
     $rA = [regex]::Escape($Glyphs.RAngle)
-    $markUser = [string][char]1 + 'u' + [string][char]1
-    $markClaude = [string][char]1 + 'a' + [string][char]1
+    # U+0003, not U+0001: U+0001 is $script:DimOpen, and a mark that collides with a dim-span marker
+    # only works while Add-DimSpanColor happens to run first.
+    $markUser = [string][char]3 + 'u' + [string][char]3
+    $markClaude = [string][char]3 + 'a' + [string][char]3
     $out = $out -replace "(^|\s)you $rA ", ('$1' + $markUser)
     $out = $out -replace "(^|\s)claude $rA ", ('$1' + $markClaude)
 
     # The bullet, ANCHORED to the row it belongs to and painted BEFORE the cursor rule (R13). In
     # ASCII mode Bullet is '+' - the same character as all four box corners - so a bare `([+])` rule
     # painted every corner of every frame magenta, and a project named 'c++' with it. The free-path
-    # row is the only place a bullet is drawn, and it has a fixed shape: one box border, the 3-cell
-    # mark ('   ' or ' <cursor> '), the bullet, a space. Matching that shape is what makes the rule
-    # mean the bullet rather than the character. Before the cursor rule, because that rule paints the
-    # mark itself and its escapes would then break this lookbehind.
+    # row is the only place a bullet is drawn: one box border, the 3-cell mark ('   ' or
+    # ' <cursor> '), the bullet, then its own label. The label is in the pattern because the shape
+    # alone is not unique - a project NAMED '+ something' sits in the identical columns - so this
+    # rule is deliberately coupled to the text Get-ProjectFrame gives that row. Before the cursor
+    # rule, because that rule paints the mark itself and its escapes would break this lookbehind.
     $markPattern = "(?:   | $([regex]::Escape([string]$Glyphs.Cursor)) )"
-    $out = $out -replace "(?<=^.$markPattern)($([regex]::Escape([string]$Glyphs.Bullet)))(?= )", ($c.Magenta + '$1' + $c.Reset)
+    $out = $out -replace "(?<=^.$markPattern)($([regex]::Escape([string]$Glyphs.Bullet)))(?= enter a path)", ($c.Magenta + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Cursor)])", ($c.BrightYellow + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Worktree)])", ($c.Yellow + '$1' + $c.Reset)
     $out = $out -replace '(\d+ (?:min|h|d)|now)$', ($c.Dim + '$1' + $c.Reset)
