@@ -37,13 +37,18 @@ function Enter-AltBuffer {
     # each side puts back what IT found, which is what the previous hardcoded $false did not do -
     # a process started with Ctrl+C already treated as input had that setting taken away by a
     # launcher that never set it.
-    try { $script:AltBufferPrevTcc = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $true } catch { }
+    # Logged, not merely swallowed: a console that refuses this setting is the difference between
+    # Ctrl+C being read as a key and the process dying before the finally that restores the buffer.
+    # The catch still has to be silent, so the record is the only place that fact can land.
+    try { $script:AltBufferPrevTcc = [Console]::TreatControlCAsInput; [Console]::TreatControlCAsInput = $true }
+    catch { Write-UiLog -Stage 'error' -Data @{ where = 'Enter-AltBuffer'; type = $_.Exception.GetType().Name; message = $_.Exception.Message.Substring(0, [Math]::Min(300, $_.Exception.Message.Length)) } }
 }
 
 function Exit-AltBuffer {
     [Console]::Write("$([char]27)[?25h$([char]27)[?1049l")
     if ($null -ne $script:AltBufferPrevTcc) {
-        try { [Console]::TreatControlCAsInput = [bool]$script:AltBufferPrevTcc } catch { }
+        try { [Console]::TreatControlCAsInput = [bool]$script:AltBufferPrevTcc }
+        catch { Write-UiLog -Stage 'error' -Data @{ where = 'Exit-AltBuffer'; type = $_.Exception.GetType().Name; message = $_.Exception.Message.Substring(0, [Math]::Min(300, $_.Exception.Message.Length)) } }
     }
     $script:AltBufferPrevTcc = $null
 }
@@ -57,6 +62,48 @@ function Write-Frame {
     foreach ($l in $Lines) { [void]$sb.Append($l); [void]$sb.Append("$([char]27)[K`n") }
     [void]$sb.Append("$([char]27)[J")
     [Console]::Write($sb.ToString())
+}
+
+function Write-UiLog {
+    # One UI-stage record - `screen`, `key` or `error`. The single place every screen in this file
+    # writes through, so the rules below are stated once instead of at each call site.
+    #
+    # SILENT and fail-open, exactly like the logger it wraps (Write-LauncherLog, Env.ps1):
+    # check-launcher-regression.ps1 compares the launcher's console output against a stored
+    # reference, so one Write-Host under here reddens a check that exists for real regressions. A
+    # throw would be worse still - it would take down a menu over a log line.
+    #
+    # NEVER the filter text, never a typed path. These records are kept for two weeks and read back
+    # later; what the owner typed into a filter box is not the launcher's to remember. Call sites
+    # pass lengths.
+    param(
+        [Parameter(Mandatory)][string]$Stage,
+        [hashtable]$Data = @{}
+    )
+    try {
+        # The sink first, and deliberately NOT under the $Preview guard below: a suite injects one to
+        # READ the records without ever opening the log directory, and that is also how a preview run
+        # can be read - the run whose whole point is that it writes nothing anywhere.
+        if ($script:UiLogSink) { & $script:UiLogSink $Stage $Data; return }
+        # Preview must stay side-effect-free - the same guard claude-auto.ps1's UI catch and
+        # Expand-SessionPage's IO catch carry, for the same reason: preview drives these very loops.
+        if ($script:Preview) { return }
+        # Resolved ONCE per process, hit OR miss ($false caches the miss). Test-Ui, Test-Input and
+        # Test-Maintenance load this file without Env.ps1, so there is no logger at all there and
+        # every call must become a no-op rather than a Get-Command per keypress. -CommandType
+        # Function so an alias, or a stray Write-LauncherLog.exe on PATH, cannot win the resolution.
+        if ($null -eq $script:UiLogWriter) {
+            $cmd = Get-Command -Name Write-LauncherLog -CommandType Function -ErrorAction SilentlyContinue
+            $script:UiLogWriter = if ($cmd) { $cmd } else { $false }
+        }
+        if (-not $script:UiLogWriter) { return }
+        $logArgs = @{ Stage = $Stage; Data = $Data }
+        # $RunId and $Preview above are the LAUNCHER's script-scope variables, not this file's: every
+        # module here is dot-sourced into claude-auto.ps1's scope, so both resolve at call time and
+        # are simply absent (hence skipped) in a suite that loads Ui.ps1 on its own.
+        if ($script:RunId) { $logArgs.RunId = $script:RunId }
+        $null = & $script:UiLogWriter @logArgs
+    } catch { }
 }
 
 function Wait-KeyOrResize {
@@ -156,6 +203,19 @@ function Invoke-LaunchScreen {
         # comes back. Default returns $false so every existing caller that omits it is unaffected.
         [scriptblock]$OnKey = { param($k) $false }
     )
+    # What the owner saw and for how long. A plain scriptblock, never .GetNewClosure(): a closure
+    # binds to its own dynamic module and resolves commands against GLOBAL session state only, which
+    # is the forwarder-only failure claude-auto.ps1's fetcher block documents at length. This one
+    # reads $State at INVOCATION, so it always reports the row the loop is actually on.
+    $enteredAt = Get-Date
+    $leave = {
+        param([string]$Key)
+        Write-UiLog -Stage 'key' -Data @{ screen = 'launch'; key = $Key; index = [int]$State.Row }
+        Write-UiLog -Stage 'screen' -Data @{ name = 'launch'; phase = 'leave'
+                                             ms = [int]((Get-Date) - $enteredAt).TotalMilliseconds
+                                             rows = @(Get-LaunchRows).Count; index = [int]$State.Row }
+    }
+    Write-UiLog -Stage 'screen' -Data @{ name = 'launch'; phase = 'enter'; rows = @(Get-LaunchRows).Count; index = [int]$State.Row }
     while ($true) {
         $rowMap = & $Draw $State
         $key = & $Wait
@@ -234,10 +294,16 @@ function Invoke-LaunchScreen {
             $State = Step-LaunchValue -State $State -Delta $(if ($back) { -1 } else { 1 })
             if ((Get-LaunchRows)[$State.Row].Name -eq 'Account') { $State = Switch-LaunchTab -State $State -From $leaving -Prefs $Prefs -Rows (Get-LaunchRows) }
         }
-        elseif ($name -eq 'Enter') { return $State }
+        # DECISIVE keys only (Enter, Escape/Ctrl+C): a row step changes a setting the next frame
+        # shows anyway, while these two END the screen. A footer click has already become its
+        # synthetic key above, so clicking 'enter start' lands here as Enter - one record, one path.
+        elseif ($name -eq 'Enter') { & $leave 'Enter'; return $State }
         # Ctrl+C is read as input (TreatControlCAsInput, set in Enter-AltBuffer) and treated exactly
         # like Escape, so the `finally` that restores the alternate buffer still runs.
-        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return $null }
+        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) {
+            & $leave $(if ($name -eq 'Escape') { 'Escape' } else { 'Ctrl+C' })
+            return $null
+        }
     }
 }
 
@@ -333,7 +399,10 @@ function Invoke-ProjectScreen {
     # the free-path row additionally resolves the path: a registry or cwd path is already in its
     # canonical form, and resolving it here would be pointless.
     $pick = {
-        param([string]$Action)
+        # -How is carried on the RESULT rather than logged here: the launcher's `ui` record answers
+        # "how did this launch choose its project" from one field, and a pick that is REJECTED (a
+        # path that no longer exists) must not leave a chosen=... record behind claiming otherwise.
+        param([string]$Action, [string]$How = 'enter')
         $r = $rows[$index]
         $path = $r.Path
         $slugs = @($r.Slugs)
@@ -350,8 +419,26 @@ function Invoke-ProjectScreen {
         } elseif ($r.Kind -eq 'cwd') {
             $slugs = @(& $slugOf $path)
         }
-        return [pscustomobject]@{ Path = $path; Action = $Action; Slug = $(if ($slugs.Count -gt 0) { $slugs[0] } else { '' }); Slugs = $slugs }
+        return [pscustomobject]@{ Path = $path; Action = $Action; How = $How; Slug = $(if ($slugs.Count -gt 0) { $slugs[0] } else { '' }); Slugs = $slugs }
     }
+
+    # The screen's own log. $index, $rows and $filter are read at INVOCATION (plain scriptblocks, no
+    # .GetNewClosure() - see Invoke-LaunchScreen), so both report what the loop currently holds.
+    # filterLength, never $filter: a filter is often a pasted PATH, and the log is not the place for it.
+    $enteredAt = Get-Date
+    $logKey = {
+        param([string]$Key, [hashtable]$Extra = @{})
+        $d = @{ screen = 'project'; key = $Key; index = [int]$index }
+        foreach ($k in $Extra.Keys) { $d[$k] = $Extra[$k] }
+        Write-UiLog -Stage 'key' -Data $d
+    }
+    $logLeave = {
+        Write-UiLog -Stage 'screen' -Data @{ name = 'project'; phase = 'leave'
+                                             ms = [int]((Get-Date) - $enteredAt).TotalMilliseconds
+                                             rows = @($rows).Count; index = [int]$index; filterLength = $filter.Length }
+    }
+    Write-UiLog -Stage 'screen' -Data @{ name = 'project'; phase = 'enter'
+                                         rows = @(& $rowsOf $filter).Count; index = [int]$index; filterLength = $filter.Length }
 
     # Hover is a REDUCTION, not a cost: a plain top-of-loop draw (as every mouse move already forces
     # on the launch and session screens) would redraw on every motion event regardless of this flag,
@@ -402,7 +489,11 @@ function Invoke-ProjectScreen {
                 # has no focus to take, and it must never move the selection.
                 elseif ($rowMap.Action -and ($key.Y - $top) -eq $rowMap.Action.Y) {
                     $cell = @($rowMap.Action.Cells | Where-Object { $key.X -ge $_.Start -and $key.X -le $_.End })
-                    if ($cell.Count -gt 0) { $action = Step-ProjectAction -Action $action -Delta $cell[0].Delta }
+                    if ($cell.Count -gt 0) {
+                        $action = Step-ProjectAction -Action $action -Delta $cell[0].Delta
+                        # A cap click is decisive in the brief's sense: it changes what Enter will DO.
+                        & $logKey 'click' @{ button = 'action'; action = $action }
+                    }
                 }
                 else {
                     $row = Get-ClaudeMouseRow -Y $key.Y -FirstRowY $rowMap.FirstRowY -RowCount $rowMap.RowCount -WindowTop $top
@@ -418,8 +509,9 @@ function Invoke-ProjectScreen {
                                 # The FIELD, not a hardcoded 'new': the gesture means "this row,
                                 # that action", and two answers to "what does a commit do here"
                                 # would disagree the first time one of them changed.
-                                $r = & $pick $action
-                                if ($r) { return $r } else { $notice = 'path not found' }
+                                & $logKey 'doubleclick' @{ button = 'row'; action = $action }
+                                $r = & $pick $action 'mouse'
+                                if ($r) { & $logLeave; return $r } else { $notice = 'path not found' }
                             }
                         }
                     }
@@ -440,8 +532,11 @@ function Invoke-ProjectScreen {
         $name = "$($key.Key)"
 
         if ($typing) {
-            if ($name -eq 'Enter') { $typing = $false }
-            elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { $typing = $false; $filter = ''; $index = 0 }
+            # The two ways a filter closes are logged; the characters between them are not, and
+            # Backspace is not either. That is the whole difference between a launcher log and a
+            # keylogger - and it is also what keeps the file open per keystroke out of this loop.
+            if ($name -eq 'Enter') { & $logKey 'Enter' @{ filter = 'close'; filterLength = $filter.Length }; $typing = $false }
+            elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { & $logKey 'Escape' @{ filter = 'clear'; filterLength = $filter.Length }; $typing = $false; $filter = ''; $index = 0 }
             elseif ($name -eq 'Backspace') { if ($filter.Length -gt 0) { $filter = $filter.Substring(0, $filter.Length - 1) } }
             # \ / : added (fix round 2, minor): Select-ProjectMatch's documented purpose is matching
             # a PASTED path literally, and a path is not a path without its separators and drive
@@ -464,16 +559,23 @@ function Invoke-ProjectScreen {
                 (Test-ClaudeHotkey -Key $key -Char 'a') -or (Test-ClaudeHotkey -Key $key -Char 'd')) {
             $back = ($name -eq 'LeftArrow') -or (Test-ClaudeHotkey -Key $key -Char 'a')
             $action = Step-ProjectAction -Action $action -Delta $(if ($back) { -1 } else { 1 })
+            # Logged as the DIRECTION, never as the character: a/d and the arrows mean the same
+            # thing here, and on a Cyrillic layout the character would be a different letter anyway.
+            & $logKey $(if ($back) { 'LeftArrow' } else { 'RightArrow' }) @{ action = $action }
         }
-        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return $null }
-        elseif ($name -eq 'Enter') { $r = & $pick $action;    if ($r) { return $r } else { $notice = 'path not found' } }
+        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) {
+            & $logKey $(if ($name -eq 'Escape') { 'Escape' } else { 'Ctrl+C' })
+            & $logLeave
+            return $null
+        }
+        elseif ($name -eq 'Enter') { & $logKey 'Enter' @{ action = $action }; $r = & $pick $action 'enter';    if ($r) { & $logLeave; return $r } else { $notice = 'path not found' } }
         # The hotkeys still fire immediately AND set the field: the press is the answer, and the
         # screen has to say what just happened - which matters most exactly when the pick is
         # REJECTED and the loop draws again with the field the press left behind.
-        elseif (Test-ClaudeHotkey -Key $key -Char 'c') { $action = 'continue'; $r = & $pick $action; if ($r) { return $r } else { $notice = 'path not found' } }
-        elseif (Test-ClaudeHotkey -Key $key -Char 'r') { $action = 'resume';   $r = & $pick $action; if ($r) { return $r } else { $notice = 'path not found' } }
-        elseif (Test-ClaudeHotkey -Key $key -Char 't') { $action = 'worktree'; $r = & $pick $action; if ($r) { return $r } else { $notice = 'path not found' } }
-        elseif (Test-ClaudeHotkey -Key $key -Char '/') { $typing = $true }
+        elseif (Test-ClaudeHotkey -Key $key -Char 'c') { $action = 'continue'; & $logKey 'c' @{ action = $action }; $r = & $pick $action 'hotkey'; if ($r) { & $logLeave; return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char 'r') { $action = 'resume';   & $logKey 'r' @{ action = $action }; $r = & $pick $action 'hotkey'; if ($r) { & $logLeave; return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char 't') { $action = 'worktree'; & $logKey 't' @{ action = $action }; $r = & $pick $action 'hotkey'; if ($r) { & $logLeave; return $r } else { $notice = 'path not found' } }
+        elseif (Test-ClaudeHotkey -Key $key -Char '/') { & $logKey '/' @{ filter = 'open' }; $typing = $true }
     }
 }
 
@@ -617,6 +719,27 @@ function Invoke-SessionPicker {
     $pages = @{}
     $pages[$scope] = [pscustomobject]@{ Sessions = @($Sessions); Fetched = @($Sessions).Count; Exhausted = (-not $FetchMore) }
 
+    # Same shape as the other two screens: enter, the decisive keys, leave. `scope` rides along
+    # because Tab is the one key here that changes what the whole list MEANS, and "the picker was
+    # empty" reads completely differently scoped to a project than widened to the account.
+    # Plain scriptblocks - $index, $items, $filter and $scope are read at invocation.
+    $enteredAt = Get-Date
+    $logKey = {
+        param([string]$Key, [hashtable]$Extra = @{})
+        $d = @{ screen = 'picker'; key = $Key; index = [int]$index; scope = $scope }
+        foreach ($k in $Extra.Keys) { $d[$k] = $Extra[$k] }
+        Write-UiLog -Stage 'key' -Data $d
+    }
+    $logLeave = {
+        Write-UiLog -Stage 'screen' -Data @{ name = 'picker'; phase = 'leave'
+                                             ms = [int]((Get-Date) - $enteredAt).TotalMilliseconds
+                                             rows = @($items).Count; index = [int]$index
+                                             filterLength = $filter.Length; scope = $scope }
+    }
+    Write-UiLog -Stage 'screen' -Data @{ name = 'picker'; phase = 'enter'
+                                         rows = @($pages[$scope].Sessions).Count; index = [int]$index
+                                         filterLength = $filter.Length; scope = $scope }
+
     while ($true) {
         if (-not $pages.ContainsKey($scope)) { $pages[$scope] = & $newBucket $scope }
         $bucket = $pages[$scope]
@@ -685,7 +808,11 @@ function Invoke-SessionPicker {
                         $target = $rowMap.Start + $row
                         if ($target -ge 0 -and $target -lt $items.Count) {
                             $index = $target
-                            if ($key.IsDoubleClick) { return [pscustomobject]@{ Session = $items[$index]; Fork = $false } }
+                            if ($key.IsDoubleClick) {
+                                & $logKey 'doubleclick' @{ button = 'row' }
+                                & $logLeave
+                                return [pscustomobject]@{ Session = $items[$index]; Fork = $false }
+                            }
                         }
                     }
                 }
@@ -700,8 +827,10 @@ function Invoke-SessionPicker {
             # Esc here clears the filter rather than leaving: while typing, Esc means "undo the
             # filter", and losing the whole picker to a stray Esc would be infuriating. Ctrl+C
             # matches that same semantics rather than leaving the picker.
-            if ($name -eq 'Enter') { $typing = $false }
-            elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { $typing = $false; $filter = ''; $index = 0 }
+            # The filter closing is decisive; what was typed into it is never logged (same rule as
+            # the project screen's own typing branch).
+            if ($name -eq 'Enter') { & $logKey 'Enter' @{ filter = 'close'; filterLength = $filter.Length }; $typing = $false }
+            elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { & $logKey 'Escape' @{ filter = 'clear'; filterLength = $filter.Length }; $typing = $false; $filter = ''; $index = 0 }
             elseif ($name -eq 'Backspace') {
                 if ($filter.Length -gt 0) { $filter = $filter.Substring(0, $filter.Length - 1) }
             }
@@ -738,15 +867,22 @@ function Invoke-SessionPicker {
         elseif ($name -eq 'Tab' -and $hasScope) {
             $scope = if ($scope -eq 'project') { 'all' } else { 'project' }
             $index = 0
+            # The scope AFTER the toggle: the record answers "what was the owner looking at", and
+            # what he was looking at from here on is the new one.
+            & $logKey 'Tab' @{ scope = $scope }
         }
-        elseif ($name -eq 'Enter') { if ($items.Count -gt 0) { return [pscustomobject]@{ Session = $items[$index]; Fork = $false } } }
-        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) { return $null }
+        elseif ($name -eq 'Enter') { if ($items.Count -gt 0) { & $logKey 'Enter'; & $logLeave; return [pscustomobject]@{ Session = $items[$index]; Fork = $false } } }
+        elseif ($name -eq 'Escape' -or ($key.Key -eq 'C' -and ($key.Modifiers -band [System.ConsoleModifiers]::Control))) {
+            & $logKey $(if ($name -eq 'Escape') { 'Escape' } else { 'Ctrl+C' })
+            & $logLeave
+            return $null
+        }
         # Test-ClaudeHotkey (Input.ps1): the character, the virtual key or the Cyrillic letter on
         # the same physical key - and never uppercase or modified, for the same reason the
         # maintenance screen was case-sensitive first: an uppercase F arriving from a terminal that
         # reports the mouse as text would FORK a session, which starts one (hover defect, 2026-08-25).
-        elseif (Test-ClaudeHotkey -Key $key -Char 'f') { if ($items.Count -gt 0) { return [pscustomobject]@{ Session = $items[$index]; Fork = $true } } }
-        elseif (Test-ClaudeHotkey -Key $key -Char '/') { $typing = $true }
+        elseif (Test-ClaudeHotkey -Key $key -Char 'f') { if ($items.Count -gt 0) { & $logKey 'f' @{ fork = $true }; & $logLeave; return [pscustomobject]@{ Session = $items[$index]; Fork = $true } } }
+        elseif (Test-ClaudeHotkey -Key $key -Char '/') { & $logKey '/' @{ filter = 'open' }; $typing = $true }
     }
 }
 

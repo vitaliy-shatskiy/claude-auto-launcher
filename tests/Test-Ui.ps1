@@ -2917,8 +2917,136 @@ $null = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) throw 
 Assert-Equal 0 $script:loggedCalls.Count 'and a preview run logs nothing for the same IO failure'
 $script:Preview = $false
 
+# --- UI-stage logging: the screens say what happened, never what was typed ------------------------
+# The 07:17 crash run had a `ui` record and nothing else: no screen the owner saw, no key that
+# decided anything. Write-UiLog (Ui.ps1) is the ONE helper every screen writes through. Tests inject
+# $script:UiLogSink, so nothing here opens the real log directory - and the sink is read BEFORE the
+# $Preview guard on purpose, which is what lets a preview run be read the same way.
+$script:uiRecords = @()
+$uiSink = { param($s, $d) $script:uiRecords += [pscustomobject]@{ Stage = $s; Data = $d } }
+# stage:screen:phase for a screen record, stage:screen:key for a key one - the ORDER of these is the
+# assertion, because "what happened" is a sequence and a set would pass on a scrambled one.
+$uiTrace = {
+    @($script:uiRecords | ForEach-Object {
+        if ($_.Stage -eq 'screen') { "screen:$($_.Data.name):$($_.Data.phase)" }
+        else { "$($_.Stage):$($_.Data.screen):$($_.Data.key)" }
+    })
+}
+$uiLogRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-uilog-$([Guid]::NewGuid().ToString('N'))")
+$uiLogProj = Join-Path $uiLogRoot 'gamma'
+New-Item -ItemType Directory -Path $uiLogProj -Force | Out-Null
+try {
+    $uiProjs = @([pscustomobject]@{ Slug = 'G'; Path = $uiLogProj; Name = 'gamma'; Worktree = $null; LastActivity = (Get-Date) })
+    $uiFake = @(
+        [pscustomobject]@{ SessionId = 'cccc3333'; Project = 'gamma'; Slug = 'G'; Worktree = $null; Modified = (Get-Date '2026-09-16 09:00'); SizeBytes = 4096; PromptCount = 4; Title = 'x'; LastUser = 'u'; LastAssistant = 'a' }
+    )
+
+    $script:UiLogSink = $uiSink
+    $script:uiRecords = @()
+    $null = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey (New-ScriptedKeyReader -Keys @('r')) -Draw {}
+    # Scoped, exactly as claude-auto.ps1 opens it after the project screen - an unscoped picker
+    # reports scope 'none', which would make the scope assertion below pass on the wrong thing.
+    $null = Invoke-SessionPicker -Sessions $uiFake -ProjectSlug @('G') -ProjectName 'gamma' -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {}
+    Assert-Equal ('screen:launch:enter,key:launch:Enter,screen:launch:leave,' +
+                  'screen:project:enter,key:project:r,screen:project:leave,' +
+                  'screen:picker:enter,key:picker:Escape,screen:picker:leave') ((& $uiTrace) -join ',') 'a scripted launch -> project -> picker -> Escape run logs exactly these records, in this order'
+
+    $uiEnter = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.name -eq 'project' -and $_.Data.phase -eq 'enter' })[0]
+    Assert-Equal 3 $uiEnter.Data.rows 'a screen record carries the row COUNT (one project, the cwd row, the free-path row)'
+    Assert-Equal 0 $uiEnter.Data.index 'and where the cursor was'
+    $uiLeave = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.name -eq 'project' -and $_.Data.phase -eq 'leave' })[0]
+    Assert-True ($uiLeave.Data.ContainsKey('ms')) 'a leave record carries how long the screen was up'
+    Assert-True ([int]$uiLeave.Data.ms -ge 0) 'as a non-negative number of milliseconds'
+    $uiPick = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.name -eq 'picker' })[0]
+    Assert-Equal 'project' $uiPick.Data.scope 'the picker records the scope it opened in'
+
+    # DECISIVE keys only. Typing into the filter must leave ONE record for opening it and one for
+    # closing it - never one per character, or the log becomes a keylogger and the file open per
+    # keystroke the brief forbids.
+    $script:uiRecords = @()
+    $sentinel = 'zqxvw42'
+    $sentinelKeys = @('/') + @($sentinel.ToCharArray() | ForEach-Object { "$_" }) + @('Escape', 'Escape')
+    $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey (New-ScriptedKeyReader -Keys $sentinelKeys) -Draw {}
+    $uiKeys = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' })
+    Assert-Equal 3 $uiKeys.Count "$($sentinel.Length) filter characters produce no key records at all - only / open, Escape close, Escape leave"
+    Assert-Equal '/,Escape,Escape' (($uiKeys | ForEach-Object { $_.Data.key }) -join ',') 'and those three are the decisive ones'
+    $uiJson = ($script:uiRecords | ConvertTo-Json -Depth 8 -Compress)
+    Assert-True ($uiJson -notmatch $sentinel) 'the filter TEXT never appears in any record'
+    $uiClose = @($uiKeys | Where-Object { $_.Data.filter -eq 'clear' })[0]
+    Assert-Equal $sentinel.Length $uiClose.Data.filterLength 'only its LENGTH does'
+
+    # The free path is the owner's own directory name - the one string on these screens that is
+    # nobody's business but his. Read-ClaudeFreePath is driven directly here: the project screen's
+    # -ReadPath is injected by every other test, so this is the only place the real prompt runs.
+    $script:uiRecords = @()
+    $pathSentinel = 'B:\qqzz-never-logged-9182'
+    $fpOk = Read-ClaudeFreePath -MouseState $null -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write { param($t) } -SetCursor { param($x, $y) } -ReadLine { $pathSentinel }
+    Assert-Equal $pathSentinel $fpOk.Line 'the free-path prompt still returns what was typed'
+    Assert-Equal 'screen:freepath:enter,screen:freepath:leave' ((& $uiTrace) -join ',') 'and logs entering and leaving the prompt'
+    $fpJson = ($script:uiRecords | ConvertTo-Json -Depth 8 -Compress)
+    Assert-True ($fpJson -notmatch 'qqzz-never-logged') 'the typed path never reaches the log'
+    $fpLeave = @($script:uiRecords | Where-Object { $_.Data.phase -eq 'leave' })[0]
+    Assert-Equal $pathSentinel.Length $fpLeave.Data.length 'only how many characters it was'
+
+    # A prompt that THROWS returns an empty line and says nothing - that silence is what item 3 is
+    # about. One error record, and the typed-path rule holds there too.
+    $script:uiRecords = @()
+    $fpBad = Read-ClaudeFreePath -MouseState $null -GetSize { @(80, 24) } -GetWindowTop { 0 } -Write { param($t) } -SetCursor { param($x, $y) } -ReadLine { throw [IO.IOException]::new('the console handle is invalid') }
+    Assert-Equal '' $fpBad.Line 'a free-path read that throws still returns an empty line'
+    $fpErr = @($script:uiRecords | Where-Object { $_.Stage -eq 'error' })
+    Assert-Equal 1 $fpErr.Count 'and logs exactly one error record instead of swallowing it'
+    Assert-Equal 'Read-ClaudeFreePath' $fpErr[0].Data.where 'tagged with where it happened'
+    Assert-Equal 'IOException' $fpErr[0].Data.type 'and with the exception type'
+
+    # The sink is a TEST seam. Without it the records must reach Write-LauncherLog for real, or every
+    # assertion above would pass over a helper that writes nothing anywhere (Write-LauncherLog is
+    # stubbed at the top of this file, so this reads the call rather than the owner's log file).
+    $script:UiLogSink = $null
+    $script:loggedCalls = @()
+    $null = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {}
+    $uiReal = @($script:loggedCalls | Where-Object { $_.Stage -eq 'screen' -or $_.Stage -eq 'key' })
+    Assert-Equal 3 $uiReal.Count 'with no sink, the screen writes its records through Write-LauncherLog itself'
+
+    # Preview must stay side-effect-free, exactly like the launcher's own UI catch and
+    # Expand-SessionPage's - a preview run drives these very loops.
+    $script:Preview = $true
+    $script:loggedCalls = @()
+    $null = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys @('Escape')) -Draw {}
+    Assert-Equal 0 $script:loggedCalls.Count 'and a preview run writes none of them'
+    $script:Preview = $false
+} finally {
+    $script:UiLogSink = $null
+    Remove-Item -LiteralPath $uiLogRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- the launcher's own `ui` record, pinned as SOURCE ----------------------------------------------
+# claude-auto.ps1's UI block has a console and no suite can drive it (the same reason
+# Test-Maintenance pins the fetcher block and the cd/secrets order as text). What must not silently
+# go missing is WHY the project screen opened where it did and HOW the owner left it - the pair of
+# questions the 07:17 run could not answer. Positive control on each anchor: the text must be found
+# at all, so a renamed field fails here rather than passing vacuously.
+$uiLauncherSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
+$uiRecStart = $uiLauncherSrc.IndexOf("Write-LauncherLog -Stage 'ui'")
+Assert-True ($uiRecStart -ge 0) 'claude-auto.ps1 writes a ui record'
+$uiRecBlock = $uiLauncherSrc.Substring($uiRecStart, [Math]::Max(0, $uiLauncherSrc.IndexOf('elseif (-not [Console]::IsInputRedirected', $uiRecStart) - $uiRecStart))
+# Scoped to the field's OWN hashtable ([^}] stops at its closing brace), never a bare
+# `source = $projectSource`: the record already carries a line reading `projectSource = $projectSource`,
+# which satisfies an unscoped match with the whole preselect field deleted.
+Assert-True ($uiRecBlock -match 'preselect\s*=\s*@\{') 'the ui record carries what the project screen OPENED on'
+Assert-True ($uiRecBlock -match 'preselect\s*=\s*@\{[^}]*source\s*=\s*\$projectSource') 'with the source Set-LaunchStartProject returned'
+Assert-True ($uiRecBlock -match 'preselect\s*=\s*@\{[^}]*path\s*=\s*\$preselectPath') 'and the path it picked'
+Assert-True ($uiRecBlock -match 'chosen\s*=\s*@\{') 'and what the owner left the screen ON'
+Assert-True ($uiRecBlock -match 'chosen\s*=\s*@\{[^}]*how\s*=\s*\$chosenHow') 'with how the pick was committed'
+Assert-True ($uiRecBlock -match 'projectSource\s*=\s*\$projectSource') 'projectSource stays beside preselect for one release, so a reader pinned to it keeps working'
+# The module loop degrades to a bare session and says so on the console; before this it said nothing
+# to the LOG, which is where a failure that only happens on the owner's machine has to land.
+Assert-True ($uiLauncherSrc -match "where\s*=\s*'module-load'") 'a module that fails to load leaves an error record too'
+$uiPreselectAssign = @($uiLauncherSrc -split "`r?`n" | Where-Object { $_ -match '^\s*\$preselectPath\s*=' })
+Assert-Equal 1 $uiPreselectAssign.Count 'and the preselected path is captured in exactly one place - before the screen runs, or it is just the final pick again'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1016) { Write-Host "COULD NOT RUN: expected 1016 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1045) { Write-Host "COULD NOT RUN: expected 1045 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

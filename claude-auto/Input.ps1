@@ -465,6 +465,16 @@ function Read-ClaudeFreePath {
     )
     $newState = $MouseState
     $line = ''
+    # Write-UiLog lives in Ui.ps1, dot-sourced beside this file by the launcher but NOT by
+    # Test-Input - resolved once, and simply absent there (the same guard Expand-SessionPage uses for
+    # Write-LauncherLog). The prompt is opened by hand, so one lookup per call costs nothing.
+    #
+    # What is logged is that the prompt opened, how long it was up and HOW MANY characters came back.
+    # Never the path itself: it is the owner's own directory name, the one string on these screens
+    # that is nobody else's business, and these records are kept for two weeks.
+    $uiLog = Get-Command -Name Write-UiLog -CommandType Function -ErrorAction SilentlyContinue
+    $enteredAt = Get-Date
+    if ($uiLog) { & $uiLog -Stage 'screen' -Data @{ name = 'freepath'; phase = 'enter' } }
     try {
         if ($MouseState) { & $Close $MouseState }
         $w, $h = & $GetSize
@@ -475,10 +485,19 @@ function Read-ClaudeFreePath {
             # of how the read ends.
             & $Write "$([char]27)[?25h"
             & $SetCursor 0 ($top + $h - 1)
-        } catch { }
+        } catch {
+            # Cosmetic, and still logged: a prompt drawn in the wrong place (or an invisible cursor)
+            # is exactly the kind of "it looked broken" the log has never been able to confirm.
+            if ($uiLog) { & $uiLog -Stage 'error' -Data @{ where = 'Read-ClaudeFreePath.cursor'; type = $_.Exception.GetType().Name; message = $_.Exception.Message.Substring(0, [Math]::Min(300, $_.Exception.Message.Length)) } }
+        }
         & $Write "$([char]27)[K  path: "
         $line = & $ReadLine
-    } catch { $line = '' }
+    } catch {
+        $line = ''
+        # The swallow this record exists for: a read that fails returns an empty line, the project
+        # screen says 'path not found', and nothing anywhere said the console was the problem.
+        if ($uiLog) { & $uiLog -Stage 'error' -Data @{ where = 'Read-ClaudeFreePath'; type = $_.Exception.GetType().Name; message = $_.Exception.Message.Substring(0, [Math]::Min(300, $_.Exception.Message.Length)) } }
+    }
     finally {
         # Hidden again ONLY when the caller's own screen will re-show it (alt-buffer Exit-AltBuffer,
         # guarded `if ($alt)`). Off the alt buffer this must stay a no-op, or the terminal cursor is
@@ -487,6 +506,13 @@ function Read-ClaudeFreePath {
         # Re-armed in the finally so a throwing reader still leaves the console usable - never let
         # a failed read strand the launcher without its mouse for the rest of the session.
         if ($Rearm) { $newState = & $Open }
+        # LENGTH, never the line. In the finally so a throwing reader still closes the record - a
+        # prompt with an `enter` and no `leave` would read as "the launcher is still sitting there".
+        if ($uiLog) {
+            & $uiLog -Stage 'screen' -Data @{ name = 'freepath'; phase = 'leave'
+                                              ms = [int]((Get-Date) - $enteredAt).TotalMilliseconds
+                                              length = "$line".Length; rearmed = [bool]$Rearm }
+        }
     }
     return [pscustomobject]@{ Line = "$line"; MouseState = $newState }
 }

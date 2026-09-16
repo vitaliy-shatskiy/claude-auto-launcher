@@ -33,13 +33,28 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
     exit 1
 }
 
+# Preview is an environment variable, never a parameter: a param() block would change how
+# --resume/--continue/-p bind, and passing those through untouched is the hard invariant.
+#
+# Both of these are resolved BEFORE the modules load so that a module which fails to load can be
+# logged under the SAME run id as everything else. The bare-session fallback below EXITS without
+# ever reaching the `start` record, and an error record with no run id is one nobody can tie to a run.
+$Preview = ($env:CLAUDE_AUTO_PREVIEW -eq '1')
+$RunId = [guid]::NewGuid().ToString('N').Substring(0, 12)
+$LaunchStartedAt = Get-Date
+
 $ModuleDir = Join-Path $PSScriptRoot 'claude-auto'
 $ModulesOk = $true
+$ModuleErrors = @()
 foreach ($m in @('Config.ps1', 'Env.ps1', 'Remote.ps1', 'Sessions.ps1', 'Projects.ps1', 'Theme.ps1', 'Layout.ps1', 'Screens.ps1', 'Prefs.ps1', 'Input.ps1', 'Ui.ps1', 'Maintenance.ps1')) {
     try { . (Join-Path $ModuleDir $m) }
     catch {
         Write-Host "  module $m failed to load: $($_.Exception.Message)" -ForegroundColor DarkYellow
         $ModulesOk = $false
+        # Collected, not logged here: Env.ps1 owns the logger and may be the very module that
+        # failed, so the write happens once below where its absence can be checked.
+        $ModuleErrors += @{ module = $m; type = $_.Exception.GetType().Name
+                            message = $_.Exception.Message.Substring(0, [Math]::Min(300, $_.Exception.Message.Length)) }
     }
 }
 $UiOk = $ModulesOk
@@ -55,6 +70,17 @@ if ($ModulesOk) {
 # in this mode, and silently starting a crippled session would be worse than saying so.
 if (-not $ModulesOk) {
     Write-Host "  starting WITHOUT profile choice, secrets or MCP config - fix the error above" -ForegroundColor Red
+    # This branch exits, so it is the only chance to record WHICH module failed and why: the console
+    # line above scrolls away under Claude's own output within seconds. Get-Command because Env.ps1
+    # itself may be the module that did not load; -not $Preview because a preview run must stay
+    # side-effect-free, the same guard every other write on this path carries.
+    if (-not $Preview -and (Get-Command Write-LauncherLog -CommandType Function -ErrorAction SilentlyContinue)) {
+        foreach ($me in $ModuleErrors) {
+            $null = Write-LauncherLog -Stage 'error' -RunId $RunId -Data @{
+                where = 'module-load'; module = $me.module; type = $me.type; message = $me.message
+            }
+        }
+    }
     # Deliberately NOT Resolve-ClaudeExecutable (Env.ps1): a module failed to load and Env.ps1 may be
     # the one that failed, so this fallback must resolve claude itself rather than lean on a function
     # that might not exist. Same guard inline: -ErrorAction so a missing claude does not throw on
@@ -68,10 +94,6 @@ if (-not $ModulesOk) {
     exit $LASTEXITCODE
 }
 
-# Preview is an environment variable, never a parameter: a param() block would change how
-# --resume/--continue/-p bind, and passing those through untouched is the hard invariant.
-$Preview = ($env:CLAUDE_AUTO_PREVIEW -eq '1')
-
 # Every real launch leaves a trace in ~/.claude/launcher-logs/claude-auto-<date>.jsonl: a `start`
 # record here, `ui` when the menu closes, `decision` with the exact argv, `exit` with the code and
 # the wall time. Added 2026-08-16 after a burst of Claude sessions in a Rider project restarted
@@ -82,9 +104,8 @@ $Preview = ($env:CLAUDE_AUTO_PREVIEW -eq '1')
 # The `start` record is written BEFORE any work, so a launcher that hangs in the menu or is killed
 # still leaves its parent chain behind; a run with `start` and no `exit` is itself the finding.
 # Preview stays out: the suites and check-launcher-regression.ps1 drive that path, and preview must
-# remain side-effect-free.
-$RunId = [guid]::NewGuid().ToString('N').Substring(0, 12)
-$LaunchStartedAt = Get-Date
+# remain side-effect-free. ($RunId and $LaunchStartedAt are set above the module loop, so a module
+# that fails to load carries this run's id too.)
 if (-not $Preview) {
     Remove-OldLauncherLogs
     $null = Write-LauncherLog -Stage 'start' -RunId $RunId -Data @{
@@ -214,6 +235,12 @@ if ($UseUi) {
         # cwd when it is a known project or holds a .git; otherwise what this account launched last;
         # otherwise nothing, and the project screen opens with the cursor at the top.
         $projectSource = Set-LaunchStartProject -State $state -Cwd $LaunchCwd -Projects $projects
+        # Captured HERE, before the screen runs, and never re-derived: after the loop $state.Project
+        # is whatever the owner ended on, so reading it later answers "what did he pick" a second
+        # time instead of "where did the screen open" - the two questions the `ui` record keeps apart.
+        $preselectPath = "$($state.Project)"
+        # How the project screen was left - enter / hotkey / mouse, filled in from the pick below.
+        $chosenHow = $null
 
         # The free-path prompt itself is Read-ClaudeFreePath (Input.ps1) - see its own comment for
         # why the re-arm MUST come back through a return value, never a plain `$mouse = ...` inside
@@ -286,6 +313,7 @@ if ($UseUi) {
             # session picker already does. Preview cannot loop - its key list is finite - so it breaks.
             if (-not $chosen) { if ($Preview) { $previewPickerCancelled = $true; break }; continue }
             $state.Project = $chosen.Path
+            $chosenHow = "$($chosen.How)"
             $state.ProjectSlug = $chosen.Slug
             $state.ProjectSlugs = @($chosen.Slugs)
             $state.Action = $chosen.Action
@@ -459,7 +487,17 @@ if ($UseUi) {
             # none, from Resolve-StartProject. Not re-derived if the owner picked a different project
             # on the screen: this answers "why did the screen open where it did", a separate question
             # from "what did it end on" (already `project`, above).
+            #
+            # Kept beside `preselect` for one release as an alias, so a reader (or a saved grep)
+            # pinned to the flat field keeps working; `preselect` is where the pair lives now.
             projectSource  = $projectSource
+            # WHERE the project screen opened and WHY, as one field. `source` alone could never say
+            # whether the remembered project still existed - a path that vanished falls back to
+            # 'none' and the screen opens at the top, which reads identically to a fresh machine.
+            preselect      = @{ source = $projectSource; path = $preselectPath }
+            # And what it was left ON. `how` is enter | hotkey | mouse - which gesture committed the
+            # pick, the thing a screenshot of the log could never reconstruct.
+            chosen         = @{ path = "$($state.Project)"; how = $chosenHow }
         }
     }
 }
