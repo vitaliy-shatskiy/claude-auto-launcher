@@ -99,6 +99,14 @@ $script:MinWidth = 50
 $script:MinHeight = 20
 $script:TwoPaneWidth = 100
 
+function Get-FrameWidth {
+    # The last console column is never written: a line that fills it exactly wraps on some
+    # terminals (spec D4). Drawing uses this everywhere $Width was used; the MinWidth check
+    # above stays on $Width itself, since that gate is about the terminal, not the drawing budget.
+    param([int]$Width)
+    return $Width - 1
+}
+
 function Get-LaunchRows { return $script:Rows }
 
 function Get-LaunchDefaultAccount {
@@ -231,13 +239,14 @@ function Get-TooSmallFrame {
     # numbers away before the reader ever sees them. The same ordering protects it from the height
     # budget below - on a very short terminal it is the one line guaranteed to survive.
     param([int]$Width, [int]$Height)
+    $frameWidth = Get-FrameWidth -Width $Width
     $lines = @(
         "  need $($script:MinWidth)x$($script:MinHeight), have ${Width}x${Height}"
         '  terminal too small'
         ''
         '  resize the window, or press esc'
     )
-    $lines = @($lines | ForEach-Object { Limit-Line -Text $_ -Max $Width })
+    $lines = @($lines | ForEach-Object { Limit-Line -Text $_ -Max $frameWidth })
     $budget = [Math]::Max(1, $Height)
     if ($lines.Count -gt $budget) { $lines = @($lines[0..($budget - 1)]) }
     return $lines
@@ -506,7 +515,8 @@ function Get-LaunchFrame {
         return (Get-TooSmallFrame -Width $Width -Height $Height)
     }
     $g = Get-Glyphs -Ascii:$Ascii
-    $boxWidth = [Math]::Min($Width, 100)
+    $frameWidth = Get-FrameWidth -Width $Width
+    $boxWidth = [Math]::Min($frameWidth, 100)
     $inner = $boxWidth - 4
     $wide = $Width -ge $script:TwoPaneWidth
 
@@ -650,7 +660,7 @@ function Get-LaunchFrame {
     # it cannot mean one of them. Everything that IS a single action is. w/s and a/d, not
     # up/down and left/right (2026-09-09): WASD navigates every screen with a cursor now, and
     # naming it here is what tells the owner the shorter keys exist at all.
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
+    $footer = New-HintFooter -Glyphs $g -Width $frameWidth -Plain:(-not $Color) -Hints @(
         @{ Token = 'w/s'; Label = 'row';         Clickable = $false }
         @{ Token = 'a/d'; Label = 'value';       Clickable = $false }
         @{ Token = 'enter';      Label = 'next';        Clickable = $true; Key = 'Enter';  Char = '' }
@@ -672,7 +682,7 @@ function Get-LaunchFrame {
             $hasHover = $true
         }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar)
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -Body launch -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar)
 }
 
 function New-ListRow {
@@ -796,6 +806,7 @@ function Get-ProjectFrame {
         return (Get-TooSmallFrame -Width $Width -Height $Height)
     }
     $g = Get-Glyphs -Ascii:$Ascii
+    $frameWidth = Get-FrameWidth -Width $Width
     $items = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
     # The pinned rows are rows: they are selected, hit-tested and entered exactly like a project, so
     # the loop below never needs to know which kind it is looking at.
@@ -814,7 +825,7 @@ function Get-ProjectFrame {
     if ($Filter -or $Typing) { $title += " $($g.H) filter: $(Get-CleanTranscriptText -Text $Filter)"; if ($Typing) { $title += '_' } }
     if ($Notice) { $title += " $($g.H) $(Get-CleanTranscriptText -Text $Notice)" }
 
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints @(
+    $footer = New-HintFooter -Glyphs $g -Width $frameWidth -Plain:(-not $Color) -Hints @(
         @{ Token = 'w/s';   Label = 'move';     Clickable = $false }
         # Not clickable, for the reason the launch screen's own arrow hints are not: the token names
         # two directions and a click on it cannot mean one of them. MEASURED before it was added -
@@ -854,7 +865,7 @@ function Get-ProjectFrame {
     $bodyRows = [Math]::Max(3, $Height - 4 - @($footer.Lines).Count)
     if ($Index -ge $rows.Count) { $Index = [Math]::Max(0, $rows.Count - 1) }
     $vp = Get-Viewport -Count $rows.Count -Index $Index -Visible $bodyRows
-    $inner = $Width - 2
+    $inner = $frameWidth - 2
 
     $body = @()
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
@@ -884,7 +895,7 @@ function Get-ProjectFrame {
     $radio = New-RadioRow -Prefix '   ' -Label 'action' -Values (Get-ProjectActions) -Current (Step-ProjectAction -Action $Action -Delta 0) -Glyphs $g -LabelWidth 8 -MaxWidth $inner
     $body += $radio.Text
 
-    $lines = New-Box -Lines $body -Width $Width -Title $title -Ascii:$Ascii
+    $lines = New-Box -Lines $body -Width $frameWidth -Title $title -Ascii:$Ascii
     if ($RowMap) {
         $firstRowY = $lines.Count - $body.Count - 1
         $RowMap.Value = [pscustomobject]@{
@@ -913,7 +924,7 @@ function Get-ProjectFrame {
         'worktree' { @(@{ Key = ''; Char = 't' }) }
         default    { @() }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar -Selected $selected)
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hasHover -HoverKey $hoverKey -HoverChar $hoverChar -Selected $selected)
 }
 
 function Get-SessionExchange {
@@ -1104,6 +1115,7 @@ function Get-PickerFrame {
         return (Get-TooSmallFrame -Width $Width -Height $Height)
     }
     $g = Get-Glyphs -Ascii:$Ascii
+    $frameWidth = Get-FrameWidth -Width $Width
     # A session nobody typed anything into is not offered - see Select-ResumableSessions. The count
     # is stated rather than the list just quietly getting shorter: dropping rows silently reads as
     # "these are all your sessions" when 16 of 40 were never a real conversation.
@@ -1140,15 +1152,15 @@ function Get-PickerFrame {
         $hints += @{ Token = 'tab'; Label = $(if ($Scope -eq 'project') { 'all projects' } else { 'this project' }); Clickable = $true; Key = 'Tab'; Char = '' }
     }
     $hints += @{ Token = 'esc'; Label = 'back'; Clickable = $true; Key = 'Escape'; Char = '' }
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints $hints
+    $footer = New-HintFooter -Glyphs $g -Width $frameWidth -Plain:(-not $Color) -Hints $hints
 
     if ($items.Count -eq 0) {
         $emptyMsg =
             if ($Filter) { '  nothing matches that filter' }
             elseif ($hiddenCount -gt 0) { "  all $hiddenCount sessions here are empty - nothing to resume" }
             else { '  no sessions found' }
-        $lines = New-Box -Lines @('', $emptyMsg, '') -Width $Width -Title $title -Ascii:$Ascii
-        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap)
+        $lines = New-Box -Lines @('', $emptyMsg, '') -Width $frameWidth -Title $title -Ascii:$Ascii
+        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap)
     }
 
     # Box top + box bottom + one headroom row + the footer's lines (one on a wide terminal, more
@@ -1159,8 +1171,8 @@ function Get-PickerFrame {
     $bodyRows = [Math]::Max(3, $Height - 3 - @($footer.Lines).Count)
     $wide = $Width -ge $script:TwoPaneWidth
 
-    $leftWidth = if ($wide) { [Math]::Max(28, [int](($Width - 2) * 0.4)) } else { $Width - 2 }
-    $rightWidth = ($Width - 2) - $leftWidth - 1
+    $leftWidth = if ($wide) { [Math]::Max(28, [int](($frameWidth - 2) * 0.4)) } else { $frameWidth - 2 }
+    $rightWidth = ($frameWidth - 2) - $leftWidth - 1
 
     # Shared by both list loops below (narrow and wide) so the label/where/what computation is not
     # duplicated a third time. A nested function, not a scriptblock, so it needs no .GetNewClosure()
@@ -1208,16 +1220,16 @@ function Get-PickerFrame {
         if ($s.Worktree) { $head += "  $($g.Worktree) $($s.Worktree)" }
         $head += "  $($g.H)  $(Format-PromptCount -Session $s) msgs  $($g.H)  $($s.Modified.ToString('dd MMM HH:mm'))"
         $body = @($list)
-        $body += '  ' + (Limit-Line -Text $head -Max ($Width - 4))
-        $body += '  ' + ([string]$g.H * ($Width - 6))
+        $body += '  ' + (Limit-Line -Text $head -Max ($frameWidth - 4))
+        $body += '  ' + ([string]$g.H * ($frameWidth - 6))
         # $previewRows (6, fixed above) minus the two header lines just added is what is left for
         # the exchange itself - same total budget as before this change, now spent on as many
         # attributed messages as fit rather than a hardcoded one question, one answer.
         $exchangeBudget = [Math]::Max(1, $previewRows - 2)
-        foreach ($l in (Get-ExchangeLines -Messages (Get-SessionExchange -Session $s) -Width ($Width - 4) -MaxLines $exchangeBudget -Glyphs $g)) {
+        foreach ($l in (Get-ExchangeLines -Messages (Get-SessionExchange -Session $s) -Width ($frameWidth - 4) -MaxLines $exchangeBudget -Glyphs $g)) {
             $body += '  ' + $l
         }
-        $lines = New-Box -Lines $body -Width $Width -Title $title -Ascii:$Ascii
+        $lines = New-Box -Lines $body -Width $frameWidth -Title $title -Ascii:$Ascii
         # The list is the first $vp.Visible entries of $body, and New-Box wraps $body between a top
         # and a bottom border. Deriving the offset from the counts rather than hardcoding 1 means a
         # future change to the box cannot silently move every row by one.
@@ -1228,7 +1240,7 @@ function Get-PickerFrame {
                 Start     = $vp.Start
             }
         }
-        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap)
+        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap)
     }
 
     $vp = Get-Viewport -Count $items.Count -Index $Index -Visible $bodyRows
@@ -1255,7 +1267,7 @@ function Get-PickerFrame {
     }
 
     $body = Join-Panes -Left $list -Right $detail -LeftWidth $leftWidth -RightWidth $rightWidth -Ascii:$Ascii
-    $lines = New-Box -Lines $body -Width $Width -Title $title -Ascii:$Ascii
+    $lines = New-Box -Lines $body -Width $frameWidth -Title $title -Ascii:$Ascii
     # Same derivation as the narrow branch. Join-Panes can make the body TALLER than the list when
     # the detail pane is longer, so the row count is the viewport's, never the body's.
     if ($RowMap) {
@@ -1265,7 +1277,7 @@ function Get-PickerFrame {
             Start     = $vp.Start
         }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap)
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap)
 }
 
 function Get-MaintenanceFrame {
@@ -1275,7 +1287,8 @@ function Get-MaintenanceFrame {
         return (Get-TooSmallFrame -Width $Width -Height $Height)
     }
     $g = Get-Glyphs -Ascii:$Ascii
-    $boxWidth = [Math]::Min($Width, 100)
+    $frameWidth = Get-FrameWidth -Width $Width
+    $boxWidth = [Math]::Min($frameWidth, 100)
     # Both verdicts are kept short enough to survive the MINIMUM width: the label column is 14 and
     # the inner box at 50 columns is 48, so anything past 34 characters is cut - which is how the
     # old wording lost its own advice ('...close every sess...') exactly when it was needed.
@@ -1298,7 +1311,7 @@ function Get-MaintenanceFrame {
         $hints += @{ Token = $a.Key; Label = $a.Label; Clickable = $true; Key = ''; Char = $a.Key }
     }
     $hints += @{ Token = 'esc'; Label = 'back'; Clickable = $true; Key = 'Escape'; Char = '' }
-    $footer = New-HintFooter -Glyphs $g -Width $Width -Plain:(-not $Color) -Hints $hints
+    $footer = New-HintFooter -Glyphs $g -Width $frameWidth -Plain:(-not $Color) -Hints $hints
 
     $body = @(
         "  installed   $($Info.BinPath)",
@@ -1329,5 +1342,5 @@ function Get-MaintenanceFrame {
     }
 
     $lines = New-Box -Lines $body -Width $boxWidth -Title 'maintenance' -Ascii:$Ascii
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $Width -Glyphs $g -Color:$Color -RowMap $RowMap)
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap)
 }

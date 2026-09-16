@@ -271,7 +271,7 @@ foreach ($w in @(50, 60, 100, 120)) {
     foreach ($acc in @('low')) {
         $sel = New-LaunchState; $sel.Account = $acc
         $f = Get-LaunchFrame -State $sel -Width $w -Height 24
-        Assert-Equal 0 (@($f | Where-Object { $_.Length -gt $w }).Count) "no line exceeds width $w with the $acc account selected"
+        Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "no line reaches column $w with the $acc account selected (Task 7: the last column is never written)"
         $accLine = @($f | Where-Object { $_ -match '\baccount\b' })
         Assert-Equal 1 $accLine.Count "width ${w}: exactly one account row ($acc selected)"
         Assert-Equal $false ($accLine[0] -match '\bshared\b') "width ${w}: the hidden shared account is not drawn"
@@ -345,7 +345,8 @@ function New-ExpectedTabLine {
     return (" $($Glyphs.Cursor) " + 'account     ' + ($cells -join $Sep))
 }
 foreach ($w in @(50, 60, 78, 100, 120)) {
-    $inner = [Math]::Min($w, 100) - 4
+    # Task 7: drawing works off Width - 1 (Get-FrameWidth), never the raw terminal width.
+    $inner = [Math]::Min(($w - 1), 100) - 4
     $withPct   = New-ExpectedTabLine -WithPercent -Limits $tabLimits -Sep $sep -Glyphs $tabGlyphs
     $namesOnly = New-ExpectedTabLine              -Limits $tabLimits -Sep $sep -Glyphs $tabGlyphs
     # Percentages first, then names alone, then the collapsed form - each step taken only because
@@ -357,7 +358,7 @@ foreach ($w in @(50, 60, 78, 100, 120)) {
     $f = @(Get-LaunchFrame -State (New-LaunchState) -Width $w -Height 30 -Limits $tabLimits)
     $line = @($f | Where-Object { $_ -match '\baccount\b' })[0]
     Assert-Equal $expected $line "width ${w}: the account row is exactly what fits ($($withPct.Length) with percentages, $($namesOnly.Length) without, $inner available)"
-    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt $w }).Count) "width ${w}: no line exceeds the terminal with three tabs and three bars"
+    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "width ${w}: no line reaches the last console column with three tabs and three bars"
 }
 
 # Narrow: one bar per line, the age on the last of them - squeezing three onto one line would
@@ -406,12 +407,12 @@ $longDefaultLabel = 'default (claude-fable-5-1[1m])'
 foreach ($w in @(60, 80, 100, 120)) {
     $sel = New-LaunchState; $sel.Model = 'sonnet1m'   # 'Sonnet 5[1M]' is the longest static label
     $f = Get-LaunchFrame -State $sel -Width $w -Height 24 -DefaultModelLabel $longDefaultLabel
-    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt $w }).Count) "no line exceeds width $w with Sonnet 5[1M] selected"
+    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "no line reaches column $w with Sonnet 5[1M] selected"
     Assert-Equal 1 (@($f | Where-Object { $_ -match [regex]::Escape('Sonnet 5[1M]') }).Count) "width ${w}: the selected model label renders complete, not truncated"
 }
 foreach ($w in @(60, 80, 100, 120)) {
     $f = Get-LaunchFrame -State (New-LaunchState) -Width $w -Height 24 -DefaultModelLabel $longDefaultLabel
-    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt $w }).Count) "no line exceeds width $w with the long resolved default label"
+    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "no line reaches column $w with the long resolved default label"
     Assert-Equal 1 (@($f | Where-Object { $_ -match [regex]::Escape($longDefaultLabel) }).Count) "width ${w}: the resolved default label renders complete, not truncated"
 }
 # The collapse is content-driven, not width-driven alone: short labels at a generous width still
@@ -444,7 +445,8 @@ Assert-Equal $false ($r4Remote.Contains('stop server')) 'so the multi-word value
 $r4Model80 = @(@(Get-LaunchFrame -State (New-LaunchState) -Width 80 -Height 24) | Where-Object { $_ -match '\bmodel\b' })[0]
 Assert-Equal $true ($r4Model80 -match [regex]::Escape($r4Glyphs.LAngle)) 'and the model row collapses at 80 columns for the same reason - every one of its labels is two words'
 # The positive half: a row whose values are all single words still takes the compact form at a width
-# where the full one does not fit (advisor: 47 cells full, 39 compact, 46 available at width 50).
+# where the full one does not fit (advisor: 47 cells full, 39 compact, 45 available at width 50 -
+# Task 7: the box is drawn at Width - 1, so one cell less than before).
 $r4Advisor = @($r4At50 | Where-Object { $_ -match '\badvisor\b' })[0]
 Assert-Equal $true ($r4Advisor.Contains('[default]')) 'a single-word row DOES take the compact form where the full one does not fit'
 Assert-Equal $false ($r4Advisor -match [regex]::Escape($r4Glyphs.On)) 'which is the form that drops the radio glyphs'
@@ -454,7 +456,7 @@ Assert-Equal $false ($r4Advisor -match [regex]::Escape($r4Glyphs.LAngle)) 'and n
 foreach ($w in @(60, 80, 120, 200)) {
     foreach ($ascii in @($true, $false)) {
         $f = Get-LaunchFrame -State (New-LaunchState) -Width $w -Height 24 -Ascii:$ascii
-        Assert-Equal 0 (@($f | Where-Object { $_.Length -gt $w }).Count) "no launch line exceeds width $w (ascii=$ascii)"
+        Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "no launch line reaches column $w (ascii=$ascii)"
     }
 }
 
@@ -463,7 +465,7 @@ foreach ($w in @(60, 80, 120, 200)) {
 # arithmetic went unchecked.
 $wideLimits = @{ work = [pscustomobject]@{ FiveHour = 90; SevenDay = 90; AgeText = 'now' } }
 $f = Get-LaunchFrame -State (New-LaunchState) -Width 120 -Height 24 -Limits $wideLimits
-Assert-Equal 0 (@($f | Where-Object { $_.Length -gt 120 }).Count) 'no launch line exceeds width 120 with the wide rate-limit bars shown'
+Assert-Equal 0 (@($f | Where-Object { $_.Length -gt 119 }).Count) 'no launch line reaches column 120 with the wide rate-limit bars shown'
 # The width check above can never fail on its own: Get-LaunchFrame Limit-Lines every line to
 # $Width right before returning, so any internal overflow in this branch would be silently cut
 # rather than reported. Assert the actual content survives instead - both percentages and the
@@ -514,10 +516,10 @@ Assert-Equal 0 (@($f | Where-Object { $_ -match 'restored from your last launch'
 foreach ($w in @(10, 20, 30, 50)) {
     foreach ($h in @(2, 4, 10, 24)) {
         $lf = Get-LaunchFrame -State (New-LaunchState) -Width $w -Height $h
-        Assert-Equal 0 (@($lf | Where-Object { $_.Length -gt $w }).Count) "too-small launch frame has no line over width $w at height $h"
+        Assert-Equal 0 (@($lf | Where-Object { $_.Length -gt ($w - 1) }).Count) "too-small launch frame has no line over column $w at height $h"
         Assert-Equal $true ($lf.Count -le $h) "too-small launch frame has no more than $h lines at width $w"
         $pf = Get-PickerFrame -Sessions @() -Index 0 -Filter '' -Width $w -Height $h
-        Assert-Equal 0 (@($pf | Where-Object { $_.Length -gt $w }).Count) "too-small picker frame has no line over width $w at height $h"
+        Assert-Equal 0 (@($pf | Where-Object { $_.Length -gt ($w - 1) }).Count) "too-small picker frame has no line over column $w at height $h"
         Assert-Equal $true ($pf.Count -le $h) "too-small picker frame has no more than $h lines at width $w"
     }
 }
@@ -647,7 +649,7 @@ foreach ($w in @(60, 78, 100, 120, 200)) {
             foreach ($ascii in @($true, $false)) {
                 $f = Get-PickerFrame -Sessions $list -Index 0 -Filter '' -Width $w -Height $h -Now $now -Ascii:$ascii
                 Assert-Equal $true ($f.Count -le $h) "frame fits in $h rows (width $w, $($list.Count) session(s), ascii=$ascii)"
-                Assert-Equal 0 (@($f | Where-Object { $_.Length -gt $w }).Count) "no line exceeds width $w (height $h, $($list.Count) session(s), ascii=$ascii)"
+                Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "no line reaches column $w (height $h, $($list.Count) session(s), ascii=$ascii)"
             }
         }
     }
@@ -848,7 +850,7 @@ $cyrSession = [pscustomobject]@{
 }
 foreach ($w in @(100, 120)) {
     $f = Get-PickerFrame -Sessions @($cyrSession) -Index 0 -Filter '' -Width $w -Height 30 -Now $now
-    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt $w }).Count) "width ${w}: Cyrillic content does not break the width budget"
+    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "width ${w}: Cyrillic content does not break the width budget"
     Assert-Equal $true ((@($f | Where-Object { $_ -match 'привет' }).Count) -gt 0) "width ${w}: Cyrillic text renders intact"
 }
 
@@ -3622,8 +3624,28 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
 Assert-True ($null -eq $r) 'a resize does not end the screen'
 Assert-Equal 'Escape' ($script:sawKeys -join ',') 'and no handler ever sees it - only the Escape behind it'
 Assert-Equal 2 $draws 'the resize costs exactly one redraw and one more wait'
+# --- Task 7 (spec D4): every frame fits - no rendered line reaches the last console column -----
+# $sharedName / $fakeInfo are the fixtures the file already uses for Get-PickerFrame and
+# Get-MaintenanceFrame elsewhere in this file - reused here rather than a fifth ad hoc fixture.
+$longProjects = @(1..30 | ForEach-Object { [pscustomobject]@{ Name = "project-with-a-long-name-$_"; Path = "C:\Users\sample\Desktop\Projects\an\even\longer\path\segment\$_"; Slug = "s$_"; Slugs = @("s$_"); LastActivity = (Get-Date).AddHours(-$_); Exists = $true; Worktree = '' } })
+foreach ($w in 60, 80, 120, 200) {
+    $m = $null
+    $frames = @{
+        launch  = @(Get-LaunchFrame -State (New-LaunchState) -Width $w -Height 24 -RowMap ([ref]$m))
+        project = @(Get-ProjectFrame -Projects $longProjects -Index 0 -Cwd 'C:\Users\sample' -Width $w -Height 24 -RowMap ([ref]$m))
+        picker  = @(Get-PickerFrame -Sessions $sharedName -Index 0 -Width $w -Height 24 -RowMap ([ref]$m))
+        maint   = @(Get-MaintenanceFrame -Info $fakeInfo -Width $w -Height 24 -RowMap ([ref]$m))
+    }
+    foreach ($k in $frames.Keys) {
+        $over = @($frames[$k] | Where-Object { (Get-DisplayWidth -Text (Remove-AnsiColor $_)) -gt ($w - 1) })
+        Assert-Equal 0 $over.Count "$k frame at $w columns: no line reaches column $w (the last console column wraps)"
+    }
+}
+Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old free-path bullet) measures two cells, as Windows Terminal draws it'
+Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1157) { Write-Host "COULD NOT RUN: expected 1157 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1175) { Write-Host "COULD NOT RUN: expected 1175 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
