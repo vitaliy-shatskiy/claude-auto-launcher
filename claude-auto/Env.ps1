@@ -23,7 +23,7 @@ foreach ($a in $Accounts) { $ProfileRoots[$a.Key] = $a.Root; $ProfileLabels[$a.K
 # when CLAUDE_CONFIG_DIR points elsewhere, so a personal copy made every personal
 # session load the same ~4.6k tokens twice (found 2026-07-31). Single copy in ~/.claude.
 $SharedFiles = @('settings.json', 'statusline.js')
-$SharedDirs = @('projects', 'plugins', 'hooks', 'agents', 'skills', 'rules', 'sessions', 'file-history', 'session-env', 'tasks', 'shell-snapshots')
+$SharedDirs = @('projects', 'plugins', 'hooks', 'agents', 'skills', 'output-styles', 'rules', 'sessions', 'file-history', 'session-env', 'tasks', 'shell-snapshots')
 
 # One JSONL file per day under ~/.claude/launcher-logs. Deliberately NOT under either profile's
 # config directory: the launcher runs before the account is chosen, and a log that moves with the
