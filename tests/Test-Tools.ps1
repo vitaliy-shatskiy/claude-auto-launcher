@@ -43,9 +43,10 @@ try {
     # run A is the newest run that reached the UI - the two `-Last` behaviours diverge only if that
     # ordering holds.
     $longNote = 'x' * 200
+    $multiLineValue = "line-one`nline-two`nline-three"
 
     $fileA = @(
-        (@{ ts = '2026-09-15T10:00:00'; stage = 'start'; run = 'AAA111'; pid = 4001; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress),
+        (@{ ts = '2026-09-15T10:00:00'; stage = 'start'; run = 'AAA111'; pid = 4001; cmd = 'claude-auto.ps1'; prompt = $multiLineValue } | ConvertTo-Json -Compress),
         (@{ ts = '2026-09-15T10:00:02'; stage = 'decision'; run = 'AAA111'; pid = 4001; useUi = $true; account = 'work' } | ConvertTo-Json -Compress),
         '{not valid json at all',
         '',
@@ -60,9 +61,19 @@ try {
             note    = $longNote } | ConvertTo-Json -Compress -Depth 5),
         (@{ ts = '2026-09-15T10:00:20'; stage = 'exit'; run = 'AAA111'; pid = 4001; code = 0 } | ConvertTo-Json -Compress),
         (@{ ts = '2026-09-15T11:00:02'; stage = 'decision'; run = 'BBB222'; pid = 4002; useUi = $false; account = 'work' } | ConvertTo-Json -Compress),
-        (@{ ts = '2026-09-15T11:00:10'; stage = 'exit'; run = 'BBB222'; pid = 4002; code = 0 } | ConvertTo-Json -Compress)
+        (@{ ts = '2026-09-15T11:00:10'; stage = 'exit'; run = 'BBB222'; pid = 4002; code = 0 } | ConvertTo-Json -Compress),
+        # A torn record: unparsable ts. Must not crash the reader and must not silently pass as "run
+        # not found" (1) - it has no usable timestamp, which is a "2", and it must not poison -Last.
+        (@{ ts = 'not-a-timestamp'; stage = 'start'; run = 'TSBAD1'; pid = 4003 } | ConvertTo-Json -Compress),
+        # A torn record: no ts key at all.
+        (@{ stage = 'start'; run = 'TSNOKEY'; pid = 4004 } | ConvertTo-Json -Compress)
     )
     Set-Content -LiteralPath (Join-Path $root 'claude-auto-2026-09-16.jsonl') -Value $fileB
+
+    # A run dated well outside the default 3-day window, beside the two in-window files above.
+    Set-Content -LiteralPath (Join-Path $root 'claude-auto-2026-01-01.jsonl') -Value @(
+        (@{ ts = '2026-01-01T09:00:00'; stage = 'start'; run = 'ANCIENT'; pid = 5001; cmd = 'claude-auto.ps1' } | ConvertTo-Json -Compress)
+    )
 
     # --- 2. -Run A: header, one line per record in ts order, monotonic offsets, parents, truncation
     $r = Invoke-Tool @('-Run', 'AAA111', '-LogRoot', $root)
@@ -90,6 +101,8 @@ try {
     if ($joined -match 'note=(x+)(…)') { $noteLen = $Matches[1].Length } else { $noteLen = -1 }
     Assert-Equal 160 $noteLen 'a value over 160 chars is truncated to 160 chars plus an ellipsis'
 
+    Assert-True ($joined -match 'prompt=line-one⏎line-two⏎line-three') 'a multi-line value collapses to one line with an <ENTER> glyph, not raw newlines'
+
     # --- 3. -Last vs -Last -Any diverge: A reached the UI, B is merely the newest overall
     $rLast = Invoke-Tool @('-Last', '-LogRoot', $root)
     Assert-Equal 0 $rLast.Code '-Last exits 0'
@@ -115,6 +128,48 @@ try {
         $rGarbage = Invoke-Tool @('-Last', '-LogRoot', $garbageRoot)
         Assert-Equal 2 $rGarbage.Code 'a -LogRoot with only garbage/blank lines exits 2'
     } finally { Remove-Item -LiteralPath $garbageRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
+    # --- 5. A torn ts must not crash the reader (raw PowerShell dump, exit 1) and must not poison
+    # -Last for healthy runs. Contract: unusable ts -> 2, distinct from a genuinely absent run -> 1.
+    $rTsBad = Invoke-Tool @('-Run', 'TSBAD1', '-LogRoot', $root)
+    Assert-Equal 2 $rTsBad.Code '-Run TSBAD1 (unparsable ts) exits 2, not a raw-dump 1'
+    Assert-True (($rTsBad.Out -join "`n") -notmatch 'Cannot convert value') 'no raw PowerShell type-conversion dump for a bad ts'
+
+    $rTsNoKey = Invoke-Tool @('-Run', 'TSNOKEY', '-LogRoot', $root)
+    Assert-Equal 2 $rTsNoKey.Code '-Run TSNOKEY (missing ts key) exits 2'
+
+    $rLastAnyTorn = Invoke-Tool @('-Last', '-Any', '-LogRoot', $root)
+    Assert-Equal 0 $rLastAnyTorn.Code '-Last -Any still succeeds with a torn record present in the window'
+    Assert-True (($rLastAnyTorn.Out -join "`n") -match 'run BBB222') '-Last -Any still resolves to the healthy newest run, not derailed by TSBAD1/TSNOKEY'
+
+    # --- 6. -Days is a real date window, and a bad -Days value is a clean parameter error.
+    $rAncient = Invoke-Tool @('-Run', 'ANCIENT', '-LogRoot', $root)
+    Assert-Equal 1 $rAncient.Code 'a run outside the default -Days window is "not found" (1), not silently served'
+    Assert-True (($rAncient.Out -join "`n") -match 'not in the last \d+ day') 'the miss names the window, not a bare not-found'
+
+    $windowRoot = Join-Path $env:TEMP ("launcher-run-window-test-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force $windowRoot | Out-Null
+    try {
+        Set-Content -LiteralPath (Join-Path $windowRoot 'claude-auto-2026-01-01.jsonl') -Value @(
+            (@{ ts = '2026-01-01T09:00:00'; stage = 'start'; run = 'ANCIENT'; pid = 5001 } | ConvertTo-Json -Compress)
+        )
+        $rWindowEmpty = Invoke-Tool @('-Last', '-LogRoot', $windowRoot)
+        Assert-Equal 2 $rWindowEmpty.Code 'a -LogRoot with only files outside the -Days window exits 2 (no files in window)'
+    } finally { Remove-Item -LiteralPath $windowRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
+    $rBadDays = Invoke-Tool @('-Last', '-LogRoot', $root, '-Days', '-1')
+    Assert-Equal 1 $rBadDays.Code '-Days -1 is a clean parameter-validation error (documented exit 1), not a -First -1 binding crash'
+    Assert-True (($rBadDays.Out -join "`n") -notmatch 'Select-Object') 'no raw Select-Object -First -1 error text'
+
+    # --- 7. The reader must not lock the file against a concurrent launcher append (item 6): open
+    # it the same way the tool now does (Read, sharing ReadWrite) and prove a live append still works.
+    $concurrentFile = Join-Path $root 'claude-auto-2026-09-16.jsonl'
+    $handle = [IO.File]::Open($concurrentFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+        $appendOk = $true
+        try { [IO.File]::AppendAllText($concurrentFile, '') } catch { $appendOk = $false }
+        Assert-True $appendOk 'a concurrent append succeeds while a FileShare.ReadWrite read handle is open'
+    } finally { $handle.Dispose() }
 
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
