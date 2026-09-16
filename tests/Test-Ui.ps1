@@ -2554,6 +2554,21 @@ try {
     Assert-Equal 'continue' (Step-Option -Values $vals -Current 'bogus' -Delta 1) 'an unknown value steps from the first'
     Assert-Equal 'new' (Step-Option -Values $vals -Current 'new' -Delta 8) 'a delta larger than the list wraps by modulo'
 
+    # --- Step-LaunchValue gained case-canonicalisation it never had (behaviour change, review fix
+    # round 1): the old code was a bare [Array]::IndexOf, so a stored 'HIGH' (Prefs.ps1 validates
+    # case-insensitively, so a hand-edited case survives into $State) stepped from index 0. Now it
+    # resolves to 'high''s own index first, matching the W4 fix the project screen already had. ---
+    $effortState = New-LaunchState
+    $effortState.Row = Get-RowIndex -Name 'Effort'
+    $effortState.Effort = 'HIGH'
+    $effortState = Step-LaunchValue -State $effortState -Delta 1
+    Assert-Equal 'xhigh' $effortState.Effort 'a differently-cased stored value steps from ITS canonical index, not from the first'
+    $effortState2 = New-LaunchState
+    $effortState2.Row = Get-RowIndex -Name 'Effort'
+    $effortState2.Effort = 'HIGH'
+    $effortState2 = Step-LaunchValue -State $effortState2 -Delta 0
+    Assert-Equal 'high' $effortState2.Effort 'and Delta 0 writes the canonical spelling back onto the state'
+
     # Left/Right from a LIST row: the owner never has to walk down to the field to use it.
     $pAct1 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('RightArrow', 'Enter')) -Draw {}
     Assert-Equal 'continue' $pAct1.Action 'RightArrow on a project row steps the field, and Enter runs what it says'
@@ -3085,7 +3100,7 @@ try {
 # (review W5).
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1049) { Write-Host "COULD NOT RUN: expected 1049 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1051) { Write-Host "COULD NOT RUN: expected 1051 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
