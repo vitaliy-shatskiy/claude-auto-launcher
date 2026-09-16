@@ -1,5 +1,6 @@
 # Assertions for Theme.ps1. Run: pwsh -NoProfile -File Test-Theme.ps1
 try { . "$PSScriptRoot\..\claude-auto\Theme.ps1" } catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
+try { . "$PSScriptRoot\..\claude-auto\Layout.ps1" } catch { Write-Host "COULD NOT RUN: $($_.Exception.Message)"; exit 2 }
 
 $script:Failed = 0
 $script:Ran = 0
@@ -10,6 +11,16 @@ function Assert-Equal {
         Write-Host "FAIL  $Because"
         Write-Host "      expected: $Expected"
         Write-Host "      actual:   $Actual"
+        $script:Failed++
+    } else {
+        Write-Host "ok    $Because"
+    }
+}
+function Assert-True {
+    param([bool]$Actual, [string]$Because)
+    $script:Ran++
+    if (-not $Actual) {
+        Write-Host "FAIL  $Because"
         $script:Failed++
     } else {
         Write-Host "ok    $Because"
@@ -96,7 +107,17 @@ $env:CLAUDE_AUTO_ASCII = '1'
 Assert-Equal $true (Test-AsciiRequired) 'CLAUDE_AUTO_ASCII=1 forces ASCII glyphs'
 if ($null -eq $savedASCII) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedASCII }
 
-if ($script:Ran -ne 29) { Write-Host "COULD NOT RUN: expected 29 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- every glyph is one cell on Windows Terminal: no emoji, no wide, no emoji-presentation ----------
+foreach ($ascii in $false, $true) {
+    $g = Get-Glyphs -Ascii:$ascii
+    foreach ($k in $g.Keys) {
+        $s = [string]$g[$k]
+        Assert-Equal 1 (Get-DisplayWidth -Text $s) "glyph $k ($([int][char]$s[0]) hex $('{0:X4}' -f [int][char]$s[0])) is exactly one cell (ascii=$ascii)"
+    }
+}
+Assert-True (-not ([string](Get-Glyphs).Bullet).Contains([char]0x23FA)) 'the free-path bullet is no longer U+23FA, which Windows Terminal draws as an emoji'
+
+if ($script:Ran -ne 68) { Write-Host "COULD NOT RUN: expected 68 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

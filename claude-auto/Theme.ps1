@@ -62,7 +62,7 @@ function Get-Glyphs {
     param([switch]$Ascii)
     if ($Ascii) {
         return @{
-            Cursor = '>'; On = '*'; Off = '-'; Bullet = '*'; Sparkle = '*'; Worktree = '@'
+            Cursor = '>'; On = '*'; Off = '-'; Bullet = '+'; Sparkle = '*'; Worktree = '@'
             Up = '^'; BarFull = '#'; BarEmpty = '.'; Prompt = '>'
             TL = '+'; TR = '+'; BL = '+'; BR = '+'; H = '-'; V = '|'
             LAngle = '<'; RAngle = '>'
@@ -72,8 +72,8 @@ function Get-Glyphs {
         }
     }
     return @{
-        Cursor = [char]0x276F; On = [char]0x25CF; Off = [char]0x25CB; Bullet = [char]0x23FA
-        Sparkle = [char]0x273B; Worktree = [char]0x2302; Up = [char]0x2B06
+        Cursor = [char]0x276F; On = [char]0x25CF; Off = [char]0x25CB; Bullet = '+'
+        Sparkle = [char]0x273B; Worktree = [char]0x2302; Up = [char]0x2191
         BarFull = [char]0x2593; BarEmpty = [char]0x2591; Prompt = [char]0x276F
         TL = [char]0x256D; TR = [char]0x256E; BL = [char]0x2570; BR = [char]0x256F
         H = [char]0x2500; V = [char]0x2502
