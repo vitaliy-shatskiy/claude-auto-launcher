@@ -1880,7 +1880,9 @@ foreach ($h in @($script:MinHeight, 50)) {
 
     $pjf = @(Get-ProjectFrame -Projects $projWorstList -Index 5 -Cwd 'C:\x' -Width 50 -Height $h)
     $pjfText = $pjf -join "`n"
-    foreach ($hint in @('w/s move', '[enter] new', '[c] continue', '[r] resume', '[t] worktree', '[/] filter', '[esc] back')) {
+    # '[enter] run', not '[enter] new': Enter runs whatever the action field says, and the arrow
+    # hint that names the field has to survive the narrowest terminal like every other one.
+    foreach ($hint in @('w/s move', "$($tabGlyphs.LAngle) $($tabGlyphs.RAngle) action", '[enter] run', '[c] continue', '[r] resume', '[t] worktree', '[/] filter', '[esc] back')) {
         Assert-Equal $true $pjfText.Contains($hint) "50x${h} project: the hint '$hint' is readable"
     }
     Assert-Equal $true ($pjf.Count -le ($h - 1)) "50x${h} project: $($pjf.Count) lines leave the headroom row"
@@ -2885,7 +2887,7 @@ Assert-Equal 0 $n2Io.Added 'an IO failure still ends the paging quietly'
 Assert-Equal $true $n2Io.Exhausted 'and marks the list exhausted rather than taking the picker down'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1012) { Write-Host "COULD NOT RUN: expected 1012 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1014) { Write-Host "COULD NOT RUN: expected 1014 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

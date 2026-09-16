@@ -703,7 +703,10 @@ function Get-ProjectFrame {
         # at 50, 80 and 100 columns the project footer wraps onto exactly the same number of lines
         # with it as without, so it costs the list no row anywhere.
         @{ Token = "$($g.LAngle) $($g.RAngle)"; Label = 'action'; Clickable = $false }
-        @{ Token = 'enter'; Label = 'new';      Clickable = $true; Key = 'Enter';  Char = '' }
+        # 'run', not 'new', since the action field landed: Enter runs whatever the field says, and a
+        # footer reading 'new' beside a field reading 'resume' advertises a key that does something
+        # else - the one failure New-HintFooter's whole data-driven shape exists to prevent.
+        @{ Token = 'enter'; Label = 'run';      Clickable = $true; Key = 'Enter';  Char = '' }
         @{ Token = 'c';     Label = 'continue'; Clickable = $true; Key = '';       Char = 'c' }
         @{ Token = 'r';     Label = 'resume';   Clickable = $true; Key = '';       Char = 'r' }
         @{ Token = 't';     Label = 'worktree'; Clickable = $true; Key = '';       Char = 't' }
