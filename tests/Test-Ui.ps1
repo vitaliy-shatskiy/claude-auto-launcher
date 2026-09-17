@@ -1647,6 +1647,154 @@ $w = New-EventReader @((New-MouseEvent -Wheel -128), (New-MouseEvent -Wheel -128
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal 2 $out.Row 'two notches down move two rows down'
 
+# --- Model/advisor PLAN filter (spec 2026-09-17 v2). An option the account's plan does not include
+# is hidden from its row - in rendering, in stepping and in click hit-testing - and a remembered
+# hidden value snaps to default so Get-LaunchArgs can never emit it. The whole rule is one constant
+# ($script:PlanHiddenFamilies: Team hides the fable family); every other plan, and no plan at all,
+# hides nothing. v1 keyed off weekly buckets instead and was inverted - Max has no own Opus bucket
+# yet has Opus, Team has no model buckets yet has no Fable. Every assertion ships a red. ----------
+$mvIdx = Get-RowIndex -Name 'Model'
+$avIdx = Get-RowIndex -Name 'Advisor'
+$modelRowDef = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Model' }
+$advRowDef   = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Advisor' }
+$modelAll = @($modelRowDef.Values) -join ','
+$advAll   = @($advRowDef.Values) -join ','
+function New-PlanLimit { param([string]$Account = 'work', [string]$Plan)
+    @{ $Account = [pscustomobject]@{ FiveHour = 40; SevenDay = 48; AgeText = 'now'; Model = $null; ModelLabel = $null; Plan = $Plan } } }
+
+# The rule at its one source: Team drops fable from both rows and keeps every other option.
+Assert-Equal 'default,opus1m,sonnet1m,haiku' (@(Get-VisibleRowValues -Row $modelRowDef -Plan 'Team') -join ',') 'Get-VisibleRowValues drops fable from the Model row on Team and keeps every other option'
+Assert-Equal 'default,opus,off' (@(Get-VisibleRowValues -Row $advRowDef -Plan 'Team') -join ',') 'and drops fable from the Advisor row, keeping default, opus and off'
+# The plan key is the FIRST WORD, lower-cased: the label carries a multiplier and arbitrary case.
+Assert-Equal 'default,opus1m,sonnet1m,haiku' (@(Get-VisibleRowValues -Row $modelRowDef -Plan 'team') -join ',') 'the plan match is case-insensitive (lower-case team)'
+Assert-Equal 'default,opus1m,sonnet1m,haiku' (@(Get-VisibleRowValues -Row $modelRowDef -Plan '  Team  ') -join ',') 'and survives surrounding whitespace'
+Assert-Equal 'default,opus1m,sonnet1m,haiku' (@(Get-VisibleRowValues -Row $modelRowDef -Plan 'Team Premium') -join ',') 'a multi-word Team label matches on its first word'
+# Every plan with no row in the constant hides nothing - this is the fail-safe the owner asked for,
+# and the hinge the frame's byte identity hangs on. 'Teams' is here on purpose: the key is the whole
+# first word, so a longer word that merely starts with team is NOT Team.
+foreach ($okPlan in @('Max 20x', 'Max 5x', 'Max', 'Pro', 'Enterprise', 'Free', 'garbage', 'Teams', '')) {
+    Assert-Equal $modelAll (@(Get-VisibleRowValues -Row $modelRowDef -Plan $okPlan) -join ',') "plan '$okPlan' hides nothing on the Model row"
+    Assert-Equal $advAll   (@(Get-VisibleRowValues -Row $advRowDef   -Plan $okPlan) -join ',') "plan '$okPlan' hides nothing on the Advisor row"
+}
+Assert-Equal $modelAll (@(Get-VisibleRowValues -Row $modelRowDef -Plan $null) -join ',') 'a $null plan hides nothing'
+Assert-Equal $modelAll (@(Get-VisibleRowValues -Row $modelRowDef) -join ',') 'and an omitted -Plan hides nothing either'
+# Rows with no family map are never touched, whatever the plan - the other five rows stay whole.
+foreach ($otherRow in @((Get-LaunchRows) | Where-Object { $_.Name -notin @('Model', 'Advisor') })) {
+    Assert-Equal (@($otherRow.Values) -join ',') (@(Get-VisibleRowValues -Row $otherRow -Plan 'Team') -join ',') "the $($otherRow.Name) row has no family map and is untouched on Team"
+}
+
+# Rendering: on Team the Model row has no fable CELL and no Fable LABEL, and every other option keeps
+# both. The cells and the drawn text come from the same visible list, so they cannot disagree.
+$teamLim = New-PlanLimit -Plan 'Team'
+$mfMap = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $teamLim -RowMap ([ref]$mfMap)
+Assert-Equal 0 (@($mfMap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'the hidden fable option gets no click cell on the Model row'
+Assert-Equal 'default,opus1m,sonnet1m,haiku' (@($mfMap.Rows[$mvIdx].Cells | ForEach-Object Value) -join ',') 'and the Model row cells are exactly the visible options'
+Assert-Equal 0 (@($mfMap.Rows[$avIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'the hidden fable option gets no click cell on the Advisor row'
+Assert-Equal 'default,opus,off' (@($mfMap.Rows[$avIdx].Cells | ForEach-Object Value) -join ',') 'and the Advisor row cells are exactly the visible options'
+$teamFrame = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $teamLim)
+$mfLine = @($teamFrame | Where-Object { $_ -match '\bmodel\b' })[0]
+Assert-Equal $false ($mfLine -match 'Fable 5\.1') 'the drawn Model row no longer shows the Fable 5.1 label on Team'
+Assert-True (($mfLine -match 'Opus 5') -and ($mfLine -match 'Sonnet 5') -and ($mfLine -match 'Haiku 4\.5')) 'while Opus, Sonnet and Haiku are all still drawn there'
+$afLine = @($teamFrame | Where-Object { $_ -match '\badvisor\b' })[0]
+Assert-Equal $false ($afLine -match 'fable') 'the drawn Advisor row no longer offers fable on Team'
+Assert-True (($afLine -match 'opus') -and ($afLine -match 'off')) 'while opus and off are both still drawn there'
+# Fail safe, the two shapes of "no plan" a real record takes: the property absent (an older widget)
+# and the property $null. Both keep the fable cell - this is what a fail-safe regression reds.
+$mfAbsent = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits @{ work = [pscustomobject]@{ FiveHour = 40; SevenDay = 48; AgeText = 'now'; Model = $null; ModelLabel = $null } } -RowMap ([ref]$mfAbsent)
+Assert-Equal 1 (@($mfAbsent.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'a limit record with no Plan property at all keeps the fable cell (fail safe)'
+$mfNull = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits @{ work = [pscustomobject]@{ FiveHour = 40; SevenDay = 48; AgeText = 'now'; Model = $null; ModelLabel = $null; Plan = $null } } -RowMap ([ref]$mfNull)
+Assert-Equal 1 (@($mfNull.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'and a record whose Plan is $null keeps it too'
+
+# Stepping skips the hidden option in both directions, through Invoke-LaunchScreen - the owner's
+# surface - with the arrows and with the w/a/s/d aliases the same keys reach.
+$stR = New-LaunchState; $stR.Account = 'work'; $stR.Model = 'default'
+$out = Invoke-LaunchScreen -State $stR -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $teamLim
+Assert-Equal 'opus1m' $out.Model 'a Right step from default skips the hidden fable and lands on opus1m'
+$stL = New-LaunchState; $stL.Account = 'work'; $stL.Model = 'opus1m'
+$out = Invoke-LaunchScreen -State $stL -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('LeftArrow', 'Enter'))) -Draw {} -Limits $teamLim
+Assert-Equal 'default' $out.Model 'a Left step from opus1m lands on default, never on fable'
+$stD = New-LaunchState; $stD.Account = 'work'; $stD.Model = 'default'
+$out = Invoke-LaunchScreen -State $stD -ReadKey (New-ScriptedKeyReader -Keys (@('s') * $mvIdx + @('d', 'Enter'))) -Draw {} -Limits $teamLim
+Assert-Equal 'opus1m' $out.Model 's then d - the w/a/s/d aliases - skips fable the same way'
+$stA2 = New-LaunchState; $stA2.Account = 'work'; $stA2.Model = 'opus1m'
+$out = Invoke-LaunchScreen -State $stA2 -ReadKey (New-ScriptedKeyReader -Keys (@('s') * $mvIdx + @('a', 'Enter'))) -Draw {} -Limits $teamLim
+Assert-Equal 'default' $out.Model 'and a - the Left alias - never lands on fable either'
+# A full lap of the row can never touch a hidden value: four steps over four visible options.
+$stLap = New-LaunchState; $stLap.Account = 'work'; $stLap.Model = 'default'
+$out = Invoke-LaunchScreen -State $stLap -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('RightArrow', 'RightArrow', 'RightArrow', 'RightArrow', 'Enter'))) -Draw {} -Limits $teamLim
+Assert-Equal 'default' $out.Model 'four Right steps are one full lap of the four visible options, back to default'
+$stAdvStep = New-LaunchState; $stAdvStep.Account = 'work'; $stAdvStep.Advisor = 'default'
+$out = Invoke-LaunchScreen -State $stAdvStep -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $avIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $teamLim
+Assert-Equal 'opus' $out.Advisor 'a Right step on the Advisor row skips fable and lands on opus'
+
+# Click hit-testing: a click at fable's OLD column (from an unfiltered map) selects nothing on a
+# Team account - the handler walks the visible list, where fable is not, so the walk is a no-op.
+$umap = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -RowMap ([ref]$umap)
+$fableOldCell = @($umap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' })[0]
+# A plain scriptblock, not .GetNewClosure(): it only reads $umap, which this scope already answers.
+$uDraw = { param($s) $umap }
+$w = New-EventReader @((New-MouseEvent -Y $umap.Rows[$mvIdx].Y -X $fableOldCell.Start -Left), $enterKey)
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $uDraw -Wait $w -GetWindowTop { 0 } -Limits $teamLim
+Assert-Equal 'default' $out.Model 'a click at the hidden option''s former column selects nothing'
+
+# Snap-to-default: a state that remembers a now-hidden value snaps before the frame is built, so
+# Get-LaunchArgs cannot emit a --model or --advisor the plan does not include.
+$stSnap = New-LaunchState; $stSnap.Account = 'work'; $stSnap.Model = 'fable'; $stSnap.Advisor = 'fable'
+$null = Get-LaunchFrame -State $stSnap -Width 100 -Height 30 -Limits $teamLim
+Assert-Equal 'default' $stSnap.Model 'a remembered Model fable snaps to default on a Team account'
+Assert-Equal 'default' $stSnap.Advisor 'and a remembered Advisor fable snaps to default too'
+$snapArgs = @(Get-LaunchArgs -State $stSnap)
+Assert-Equal 0 (@($snapArgs | Where-Object { $_ -eq '--model' }).Count) 'so Get-LaunchArgs emits no --model at all'
+Assert-Equal 0 (@($snapArgs | Where-Object { $_ -eq '--advisor' }).Count) 'and no --advisor either'
+Assert-Equal 0 (@($snapArgs | Where-Object { $_ -eq 'fable' }).Count) 'and the word fable reaches no argument'
+# The same remembered fable SURVIVES on a plan that includes it - the snap is the rule, not a reset.
+$stKeep = New-LaunchState; $stKeep.Account = 'work'; $stKeep.Model = 'fable'; $stKeep.Advisor = 'fable'
+$null = Get-LaunchFrame -State $stKeep -Width 100 -Height 30 -Limits (New-PlanLimit -Plan 'Max 20x')
+Assert-Equal 'fable' $stKeep.Model 'a remembered fable is left alone on Max'
+Assert-Equal 'fable' $stKeep.Advisor 'on both rows'
+
+# Per account, from ONE limits table: work is on Team and hides fable, personal is on Max and shows
+# it, and switching tabs switches which rows the owner sees.
+$mixed = @{
+    work     = [pscustomobject]@{ FiveHour = 40; SevenDay = 48; AgeText = 'now'; Model = $null; ModelLabel = $null; Plan = 'Team' }
+    personal = [pscustomobject]@{ FiveHour = 17; SevenDay = 20; AgeText = 'now'; Model = $null; ModelLabel = $null; Plan = 'Max 20x' }
+}
+$mixWork = $null
+$stW = New-LaunchState; $stW.Account = 'work'
+$null = Get-LaunchFrame -State $stW -Width 100 -Height 30 -Limits $mixed -RowMap ([ref]$mixWork)
+Assert-Equal 0 (@($mixWork.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'on the work tab (Team) the Model row has no fable cell'
+$mixPersonal = $null
+$stP = New-LaunchState; $stP.Account = 'personal'
+$null = Get-LaunchFrame -State $stP -Width 100 -Height 30 -Limits $mixed -RowMap ([ref]$mixPersonal)
+Assert-Equal 1 (@($mixPersonal.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'and on the personal tab (Max) it has one - same table, same frame builder'
+# Through the screen: the SAME keys land on a different value because the tab switch changed the plan.
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $mixed
+Assert-Equal 'opus1m' $out.Model 'staying on work, a Right step on the Model row skips fable'
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys (@('RightArrow') + @('DownArrow') * $mvIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $mixed
+Assert-Equal 'personal' $out.Account 'a Right step on the account row switches to the personal tab'
+Assert-Equal 'fable' $out.Model 'and the same Right step on the Model row then lands ON fable, which that plan has'
+
+# Every row without a family map is byte-identical to the unplanned frame, at every account: only
+# Model/Advisor may change. Compared line for line across the whole body.
+foreach ($acc in @('work', 'personal', 'low')) {
+    $stA = New-LaunchState; $stA.Account = $acc
+    $unfiltered = @(Get-LaunchFrame -State $stA -Width 100 -Height 30 -Limits (New-PlanLimit -Account $acc))
+    $stB = New-LaunchState; $stB.Account = $acc
+    $filtered   = @(Get-LaunchFrame -State $stB -Width 100 -Height 30 -Limits (New-PlanLimit -Account $acc -Plan 'Team'))
+    $accU = @($unfiltered | Where-Object { $_ -match '\baccount\b' })[0]
+    $accF = @($filtered   | Where-Object { $_ -match '\baccount\b' })[0]
+    Assert-Equal $accU $accF "the account tab strip is untouched by the plan filter ($acc)"
+    foreach ($other in @('effort', 'permission', 'mode', 'remote')) {
+        $lu = @($unfiltered | Where-Object { $_ -match "\b$other\b" })[0]
+        $lf = @($filtered   | Where-Object { $_ -match "\b$other\b" })[0]
+        Assert-Equal $lu $lf "the $other row is untouched by the plan filter ($acc)"
+    }
+}
+
 # --- Clickable footer hints (owner ask 2026-08-15). A click becomes the KEY the hint advertises and
 # takes the ordinary keyboard path, so what is asserted here is that the SAME outcome arrives. ---
 function Get-HintSpan { param($Map, [string]$Key, [string]$Char)
@@ -5142,7 +5290,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1638
+$script:Expected = 1712
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

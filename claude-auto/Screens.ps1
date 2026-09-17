@@ -51,6 +51,39 @@ $script:RemoteRow = @{ Name = 'Remote'; Label = 'remote'; Values = @('on', 'off'
 $script:AccountTints = @{ work = 'Green' }
 $script:DefaultAccount = 'work'
 
+# Model/advisor PLAN filter (spec 2026-09-17 v2). The ONLY source of the hide rule, so a new plan
+# is one line here: which model families a plan does NOT include, keyed by the first word of the
+# plan label lower-cased ('Max 20x' and 'Max 5x' share the key 'max'), plus which row option
+# belongs to which family. The option map is keyed by ROW NAME, so an account whose KEY happens to
+# be 'fable' is never filtered - only the Model and Advisor option rows carry a map at all, and an
+# option with no family entry ('default', 'haiku', 'off') can never be hidden.
+$script:PlanHiddenFamilies = @{ team = @('fable') }
+$script:OptionModelFamily = @{
+    Model   = @{ fable = 'fable'; opus1m = 'opus'; sonnet1m = 'sonnet' }
+    Advisor = @{ fable = 'fable'; opus   = 'opus' }
+}
+
+function Get-VisibleRowValues {
+    # A row's Values minus what the account's PLAN does not include. Entitlement comes from the plan
+    # label, never from which weekly buckets the account happens to have: on Max, Opus sits in the
+    # shared bucket with no bucket of its own yet is available, and Team has no model buckets at all
+    # yet has no Fable - so reading buckets inverted the answer (v1, reverted). A plan with no row in
+    # the constant, and no plan at all, hide nothing (fail safe to show), which is what makes
+    # "unknown still shows" and "the plan changed and it appeared" true. Rows with no family map
+    # (Account, Effort, Permission, Mode, Remote) return their Values untouched, so the frame stays
+    # byte-identical there.
+    param([Parameter(Mandatory)]$Row, [string]$Plan)
+    $fam = $script:OptionModelFamily[$Row.Name]
+    # The FIRST WORD only, lower-cased: the label carries a multiplier the rule never looks at, and
+    # a whole word so a longer one that merely starts the same ('Teams') is a different plan. Guarded
+    # against an empty key because a hashtable lookup on $null throws.
+    $key = if ($Plan) { (([string]$Plan).Trim() -split '\s+')[0].ToLowerInvariant() } else { '' }
+    $hidden = if ($key -and $script:PlanHiddenFamilies.ContainsKey($key)) { @($script:PlanHiddenFamilies[$key]) } else { @() }
+    if (-not $fam -or $hidden.Count -eq 0) { return @($Row.Values) }
+    # $fam[$_] is $null for an option with no family, and $null is in no hidden list, so it stays.
+    @($Row.Values | Where-Object { $fam[$_] -notin $hidden })
+}
+
 function Set-LaunchRoster {
     # The account row and the tints come from the config; this file stays pure (no file reads) by
     # taking the roster as a parameter. The Remote row only exists when the feature is on.
@@ -184,9 +217,13 @@ function Step-ProjectAction {
 
 function Step-LaunchValue {
     # Thin wrapper: steps the row under the cursor and writes the result back onto the state.
-    param($State, [int]$Delta)
+    # -Plan: the current account's subscription label. Left/Right must skip a hidden option, so it
+    # steps over the VISIBLE values, never the raw row. Default '' -> no filtering (every existing
+    # caller and every pin that omits it keeps today's behaviour exactly).
+    param($State, [int]$Delta, [string]$Plan = '')
     $row = $script:Rows[$State.Row]
-    $State.($row.Name) = Step-Option -Values @($row.Values) -Current $State.($row.Name) -Delta $Delta
+    $values = @(Get-VisibleRowValues -Row $row -Plan $Plan)
+    $State.($row.Name) = Step-Option -Values $values -Current $State.($row.Name) -Delta $Delta
     return $State
 }
 
@@ -759,6 +796,19 @@ function Get-LaunchFrame {
     $body = @()
     $rowHits = @()
     $limit = $Limits[$State.Account]
+    # The current account's plan (spec 2026-09-17 v2) drives the hide filter below. Read off the same
+    # $limit record the bars use; an absent Plan property, a $null one and no record at all all read
+    # as "no plan", which hides nothing - so the frame is byte-identical to before this filter
+    # existed for every account whose widget has not reported a plan yet.
+    $plan = "$($limit.Plan)"
+    # Snap a hidden Model/Advisor to default BEFORE the rows are built: Get-LaunchArgs reads these off
+    # the same state, so a value the plan does not include (a remembered pref, or the account was just
+    # switched to one lacking it) must never survive to the command line. 'default' is never hidden,
+    # so this always lands on a visible option; with no plan nothing is hidden and nothing snaps.
+    foreach ($rn in @('Model', 'Advisor')) {
+        $rdef = $script:Rows | Where-Object { $_.Name -eq $rn } | Select-Object -First 1
+        if ($rdef -and ($State.($rn) -notin @(Get-VisibleRowValues -Row $rdef -Plan $plan))) { $State.($rn) = 'default' }
+    }
     # What the mouse is over (spec D8/D10), read off the state exactly as $State.Hover already is -
     # and defaulted the same way, because a hand-built fixture carries neither field and hovers
     # nothing rather than row 0.
@@ -812,7 +862,11 @@ function Get-LaunchFrame {
             # The band goes on the hovered VALUE, and only while the pointer is on this row: two rows
             # can offer the same value ('default' is on three of them), and matching on the value
             # alone would light every one of them at once.
-            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values @($row.Values) -Current $current -Glyphs $g -Labels $optionLabels -MaxWidth $inner `
+            # Values filtered to what the account's plan includes (spec 2026-09-17 v2): the SAME
+            # visible list is what builds the click cells, so a hidden option gets no cell either.
+            # No plan leaves the list untouched, so the row is byte-identical to before.
+            $rowValues = @(Get-VisibleRowValues -Row $row -Plan $plan)
+            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values $rowValues -Current $current -Glyphs $g -Labels $optionLabels -MaxWidth $inner `
                                   -Hover $(if ($hoverRow -eq $i) { $hoverValue } else { '' })
             $line = $radio.Text
             $cellHits = @($radio.Cells)

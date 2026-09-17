@@ -273,7 +273,7 @@ if ($UseUi) {
         }
 
         while ($true) {
-            $state = Invoke-LaunchScreen -State $state -ReadKey $KeySource -Wait $wait -Draw $draw -Prefs $prefs -OnKey {
+            $state = Invoke-LaunchScreen -State $state -ReadKey $KeySource -Wait $wait -Draw $draw -Prefs $prefs -Limits $limits -OnKey {
                 param($k)
                 # 'u' opens maintenance from anywhere on the launch screen and returns here.
                 # Test-ClaudeHotkey: any layout (virtual key, or the Cyrillic letter on that key),
