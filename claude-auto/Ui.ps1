@@ -180,6 +180,19 @@ function Switch-LaunchTab {
     return (Switch-LaunchAccount -State $State -To $to -Prefs $Prefs -Rows $Rows)
 }
 
+function Test-MapHas {
+    # Duck-typed shape check for a row map, for Get-HitAt's four branches below: PSObject.Properties
+    # on a HASHTABLE enumerates the hashtable's OWN members (Keys, Values, Count...), never its
+    # entries, so a hashtable-built row map (a test fixture, or any future caller that does not
+    # bother with pscustomobject) used to answer 'none' for every shape check that read it that way.
+    # A named function, not a scriptblock built inside Get-HitAt: that function is called once per
+    # mouse record (Invoke-ScreenLoop's R19 note a few lines down says why that matters), and a
+    # scriptblock literal is a fresh allocation on every one of those calls.
+    param($RowMap, [string]$Name)
+    if ($RowMap -is [hashtable]) { return $RowMap.ContainsKey($Name) }
+    return ($null -ne $RowMap.PSObject.Properties[$Name])
+}
+
 function Get-HitAt {
     # Where a click landed, for BOTH row-map shapes: the launch/maintenance map (Rows[] with Cells)
     # and the list map (FirstRowY/RowCount/Start, optional Action row). Footer first, then the
@@ -188,22 +201,17 @@ function Get-HitAt {
     param($RowMap, [int]$X, [int]$Y, [int]$WindowTop = 0)
     $none = [pscustomobject]@{ Kind = 'none'; Footer = $null; FooterIndex = -1; Row = $null; Cell = $null; Value = $null }
     if (-not $RowMap) { return $none }
-    # Duck-typed rather than PSObject.Properties-only: PSObject.Properties on a HASHTABLE enumerates
-    # the hashtable's OWN members (Keys, Values, Count...), never its entries, so a hashtable-built
-    # row map (a test fixture, or any future caller that does not bother with pscustomobject) used to
-    # answer 'none' here for every shape check below, silently.
-    $has = { param($o, [string]$n) if ($o -is [hashtable]) { $o.ContainsKey($n) } else { $null -ne $o.PSObject.Properties[$n] } }
     $hint = Get-ClaudeFooterHit -RowMap $RowMap -X $X -Y $Y -WindowTop $WindowTop
     if ($hint) { return [pscustomobject]@{ Kind = 'footer'; Footer = $hint; FooterIndex = [Array]::IndexOf(@($RowMap.Footer), $hint); Row = $null; Cell = $null; Value = $null } }
     # A distinct name, not $y: PowerShell variable names are case-insensitive, so $y would be the
     # SAME variable as the -Y parameter and silently clobber it - breaking the FirstRowY branch
     # below, which needs the raw, unadjusted $Y (Get-ClaudeMouseRow does its own WindowTop math).
     $rowY = $Y - $WindowTop
-    if ((& $has $RowMap 'Action') -and $RowMap.Action -and $rowY -eq $RowMap.Action.Y) {
+    if ((Test-MapHas $RowMap 'Action') -and $RowMap.Action -and $rowY -eq $RowMap.Action.Y) {
         $cell = @($RowMap.Action.Cells | Where-Object { $X -ge $_.Start -and $X -le $_.End })
         return [pscustomobject]@{ Kind = 'action'; Footer = $null; FooterIndex = -1; Row = $null; Cell = $(if ($cell.Count) { $cell[0] } else { $null }); Value = $(if ($cell.Count) { $cell[0].Value } else { $null }) }
     }
-    if (& $has $RowMap 'Rows') {
+    if (Test-MapHas $RowMap 'Rows') {
         $hit = @($RowMap.Rows | Where-Object { $_.Y -eq $rowY })
         if ($hit.Count -eq 0) { return $none }
         $cell = @($hit[0].Cells | Where-Object { $X -ge $_.Start -and $X -le $_.End })
@@ -215,12 +223,12 @@ function Get-HitAt {
     # a click under a separator would land one row too far down the list. A y that is not a row's own
     # is no row at all, which is what makes a click on a gap do nothing. Every other list map carries
     # FirstRowY/RowCount only and falls through to Get-ClaudeMouseRow, untouched.
-    if ($null -ne $RowMap.PSObject.Properties['RowYs'] -and $RowMap.RowYs) {
+    if ((Test-MapHas $RowMap 'RowYs') -and $RowMap.RowYs) {
         $at = [Array]::IndexOf([int[]]@($RowMap.RowYs), [int]$rowY)
         if ($at -lt 0) { return $none }
         return [pscustomobject]@{ Kind = 'row'; Footer = $null; FooterIndex = -1; Row = [int]($RowMap.Start + $at); Cell = $null; Value = $null }
     }
-    if (& $has $RowMap 'FirstRowY') {
+    if (Test-MapHas $RowMap 'FirstRowY') {
         $row = Get-ClaudeMouseRow -Y $Y -FirstRowY $RowMap.FirstRowY -RowCount $RowMap.RowCount -WindowTop $WindowTop
         if ($null -eq $row) { return $none }
         return [pscustomobject]@{ Kind = 'row'; Footer = $null; FooterIndex = -1; Row = [int]($RowMap.Start + $row); Cell = $null; Value = $null }

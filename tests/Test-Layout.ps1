@@ -107,9 +107,14 @@ foreach ($degMax in @(0, 1, 2, 3)) {
 }
 # No separator at all: LastIndexOfAny finds none, the leaf is empty, and the tail comes from
 # Limit-CellsRight of the WHOLE text instead - both halves still fit inside the budget.
-$noSep = Limit-Path -Text ('n' * 60) -Max 20
+# Fix round 1, Minor 5: a DISTINGUISHABLE fixture, not 60 identical 'n's - a uniform string leaves
+# the tail's CONTENT unpinned (a mutation that replaced the fallback tail with '' still passed the
+# width and marker-count checks below, since nothing here read what the tail actually said).
+$noSepText = ('a' * 55) + 'zzzzz'
+$noSep = Limit-Path -Text $noSepText -Max 20
 Assert-Equal $true ((Get-DisplayWidth -Text $noSep) -le 20) 'a path with no separator still fits the budget'
 Assert-Equal 1 (@($noSep.ToCharArray() | Where-Object { [int]$_ -eq 0x2026 }).Count) 'and still carries exactly one marker'
+Assert-Equal $true ($noSep.EndsWith('zzzzz')) 'and the tail is the actual END of the text (Limit-CellsRight), not an unpinned fallback'
 # A UNC path: the leaf after the last separator survives, and the head still starts with the
 # server name rather than being cut into the middle of the \\ prefix.
 $unc = Limit-Path -Text '\\server\share\deep\nested\path\leaf' -Max 20
@@ -291,8 +296,10 @@ Assert-Equal $true ($asciiPath.Contains('~')) 'which is the one-cell marker Get-
 Assert-Equal $true ($asciiPath.EndsWith('\alpha')) 'and the leaf survives there too'
 # BACKLOG 217 G3: ASCII mode on the same degenerate shapes tested above (no separator, UNC) - the
 # marker is Get-Ellipsis's own one-cell '~', never the two-cell '...' the arithmetic never reserved
-# room for.
-Assert-Equal 0 (Get-NonAsciiCount -Lines @(Limit-Path -Text ('n' * 60) -Max 20 -Ascii)) 'ASCII mode on a separator-less path uses the ASCII marker'
+# room for. Same DISTINGUISHABLE fixture as the non-ASCII pin above (fix round 1, Minor 5).
+$asciiNoSep = Limit-Path -Text $noSepText -Max 20 -Ascii
+Assert-Equal 0 (Get-NonAsciiCount -Lines @($asciiNoSep)) 'ASCII mode on a separator-less path uses the ASCII marker'
+Assert-Equal $true ($asciiNoSep.EndsWith('zzzzz')) 'and the tail there is still the actual end of the text, not an unpinned fallback'
 Assert-Equal 0 (Get-NonAsciiCount -Lines @(Limit-Path -Text '\\server\share\deep\nested\path\leaf' -Max 20 -Ascii)) 'and so does ASCII mode on a UNC path'
 Assert-Equal 0 (Get-NonAsciiCount -Lines @(Split-TextLines -Text 'one two three four five six seven' -Width 10 -MaxLines 2)) 'ASCII mode caps a wrap with an ASCII marker'
 # The override channel, asserted without asking what the runner's console code page is: with the
@@ -307,7 +314,7 @@ Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line th
 if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
 $script:Ellipsis = [string][char]0x2026
 
-if ($script:Ran -ne 110) { Write-Host "COULD NOT RUN: expected 110 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 112) { Write-Host "COULD NOT RUN: expected 112 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

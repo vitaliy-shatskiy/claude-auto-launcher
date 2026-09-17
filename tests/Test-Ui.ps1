@@ -4061,6 +4061,16 @@ Assert-Equal 13 (Get-HitAt -RowMap $pmHt -X 5 -Y 5).Row 'hashtable map: a list m
 Assert-Equal 'action' (Get-HitAt -RowMap $pmHt -X 14 -Y 7).Kind 'hashtable map: the action row is still its own kind'
 Assert-Equal 'resume' (Get-HitAt -RowMap $pmHt -X 14 -Y 7).Value 'hashtable map: with the clicked value'
 
+# Fix round 1, Important 1: RowYs itself, hashtable vs pscustomobject - the RowYs branch was still
+# PSObject.Properties-only after the other three were duck-typed, so a hashtable map with RowYs fell
+# through to the FirstRowY arithmetic below it (which ignores the gaps and answers a WRONG absolute
+# row, never 'none'). A separate map, not $pmHt above: $pmHt already answers via FirstRowY and
+# giving it a RowYs too would silently redirect ITS assertions through this branch instead.
+$pmRowYsPso = [pscustomobject]@{ FirstRowY = 2; RowCount = 5; Start = 10; RowYs = @(2, 3, 5, 6) }
+$pmRowYsHt = @{ FirstRowY = 2; RowCount = 5; Start = 10; RowYs = @(2, 3, 5, 6) }
+Assert-Equal 'none' (Get-HitAt -RowMap $pmRowYsHt -X 5 -Y 4).Kind 'hashtable map: a click under a gap Y (not in RowYs) is none'
+Assert-Equal (Get-HitAt -RowMap $pmRowYsPso -X 5 -Y 5).Row (Get-HitAt -RowMap $pmRowYsHt -X 5 -Y 5).Row 'and a click on a real row Y answers the same absolute row as the pscustomobject twin'
+
 
 # --- Invoke-ScreenLoop: the mechanics every screen shares -----------------------------------------
 $st = @{ Index = 0; Hover = -1; Typing = $false; Log = @() }
@@ -4077,22 +4087,33 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -
 Assert-True ($null -eq $r) 'Escape returns $null by default'
 Assert-Equal 2 $st.Index 'and Down at the last row stays'
 
-# BACKLOG 217 G3: a wheel event on a CURSORLESS screen (no Rows handler, no Wheel handler either) -
-# $loopRows answers 0 for a screen with no Rows handler, and the wheel-move guard is `-gt 0`, so the
-# index is left exactly where it was rather than being nudged by the delta.
-$st = @{ Index = 0; Hover = -1; Typing = $false }
+# BACKLOG 217 G3 / fix round 1, Important 2: a wheel event on a CURSORLESS screen (no Rows handler,
+# no Wheel handler either) - $loopRows answers 0 for a screen with no Rows handler, and the
+# wheel-move guard is `-gt 0`, so the index is left exactly where it was rather than being nudged by
+# the delta. Index MUST start away from 0: at Index 0, WheelDown's delta (+1) clamped through
+# Max(0, Min(-1, 0+1)) already lands back on 0 even WITHOUT the guard, so that start made the pin
+# pass whether or not the guard existed. Index 2 does not share that coincidence.
+$st = @{ Index = 2; Hover = -1; Typing = $false }
 $r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-EventReader @((New-MouseEvent -X 1 -Y 1 -Wheel -1), $esc)) -Draw { $null } -Handlers @{}
-Assert-Equal 0 $st.Index 'a wheel move on a cursorless screen (no Rows handler) leaves Index unchanged'
+Assert-Equal 2 $st.Index 'a wheel move on a cursorless screen (no Rows handler) leaves Index unchanged'
 
 # R7c: a Left/Right handler that returns Done ends the loop with its Result, exactly like Enter.
+# Fix round 1, Minor 4: a trailing Escape on BOTH readers - a mutation that makes the loop keep
+# running past the handler's Done (dropping the `if ($loopRes -and $loopRes.Done) { return ... }`
+# check) used to make it ask the reader for a SECOND key that was never queued, and
+# New-ScriptedKeyReader throws 'scripted keys exhausted' rather than returning a value - an
+# unhandled exception that crashes the whole script before the Assert-Equal below ever runs, so
+# every assertion after it in the file was silently skipped too, not reported as this pin's own red.
+# With Escape queued, that same mutation now consumes it and returns $null - the Assert-Equal fails
+# cleanly instead.
 $st = @{ Index = 0; Hover = -1; Typing = $false }
-$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'RightArrow') -Draw { $null } -Handlers @{
+$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'RightArrow', 'Escape') -Draw { $null } -Handlers @{
         Rows  = { 3 }
         Right = { param($s) @{ Done = $true; Result = 'right-done' } }
     }
 Assert-Equal 'right-done' $r 'a Right handler returning Done ends the loop with its Result'
 $st = @{ Index = 0; Hover = -1; Typing = $false }
-$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'LeftArrow') -Draw { $null } -Handlers @{
+$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'LeftArrow', 'Escape') -Draw { $null } -Handlers @{
         Rows = { 3 }
         Left = { param($s) @{ Done = $true; Result = 'left-done' } }
     }
@@ -4295,7 +4316,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1390) { Write-Host "COULD NOT RUN: expected 1390 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1392) { Write-Host "COULD NOT RUN: expected 1392 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
