@@ -67,6 +67,30 @@ function Add-DimSpanColor {
 $script:HoverOpen = [char]4
 $script:HoverClose = [char]5
 
+# Every C0 control, as one pattern for the row builders (Screens.ps1). Both marker pairs live in
+# this range, so a DATA field carrying [char]4/[char]5 - or [char]1/[char]2 - is read as a marker by
+# the painters: the band then runs to the end of the line, box border included, and the frame memo's
+# repaint (which strips the pair unconditionally and cannot tell a builder's marker from a data one)
+# comes out a different string than the cold build. So a builder strips the whole range from the text
+# it is handed, and the markers it adds afterwards are the only ones in the row. The whole range
+# rather than the four markers: anything under 0x20 is zero cells to Get-CodePointWidth and none of
+# it is drawable, so a tab or a stray CR in a field is the same class of fault.
+# Belt and braces by design - Get-CleanTranscriptText already maps C0 to a space in every
+# transcript-sourced field and NTFS forbids it in a name - but the invariant is the BAND's, and it
+# now holds where the band is built rather than two layers away.
+#
+# A Regex INSTANCE, not a pattern string for `-replace`: the operator resolves its pattern through
+# [regex]::Replace's static cache on every call, and a frame's painters hold more distinct patterns
+# than that cache keeps, so the hot pattern here is recompiled rather than reused. Alone the operator
+# is the faster of the two (0.9 us against 8.8 us, which is what PowerShell costs to bind a .NET
+# method); inside a 198x50 frame with 40 sessions it is the slower - paired runs 83.7/72.3 ms p50
+# through the operator against 70.8/67.9 through the instance. Against no strip at all the instance
+# form does not separate from it (65.4/64.8/66.0 against 68.9/65.8/68.2 p50), which is the whole
+# budget this buys: ~140 calls, ~1.3 ms, on the COLD path only.
+# Created once at load. .Replace refuses $null, so every caller hands it a [string] - a parameter of
+# that type, or "$(...)".
+$script:CtlStrip = [regex]::new('[\x00-\x1F]')
+
 function Add-HoverSpan {
     # Marks a finished piece of PLAIN text as hovered. Wrapped after the caller's own width
     # arithmetic, never before it - the markers cost no cells, and that only holds if nothing

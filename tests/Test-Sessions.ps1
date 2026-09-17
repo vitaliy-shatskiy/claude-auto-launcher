@@ -218,6 +218,14 @@ Assert-Equal $false ($s.LastUser -match $ctrl)      'no control character surviv
 Assert-Equal $false ($s.LastAssistant -match $ctrl) 'no control character survives into LastAssistant'
 Assert-Equal 0 (@($s.RecentMessages | Where-Object { $_.Text -match $ctrl }).Count) 'no control character survives into any RecentMessages entry'
 Assert-Equal $true ($s.LastAssistant -match 'red') 'the printable text of a colour-escaped reply is kept, not dropped wholesale'
+# The screens' own C0 markers, named one by one: [char]4 / [char]5 are the hover band's pair and
+# [char]1 / [char]2 the dim spans', so a transcript carrying one would arrive at a row builder as a
+# marker; [char]31 is the list signature's separator, where it would let two different lists sign
+# alike. The builders strip the range themselves (Screens.ps1), and this is the other end of that
+# rule: nothing marker-shaped leaves the sanitiser. Built from code points for the reason the ESC
+# fixture above records.
+Assert-Equal 'a b c d e' (Get-CleanTranscriptText -Text ("a$([char]4)b$([char]5)c$([char]1)d$([char]2)e")) 'the sanitiser turns both marker pairs into spaces, so transcript text can open neither a band nor a dim span'
+Assert-Equal 'x y' (Get-CleanTranscriptText -Text ("x$([char]31)y")) 'and the list signature separator with them'
 Remove-Item -LiteralPath $escRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 # 16. The tail walk stopped only when it had counted $Count newlines, so a file with few newlines
@@ -904,7 +912,7 @@ $pfEsc = Join-Path $pfDir 'eeee3333.jsonl'
 Assert-Equal 'escaped key prompt' (Get-ClaudeSessionSummary -Path $pfEsc -ProjectPath 'C:\src\pf').Title 'a \u-escaped type key is decoded by the parser, so the pre-filter must not skip the line on a literal miss'
 Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 170) { Write-Host "COULD NOT RUN: expected 170 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 172) { Write-Host "COULD NOT RUN: expected 172 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

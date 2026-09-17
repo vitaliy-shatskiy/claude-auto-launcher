@@ -932,6 +932,13 @@ function New-ListRow {
     # in Add-PickerColor able to find the mark column at all.
     param([string]$Mark = '   ', [string]$Label = '', [string]$Tail = '', [string]$Age = '', [int]$Width, [switch]$Ascii, [switch]$TrailingSpace,
           [switch]$DimTail, [switch]$DimAge, [switch]$PathTail, [switch]$Hover)
+    # The three text columns are stripped of C0 FIRST, before any width is measured: the markers this
+    # row adds below are C0 themselves, so a data field carrying one would be read as a marker by the
+    # painters and by the memo's repaint (Theme.ps1, $script:CtlStrip, carries the whole argument).
+    # $Mark is ours. Three calls per visible row, 8.8 us each (the binding, not the regex).
+    $Label = $script:CtlStrip.Replace($Label, '')
+    $Tail = $script:CtlStrip.Replace($Tail, '')
+    $Age = $script:CtlStrip.Replace($Age, '')
     $ageW = Get-DisplayWidth -Text $Age
     $ageCol = if ($Age) { if ($TrailingSpace) { $Age + ' ' } else { ' ' + $Age } } else { '' }
     # Every column is measured ONCE here and the number reused below. The three budget lines asked
@@ -1007,11 +1014,14 @@ function New-RadioRow {
     param([string]$Prefix = '   ', [string]$Label, [Parameter(Mandatory)][string[]]$Values, [string]$Current,
           [Parameter(Mandatory)][hashtable]$Glyphs, [hashtable]$Labels = @{}, [int]$LabelWidth = 12, [int]$MaxWidth = 0,
           [string]$Hover = '')
-    $labelPart = $Label.PadRight($LabelWidth)
+    # Stripped of C0 before it is padded, and the same for every value's drawn text below: this row
+    # wraps a hovered value in the band's own C0 markers, so a label carrying one would be read as a
+    # marker by the painters and by the memo's repaint (Theme.ps1, $script:CtlStrip).
+    $labelPart = $script:CtlStrip.Replace($Label, '').PadRight($LabelWidth)
     # ONE resolver for the text a value is drawn as (C3): the compact-form gate below asked the same
     # question in its own copy, and the two answering differently is how a row would be laid out from
     # one string and measured from another.
-    $labelOf = { param([string]$v) if ($Labels.ContainsKey($v)) { "$($Labels[$v])" } else { "$v" } }
+    $labelOf = { param([string]$v) $script:CtlStrip.Replace($(if ($Labels.ContainsKey($v)) { "$($Labels[$v])" } else { "$v" }), '') }
     $build = {
         param([bool]$Compact)
         $plain = @(foreach ($v in $Values) {
@@ -1206,7 +1216,9 @@ function Get-ProjectFrame {
             # The one row not built by New-ListRow, so it marks itself. Same rule as there: the open
             # marker goes in FRONT of the mark column, which is where Add-PickerColor's bullet
             # anchor expects to be able to step over it.
-            $pathRow = $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
+            # C0-stripped like New-ListRow's own columns, and for the same reason: this row wraps
+            # itself in the band's markers below (Theme.ps1, $script:CtlStrip).
+            $pathRow = $mark + $($g.Bullet) + ' ' + (Limit-Line -Text ($script:CtlStrip.Replace("$($r.Item.Name)", '')) -Max ($inner - $mark.Length - 3))
             # Padded to the full inner width INSIDE the hover branch (P10), for the reason
             # New-ListRow's own gutter carries: every hovered row on this screen bands the same
             # width, and an unhovered frame keeps the exact bytes it had. This row is far shorter
@@ -1340,7 +1352,10 @@ function Get-ExchangeLines {
         $prefix = if ($m.Speaker -eq 'user') { "you $($Glyphs.RAngle) " } else { "claude $($Glyphs.RAngle) " }
         $indent = ' ' * $prefix.Length
         $wrapWidth = [Math]::Max(1, $Width - $prefix.Length)
-        $wrapped = @(Split-TextLines -Text $m.Text -Width $wrapWidth -MaxLines $budget)
+        # C0 out of the message text before it is wrapped: the hover band and the dim spans are C0
+        # markers, and a message carrying one reaches the painters as a marker (Theme.ps1,
+        # $script:CtlStrip). One call per message actually rendered, three to six a frame.
+        $wrapped = @(Split-TextLines -Text ($script:CtlStrip.Replace("$($m.Text)", '')) -Width $wrapWidth -MaxLines $budget)
         if ($wrapped.Count -eq 0) { continue }
         $lines = for ($j = 0; $j -lt $wrapped.Count; $j++) {
             if ($j -eq 0) { $prefix + $wrapped[$j] } else { $indent + $wrapped[$j] }
@@ -1651,8 +1666,10 @@ function Get-PickerFrame {
 
         # Single column: the selected session's preview goes underneath the list.
         $s = $items[$Index]
-        $head = "$($s.Project)"
-        if ($s.Worktree) { $head += "  $($g.Worktree) $($s.Worktree)" }
+        # C0-stripped for the reason New-ListRow's columns are: the detail pane is body text and the
+        # painters read C0 as a marker (Theme.ps1, $script:CtlStrip). One call a frame.
+        $head = $script:CtlStrip.Replace("$($s.Project)", '')
+        if ($s.Worktree) { $head += "  $($g.Worktree) " + $script:CtlStrip.Replace("$($s.Worktree)", '') }
         $head += "  $($g.H)  $(Format-PromptCount -Session $s) msgs  $($g.H)  $($s.Modified.ToString('dd MMM HH:mm'))"
         $body = @($list)
         $body += '  ' + (Limit-Line -Text $head -Max ($frameWidth - 4))
@@ -1696,8 +1713,9 @@ function Get-PickerFrame {
     }
 
     $s = $items[$Index]
-    $where = $s.Project
-    if ($s.Worktree) { $where += "  $($g.Worktree) $($s.Worktree)" }
+    # Same strip as the narrow branch's $head above (Theme.ps1, $script:CtlStrip).
+    $where = $script:CtlStrip.Replace("$($s.Project)", '')
+    if ($s.Worktree) { $where += "  $($g.Worktree) " + $script:CtlStrip.Replace("$($s.Worktree)", '') }
 
     $detail = @()
     $detail += ' ' + (Limit-Line -Text $where -Max ($rightWidth - 2))

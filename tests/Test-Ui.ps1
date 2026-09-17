@@ -4876,6 +4876,56 @@ Assert-Equal 96 $goldPickerCases 'and every one of the 96 picker hover transitio
 Assert-Equal '' $goldProject 'the memoised project frame is byte-identical to a cold build for every hover row, action value and footer button'
 Assert-Equal 96 $goldProjectCases 'and every one of the 96 project hover transitions was actually compared'
 
+# The same two questions with the band's OWN MARKERS inside the data. The hover band is [char]4 /
+# [char]5 and the dim spans [char]1 / [char]2, so a rendered field carrying one used to be read as a
+# marker: the cold frame banded the rest of the row - the box's right border included - and the memo
+# came out a DIFFERENT string, because its repaint strips the pair unconditionally and cannot tell a
+# builder's marker from a data one. Not reachable end to end today (every transcript-sourced field
+# goes through Get-CleanTranscriptText and NTFS forbids C0 in a name), so the row builders strip the
+# range themselves and these two hold that where the band is built. Both layouts of the picker (78
+# is single-column, 198 two-pane) and both of the fields the detail pane draws from.
+$c0Sessions = @(
+    [pscustomobject]@{ SessionId = 'c0-1'; Project = ("proj" + [char]4 + "ect"); Worktree = ''
+                       Title = ("title" + [char]5 + "here"); LastUser = ("pre" + [char]4 + "post")
+                       LastAssistant = ("reply" + [char]1 + "tail"); Modified = $now.AddMinutes(-3); PromptCount = 4; SizeBytes = 2048 }
+    [pscustomobject]@{ SessionId = 'c0-2'; Project = 'ordinary-project'; Worktree = ("wt" + [char]2 + "x")
+                       Title = 'ordinary title'; LastUser = 'ordinary snippet'
+                       LastAssistant = 'ordinary reply'; Modified = $now.AddMinutes(-9); PromptCount = 7; SizeBytes = 4096 }
+)
+$c0Projects = @(
+    [pscustomobject]@{ Slug = 'c0a'; Name = ("proj" + [char]1 + "name"); Path = ("C:\p\" + [char]4 + "dir")
+                       Worktree = $false; LastActivity = $now.AddHours(-2) }
+    [pscustomobject]@{ Slug = 'c0b'; Name = 'ordinary-name'; Path = 'C:\p\ordinary'
+                       Worktree = $true; LastActivity = $now.AddHours(-5) }
+)
+# Every C0 except the ESC that introduces a colour escape - which every line of a coloured frame
+# legitimately carries, and which the -join's own newlines are not.
+$c0Count = { param([string[]]$Frame) @(($Frame -join '').ToCharArray() | Where-Object { [int]$_ -lt 32 -and [int]$_ -ne 27 }).Count }
+$c0Bad = @()
+foreach ($cw in @(78, 198)) {
+    foreach ($chr in @(0, 1)) {
+        $script:FrameMemo = @{}
+        $c0Cold = @(Get-PickerFrame -Sessions $c0Sessions -Index 0 -Width $cw -Height 24 -Now $now -Color -HoverRow $chr -Hover -1)
+        $c0Leak = & $c0Count $c0Cold
+        if ($c0Leak -ne 0) { $c0Bad += "picker w=$cw row=$chr leaked $c0Leak control chars" }
+        $script:FrameMemo = @{}
+        $null = Get-PickerFrame -Sessions $c0Sessions -Index 0 -Width $cw -Height 24 -Now $now -Color -HoverRow -1 -Hover -1
+        $c0Memo = @(Get-PickerFrame -Sessions $c0Sessions -Index 0 -Width $cw -Height 24 -Now $now -Color -HoverRow $chr -Hover -1)
+        if (($c0Cold -join "`n") -cne ($c0Memo -join "`n")) { $c0Bad += "picker w=$cw row=$chr memo != cold" }
+
+        $script:FrameMemo = @{}
+        $c0ColdP = @(Get-ProjectFrame -Projects $c0Projects -Index 0 -Cwd 'C:\p\cwd' -Width $cw -Height 24 -Now $now -Color -Action 'new' -HoverRow $chr -HoverValue '' -Hover -1)
+        $c0LeakP = & $c0Count $c0ColdP
+        if ($c0LeakP -ne 0) { $c0Bad += "project w=$cw row=$chr leaked $c0LeakP control chars" }
+        $script:FrameMemo = @{}
+        $null = Get-ProjectFrame -Projects $c0Projects -Index 0 -Cwd 'C:\p\cwd' -Width $cw -Height 24 -Now $now -Color -Action 'new' -HoverRow -1 -HoverValue '' -Hover -1
+        $c0MemoP = @(Get-ProjectFrame -Projects $c0Projects -Index 0 -Cwd 'C:\p\cwd' -Width $cw -Height 24 -Now $now -Color -Action 'new' -HoverRow $chr -HoverValue '' -Hover -1)
+        if (($c0ColdP -join "`n") -cne ($c0MemoP -join "`n")) { $c0Bad += "project w=$cw row=$chr memo != cold" }
+    }
+}
+Assert-Equal '' ($c0Bad -join '; ') 'a session and a project whose own fields carry the band and dim markers render with NO control character left in the frame, and the memo stays byte-identical to the cold build'
+Assert-Equal 2 (@(Get-PickerFrame -Sessions $c0Sessions -Index 0 -Width 198 -Height 24 -Now $now -Color -HoverRow 0 -Hover -1) | Where-Object { $_ -match 'pre.*post' }).Count 'the control: the marked snippet is still DRAWN, on both lines it reaches - the row and the detail pane - so the assertion above is about markers and not about a frame that lost its text'
+
 # A hit must not re-enter the builders. New-Box is the cheapest witness: exactly one call per frame
 # built, zero calls when the memo answered. Shadowed with the ORIGINAL param block and restored
 # immediately - an @args passthrough silently mangles the named switch this function takes.
@@ -5049,7 +5099,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1631
+$script:Expected = 1633
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
