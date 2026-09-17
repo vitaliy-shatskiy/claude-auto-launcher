@@ -775,7 +775,11 @@ function New-ListRow {
     if ($DimTail -and $tail) { $tail = [string]$script:DimOpen + $tail + [string]$script:DimClose }
     if ($DimAge -and $ageCol) { $ageCol = [string]$script:DimOpen + $ageCol + [string]$script:DimClose }
     $row = $Mark + $label + (' ' * $pad) + $tail + $ageCol
-    if ($Hover) { $row = Add-HoverSpan -Text $row }
+    # The right gutter goes INSIDE the band (P10), and only when the row is hovered: every hovered
+    # list row then spans the identical inner width, while an unhovered row keeps the exact bytes it
+    # always had. Without it an age-less row (the cwd row) banded one cell short of the rows above
+    # and below it, which reads as a rendering fault rather than as a highlight.
+    if ($Hover) { $row = Add-HoverSpan -Text ($row + (' ' * $gutter)) }
     return $row
 }
 
@@ -988,7 +992,11 @@ function Get-ProjectFrame {
             # marker goes in FRONT of the mark column, which is where Add-PickerColor's bullet
             # anchor expects to be able to step over it.
             $pathRow = $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
-            if ($i -eq $HoverRow) { $pathRow = Add-HoverSpan -Text $pathRow }
+            # Padded to the full inner width INSIDE the hover branch (P10), for the reason
+            # New-ListRow's own gutter carries: every hovered row on this screen bands the same
+            # width, and an unhovered frame keeps the exact bytes it had. This row is far shorter
+            # than the list rows above it, so its band was the ragged one.
+            if ($i -eq $HoverRow) { $pathRow = Add-HoverSpan -Text ($pathRow + (' ' * [Math]::Max(0, $inner - (Get-DisplayWidth -Text $pathRow)))) }
             $body += $pathRow
         }
     }
