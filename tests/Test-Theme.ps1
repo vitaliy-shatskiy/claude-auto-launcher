@@ -144,7 +144,20 @@ Assert-Equal 'abcdeefg' (Remove-AnsiColor -Text $band) 'painting never changes t
 Assert-Equal 'abcdf' (Add-HoverSpanColor -Line ("ab" + (Add-HoverSpan -Text 'cd') + "f")) 'colour off strips the markers'
 Assert-Equal ($script:C.ButtonBg + 'xy' + $script:C.Reset) (Add-HoverSpanColor -Line ([string]$script:HoverOpen + 'xy') -Enabled) 'an unpaired open marker is closed at the end of the line'
 
-if ($script:Ran -ne 79) { Write-Host "COULD NOT RUN: expected 79 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# The early-out has NO observable of its own: the regex behind it matches nothing on an unmarked line
+# and [regex]::Replace hands back the very instance it was given, so the bytes AND the reference are
+# the same whether the guard fires or not (measured: a ReferenceEquals pin passes over a dead guard).
+# What can be pinned is the rule it broke - String.IndexOf(String) is culture-sensitive and a C0
+# control has zero collation weight, so the [string] overload "finds" a marker at index 0 of EVERY
+# line and the guard never fired; every body line of every frame paid the regex for it (0.88 ms/line,
+# 44 ms a 50-line frame). The first two name the rule, the third holds the one line that obeys it.
+$unmarked = 'an ordinary frame line with no markers at all'
+Assert-Equal 0 ($unmarked.IndexOf([string][char]4)) 'the rule under test: IndexOf(STRING) is culture-sensitive and finds a zero-weight C0 marker at index 0 of a marker-FREE line'
+Assert-Equal -1 ($unmarked.IndexOf([char]4)) 'while the [char] overload is ordinal - the only form a marker guard may use'
+$themeSource = [IO.File]::ReadAllText("$PSScriptRoot\..\claude-auto\Theme.ps1")
+Assert-True ($themeSource -match '\$Line\.IndexOf\(\$script:HoverOpen\) -lt 0 -and \$Line\.IndexOf\(\$script:HoverClose\) -lt 0') 'and the band painter''s early-out tests the [char] markers themselves, never the [string] copies it paints with'
+
+if ($script:Ran -ne 82) { Write-Host "COULD NOT RUN: expected 82 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

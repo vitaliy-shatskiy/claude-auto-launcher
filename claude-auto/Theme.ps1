@@ -89,7 +89,12 @@ function Add-HoverSpanColor {
     $close = [string]$script:HoverClose
     # Every body line of every frame passes here; an unmarked one costs two IndexOf and leaves with
     # the identical string it arrived as.
-    if ($Line.IndexOf($open) -lt 0 -and $Line.IndexOf($close) -lt 0) { return $Line }
+    # The [char] overload, never the [string] one: String.IndexOf(String) is CULTURE-sensitive, and a
+    # C0 control has zero collation weight - so it is "found" at index 0 of every line, the early-out
+    # never fired, and each body line paid the regex instead (measured 0.88 ms/line, 44 ms a frame).
+    # Get-RowBandLength and Complete-PickerFrame already pass a [char] here, which is why only this
+    # one line was dead. .Contains(String) is ordinal and needs no such care (measured).
+    if ($Line.IndexOf($script:HoverOpen) -lt 0 -and $Line.IndexOf($script:HoverClose) -lt 0) { return $Line }
     if (-not $Enabled) { return ($Line -replace "[$open$close]", '') }
     # A MatchEvaluator rather than a replacement string: the band has to rewrite what it wraps (every
     # inner Reset becomes Reset + background again), which no '$1' replacement can express. It reads
