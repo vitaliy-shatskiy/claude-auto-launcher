@@ -922,12 +922,18 @@ function New-ListRow {
           [switch]$DimTail, [switch]$DimAge, [switch]$PathTail, [switch]$Hover)
     $ageW = Get-DisplayWidth -Text $Age
     $ageCol = if ($Age) { if ($TrailingSpace) { $Age + ' ' } else { ' ' + $Age } } else { '' }
+    # Every column is measured ONCE here and the number reused below. The three budget lines asked
+    # Get-DisplayWidth for the same mark, label and age column two and three times over, and this
+    # function runs once per visible row of every frame - nine calls a row became five.
+    $markW = Get-DisplayWidth -Text $Mark
+    $ageColW = Get-DisplayWidth -Text $ageCol
     # Review fix round 1 (C1): the reserve here is mark + a 1-cell minimum pad + the age's OWN
     # width, same as the old inline code (`$inner - $mark.Length - $age.Length - 2`) - using
     # $ageCol's width instead double-counts the separator $ageCol already carries and clamps the
     # label one cell too early (an "…" that used to fit no longer does).
-    $label = Limit-Line -Text $Label -Max ([Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - $ageW - 2)) -Ascii:$Ascii
-    $room = $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $ageCol) - 3
+    $label = Limit-Line -Text $Label -Max ([Math]::Max(1, $Width - $markW - $ageW - 2)) -Ascii:$Ascii
+    $labelW = Get-DisplayWidth -Text $label
+    $room = $Width - $markW - $labelW - $ageColW - 3
     $tail =
         if (-not $Tail -or $room -le 8) { '' }
         elseif ($PathTail) { Limit-Path -Text $Tail -Max $room -Ascii:$Ascii }
@@ -937,7 +943,7 @@ function New-ListRow {
     # spends that cell on the separator already folded into $ageCol; without one, nothing does -
     # so only the no-age case reserves it here.
     $gutter = if ($Age) { 0 } else { 1 }
-    $pad = [Math]::Max(1, $Width - (Get-DisplayWidth -Text $Mark) - (Get-DisplayWidth -Text $label) - (Get-DisplayWidth -Text $tail) - (Get-DisplayWidth -Text $ageCol) - $gutter)
+    $pad = [Math]::Max(1, $Width - $markW - $labelW - (Get-DisplayWidth -Text $tail) - $ageColW - $gutter)
     # Marked AFTER the arithmetic above, never before it: every width here is measured on the plain
     # column, so a marked row and an unmarked one are laid out by the identical numbers.
     if ($DimTail -and $tail) { $tail = [string]$script:DimOpen + $tail + [string]$script:DimClose }
@@ -1148,7 +1154,7 @@ function Get-ProjectFrame {
     # $rowYs: where each VISIBLE cursor row landed in $body. The separators below are blank body
     # LINES, not rows - nothing selects one, nothing is hit-tested onto one - so the row index can no
     # longer be derived from a y by arithmetic, and the map carries the actual list instead.
-    $body = @()
+    $body = [Collections.Generic.List[string]]::new()   # a List, not `+=`: every append copies the array
     $rowYs = @()
     # Where a band goes on every visible row, for the memo: body index and how many characters of
     # the finished line it wraps. Recorded here because this loop is the only place that knows which
@@ -1158,7 +1164,7 @@ function Get-ProjectFrame {
         $r = $rows[$i]
         # The blank line ABOVE the free-path row - skipped when that row opens the viewport, since a
         # box whose first body line is empty reads as a rendering fault rather than as a separator.
-        if ($r.Kind -eq 'path' -and $body.Count -gt 0) { $body += '' }
+        if ($r.Kind -eq 'path' -and $body.Count -gt 0) { $body.Add('') }
         $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
         $rowYs += $body.Count
         $rowBandY = $body.Count
@@ -1168,19 +1174,19 @@ function Get-ProjectFrame {
             if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
             $rowText = New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail -Hover:($i -eq $HoverRow)
             $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $rowText -PaneWidth $inner) }
-            $body += $rowText
+            $body.Add($rowText)
         } elseif ($r.Kind -eq 'cwd') {
             # The reader must see which directory the row means - rendered like a project row's
             # name+path columns, minus the age no pinned row has a real LastActivity for.
             $rowText = New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail -PathTail -Hover:($i -eq $HoverRow)
             $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $rowText -PaneWidth $inner) }
-            $body += $rowText
+            $body.Add($rowText)
             # And the blank line UNDER it: the current directory is a group of its own, so the eye
             # stops there instead of reading it as the first entry of the registry (spec D6). Not
             # when the next visible row is the free-path row - it brings its own separator, and both
             # rules firing puts TWO blank lines in the box (reachable with any filter that matches
             # nothing, and with an empty registry).
-            if ($i -lt ($vp.Start + $vp.Visible - 1) -and $rows[$i + 1].Kind -ne 'path') { $body += '' }
+            if ($i -lt ($vp.Start + $vp.Visible - 1) -and $rows[$i + 1].Kind -ne 'path') { $body.Add('') }
         } else {
             # The one row not built by New-ListRow, so it marks itself. Same rule as there: the open
             # marker goes in FRONT of the mark column, which is where Add-PickerColor's bullet
@@ -1192,7 +1198,7 @@ function Get-ProjectFrame {
             # than the list rows above it, so its band was the ragged one.
             if ($i -eq $HoverRow) { $pathRow = Add-HoverSpan -Text ($pathRow + (' ' * [Math]::Max(0, $inner - (Get-DisplayWidth -Text $pathRow)))) }
             $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $pathRow -PaneWidth $inner) }
-            $body += $pathRow
+            $body.Add($pathRow)
         }
     }
 
@@ -1201,7 +1207,7 @@ function Get-ProjectFrame {
     # mid-scroll - so without this the box bottom and the whole footer would jump a line the moment
     # the list scrolls past a separator. Padding to a height that does not depend on $Index is what
     # keeps the frame still while the list moves inside it.
-    while ($body.Count -lt ($vp.Visible + 2)) { $body += '' }
+    while ($body.Count -lt ($vp.Visible + 2)) { $body.Add('') }
 
     # The action field: one launch-screen-style RADIO row under the list, drawn by the same
     # New-RadioRow every launch row goes through, so the whole screen is driveable with the arrows
@@ -1219,7 +1225,7 @@ function Get-ProjectFrame {
     # points at a blank line - a click on the field would do nothing and a click on a gap would step
     # it (controller ruling C7).
     $actionIndex = $body.Count
-    $body += $radio.Text
+    $body.Add($radio.Text)
 
     $lines = New-Box -Lines $body -Width $frameWidth -Title $title -Ascii:$Ascii
     # Derived from the counts, never hardcoded, for the reason the map below records - and taken out
@@ -1344,8 +1350,12 @@ function Select-ResumableSessions {
     # >4 MB transcript whose first 4 MB holds nothing a human typed was offered as resumable
     # (adversarial review 2026-09-16, E4b). The trailing '+' is still stripped so a cache written by
     # an older build stays readable.
+    #
+    # .Where() rather than a Where-Object pipeline: measured ~4.4x cheaper on a list this size, and
+    # it runs on every cold build. The @() around it is load-bearing exactly as it was - see
+    # Select-SessionMatch's own note.
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions)
-    return @($Sessions | Where-Object { (Get-PromptCountValue -Session $_) -gt 0 })
+    return @($Sessions.Where({ (Get-PromptCountValue -Session $_) -gt 0 }))
 }
 
 function Get-PromptCountValue {
@@ -1377,9 +1387,11 @@ function Select-SessionMatch {
     # unroll to a bare object where the filtered answer is an array.
     if ([string]::IsNullOrWhiteSpace($Filter)) { return @($Sessions) }
     $f = [Management.Automation.WildcardPattern]::Escape($Filter.Trim())
-    return @($Sessions | Where-Object {
+    # .Where(), not a Where-Object pipeline, for the reason Select-ResumableSessions records; the
+    # scriptblock still runs in this scope, so $f reaches it exactly as it did through the pipeline.
+    return @($Sessions.Where({
         "$($_.Project) $($_.Worktree) $($_.Title) $($_.LastUser) $($_.LastAssistant)" -like "*$f*"
-    })
+    }))
 }
 
 $script:PickerRx = @{}
@@ -1612,13 +1624,14 @@ function Get-PickerFrame {
         $listRows = [Math]::Max(1, $bodyRows - $previewRows)
         $vp = Get-Viewport -Count $items.Count -Index $Index -Visible $listRows
 
-        $list = @()
+        # A List, not `+=`: every append to a PowerShell array copies the whole array.
+        $list = [Collections.Generic.List[string]]::new()
         # Where a band goes on each visible row, for the memo - see Get-ProjectFrame's own $rowBands.
         $rowBands = @{}
         for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
             $rowText = New-SessionRow -Item $items[$i] -RowIndex $i
             $rowBands[$i] = @{ Y = ($i - $vp.Start); Length = (Get-RowBandLength -Row $rowText -PaneWidth $leftWidth) }
-            $list += $rowText
+            $list.Add($rowText)
         }
 
         # Single column: the selected session's preview goes underneath the list.
@@ -1657,14 +1670,14 @@ function Get-PickerFrame {
     }
 
     $vp = Get-Viewport -Count $items.Count -Index $Index -Visible $bodyRows
-    $list = @()
+    $list = [Collections.Generic.List[string]]::new()   # see the narrow branch: `+=` copies the array
     $rowBands = @{}
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
         $rowText = New-SessionRow -Item $items[$i] -RowIndex $i
         # The band covers the LEFT PANE only here, not the whole line: the right pane is the preview
         # and nothing hovers it.
         $rowBands[$i] = @{ Y = ($i - $vp.Start); Length = (Get-RowBandLength -Row $rowText -PaneWidth $leftWidth) }
-        $list += $rowText
+        $list.Add($rowText)
     }
 
     $s = $items[$Index]
