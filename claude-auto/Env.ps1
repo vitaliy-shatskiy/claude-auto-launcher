@@ -781,21 +781,12 @@ function Get-RateLimitSummary {
             # fields at all, so when its record is the fresher one both are $null and the screen
             # draws no third bar - correct, not a gap.
             if ($null -ne $j.fiveHour -or $null -ne $j.sevenDay) {
-                # availableModels (widget payload v3): the account's model-bucket families, lower-cased.
-                # A guarded array, never a bare @($j.availableModels): PowerShell's @($null) is a
-                # ONE-element array holding $null (Count 1), so an absent field (old widget build) or a
-                # JSON null would read downstream as "a non-empty set that lacks fable/opus" and hide
-                # them for everyone - the exact inversion of the fail-safe. Absent/null/[] all become
-                # an empty set here, and any null/empty member is stripped.
-                $fams = @()
-                if ($null -ne $j.availableModels) { $fams = @($j.availableModels | Where-Object { $_ }) }
                 $out[$profileName] = [pscustomobject]@{
-                    FiveHour        = if ($null -ne $j.fiveHour) { [int]$j.fiveHour } else { $null }
-                    SevenDay        = if ($null -ne $j.sevenDay) { [int]$j.sevenDay } else { $null }
-                    AgeText         = $ageText
-                    Model           = if ($null -ne $j.modelSevenDay) { [int]$j.modelSevenDay } else { $null }
-                    ModelLabel      = if ($j.modelLabel) { [string]$j.modelLabel } else { $null }
-                    AvailableModels = $fams
+                    FiveHour   = if ($null -ne $j.fiveHour) { [int]$j.fiveHour } else { $null }
+                    SevenDay   = if ($null -ne $j.sevenDay) { [int]$j.sevenDay } else { $null }
+                    AgeText    = $ageText
+                    Model      = if ($null -ne $j.modelSevenDay) { [int]$j.modelSevenDay } else { $null }
+                    ModelLabel = if ($j.modelLabel) { [string]$j.modelLabel } else { $null }
                 }
             }
         } catch { }   # unreadable or malformed: show nothing rather than a wrong number

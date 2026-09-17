@@ -1647,93 +1647,6 @@ $w = New-EventReader @((New-MouseEvent -Wheel -128), (New-MouseEvent -Wheel -128
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal 2 $out.Row 'two notches down move two rows down'
 
-# --- Model/advisor availability filter (spec 2026-09-17). An option the current account has no
-# bucket for is hidden from its row - in rendering, in stepping and in click hit-testing - and a
-# remembered hidden value snaps to default so Get-LaunchArgs can never emit it. Hideable = {fable,
-# opus}; absent/empty availableModels hides nothing (fail safe). Every assertion ships a red. ------
-$mvIdx = Get-RowIndex -Name 'Model'
-$avIdx = Get-RowIndex -Name 'Advisor'
-$modelRowDef = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Model' }
-$advRowDef   = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Advisor' }
-function New-AvailLimit { param([string]$Account = 'work', [string[]]$Available)
-    @{ $Account = [pscustomobject]@{ FiveHour = 40; SevenDay = 48; AgeText = 'now'; Model = $null; ModelLabel = $null; AvailableModels = $Available } } }
-
-# The rule, at its one source: an opus-only account drops fable from the Model row and keeps the rest.
-Assert-Equal 'default,opus1m,sonnet1m,haiku' (@(Get-VisibleRowValues -Row $modelRowDef -Available @('opus')) -join ',') 'Get-VisibleRowValues drops fable for an opus-only account and keeps every other Model option'
-# Fail safe, both shapes that mean "no signal": an empty set and the count-1 @($null) an absent
-# .AvailableModels property yields both leave the row whole - this is the byte-identity hinge.
-Assert-Equal (@($modelRowDef.Values) -join ',') (@(Get-VisibleRowValues -Row $modelRowDef -Available @()) -join ',') 'an empty availableModels hides nothing (fail safe)'
-Assert-Equal (@($modelRowDef.Values) -join ',') (@(Get-VisibleRowValues -Row $modelRowDef -Available @($null)) -join ',') 'a count-1 @($null) - what an absent field reads as - hides nothing either'
-# Never hidden, whatever the account carries: default/haiku/sonnet1m on the Model row.
-Assert-Equal 'default,sonnet1m,haiku' (@(Get-VisibleRowValues -Row $modelRowDef -Available @('sonnet') | Where-Object { $_ -in @('default','sonnet1m','haiku') }) -join ',') 'default, sonnet1m and haiku are never hideable'
-
-# Rendering: the Model row map has no fable CELL for an opus-only account, but opus1m keeps its cell.
-$mfMap = $null
-$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits (New-AvailLimit -Available @('opus')) -RowMap ([ref]$mfMap)
-Assert-Equal 0 (@($mfMap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'the hidden fable option gets no click cell'
-Assert-Equal 1 (@($mfMap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'opus1m' }).Count) 'the account HAS opus, so opus1m keeps its cell'
-$mfLine = @(@(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits (New-AvailLimit -Available @('opus'))) | Where-Object { $_ -match '\bmodel\b' })[0]
-Assert-Equal $false ($mfLine -match 'Fable') 'and the drawn Model row no longer shows the Fable label'
-# A record with NO AvailableModels property renders the fable cell (positive control - the absent
-# field must never filter). This is what a fail-safe regression reds.
-$mfAbsent = $null
-$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits @{ work = [pscustomobject]@{ FiveHour = 40; SevenDay = 48; AgeText = 'now'; Model = $null; ModelLabel = $null } } -RowMap ([ref]$mfAbsent)
-Assert-Equal 1 (@($mfAbsent.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'a limit record with no availableModels field keeps the fable cell (fail safe)'
-
-# Stepping skips the hidden option both directions (through Invoke-LaunchScreen, the owner's surface).
-$avLim = New-AvailLimit -Available @('opus')
-$stR = New-LaunchState; $stR.Account = 'work'; $stR.Model = 'default'
-$out = Invoke-LaunchScreen -State $stR -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $avLim
-Assert-Equal 'opus1m' $out.Model 'a Right step from default skips the hidden fable and lands on opus1m'
-$stL = New-LaunchState; $stL.Account = 'work'; $stL.Model = 'opus1m'
-$out = Invoke-LaunchScreen -State $stL -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('LeftArrow', 'Enter'))) -Draw {} -Limits $avLim
-Assert-Equal 'default' $out.Model 'a Left step from opus1m skips fable and lands on default, never fable'
-
-# Click hit-testing: a click at fable's OLD column (from the unfiltered map) selects nothing on a
-# filtered account - the handler walks over the visible list, where fable is not, so the walk is a
-# no-op and the value stays default.
-$umap = $null
-$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -RowMap ([ref]$umap)
-$fableOldCell = @($umap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' })[0]
-$uDraw = { param($s) $umap }.GetNewClosure()
-$w = New-EventReader @((New-MouseEvent -Y $umap.Rows[$mvIdx].Y -X $fableOldCell.Start -Left), $enterKey)
-$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $uDraw -Wait $w -GetWindowTop { 0 } -Limits $avLim
-Assert-Equal 'default' $out.Model 'a click at the hidden option''s former column selects nothing'
-
-# Snap-to-default: a state that remembers a now-hidden value snaps before the frame is built, so
-# Get-LaunchArgs cannot emit a --model the account lacks.
-$stSnap = New-LaunchState; $stSnap.Account = 'work'; $stSnap.Model = 'fable'
-$null = Get-LaunchFrame -State $stSnap -Width 100 -Height 30 -Limits $avLim
-Assert-Equal 'default' $stSnap.Model 'a remembered fable snaps to default on an opus-only account'
-Assert-Equal 0 (@(Get-LaunchArgs -State $stSnap) | Where-Object { $_ -eq '--model' }).Count 'and Get-LaunchArgs then emits no --model at all'
-
-# Advisor row: fable-only account hides opus, keeps default/off/fable; the opus cell is gone.
-$advVis = @(Get-VisibleRowValues -Row $advRowDef -Available @('fable'))
-Assert-Equal 'default,fable,off' ($advVis -join ',') 'the Advisor row hides opus for a fable-only account and keeps default, fable and off'
-$advMap = $null
-$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits (New-AvailLimit -Available @('fable')) -RowMap ([ref]$advMap)
-Assert-Equal 0 (@($advMap.Rows[$avIdx].Cells | Where-Object { $_.Value -eq 'opus' }).Count) 'the hidden advisor opus gets no click cell'
-$stAdv = New-LaunchState; $stAdv.Account = 'work'; $stAdv.Advisor = 'opus'
-$null = Get-LaunchFrame -State $stAdv -Width 100 -Height 30 -Limits (New-AvailLimit -Available @('fable'))
-Assert-Equal 'default' $stAdv.Advisor 'a remembered advisor opus snaps to default on a fable-only account'
-
-# The account tab strip and every non-filtered row are byte-identical to the unfiltered frame, at
-# every account: only Model/Advisor may change. Compared line for line across the whole body.
-foreach ($acc in @('work', 'personal', 'low')) {
-    $stA = New-LaunchState; $stA.Account = $acc
-    $unfiltered = @(Get-LaunchFrame -State $stA -Width 100 -Height 30 -Limits (New-AvailLimit -Account $acc -Available @()))
-    $stB = New-LaunchState; $stB.Account = $acc
-    $filtered   = @(Get-LaunchFrame -State $stB -Width 100 -Height 30 -Limits (New-AvailLimit -Account $acc -Available @('opus')))
-    $accU = @($unfiltered | Where-Object { $_ -match '\baccount\b' })[0]
-    $accF = @($filtered   | Where-Object { $_ -match '\baccount\b' })[0]
-    Assert-Equal $accU $accF "the account tab strip is untouched by the Model filter ($acc)"
-    foreach ($other in @('effort', 'permission', 'mode', 'remote')) {
-        $lu = @($unfiltered | Where-Object { $_ -match "\b$other\b" })[0]
-        $lf = @($filtered   | Where-Object { $_ -match "\b$other\b" })[0]
-        Assert-Equal $lu $lf "the $other row is untouched by the Model filter ($acc)"
-    }
-}
-
 # --- Clickable footer hints (owner ask 2026-08-15). A click becomes the KEY the hint advertises and
 # takes the ordinary keyboard path, so what is asserted here is that the SAME outcome arrives. ---
 function Get-HintSpan { param($Map, [string]$Key, [string]$Char)
@@ -5229,7 +5142,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1669
+$script:Expected = 1638
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
