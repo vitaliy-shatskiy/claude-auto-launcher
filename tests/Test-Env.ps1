@@ -571,6 +571,28 @@ try {
     if (Test-Path -LiteralPath $ml) { Remove-Item -LiteralPath $ml -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# availableModels (widget payload v3, spec 2026-09-17): the account's model-bucket families, read
+# from real ConvertFrom-Json inputs so the count-1 @($null) trap is exercised for real. Absent (old
+# widget), JSON null (defensive) and [] (Team, buckets-but-none) must ALL become an empty set - the
+# launcher's hide filter fails safe to show on an empty set, so a false non-empty here would hide
+# fable/opus for everyone. ["opus"] is the only case that carries a family through.
+$av = Join-Path $env:TEMP ("cct-availmodels-test-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $av | Out-Null
+try {
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    Set-Content -LiteralPath "$av\work.widget.json"     -Value ('{"fiveHour":40,"sevenDay":48,"atMs":' + $nowMs + ',"availableModels":["opus"]}')
+    Set-Content -LiteralPath "$av\personal.widget.json" -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"availableModels":[]}')
+    Set-Content -LiteralPath "$av\low.widget.json"      -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"availableModels":null}')
+    Set-Content -LiteralPath "$av\shared.widget.json"   -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + '}')
+    $sum = Get-RateLimitSummary -Directory $av
+    Assert 'availableModels ["opus"] becomes the family set {opus}'  ((@($sum.work.AvailableModels) -join ',') -eq 'opus')
+    Assert 'availableModels [] becomes an empty set'                 (@($sum.personal.AvailableModels).Count -eq 0)
+    Assert 'availableModels JSON null becomes an empty set'          (@($sum.low.AvailableModels).Count -eq 0)
+    Assert 'an ABSENT availableModels field becomes an empty set - not a count-1 @($null)' (@($sum.shared.AvailableModels).Count -eq 0)
+} finally {
+    if (Test-Path -LiteralPath $av) { Remove-Item -LiteralPath $av -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # Get-DefaultAdvisorLabel: what 'default' on the advisor row means right now. Same shape and same
 # failure policy as Get-DefaultModelLabel - this is a menu, not a validator, so every failure
 # degrades to a plain label instead of taking the launch screen down.
@@ -731,7 +753,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 150 } else { 146 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 154 } else { 150 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

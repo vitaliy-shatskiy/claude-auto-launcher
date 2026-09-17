@@ -608,13 +608,18 @@ function Invoke-LaunchScreen {
         # Called BEFORE arrow handling with the raw key; when it returns $true the loop redraws
         # without interpreting the key further. That is how 'u' opens maintenance from here and
         # comes back. Default returns $false so every existing caller that omits it is unaffected.
-        [scriptblock]$OnKey = { param($k) $false }
+        [scriptblock]$OnKey = { param($k) $false },
+        # Per-account rate-limit records (Get-RateLimitSummary), the same table the frame is drawn
+        # from. Only .AvailableModels is read here, to skip a hidden Model/Advisor option when
+        # stepping or clicking; the empty default keeps every existing caller and test unfiltered.
+        [hashtable]$Limits = @{}
     )
     # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
     # the rule; this screen's own state travels as $s.State, never as $State.
     $paintLaunch = $Draw
     $askCaller = $OnKey
     $tabPrefs = $Prefs
+    $launchLimits = $Limits
 
     # One walk of the stepper - $Count steps of $Delta - and the tab switch the account row is. The
     # arrows walk one step and a click on a cell walks to it, both through the SAME stepper: a
@@ -625,7 +630,11 @@ function Invoke-LaunchScreen {
         # Captured before the first step, not after the last: a click on a tab may walk two
         # accounts, and the stash belongs to the one the walk started on.
         $leaving = $s.State.Account
-        for ($n = 0; $n -lt $Count; $n++) { $s.State = Step-LaunchValue -State $s.State -Delta $Delta }
+        # This account's model-bucket families, so a Left/Right over the Model/Advisor row skips a
+        # hidden option instead of landing on it (spec 2026-09-17). The Account row itself is never
+        # filtered, so its own step is unaffected; @() when there is no record (fail safe).
+        $available = @($launchLimits[$s.State.Account].AvailableModels)
+        for ($n = 0; $n -lt $Count; $n++) { $s.State = Step-LaunchValue -State $s.State -Delta $Delta -Available $available }
         # The account row is a tab strip: stepping it is a tab switch, and the five habit rows have
         # to travel with it. Every other row steps and nothing else happens.
         if ((Get-LaunchRows)[$s.State.Row].Name -eq 'Account') {
@@ -658,7 +667,12 @@ function Invoke-LaunchScreen {
             $s.Index = [int]$hit.Row.Index
             $s.State.Row = $s.Index
             if ($hit.Kind -ne 'cell') { return }
-            $values = @((Get-LaunchRows)[$hit.Row.Index].Values)
+            # Over the VISIBLE values, the same list that built the row's cells: a hidden option has
+            # no cell, so a click at its former column finds no value here and the walk is a no-op
+            # (spec 2026-09-17). The step count must match the visible-stepping walkRow, or a click
+            # would over- or under-shoot the option it landed on.
+            $available = @($launchLimits[$s.State.Account].AvailableModels)
+            $values = @(Get-VisibleRowValues -Row (Get-LaunchRows)[$hit.Row.Index] -Available $available)
             $from = [Array]::IndexOf($values, $s.State.($hit.Row.Name))
             $to = [Array]::IndexOf($values, $hit.Value)
             $steps = 0

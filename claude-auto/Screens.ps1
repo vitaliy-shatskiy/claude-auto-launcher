@@ -51,6 +51,36 @@ $script:RemoteRow = @{ Name = 'Remote'; Label = 'remote'; Values = @('on', 'off'
 $script:AccountTints = @{ work = 'Green' }
 $script:DefaultAccount = 'work'
 
+# Model/advisor availability filter (spec 2026-09-17). The ONLY source of the hide rule, so it is
+# one-line adjustable: which families may be hidden, and which row option maps to which family.
+# Keyed by ROW NAME so an account whose KEY happens to be 'fable'/'opus' is never filtered - only
+# the Model and Advisor option rows carry a family map at all. Sonnet is deliberately absent from
+# the hideable set: it is broadly available and a missing sonnet bucket is not proof of no-Sonnet.
+$script:HideableModelFamilies = @('fable', 'opus')
+$script:OptionModelFamily = @{
+    Model   = @{ fable = 'fable'; opus1m = 'opus' }
+    Advisor = @{ fable = 'fable'; opus   = 'opus' }
+}
+
+function Get-VisibleRowValues {
+    # A row's Values minus the options the current account cannot use. An option is hidden iff its
+    # family is hideable {fable,opus} AND the account published a NON-EMPTY availableModels set AND
+    # that family is not in it. Absent/empty -> hide nothing (fail safe to show), which is what makes
+    # "unknown still shows" and "appeared later shows" true. Rows with no family map (Account, Effort,
+    # Permission, Mode, Remote) return their Values untouched, so the frame is byte-identical there.
+    param([Parameter(Mandatory)]$Row, [string[]]$Available = @())
+    $fam = $script:OptionModelFamily[$Row.Name]
+    # Strip null/empty members HERE too: a caller reading an absent .AvailableModels property hands us
+    # @($null) (Count 1), which must read as "no signal", not as a set that lacks every family.
+    $avail = @($Available | Where-Object { $_ })
+    if (-not $fam -or $avail.Count -eq 0) { return @($Row.Values) }
+    @($Row.Values | Where-Object {
+        $f = $fam[$_]
+        # Kept unless the option has a hideable family the account's set does not carry.
+        -not ($f -and ($f -in $script:HideableModelFamilies) -and ($f -notin $avail))
+    })
+}
+
 function Set-LaunchRoster {
     # The account row and the tints come from the config; this file stays pure (no file reads) by
     # taking the roster as a parameter. The Remote row only exists when the feature is on.
@@ -184,9 +214,13 @@ function Step-ProjectAction {
 
 function Step-LaunchValue {
     # Thin wrapper: steps the row under the cursor and writes the result back onto the state.
-    param($State, [int]$Delta)
+    # -Available: the current account's model-bucket families. Left/Right must skip a hidden option,
+    # so it steps over the VISIBLE values, never the raw row. Default @() -> no filtering (every
+    # existing caller and every pin that omits it keeps today's behaviour exactly).
+    param($State, [int]$Delta, [string[]]$Available = @())
     $row = $script:Rows[$State.Row]
-    $State.($row.Name) = Step-Option -Values @($row.Values) -Current $State.($row.Name) -Delta $Delta
+    $values = @(Get-VisibleRowValues -Row $row -Available $Available)
+    $State.($row.Name) = Step-Option -Values $values -Current $State.($row.Name) -Delta $Delta
     return $State
 }
 
@@ -759,6 +793,19 @@ function Get-LaunchFrame {
     $body = @()
     $rowHits = @()
     $limit = $Limits[$State.Account]
+    # The current account's model-bucket families (spec 2026-09-17) drive the hide filter below.
+    # Read off the same $limit record the bars use; Get-VisibleRowValues treats an absent field or a
+    # null member as "no signal", so this is @()-equivalent for an old widget, a stale record or a
+    # Team account - and the frame is then byte-identical to before this filter existed.
+    $available = @($limit.AvailableModels)
+    # Snap a hidden Model/Advisor to default BEFORE the rows are built: Get-LaunchArgs reads these off
+    # the same state, so a value the account cannot use (a remembered pref, or the account was just
+    # switched to one lacking it) must never survive to the command line. 'default' is never hideable,
+    # so this always lands on a visible option; with no signal nothing is hidden and nothing snaps.
+    foreach ($rn in @('Model', 'Advisor')) {
+        $rdef = $script:Rows | Where-Object { $_.Name -eq $rn } | Select-Object -First 1
+        if ($rdef -and ($State.($rn) -notin @(Get-VisibleRowValues -Row $rdef -Available $available))) { $State.($rn) = 'default' }
+    }
     # What the mouse is over (spec D8/D10), read off the state exactly as $State.Hover already is -
     # and defaulted the same way, because a hand-built fixture carries neither field and hovers
     # nothing rather than row 0.
@@ -812,7 +859,11 @@ function Get-LaunchFrame {
             # The band goes on the hovered VALUE, and only while the pointer is on this row: two rows
             # can offer the same value ('default' is on three of them), and matching on the value
             # alone would light every one of them at once.
-            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values @($row.Values) -Current $current -Glyphs $g -Labels $optionLabels -MaxWidth $inner `
+            # Values filtered to what the account can use (spec 2026-09-17): the SAME visible list is
+            # what builds the click cells, so a hidden option gets no cell either. Empty/absent
+            # availableModels leaves the list untouched, so the row is byte-identical to before.
+            $rowValues = @(Get-VisibleRowValues -Row $row -Available $available)
+            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values $rowValues -Current $current -Glyphs $g -Labels $optionLabels -MaxWidth $inner `
                                   -Hover $(if ($hoverRow -eq $i) { $hoverValue } else { '' })
             $line = $radio.Text
             $cellHits = @($radio.Cells)
