@@ -475,11 +475,16 @@ function Get-ListSignature {
     $null = $sb.Append(@($Items).Count)
     foreach ($it in $Items) {
         foreach ($f in $Fields) {
-            $null = $sb.Append([char]31)
             $v = $it.$f
-            if ($v -is [datetime]) { $null = $sb.Append($v.Ticks) }
-            elseif ($null -eq $v -or $v -is [string] -or $v -is [ValueType]) { $null = $sb.Append([string]$v) }
-            else { $null = $sb.Append([Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($v)) }
+            $s =
+                if ($v -is [datetime]) { [string]$v.Ticks }
+                elseif ($null -eq $v -or $v -is [string] -or $v -is [ValueType]) { [string]$v }
+                else { [string][Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($v) }
+            # LENGTH-prefixed, not merely separated: a value that itself contains the separator lets
+            # two different lists sign identically, and a memo answering that key shows one list's
+            # rows for another's. A field here is arbitrary text - a project name, a message - so the
+            # separator cannot be assumed absent from it.
+            $null = $sb.Append($s.Length).Append([char]31).Append($s)
         }
     }
     return $sb.ToString()
@@ -501,8 +506,12 @@ function Get-SessionListSignature {
     foreach ($it in $Items) {
         $parts.Add([string][Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($it))
         $parts.Add([string]$it.Modified.Ticks)
-        $parts.Add([string]$it.Path)
-        $parts.Add([string]$it.Project)
+        # Length-prefixed for the reason Get-ListSignature records: a path or a project name that
+        # carried the separator could otherwise sign the same as a different pair of values.
+        $p = [string]$it.Path
+        $q = [string]$it.Project
+        $parts.Add($p.Length.ToString() + ':' + $p)
+        $parts.Add($q.Length.ToString() + ':' + $q)
     }
     return ($parts -join [string][char]31)
 }
@@ -525,6 +534,9 @@ function Add-HoverSpanAt {
     # or Join-Panes had already cut is one where the builder's markers would have landed elsewhere,
     # and the caller must rebuild rather than guess.
     param([string]$Line, [int]$Start, [int]$Length)
+    # No caller can reach this branch today: every range handed in was measured off the very line it
+    # is applied to, on the same build. It is a guard, not a code path - it exists so that a future
+    # caller measuring a range somewhere else rebuilds instead of writing a band at a wrong offset.
     if ($Start -lt 0 -or $Length -le 0 -or ($Start + $Length) -gt $Line.Length) { return $null }
     return $Line.Substring(0, $Start) + [string]$script:HoverOpen + $Line.Substring($Start, $Length) + [string]$script:HoverClose + $Line.Substring($Start + $Length)
 }
@@ -1093,7 +1105,10 @@ function Get-ProjectFrame {
     # only thing it feeds is the age column and that column changes once a minute - a key to the
     # tick would miss on every single frame and the memo would never answer anything.
     $memoKey = "$Width|$Height|$Color|$Ascii|$Index|$Filter|$Typing|$Notice|$Action|$Cwd|" + $Now.ToString('yyyyMMddHHmm') + '|' +
-               (Get-ListSignature -Items $Projects -Fields @('Name', 'Path', 'Slug', 'Worktree', 'LastActivity'))
+               # No Slug: this screen draws Name, Path, the worktree glyph and the age, and nothing
+               # else - a field the rows cannot show cannot move them, and every field costs a
+               # property read per project on a key that is rebuilt on every hover.
+               (Get-ListSignature -Items $Projects -Fields @('Name', 'Path', 'Worktree', 'LastActivity'))
     $memoHit = Get-MemoFrame -Builder 'project' -Key $memoKey -HoverRow $HoverRow -HoverValue $HoverValue -Hover $Hover -RowMap $RowMap
     if ($null -ne $memoHit) { return $memoHit }
     $items = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
