@@ -14,6 +14,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   `Limit-CellsRight` decide printable ASCII and the zero-width markers inline and reach the width
   table only for the characters that need it. Same widths, a session picker that answers a mouse
   move far sooner.
+- Moving the mouse over the project list or the session picker repaints only the lines whose
+  highlight changed, instead of rebuilding the whole frame behind them. The picture is the one a
+  full rebuild would have drawn; every other input still rebuilds.
+- A cold frame measures each distinct piece of text once and remembers the answer, so the rows,
+  borders and wrapped words that repeat down a screen and across redraws are no longer re-measured
+  character by character.
 
 ## [0.1.1] — 2026-09-09
 
