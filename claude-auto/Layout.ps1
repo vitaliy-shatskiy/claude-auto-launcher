@@ -199,29 +199,38 @@ function Split-TextLines {
     param([string]$Text, [int]$Width, [int]$MaxLines = 0, [switch]$Ascii)
     if ([string]::IsNullOrWhiteSpace($Text) -or $Width -le 0) { return @() }
 
-    $lines = @()
+    # A List and a foreach, not `+=` over a piped Where-Object: this runs once per word of every
+    # preview pane, and both the array copy and the pipeline cost more than the wrapping does.
+    # `if (-not $word)` is the same test Where-Object ran - `-split '\s+'` emits an empty leading
+    # element for text that starts with whitespace.
+    $lines = [Collections.Generic.List[string]]::new()
     $current = ''
-    foreach ($word in ($Text -split '\s+' | Where-Object { $_ })) {
+    foreach ($word in ($Text -split '\s+')) {
+        if (-not $word) { continue }
         $token = $word
-        while ((Get-DisplayWidth -Text $token) -gt $Width) {
-            if ($current) { $lines += $current; $current = '' }
+        # Measured once per shape of $token rather than once per test of it: the while condition and
+        # the fit test below asked the same question twice for every word on the pane.
+        $tokenWidth = Get-DisplayWidth -Text $token
+        while ($tokenWidth -gt $Width) {
+            if ($current) { $lines.Add($current); $current = '' }
             $head = Limit-Cells -Text $token -Max $Width
             # Nothing fits: the pane is narrower than a single glyph. Emitting the token anyway
             # produces a row wider than the pane, which wraps and drags every row below it out of
             # line - the one outcome this whole file exists to prevent. Drop it instead, and never
             # loop forever on a prefix that cannot shrink.
-            if (-not $head) { $token = ''; break }
-            $lines += $head
+            if (-not $head) { $token = ''; $tokenWidth = 0; break }
+            $lines.Add($head)
             $token = $token.Substring($head.Length)
+            $tokenWidth = Get-DisplayWidth -Text $token
         }
         if (-not $current) { $current = $token }
-        elseif (((Get-DisplayWidth -Text $current) + 1 + (Get-DisplayWidth -Text $token)) -le $Width) { $current += ' ' + $token }
-        else { $lines += $current; $current = $token }
+        elseif (((Get-DisplayWidth -Text $current) + 1 + $tokenWidth) -le $Width) { $current += ' ' + $token }
+        else { $lines.Add($current); $current = $token }
     }
-    if ($current) { $lines += $current }
+    if ($current) { $lines.Add($current) }
 
     if ($MaxLines -gt 0 -and $lines.Count -gt $MaxLines) {
-        $kept = @($lines[0..($MaxLines - 1)])
+        $kept = @($lines.GetRange(0, $MaxLines))
         # Limit-Cells, not Limit-Line: Limit-Line appends an ellipsis of its own when it truncates,
         # and adding ours on top produced '……'. The reader must be able to tell a truncated preview
         # from a complete one with exactly one marker.

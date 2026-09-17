@@ -223,6 +223,17 @@ Assert-Equal 0 (@($w | Where-Object { (Get-DisplayWidth -Text $_) -gt 20 }).Coun
 $narrow = @(Split-TextLines -Text ($script:CJK * 4) -Width 1)
 Assert-Equal 0 (@($narrow | Where-Object { (Get-DisplayWidth -Text $_) -gt 1 }).Count) 'a pane narrower than one glyph emits no over-wide row'
 
+# One text carrying every wrap decision at once - a CJK run, an astral emoji run, a token longer
+# than the pane, a combining mark - pinned as the cells/code-units shape of each line it produces.
+# Taken off the wrap as it stood before the loop was rewritten: this is the contract that rewrite
+# had to preserve, and neither half of it (cells or code units) can move without the other showing.
+$mixedWrap = 'head ' + ($script:CJK * 8) + ' ' + ($script:Emoji * 9) + ' ' + ('z' * 30) + ' ' + $script:Combining + 'tail end'
+$w = @(Split-TextLines -Text $mixedWrap -Width 12)
+Assert-Equal '4/4 12/6 4/2 12/12 6/6 12/12 12/12 12/13 3/3' ((@($w | ForEach-Object { "$(Get-DisplayWidth -Text $_)/$($_.Length)" })) -join ' ') 'a mixed CJK/emoji/over-long-token text wraps into the same cells and code units per line as before'
+Assert-Equal ($mixedWrap -replace '\s+', '') (($w -join '') -replace '\s+', '') 'and not one character is lost or invented while cutting the over-long token'
+$w = @(Split-TextLines -Text $mixedWrap -Width 12 -MaxLines 4)
+Assert-Equal '4/4 12/6 4/2 11/11' ((@($w | ForEach-Object { "$(Get-DisplayWidth -Text $_)/$($_.Length)" })) -join ' ') 'and capping that same wrap keeps the marker inside the pane'
+
 # --- boxes -------------------------------------------------------------------------------
 $box = New-Box -Lines @('hello', 'world') -Width 20 -Ascii
 Assert-Equal 4 $box.Count 'a two-line box is four lines tall'
@@ -356,7 +367,7 @@ Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line th
 if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
 $script:Ellipsis = [string][char]0x2026
 
-if ($script:Ran -ne 123) { Write-Host "COULD NOT RUN: expected 123 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 126) { Write-Host "COULD NOT RUN: expected 126 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
