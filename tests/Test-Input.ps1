@@ -917,7 +917,7 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
 # genuine hidden console, never guessed. The bare count (83: 81 before Test-ClaudeInputPending's
 # pins, plus 2 for its no-console/no-state half - a plain $false and its boolean type) IS exact -
-# checkpoint.ps1 only ever runs this suite bare, and that path has no such branching. BACKLOG 217
+# checkpoint.ps1 only ever runs this suite bare, and that path has no such branching. deferred-minors sweep (17.09.2026)
 # G3: re-measured in a genuine hidden console (4 consecutive runs, -Live, redirecting the hidden
 # child's stdout to a file) - the full run is 153, every time, with the SECOND-arming tail's 4
 # assertions all landing (never the 1-assertion shrink the comment above allows for). The floor

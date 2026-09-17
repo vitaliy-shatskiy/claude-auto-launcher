@@ -419,7 +419,7 @@ $tabColoredP = @(Get-LaunchFrame -State $selPersonal -Width 100 -Height 30 -Limi
 Assert-Equal $true ($tabColoredP.IndexOf($magenta) -lt $tabColoredP.IndexOf('[personal')) 'the personal tint opens the personal tab'
 Assert-Equal 1 ([regex]::Matches($tabColoredP, [regex]::Escape($boldEsc)).Count) 'still exactly one emphasised tab'
 
-# BACKLOG 217 G1: the tab-strip fit check must measure DISPLAY CELLS, not .Length - a CJK account
+# deferred-minors sweep (17.09.2026) G1: the tab-strip fit check must measure DISPLAY CELLS, not .Length - a CJK account
 # key is short in UTF-16 code units but wide on screen, so the two disagree on whether the
 # with-percent form still fits. The roster is swapped out for this probe and rebuilt from the real
 # config right after (finally) - Set-LaunchRoster mutates the Account row's Values IN PLACE, so
@@ -539,7 +539,7 @@ Assert-Equal 0 (@($f | Where-Object { $_ -match [regex]::Escape($needed) }).Coun
 $f = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -Version @{ Installed='2.1.226'; Newest='2.1.230' }
 Assert-Equal 1 (@($f | Where-Object { $_ -match '2\.1\.230' }).Count) 'an available update is visible on the launch screen'
 
-# BACKLOG 217 G1: the header pad is computed in DISPLAY CELLS, not .Length. Get-Glyphs carries no
+# deferred-minors sweep (17.09.2026) G1: the header pad is computed in DISPLAY CELLS, not .Length. Get-Glyphs carries no
 # wide glyphs to build this fixture from, so the wide character rides in on the version string
 # instead (an arbitrary caller-supplied value the header has to lay out correctly regardless).
 # Stripping the box border and the box's own trailing pad (always spaces, since the header content
@@ -3238,7 +3238,7 @@ try {
     $actUnbounded = @(Get-ProjectFrame -Projects $actBig -Index 5 -Cwd 'C:\x' -Width 50 -Height 200 -Action 'worktree')
     Assert-True ($actUnbounded.Count -gt $actFit.Count) 'and it still clamps - more lines when given the room'
 
-    # BACKLOG 217 G3: the project action row is built by the SAME New-RadioRow -MaxWidth every
+    # deferred-minors sweep (17.09.2026) G3: the project action row is built by the SAME New-RadioRow -MaxWidth every
     # launch row uses - pin that its return always fits the project screen's own inner budget
     # (Get-ProjectFrame's $inner = frameWidth - 2) at the widths the launcher must run at.
     foreach ($wA in @(50, 80, 120)) {
@@ -3724,7 +3724,7 @@ try {
     ) -join ' | ')
     $uiFieldsActual = ((& $uiFields) -join ' | ')
     Assert-Equal $uiFieldsExpected $uiFieldsActual 'and every one of those records carries exactly these fields - a dropped or renamed one is red here'
-    # BACKLOG 217 G3: Assert-Equal compares with -ne, which PowerShell resolves case-INsensitively,
+    # deferred-minors sweep (17.09.2026) G3: Assert-Equal compares with -ne, which PowerShell resolves case-INsensitively,
     # so a field renamed only in case ('screen' -> 'Screen') traced identically above. Checked here
     # with -ceq wrapped in a boolean, so Assert-Equal's own case-insensitive string compare cannot
     # hide the answer ('True' vs 'False' differ regardless of case).
@@ -3808,7 +3808,7 @@ try {
     Assert-Equal 'action' $uiClickRec.Data.button 'the button it names is the action field, not a footer one'
     Assert-Equal 'continue' $uiClickRec.Data.action 'and it carries the value the click walked to'
 
-    # BACKLOG 217 G3: a click on the ALREADY-selected action value is a no-op (Ui.ps1's Click
+    # deferred-minors sweep (17.09.2026) G3: a click on the ALREADY-selected action value is a no-op (Ui.ps1's Click
     # handler returns before building any Log) - it must write no record at all, exactly like the
     # picker's two silent presses noted above.
     $script:uiRecords = @()
@@ -4037,7 +4037,7 @@ Assert-Equal 13 (Get-HitAt -RowMap $pm -X 5 -Y 15 -WindowTop 10).Row 'window top
 # Launch-map (Rows[]) case for the SAME WindowTop subtraction, so a mutation that drops it from the
 # Rows branch specifically (rather than the FirstRowY branch above) is caught too.
 Assert-Equal 2 (Get-HitAt -RowMap $lm -X 2 -Y 10 -WindowTop 3).Row.Index 'and WindowTop is subtracted for a launch row too'
-# BACKLOG 217 G3: the ACTION branch subtracts WindowTop too - Y 10 with WindowTop 3 is the same
+# deferred-minors sweep (17.09.2026) G3: the ACTION branch subtracts WindowTop too - Y 10 with WindowTop 3 is the same
 # rowY (7) as the plain Y 7 hit above.
 Assert-Equal 'action' (Get-HitAt -RowMap $pm -X 14 -Y 10 -WindowTop 3).Kind 'and WindowTop is subtracted for the action row too'
 # FooterIndex and Cell, not just Footer.Key/Value: the loop hands FooterIndex straight to
@@ -4046,7 +4046,7 @@ Assert-Equal 0 (Get-HitAt -RowMap $lm -X 6 -Y 12).FooterIndex 'a footer hit carr
 Assert-Equal 15 (Get-HitAt -RowMap $lm -X 17 -Y 7).Cell.Start 'a cell hit carries the whole cell'
 Assert-Equal 20 (Get-HitAt -RowMap $lm -X 17 -Y 7).Cell.End 'both ends of its span'
 
-# BACKLOG 217 G2: the same two maps, HASHTABLE-built rather than pscustomobject - PSObject.Properties
+# deferred-minors sweep (17.09.2026) G2: the same two maps, HASHTABLE-built rather than pscustomobject - PSObject.Properties
 # on a hashtable enumerates its OWN members (Keys/Values/Count), never its entries, so a
 # hashtable-shaped row map used to answer 'none'/'footer only' for everything here silently.
 $lmHt = @{ Rows = @([pscustomobject]@{ Index = 2; Name = 'Effort'; Y = 7; Cells = @([pscustomobject]@{ Start = 15; End = 20; Value = 'high' }) })
@@ -4087,7 +4087,7 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -
 Assert-True ($null -eq $r) 'Escape returns $null by default'
 Assert-Equal 2 $st.Index 'and Down at the last row stays'
 
-# BACKLOG 217 G3 / fix round 1, Important 2: a wheel event on a CURSORLESS screen (no Rows handler,
+# deferred-minors sweep (17.09.2026) G3 / fix round 1, Important 2: a wheel event on a CURSORLESS screen (no Rows handler,
 # no Wheel handler either) - $loopRows answers 0 for a screen with no Rows handler, and the
 # wheel-move guard is `-gt 0`, so the index is left exactly where it was rather than being nudged by
 # the delta. Index MUST start away from 0: at Index 0, WheelDown's delta (+1) clamped through
@@ -4253,7 +4253,7 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing =
         DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
     }
 Assert-Equal 'dbl@4' $r 'a row double click on a Rows[]-shaped map moves the index to that row''s own Index, not to the row object'
-# BACKLOG 217 G2: a Rows[]-shaped row object with NO Index (a hand-built fixture, or a shape that
+# deferred-minors sweep (17.09.2026) G2: a Rows[]-shaped row object with NO Index (a hand-built fixture, or a shape that
 # never grew one) must leave $State.Index untouched, not fall to [int]$null - which is 0, a silent
 # jump to the first row.
 $rq2 = [System.Collections.Queue]::new()

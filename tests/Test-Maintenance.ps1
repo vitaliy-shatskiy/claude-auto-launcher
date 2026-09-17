@@ -167,7 +167,7 @@ Assert-Equal $false $r.Matches 'nothing to compare against is not a match'
 # The frame renders the mismatch as a sentence, not as a boolean.
 $info = Get-ClaudeInstallInfo -BinPath $bin -VersionsDir $versions
 $f = Get-MaintenanceFrame -Info $info -Width 80 -Height 24
-# BACKLOG 217 G3: loosened-proof - not merely "no line is OVER width" (a bound any narrower frame
+# deferred-minors sweep (17.09.2026) G3: loosened-proof - not merely "no line is OVER width" (a bound any narrower frame
 # also passes), but the box's own longest line measured in CELLS equals the frame width EXACTLY.
 # The frame is deterministic at these fixed Info fields, so an exact bound is possible.
 Assert-Equal (Get-FrameWidth -Width 80) (($f | ForEach-Object { Get-DisplayWidth -Text $_ } | Measure-Object -Maximum).Maximum) 'the widest maintenance line fills exactly the frame width at 80 columns'
@@ -194,7 +194,7 @@ $expectedGb = '{0:N1}' -f ($wideInfo.VersionsBytes / 1GB)
 # and moved to 21 on 2026-09-04, at which point a hardcoded 20 stopped rendering this screen at all
 # and started asserting against the too-small notice.
 $f60 = Get-MaintenanceFrame -Info $wideInfo -Width 60 -Height $script:MinHeight
-# BACKLOG 217 G3: same tightening as width 80 above - the exact cell width the box reaches, not
+# deferred-minors sweep (17.09.2026) G3: same tightening as width 80 above - the exact cell width the box reaches, not
 # merely a ceiling nothing exceeds.
 Assert-Equal (Get-FrameWidth -Width 60) (($f60 | ForEach-Object { Get-DisplayWidth -Text $_ } | Measure-Object -Maximum).Maximum) 'the widest maintenance line fills exactly the frame width at 60 columns'
 Assert-Equal 1 (@($f60 | Where-Object { $_ -match [regex]::Escape($expectedPrefix) }).Count) 'width 60: the 16-char hash prefix renders complete, not truncated'

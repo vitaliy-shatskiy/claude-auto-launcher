@@ -99,7 +99,7 @@ Assert-Equal $true ($longLeaf.StartsWith('C')) 'and still starts with the drive'
 Assert-Equal 0 (Get-LoneSurrogateCount -Text (Limit-Path -Text ('C:\a\' + ($script:Emoji * 10) + '\' + ($script:Emoji * 10)) -Max 12)) 'middle truncation never cuts a surrogate pair in half'
 Assert-Equal $true ((Get-DisplayWidth -Text (Limit-Path -Text ('C:\a\' + ($script:CJK * 30)) -Max 21)) -le 21) 'a CJK path is cut by cells, not code units'
 
-# BACKLOG 217 G3: degenerate Limit-Path inputs, read straight off the function rather than
+# deferred-minors sweep (17.09.2026) G3: degenerate Limit-Path inputs, read straight off the function rather than
 # changed to match a guess - Max <= 3 has no room for a head, a marker AND a tail, so it falls
 # back to Limit-Line's own plain right cut.
 foreach ($degMax in @(0, 1, 2, 3)) {
@@ -294,7 +294,7 @@ $asciiPath = Limit-Path -Text 'C:\Users\sample\Desktop\Projects\workspace\alpha'
 Assert-Equal 0 (Get-NonAsciiCount -Lines @($asciiPath)) 'ASCII mode middle-truncates a path with an ASCII marker'
 Assert-Equal $true ($asciiPath.Contains('~')) 'which is the one-cell marker Get-Ellipsis hands every other helper'
 Assert-Equal $true ($asciiPath.EndsWith('\alpha')) 'and the leaf survives there too'
-# BACKLOG 217 G3: ASCII mode on the same degenerate shapes tested above (no separator, UNC) - the
+# deferred-minors sweep (17.09.2026) G3: ASCII mode on the same degenerate shapes tested above (no separator, UNC) - the
 # marker is Get-Ellipsis's own one-cell '~', never the two-cell '...' the arithmetic never reserved
 # room for. Same DISTINGUISHABLE fixture as the non-ASCII pin above (fix round 1, Minor 5).
 $asciiNoSep = Limit-Path -Text $noSepText -Max 20 -Ascii
