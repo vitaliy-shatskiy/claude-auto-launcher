@@ -315,6 +315,13 @@ foreach ($pair in @(@('w', 0x0446), @('a', 0x0444), @('s', 0x044B), @('c', 0x044
 $shiftedW = [System.ConsoleKeyInfo]::new('W', [System.ConsoleKey]::W, $true, $false, $false)
 Assert-Equal $false (Test-ClaudeHotkey -Key $shiftedW -Char 'w') 'a shifted w is never the w hotkey'
 
+# --------------------------------------------------------- Test-ClaudeInputPending (no console) ---
+# The pure half of the contract: no console, no state, no throw - just $false, so the coalescing
+# check in Invoke-ScreenLoop is a no-op on the keyboard-only path rather than a behaviour change.
+$pendingNoState = Test-ClaudeInputPending -State $null
+Assert-Equal $false $pendingNoState 'with no console and no state, Test-ClaudeInputPending is false, never a throw'
+Assert-Equal 'System.Boolean' ($pendingNoState.GetType().FullName) 'and always a real boolean, never $null masquerading as falsy'
+
 # ---------------------------------------------------------------- live console
 
 if ($Live -and -not $LiveOnly) {
@@ -366,12 +373,57 @@ if ($Live -and -not $LiveOnly) {
     # Captured BEFORE arming, because arming is now what neutralises Ctrl+C and the restore has to
     # put back whatever this process was actually found with, not a guessed $false.
     $tccBefore = try { [Console]::TreatControlCAsInput } catch { $null }
+    # Before anything is armed, $script:ClaudeInputState is whatever this fresh child started with -
+    # nothing. Test-ClaudeInputPending's own default parameter reads that script variable, so this
+    # is the one place that default is provably unset rather than assumed.
+    Assert-Equal $false (Test-ClaudeInputPending) 'before Open-ClaudeConsoleInput has ever run, the default $script:ClaudeInputState is nothing - nothing is pending'
     $state = Open-ClaudeConsoleInput
     if (-not $state) {
         Write-Host "COULD NOT RUN: -LiveOnly was asked for but this process has no console"
         exit 2
     }
     try {
+        # --- Test-ClaudeInputPending: ONE non-blocking peek at the queue's depth, never a read -----
+        # DRAIN FIRST, same rule as the mouse injection below: a hidden console this process did not
+        # create can have records of its own already waiting (measured 2026-09-16, see the comment
+        # on the mouse injection further down), so "empty queue" has to be made true, not assumed.
+        $null = Clear-ClaudeInputQueue -State $state
+        Assert-Equal $false (Test-ClaudeInputPending -State $state) 'right after arming, with the queue drained, nothing is pending'
+
+        $pendRec = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
+        $pendRec[0] = New-MouseRec 11 5 0 ([ClaudeAuto.ConsoleInput]::MOUSE_MOVED)
+        [uint32]$pendWritten = 0
+        $pendWh = [ClaudeAuto.ConsoleInput]::CreateFileW('CONIN$',
+            [ClaudeAuto.ConsoleInput]::GENERIC_READ -bor [ClaudeAuto.ConsoleInput]::GENERIC_WRITE,
+            [ClaudeAuto.ConsoleInput]::FILE_SHARE_READ -bor [ClaudeAuto.ConsoleInput]::FILE_SHARE_WRITE,
+            [IntPtr]::Zero, [ClaudeAuto.ConsoleInput]::OPEN_EXISTING, 0, [IntPtr]::Zero)
+        [void][ClaudeAuto.ConsoleInput]::WriteConsoleInputW($pendWh, $pendRec, 1, [ref]$pendWritten)
+        [void][ClaudeAuto.ConsoleInput]::CloseHandle($pendWh)
+        Assert-Equal $true (Test-ClaudeInputPending -State $state) 'one queued mouse record makes it pending'
+        Assert-Equal $true (Test-ClaudeInputPending -State $state) 'asked again it is still pending - the peek does not consume'
+        Assert-Equal $true (Test-ClaudeInputPending -State $state) 'and a third time, same answer - GetNumberOfConsoleInputEvents is a pure snapshot'
+
+        $pendGot = Read-ClaudeInputEvent -State $state -TimeoutMs 60
+        Assert-Equal 'mouse' "$($pendGot.Kind)" 'the record Test-ClaudeInputPending saw all along reaches the real reader intact'
+        Assert-Equal $true $pendGot.IsMove 'with the IsMove flag it was queued with'
+
+        # A flush drains the queue exactly like a read does - Test-ClaudeInputPending must agree.
+        $pendRec2 = New-Object 'ClaudeAuto.ConsoleInput+INPUT_RECORD[]' 1
+        $pendRec2[0] = New-MouseRec 3 3 0 ([ClaudeAuto.ConsoleInput]::MOUSE_MOVED)
+        [uint32]$pendWritten2 = 0
+        $pendWh2 = [ClaudeAuto.ConsoleInput]::CreateFileW('CONIN$',
+            [ClaudeAuto.ConsoleInput]::GENERIC_READ -bor [ClaudeAuto.ConsoleInput]::GENERIC_WRITE,
+            [ClaudeAuto.ConsoleInput]::FILE_SHARE_READ -bor [ClaudeAuto.ConsoleInput]::FILE_SHARE_WRITE,
+            [IntPtr]::Zero, [ClaudeAuto.ConsoleInput]::OPEN_EXISTING, 0, [IntPtr]::Zero)
+        [void][ClaudeAuto.ConsoleInput]::WriteConsoleInputW($pendWh2, $pendRec2, 1, [ref]$pendWritten2)
+        [void][ClaudeAuto.ConsoleInput]::CloseHandle($pendWh2)
+        $null = Clear-ClaudeInputQueue -State $state
+        Assert-Equal $false (Test-ClaudeInputPending -State $state) 'after a flush, nothing is pending - Clear-ClaudeInputQueue drains it just as a read would'
+
+        # A Closed state is the guard's job, not the P/Invoke's - it must answer without touching
+        # the (possibly stale) handle at all, and never throw.
+        Assert-Equal $false (Test-ClaudeInputPending -State ([pscustomobject]@{ Handle = $state.Handle; Closed = $true })) 'a state object marked Closed reports nothing pending, without throwing'
+
         # --- W1: Ctrl+C is neutralised by ARMING, not by the alternate buffer ---------------------
         # Open-ClaudeConsoleInput is called on a path where Enter-AltBuffer never runs:
         # Test-AltBufferSupported returns $false whenever output is redirected, so `claude-auto > log`
@@ -784,6 +836,9 @@ if ($Live -and -not $LiveOnly) {
         # back the way this process was found - never a hardcoded $false.
         Assert-Equal "$tccBefore" "$([Console]::TreatControlCAsInput)" 'and closing puts Ctrl+C back exactly as it was found'
         Assert-Equal $true (Close-ClaudeConsoleInput -State $state) 'closing twice is harmless — it runs from a finally that can unwind twice'
+        # Once Close-ClaudeConsoleInput has run, $state.Closed is set - Test-ClaudeInputPending must
+        # honour that on the SAME object the rest of this half used, not only on a synthetic one.
+        Assert-Equal $false (Test-ClaudeInputPending -State $state) 'after Close-ClaudeConsoleInput, Test-ClaudeInputPending is false too - Closed guards it here as well'
     }
 
     # ------------------------------------------------------------------ launcher composition
@@ -860,18 +915,17 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # (arming a SECOND time after TreatControlCAsInput can fail, in which case only 1 assertion runs
 # there instead of 4 - see 'arming after TreatControlCAsInput should still work'), so its count is
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
-# genuine hidden console, never guessed. The bare count (81: 59 before Task 9's fix round 1, 17 for
-# Read-ClaudeFreePath's own injected-dependency assertions, 3 from Task 10 - the -RestoreCursorHidden
-# branches (review item B) and the $script:mouse source assertion (item D) - plus 2 more from Task 10
-# fix round 1 (MINOR 4: a weak $null MouseState check replaced with Assert-True; MINOR 5: the
-# previously-unused $rNoRestore return value now asserted)) IS exact - checkpoint.ps1 only ever runs
-# this suite bare, and that path has no such branching. The LiveOnly floor of 115 is untouched: it
-# was already a lower bound, not a guess of the branching total, and the new assertions (pure, no
-# console needed) run there too, just widening the margin.
+# genuine hidden console, never guessed. The bare count (83: 81 before Test-ClaudeInputPending's
+# pins, plus 2 for its no-console/no-state half - a plain $false and its boolean type) IS exact -
+# checkpoint.ps1 only ever runs this suite bare, and that path has no such branching. The LiveOnly
+# floor moves from 115 to 125: the same 10 fixed pins (before Open, after Open with the queue
+# drained, one queued mouse record asked about three times plus its intact readback, after a flush,
+# a synthetic Closed state, and after Close) all sit before the environment-dependent tail, so they
+# widen the floor by exactly their own count rather than becoming part of the uncertain part.
 if ($LiveOnly) {
-    if ($script:Ran -lt 115) { Write-Host "COULD NOT RUN: expected at least 115 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
-} elseif ($script:Ran -ne 81) {
-    Write-Host "COULD NOT RUN: expected 81 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
+    if ($script:Ran -lt 125) { Write-Host "COULD NOT RUN: expected at least 125 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+} elseif ($script:Ran -ne 83) {
+    Write-Host "COULD NOT RUN: expected 83 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 if ($script:Unverified) { Write-Host ""; Write-Host "$script:Unverified check(s) DID NOT RUN - this is NOT a pass"; exit 2 }
