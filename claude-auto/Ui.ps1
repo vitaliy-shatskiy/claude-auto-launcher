@@ -19,7 +19,7 @@
 # Activate whose result ends the screen returns from inside Invoke-ScreenLoop, and the second record
 # of that one physical gesture is still sitting in the terminal's queue. It reaches the NEXT screen,
 # which has no idea a gesture was in progress, and lands there as an ordinary press on whatever
-# occupies the same Y - measured: picking a project opened a session on the picker's row 0 that
+# occupies the same POINT - measured: picking a project opened a session on the picker's row 0 that
 # nobody chose. A loop-local guard cannot see across that boundary; this can.
 $script:LastActivation = $null
 
@@ -344,8 +344,12 @@ function Invoke-ScreenLoop {
     $loopActedAt = $null
     $loopTwinMs = 500
     # The same question for a FOOTER button, which has no Activate to hang off: when did the press
-    # that became this button's key arrive, and over which Y.
+    # that became this button's key arrive, and over WHICH BUTTON. The button, not merely the line:
+    # every hint on a footer line shares that line's Y, so a Y-only test swallowed a deliberate
+    # press on the next hint along (probe: 'c' then 'r' 300 ms apart fired only 'c'). The footer
+    # INDEX rather than X, because one gesture may land on two different cells of one hint.
     $loopFooterY = -1
+    $loopFooterIndex = -1
     $loopFooterAt = $null
     while ($true) {
         if ($loopH.Before) { $null = & $loopH.Before $State }
@@ -402,14 +406,15 @@ function Invoke-ScreenLoop {
             # and the row guard - so a press costs one -RecordTime call rather than three.
             $loopNow = & $RecordTime
             # P14: the twin that OUTLIVED its screen (the header carries the whole argument). Every
-            # Left press in every screen looks at the record first, footer presses included - the Y
-            # decides, because the next screen's rows are not this one's. It guards the NEXT press
-            # and only that one: matched or not, it is consumed right here, so an ordinary click
-            # that happens to follow an activation is never swallowed twice over.
+            # Left press in every screen looks at the record first, footer presses included - the
+            # POINT decides, X as well as Y, because the next screen's rows are not this one's and a
+            # twin never moves. Y alone would blind a whole screen line for half a second. It guards
+            # the NEXT press and only that one: matched or not, it is consumed right here, so an
+            # ordinary click that happens to follow an activation is never swallowed twice over.
             if ($script:LastActivation) {
                 $loopLast = $script:LastActivation
                 $script:LastActivation = $null
-                if ($loopKey.Y -eq $loopLast.Y -and ($loopKey.IsDoubleClick -or
+                if ($loopKey.X -eq $loopLast.X -and $loopKey.Y -eq $loopLast.Y -and ($loopKey.IsDoubleClick -or
                     ($null -ne $loopNow -and $null -ne $loopLast.At -and ($loopNow - $loopLast.At) -lt $loopTwinMs))) {
                     $loopNeedDraw = $false
                     continue
@@ -421,9 +426,10 @@ function Invoke-ScreenLoop {
                 # The FLAG is the console's answer and the STAMP is the only one a VT terminal can
                 # give (P7): ConvertFrom-ClaudeMouseReport has no double click to report, so one
                 # gesture on a button fired its key twice there - probe, 2 fires 80 ms apart.
-                if ($loopKey.IsDoubleClick -or ($loopKey.Y -eq $loopFooterY -and $null -ne $loopNow -and
-                    $null -ne $loopFooterAt -and ($loopNow - $loopFooterAt) -lt $loopTwinMs)) { $loopNeedDraw = $false; continue }
+                if ($loopKey.IsDoubleClick -or ($loopKey.Y -eq $loopFooterY -and $loopHit.FooterIndex -eq $loopFooterIndex -and
+                    $null -ne $loopNow -and $null -ne $loopFooterAt -and ($loopNow - $loopFooterAt) -lt $loopTwinMs)) { $loopNeedDraw = $false; continue }
                 $loopFooterY = $loopKey.Y
+                $loopFooterIndex = [int]$loopHit.FooterIndex
                 $loopFooterAt = $loopNow
                 # Disarms the twin guard above, and it is load-bearing rather than defensive: an
                 # Activate that does NOT end the screen (a rejected project pick) leaves it armed,
@@ -467,10 +473,10 @@ function Invoke-ScreenLoop {
                     $loopActedAt = $loopNow
                     # The cross-screen half of the same record (P14), armed BEFORE the handler runs:
                     # a handler that ends the screen returns out of this loop, so anything written
-                    # after it would never be written at all. The Y is the RECORD's own, not the
-                    # row's - the twin carries the same one, and the next screen's rows are not this
-                    # screen's.
-                    $script:LastActivation = @{ Y = $loopKey.Y; At = $loopNow }
+                    # after it would never be written at all. X and Y are the RECORD's own, not the
+                    # row's - the twin carries the same pair, and the next screen's rows are not
+                    # this screen's.
+                    $script:LastActivation = @{ X = $loopKey.X; Y = $loopKey.Y; At = $loopNow }
                     $loopRes = & $loopH.Activate $State $loopHit
                     $null = & $loopLogRes $State 'click' $loopRes @{ button = 'row' }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }

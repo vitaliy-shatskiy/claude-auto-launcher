@@ -4374,6 +4374,30 @@ $ftRun = {
 Assert-Equal 1 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left -Double), $esc) @()) 'a console double click on a footer button fires its key once - the flagged twin is dropped'
 Assert-Equal 1 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left), $esc) @(1000, 1080)) 'and so does the VT one, where the twin is a second PLAIN press 80 ms later and no record carries a flag'
 Assert-Equal 2 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left), $esc) @(1000, 1800)) 'while two presses 800 ms apart are two clicks and fire the button twice'
+# Every button on a footer LINE shares that line's Y, so a twin test that names only the Y swallows a
+# deliberate press on the NEXT button along (probe: 'c' then 'r' 300 ms apart fired only 'c'). A twin
+# is the same BUTTON, and the button is named by its footer index - not by X, because one gesture may
+# land on two different cells of the same hint.
+$ft2Map = [pscustomobject]@{ FirstRowY = 1; RowCount = 3; Start = 0; FooterY = 6; FooterLines = 1
+                             Footer = @([pscustomobject]@{ Start = 2; End = 4; Key = ''; Char = 'c'; Line = 0 }
+                                        [pscustomobject]@{ Start = 6; End = 8; Key = ''; Char = 'r'; Line = 0 }) }
+$ft2Run = {
+    param([object[]]$Events, [object[]]$Stamps)
+    $ft2Q = [System.Collections.Queue]::new(); foreach ($e in $Events) { $ft2Q.Enqueue($e) }
+    $ft2S = [System.Collections.Queue]::new(); foreach ($s in $Stamps) { $ft2S.Enqueue($s) }
+    $script:ft2Keys = New-Object System.Collections.Generic.List[string]
+    $script:LastActivation = $null   # a new gesture: nothing here follows an activation
+    $null = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false } `
+        -Wait { $ft2Q.Dequeue() } -Draw { $ft2Map } -InputPending { $false } `
+        -RecordTime { if ($ft2S.Count -gt 0) { $ft2S.Dequeue() } else { $null } } -Handlers @{
+            Rows    = { 3 }
+            Hotkeys = @{ 'c' = { param($s) $script:ft2Keys.Add('c'); $null }
+                         'r' = { param($s) $script:ft2Keys.Add('r'); $null } }
+        }
+    return ($script:ft2Keys -join ',')
+}
+Assert-Equal 'c,r' (& $ft2Run @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 7 -Y 6 -Left), $esc) @(1000, 1300)) 'two presses 300 ms apart on DIFFERENT buttons of one footer line both fire - sharing a line is not being the same button'
+Assert-Equal 'c' (& $ft2Run @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 4 -Y 6 -Left), $esc) @(1000, 1080)) 'while two presses 80 ms apart on the SAME button are one gesture, even when they land a cell apart'
 # What a move over an ACTION-row cell publishes, pinned at the LOOP rather than at a frame builder.
 # Before this, deleting the loop's `action` branch outright, or the HoverValue term of its redraw
 # test, left every suite in the repository green.
@@ -4658,6 +4682,10 @@ Assert-Equal 0 $p14Console.Left 'exactly one record was left for the Escape that
 $p14Vt = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1080)
 Assert-True ($null -eq $p14Vt.Picked) 'the VT twin - a second PLAIN press 80 ms later, the only shape that terminal can send - is dropped just as the flagged one is'
 Assert-Equal 0 $p14Vt.Left 'and leaves the same single record for Escape'
+# The record names a POINT, not a line: a twin never moves, so a press at a different X is a
+# different gesture however fast it came - otherwise one activation would blind a whole screen row.
+$p14ElseWhere = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 40 -Y $p14Y -Left -Double), $esc) @()
+Assert-Equal 's1' "$($p14ElseWhere.Picked.Session.SessionId)" 'a flagged press at another X on the same line is NOT this gesture''s twin and still reaches the picker'
 $p14Late = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1800)
 Assert-Equal 's1' "$($p14Late.Picked.Session.SessionId)" 'while a plain press 800 ms later is a real second click and still reaches the picker - the guard swallows a twin, never a decision'
 Remove-Item -LiteralPath $p14Cwd -Recurse -Force -ErrorAction SilentlyContinue
@@ -4743,7 +4771,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1594) { Write-Host "COULD NOT RUN: expected 1594 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1597) { Write-Host "COULD NOT RUN: expected 1597 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
