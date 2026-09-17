@@ -99,6 +99,24 @@ Assert-Equal $true ($longLeaf.StartsWith('C')) 'and still starts with the drive'
 Assert-Equal 0 (Get-LoneSurrogateCount -Text (Limit-Path -Text ('C:\a\' + ($script:Emoji * 10) + '\' + ($script:Emoji * 10)) -Max 12)) 'middle truncation never cuts a surrogate pair in half'
 Assert-Equal $true ((Get-DisplayWidth -Text (Limit-Path -Text ('C:\a\' + ($script:CJK * 30)) -Max 21)) -le 21) 'a CJK path is cut by cells, not code units'
 
+# BACKLOG 217 G3: degenerate Limit-Path inputs, read straight off the function rather than
+# changed to match a guess - Max <= 3 has no room for a head, a marker AND a tail, so it falls
+# back to Limit-Line's own plain right cut.
+foreach ($degMax in @(0, 1, 2, 3)) {
+    Assert-Equal (Limit-Line -Text $deeper -Max $degMax) (Limit-Path -Text $deeper -Max $degMax) "Limit-Path at Max $degMax falls back to Limit-Line's plain right cut"
+}
+# No separator at all: LastIndexOfAny finds none, the leaf is empty, and the tail comes from
+# Limit-CellsRight of the WHOLE text instead - both halves still fit inside the budget.
+$noSep = Limit-Path -Text ('n' * 60) -Max 20
+Assert-Equal $true ((Get-DisplayWidth -Text $noSep) -le 20) 'a path with no separator still fits the budget'
+Assert-Equal 1 (@($noSep.ToCharArray() | Where-Object { [int]$_ -eq 0x2026 }).Count) 'and still carries exactly one marker'
+# A UNC path: the leaf after the last separator survives, and the head still starts with the
+# server name rather than being cut into the middle of the \\ prefix.
+$unc = Limit-Path -Text '\\server\share\deep\nested\path\leaf' -Max 20
+Assert-Equal $true ((Get-DisplayWidth -Text $unc) -le 20) 'a UNC path cut to budget still fits'
+Assert-Equal $true ($unc.EndsWith('\leaf')) 'and keeps its leaf'
+Assert-Equal $true ($unc.StartsWith('\\')) 'starting with the UNC prefix, not a mid-cut server name'
+
 # --- word wrap ---------------------------------------------------------------------------
 $w = Split-TextLines -Text 'the quick brown fox jumps over the lazy dog' -Width 12
 Assert-Equal 0 (@($w | Where-Object { $_.Length -gt 12 }).Count) 'no wrapped line exceeds the width'
@@ -271,6 +289,11 @@ $asciiPath = Limit-Path -Text 'C:\Users\sample\Desktop\Projects\workspace\alpha'
 Assert-Equal 0 (Get-NonAsciiCount -Lines @($asciiPath)) 'ASCII mode middle-truncates a path with an ASCII marker'
 Assert-Equal $true ($asciiPath.Contains('~')) 'which is the one-cell marker Get-Ellipsis hands every other helper'
 Assert-Equal $true ($asciiPath.EndsWith('\alpha')) 'and the leaf survives there too'
+# BACKLOG 217 G3: ASCII mode on the same degenerate shapes tested above (no separator, UNC) - the
+# marker is Get-Ellipsis's own one-cell '~', never the two-cell '...' the arithmetic never reserved
+# room for.
+Assert-Equal 0 (Get-NonAsciiCount -Lines @(Limit-Path -Text ('n' * 60) -Max 20 -Ascii)) 'ASCII mode on a separator-less path uses the ASCII marker'
+Assert-Equal 0 (Get-NonAsciiCount -Lines @(Limit-Path -Text '\\server\share\deep\nested\path\leaf' -Max 20 -Ascii)) 'and so does ASCII mode on a UNC path'
 Assert-Equal 0 (Get-NonAsciiCount -Lines @(Split-TextLines -Text 'one two three four five six seven' -Width 10 -MaxLines 2)) 'ASCII mode caps a wrap with an ASCII marker'
 # The override channel, asserted without asking what the runner's console code page is: with the
 # marker pinned, the ambient decision must not win. This is how the launcher hands its own -Ascii
@@ -284,7 +307,7 @@ Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line th
 if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
 $script:Ellipsis = [string][char]0x2026
 
-if ($script:Ran -ne 99) { Write-Host "COULD NOT RUN: expected 99 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 110) { Write-Host "COULD NOT RUN: expected 110 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

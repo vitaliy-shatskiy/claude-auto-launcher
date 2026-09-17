@@ -112,7 +112,11 @@ foreach ($ascii in $false, $true) {
     $g = Get-Glyphs -Ascii:$ascii
     foreach ($k in $g.Keys) {
         $s = [string]$g[$k]
-        Assert-Equal 1 (Get-DisplayWidth -Text $s) "glyph $k ($([int][char]$s[0]) hex $('{0:X4}' -f [int][char]$s[0])) is exactly one cell (ascii=$ascii)"
+        # BACKLOG 217 G3: every UTF-16 code unit, not just $s[0] - a surrogate PAIR (an astral glyph)
+        # printed only its first half here, which reads as one BMP character and hides which of the
+        # two code units is the one Get-DisplayWidth actually scored.
+        $units = (@($s.ToCharArray()) | ForEach-Object { '{0:X4}' -f [int]$_ }) -join ' '
+        Assert-Equal 1 (Get-DisplayWidth -Text $s) "glyph $k (hex $units) is exactly one cell (ascii=$ascii)"
     }
 }
 Assert-True (-not ([string](Get-Glyphs).Bullet).Contains([char]0x23FA)) 'the free-path bullet is no longer U+23FA, which Windows Terminal draws as an emoji'

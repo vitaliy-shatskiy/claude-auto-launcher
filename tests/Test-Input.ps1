@@ -917,13 +917,15 @@ Assert-Equal '' ($missing -join ',') 'every P/Invoke in ConsoleInput.cs is prese
 # not a single fixed number either: it is bounded below by the smaller of the two, measured in a
 # genuine hidden console, never guessed. The bare count (83: 81 before Test-ClaudeInputPending's
 # pins, plus 2 for its no-console/no-state half - a plain $false and its boolean type) IS exact -
-# checkpoint.ps1 only ever runs this suite bare, and that path has no such branching. The LiveOnly
-# floor moves from 115 to 125: the same 10 fixed pins (before Open, after Open with the queue
-# drained, one queued mouse record asked about three times plus its intact readback, after a flush,
-# a synthetic Closed state, and after Close) all sit before the environment-dependent tail, so they
-# widen the floor by exactly their own count rather than becoming part of the uncertain part.
+# checkpoint.ps1 only ever runs this suite bare, and that path has no such branching. BACKLOG 217
+# G3: re-measured in a genuine hidden console (4 consecutive runs, -Live, redirecting the hidden
+# child's stdout to a file) - the full run is 153, every time, with the SECOND-arming tail's 4
+# assertions all landing (never the 1-assertion shrink the comment above allows for). The floor
+# stays a lower bound rather than becoming -eq 153, exactly BECAUSE that shrink is real and
+# documented above: 153 minus the 3-assertion width of that uncertain tail is 150, which is what
+# moves here (125 was stale - measured before this file's later pins were added).
 if ($LiveOnly) {
-    if ($script:Ran -lt 125) { Write-Host "COULD NOT RUN: expected at least 125 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+    if ($script:Ran -lt 150) { Write-Host "COULD NOT RUN: expected at least 150 assertions (the live-console branch has an environment-dependent tail), ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 } elseif ($script:Ran -ne 83) {
     Write-Host "COULD NOT RUN: expected 83 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2
 }

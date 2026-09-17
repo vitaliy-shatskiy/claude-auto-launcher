@@ -3238,6 +3238,15 @@ try {
     $actUnbounded = @(Get-ProjectFrame -Projects $actBig -Index 5 -Cwd 'C:\x' -Width 50 -Height 200 -Action 'worktree')
     Assert-True ($actUnbounded.Count -gt $actFit.Count) 'and it still clamps - more lines when given the room'
 
+    # BACKLOG 217 G3: the project action row is built by the SAME New-RadioRow -MaxWidth every
+    # launch row uses - pin that its return always fits the project screen's own inner budget
+    # (Get-ProjectFrame's $inner = frameWidth - 2) at the widths the launcher must run at.
+    foreach ($wA in @(50, 80, 120)) {
+        $innerA = (Get-FrameWidth -Width $wA) - 2
+        $radioA = New-RadioRow -Prefix '   ' -Label 'action' -Values (Get-ProjectActions) -Current 'worktree' -Glyphs (Get-Glyphs) -LabelWidth 8 -MaxWidth $innerA
+        Assert-Equal $true ((Get-DisplayWidth -Text $radioA.Text) -le $innerA) "the project action row fits the box inner width at $wA columns"
+    }
+
     # --- mouse: a click on a VALUE selects it, exactly like a click on a launch-screen option cell,
     # and it does not disturb which row Enter would commit. The loop walks there with the same
     # stepper the arrows use, so the click and the keys can never be two implementations. ---
@@ -3268,11 +3277,14 @@ try {
     $stepReal = (Get-Command Step-ProjectAction -CommandType Function).ScriptBlock
     $script:stepCalls = 0
     function Step-ProjectAction { param([string]$Action, [int]$Delta = 0) $script:stepCalls++; & $stepReal -Action $Action -Delta $Delta }
-    $capFar = $capMap.Action.Cells[3]
-    $wWalk = New-EventReader @((New-MouseEvent -X $capFar.Start -Y $capMap.Action.Y -Left), $enterKey)
-    $pWalk = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWalk -Draw $capDraw -Wait $wWalk -GetWindowTop { 0 }
-    Set-Item Function:Step-ProjectAction $stepReal
-    Assert-Equal 4 $script:stepCalls 'clicking the far value walks there one step at a time: the -InitialAction canonicalisation plus three steps from new to worktree'
+    try {
+        $capFar = $capMap.Action.Cells[3]
+        $wWalk = New-EventReader @((New-MouseEvent -X $capFar.Start -Y $capMap.Action.Y -Left), $enterKey)
+        $pWalk = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wWalk -Draw $capDraw -Wait $wWalk -GetWindowTop { 0 }
+    } finally {
+        Set-Item Function:Step-ProjectAction $stepReal
+    }
+    Assert-Equal 4 $script:stepCalls 'pins the SHAPE of the walk (the call count), not behaviour: the -InitialAction canonicalisation plus three steps from new to worktree'
     Assert-Equal 'worktree' $pWalk.Action 'and the walk lands on the value that was clicked'
 
     # A double click on a row commits the FIELD, not a hardcoded 'new'.
@@ -3297,7 +3309,7 @@ try {
     # The separators are LINES, not rows: a cursor stop on one, or one counted into RowCount, would
     # be a row the owner can select and nothing happens on.
     Assert-Equal $m9.RowYs.Count $m9.RowCount 'and the blank lines are not rows - RowCount still counts cursor rows only'
-    Assert-Equal $m9.RowYs[-1] ($m9.Action.Y - 1) 'the action row sits right under the free-path row, its Y taken from the body, not from the viewport size'
+    Assert-Equal $m9.RowYs[-1] ($m9.Action.Y - 1) 'the action row sits right under the free-path row when both gaps are drawn (the whole registry fits)'
     Assert-True ($body9[$m9.Action.Y].Contains('action')) 'and the line that Y names is the one the field was drawn on'
 
     # The path column is DIM - painted from a zero-width marker the builder wrapped it in, so the
@@ -3365,7 +3377,7 @@ try {
     # every row, the two blank lines, the action row, two box borders and the footer.
     $m9s = $null
     $short9 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$m9s))
-    Assert-Equal (@($m9s.RowYs).Count + 2 + 1 + 2 + $m9s.FooterLines) $short9.Count 'a registry that fits whole draws BOTH gaps: every row, two blank lines, the action row, two borders and the footer'
+    Assert-Equal (@($m9s.RowYs).Count + 2 + 1 + 2 + $m9s.FooterLines) $short9.Count 'pins the LINE ACCOUNTING when a registry that fits whole draws both gaps: every row, two blank lines, the action row, two borders and the footer'
 
     # R17: with nothing matching the filter the two pinned rows are neighbours, and only ONE
     # separator may fire between them - both rules firing puts two blank lines in the box.
@@ -3697,7 +3709,7 @@ try {
     # The FIELDS of every record in that run, not just its label: a screen that stopped recording
     # the action it stepped to, dropped `scope`, or renamed `filterLength` traces identically above.
     # This is the contract each screen migrated onto Invoke-ScreenLoop is verified against.
-    Assert-Equal (@(
+    $uiFieldsExpected = (@(
         'screen:launch:enter -> index,name,phase,rows'
         'key:launch:Enter -> index,key,screen'
         'screen:launch:leave -> index,ms,name,phase,rows'
@@ -3709,7 +3721,14 @@ try {
         'key:picker:Tab -> index,key,scope,screen'
         'key:picker:Escape -> index,key,scope,screen'
         'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
-    ) -join ' | ') ((& $uiFields) -join ' | ') 'and every one of those records carries exactly these fields - a dropped or renamed one is red here'
+    ) -join ' | ')
+    $uiFieldsActual = ((& $uiFields) -join ' | ')
+    Assert-Equal $uiFieldsExpected $uiFieldsActual 'and every one of those records carries exactly these fields - a dropped or renamed one is red here'
+    # BACKLOG 217 G3: Assert-Equal compares with -ne, which PowerShell resolves case-INsensitively,
+    # so a field renamed only in case ('screen' -> 'Screen') traced identically above. Checked here
+    # with -ceq wrapped in a boolean, so Assert-Equal's own case-insensitive string compare cannot
+    # hide the answer ('True' vs 'False' differ regardless of case).
+    Assert-Equal $true ($uiFieldsExpected -ceq $uiFieldsActual) 'the field-name trace is checked CASE-SENSITIVELY too - a case-only rename must not pass as unchanged'
     # The PAYLOAD, not just the key name: a record saying "LeftArrow" without what it left the field
     # on answers nothing, and 'worktree' is what Step-ProjectAction gives stepping back from 'new'.
     $uiLeft = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'LeftArrow' })[0]
@@ -3788,6 +3807,15 @@ try {
     $uiClickRec = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'click' })[0]
     Assert-Equal 'action' $uiClickRec.Data.button 'the button it names is the action field, not a footer one'
     Assert-Equal 'continue' $uiClickRec.Data.action 'and it carries the value the click walked to'
+
+    # BACKLOG 217 G3: a click on the ALREADY-selected action value is a no-op (Ui.ps1's Click
+    # handler returns before building any Log) - it must write no record at all, exactly like the
+    # picker's two silent presses noted above.
+    $script:uiRecords = @()
+    $uiCellSame = $uiMap.Action.Cells[0]
+    $wUiSame = New-EventReader @((New-MouseEvent -X $uiCellSame.Start -Y $uiMap.Action.Y -Left), $esc)
+    $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey $wUiSame -Draw $uiMapDraw -Wait $wUiSame -GetWindowTop { 0 }
+    Assert-Equal 0 (@($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'click' }).Count) 'a click on the already-selected action value writes no record'
 
     $script:uiRecords = @()
     $wUiDbl = New-EventReader @((New-MouseEvent -X 4 -Y $uiMap.FirstRowY -Left -Double), $esc)
@@ -4009,6 +4037,14 @@ Assert-Equal 13 (Get-HitAt -RowMap $pm -X 5 -Y 15 -WindowTop 10).Row 'window top
 # Launch-map (Rows[]) case for the SAME WindowTop subtraction, so a mutation that drops it from the
 # Rows branch specifically (rather than the FirstRowY branch above) is caught too.
 Assert-Equal 2 (Get-HitAt -RowMap $lm -X 2 -Y 10 -WindowTop 3).Row.Index 'and WindowTop is subtracted for a launch row too'
+# BACKLOG 217 G3: the ACTION branch subtracts WindowTop too - Y 10 with WindowTop 3 is the same
+# rowY (7) as the plain Y 7 hit above.
+Assert-Equal 'action' (Get-HitAt -RowMap $pm -X 14 -Y 10 -WindowTop 3).Kind 'and WindowTop is subtracted for the action row too'
+# FooterIndex and Cell, not just Footer.Key/Value: the loop hands FooterIndex straight to
+# Get-FooterHover, and a handler that reads .Cell wants the whole span, not only its .Value.
+Assert-Equal 0 (Get-HitAt -RowMap $lm -X 6 -Y 12).FooterIndex 'a footer hit carries the clicked button''s index'
+Assert-Equal 15 (Get-HitAt -RowMap $lm -X 17 -Y 7).Cell.Start 'a cell hit carries the whole cell'
+Assert-Equal 20 (Get-HitAt -RowMap $lm -X 17 -Y 7).Cell.End 'both ends of its span'
 
 # BACKLOG 217 G2: the same two maps, HASHTABLE-built rather than pscustomobject - PSObject.Properties
 # on a hashtable enumerates its OWN members (Keys/Values/Count), never its entries, so a
@@ -4027,7 +4063,7 @@ Assert-Equal 'resume' (Get-HitAt -RowMap $pmHt -X 14 -Y 7).Value 'hashtable map:
 
 
 # --- Invoke-ScreenLoop: the mechanics every screen shares -----------------------------------------
-$st = @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false; Log = @() }
+$st = @{ Index = 0; Hover = -1; Typing = $false; Log = @() }
 $draws = 0
 $r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'DownArrow','DownArrow','UpArrow','Enter') `
     -Draw { param($s) $script:draws++; $null } -Handlers @{
@@ -4036,13 +4072,35 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -
     }
 Assert-Equal 'row1' $r 'Up/Down move the index within Rows and Enter returns the handler''s result'
 Assert-Equal 4 $draws 'one draw per key'
-$st = @{ Index = 2; Hover = -1; HoverRow = -1; Typing = $false }
+$st = @{ Index = 2; Hover = -1; Typing = $false }
 $r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'DownArrow','Escape') -Draw { $null } -Handlers @{ Rows = { 3 } }
 Assert-True ($null -eq $r) 'Escape returns $null by default'
 Assert-Equal 2 $st.Index 'and Down at the last row stays'
+
+# BACKLOG 217 G3: a wheel event on a CURSORLESS screen (no Rows handler, no Wheel handler either) -
+# $loopRows answers 0 for a screen with no Rows handler, and the wheel-move guard is `-gt 0`, so the
+# index is left exactly where it was rather than being nudged by the delta.
+$st = @{ Index = 0; Hover = -1; Typing = $false }
+$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-EventReader @((New-MouseEvent -X 1 -Y 1 -Wheel -1), $esc)) -Draw { $null } -Handlers @{}
+Assert-Equal 0 $st.Index 'a wheel move on a cursorless screen (no Rows handler) leaves Index unchanged'
+
+# R7c: a Left/Right handler that returns Done ends the loop with its Result, exactly like Enter.
+$st = @{ Index = 0; Hover = -1; Typing = $false }
+$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'RightArrow') -Draw { $null } -Handlers @{
+        Rows  = { 3 }
+        Right = { param($s) @{ Done = $true; Result = 'right-done' } }
+    }
+Assert-Equal 'right-done' $r 'a Right handler returning Done ends the loop with its Result'
+$st = @{ Index = 0; Hover = -1; Typing = $false }
+$r = Invoke-ScreenLoop -Screen 'probe' -State $st -Wait (New-ScriptedKeyReader -Keys 'LeftArrow') -Draw { $null } -Handlers @{
+        Rows = { 3 }
+        Left = { param($s) @{ Done = $true; Result = 'left-done' } }
+    }
+Assert-Equal 'left-done' $r 'and so does a Left handler'
+
 # hotkeys through Test-ClaudeHotkey, a raw pre-hook, and a screen that has no cursor
 $seen = @()
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait (New-ScriptedKeyReader -Keys 'x','c','Escape') -Draw { $null } -Handlers @{
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait (New-ScriptedKeyReader -Keys 'x','c','Escape') -Draw { $null } -Handlers @{
         OnKey   = { param($s, $k) if ("$($k.KeyChar)" -eq 'x') { $script:seen += 'x'; return $true }; $false }
         Hotkeys = @{ 'c' = { param($s) $script:seen += 'c'; $null } }
     }
@@ -4058,7 +4116,7 @@ $mouse = @(
 )
 $q = [System.Collections.Queue]::new(); foreach ($m in $mouse) { $q.Enqueue($m) }
 $draws = 0; $clicked = @()
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $q.Dequeue() } -Draw { param($s) $script:draws++; $map } -Handlers @{
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $q.Dequeue() } -Draw { param($s) $script:draws++; $map } -Handlers @{
         Rows  = { 3 }
         Click = { param($s, $h) $script:clicked += "$($h.Kind):$($h.Row)"; $s.Index = $h.Row }
         Enter = { param($s) @{ Done = $true; Result = "enter@$($s.Index)" } }
@@ -4126,7 +4184,7 @@ $fq.Enqueue((New-MouseEvent -X 3 -Y 6 -Left -Double))   # the doubleclick record
 $fq.Enqueue((New-MouseEvent -X 3 -Y 6 -Left))           # a plain press over the same button
 $fq.Enqueue($esc)
 $script:footerEnters = 0
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $fq.Dequeue() } -Draw { $map } -Handlers @{
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $fq.Dequeue() } -Draw { $map } -Handlers @{
         Rows  = { 3 }
         Enter = { param($s) $script:footerEnters++; $null }
     }
@@ -4156,7 +4214,7 @@ Assert-Equal 'screen:,key:Escape,screen:' ($script:launchDblRecords -join ',') '
 # handler that reads $s.Index must see the row the owner hit, not where the cursor happened to be.
 $dq = [System.Collections.Queue]::new()
 $dq.Enqueue([pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 3; Left = $true; IsMove = $false; IsDoubleClick = $true; WheelUp = $false; WheelDown = $false })
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $dq.Dequeue() } -Draw { $map } -Handlers @{
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $dq.Dequeue() } -Draw { $map } -Handlers @{
         Rows        = { 3 }
         DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
     }
@@ -4169,7 +4227,7 @@ $rq = [System.Collections.Queue]::new()
 $rq.Enqueue((New-MouseEvent -X 2 -Y 7 -Left -Double))
 $rowShapeMap = [pscustomobject]@{ Rows = @([pscustomobject]@{ Y = 7; Index = 4; Cells = @() })
                                   FooterY = 9; FooterLines = 1; Footer = @() }
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $rq.Dequeue() } -Draw { $rowShapeMap } -Handlers @{
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $rq.Dequeue() } -Draw { $rowShapeMap } -Handlers @{
         Rows        = { 5 }
         DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
     }
@@ -4201,7 +4259,7 @@ Assert-Equal 's4' $pickedScroll.Session.SessionId 'a click on visible row 1 of a
 $zq = [System.Collections.Queue]::new(); $zq.Enqueue('resize'); $zq.Enqueue($esc)
 $script:sawKeys = @()
 $draws = 0
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false } -Wait { $zq.Dequeue() } `
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $zq.Dequeue() } `
     -Draw { param($s) $script:draws++; $null } -Handlers @{ OnKey = { param($s, $k) $script:sawKeys += "$($k.Key)"; $false } }
 Assert-True ($null -eq $r) 'a resize does not end the screen'
 Assert-Equal 'Escape' ($script:sawKeys -join ',') 'and no handler ever sees it - only the Escape behind it'
@@ -4237,7 +4295,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1378) { Write-Host "COULD NOT RUN: expected 1378 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1390) { Write-Host "COULD NOT RUN: expected 1390 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
