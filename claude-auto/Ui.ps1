@@ -188,17 +188,22 @@ function Get-HitAt {
     param($RowMap, [int]$X, [int]$Y, [int]$WindowTop = 0)
     $none = [pscustomobject]@{ Kind = 'none'; Footer = $null; FooterIndex = -1; Row = $null; Cell = $null; Value = $null }
     if (-not $RowMap) { return $none }
+    # Duck-typed rather than PSObject.Properties-only: PSObject.Properties on a HASHTABLE enumerates
+    # the hashtable's OWN members (Keys, Values, Count...), never its entries, so a hashtable-built
+    # row map (a test fixture, or any future caller that does not bother with pscustomobject) used to
+    # answer 'none' here for every shape check below, silently.
+    $has = { param($o, [string]$n) if ($o -is [hashtable]) { $o.ContainsKey($n) } else { $null -ne $o.PSObject.Properties[$n] } }
     $hint = Get-ClaudeFooterHit -RowMap $RowMap -X $X -Y $Y -WindowTop $WindowTop
     if ($hint) { return [pscustomobject]@{ Kind = 'footer'; Footer = $hint; FooterIndex = [Array]::IndexOf(@($RowMap.Footer), $hint); Row = $null; Cell = $null; Value = $null } }
     # A distinct name, not $y: PowerShell variable names are case-insensitive, so $y would be the
     # SAME variable as the -Y parameter and silently clobber it - breaking the FirstRowY branch
     # below, which needs the raw, unadjusted $Y (Get-ClaudeMouseRow does its own WindowTop math).
     $rowY = $Y - $WindowTop
-    if ($null -ne $RowMap.PSObject.Properties['Action'] -and $RowMap.Action -and $rowY -eq $RowMap.Action.Y) {
+    if ((& $has $RowMap 'Action') -and $RowMap.Action -and $rowY -eq $RowMap.Action.Y) {
         $cell = @($RowMap.Action.Cells | Where-Object { $X -ge $_.Start -and $X -le $_.End })
         return [pscustomobject]@{ Kind = 'action'; Footer = $null; FooterIndex = -1; Row = $null; Cell = $(if ($cell.Count) { $cell[0] } else { $null }); Value = $(if ($cell.Count) { $cell[0].Value } else { $null }) }
     }
-    if ($null -ne $RowMap.PSObject.Properties['Rows']) {
+    if (& $has $RowMap 'Rows') {
         $hit = @($RowMap.Rows | Where-Object { $_.Y -eq $rowY })
         if ($hit.Count -eq 0) { return $none }
         $cell = @($hit[0].Cells | Where-Object { $X -ge $_.Start -and $X -le $_.End })
@@ -215,7 +220,7 @@ function Get-HitAt {
         if ($at -lt 0) { return $none }
         return [pscustomobject]@{ Kind = 'row'; Footer = $null; FooterIndex = -1; Row = [int]($RowMap.Start + $at); Cell = $null; Value = $null }
     }
-    if ($null -ne $RowMap.PSObject.Properties['FirstRowY']) {
+    if (& $has $RowMap 'FirstRowY') {
         $row = Get-ClaudeMouseRow -Y $Y -FirstRowY $RowMap.FirstRowY -RowCount $RowMap.RowCount -WindowTop $WindowTop
         if ($null -eq $row) { return $none }
         return [pscustomobject]@{ Kind = 'row'; Footer = $null; FooterIndex = -1; Row = [int]($RowMap.Start + $row); Cell = $null; Value = $null }
@@ -347,7 +352,10 @@ function Invoke-ScreenLoop {
                 if ($loopNeedDraw -and (& $InputPending)) { $loopNeedDraw = $false }
                 continue
             }
-            if (-not ($loopKey.Left -and -not $loopKey.IsMove)) { continue }
+            # -not $loopKey.IsMove used to gate this too, but it can never be false here: the IsMove
+            # branch above always `continue`s the loop, so a move event never reaches this line - the
+            # IsMove block above is the real move guard.
+            if (-not $loopKey.Left) { continue }
             # A double click on a footer button is ignored outright: the first press already became
             # its key, and a second synthetic press would fire the action twice (or -ReadPath twice).
             if ($loopHit.Kind -eq 'footer') {
@@ -361,7 +369,14 @@ function Invoke-ScreenLoop {
                     # Both map shapes, because Get-HitAt answers both: a list map hands back the
                     # row INDEX, a Rows[] map (launch, maintenance) the row OBJECT - assigning that
                     # object put a pscustomobject in $State.Index, silently on a -Silent screen.
-                    $State.Index = $(if ($loopHit.Row -is [int]) { $loopHit.Row } else { [int]$loopHit.Row.Index })
+                    # A Rows[]-shaped row object with no Index (a hand-built fixture, or a future
+                    # row shape that never grew one) falls through to $State.Index unchanged rather
+                    # than [int]$null, which is 0 - a silent jump to the first row.
+                    $State.Index = $(
+                        if ($loopHit.Row -is [int]) { $loopHit.Row }
+                        elseif ($null -ne $loopHit.Row.Index) { [int]$loopHit.Row.Index }
+                        else { $State.Index }
+                    )
                     $loopRes = & $loopH.DoubleClick $State $loopHit
                     $null = & $loopLogRes $State 'doubleclick' $loopRes @{ button = 'row' }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
@@ -1305,6 +1320,8 @@ function Invoke-MaintenanceScreen {
             # threshold worth setting, while two characters of one paste arrive microseconds apart
             # however slow the screen is. $null - the keyboard-only ReadKey path - leaves the guard
             # inert rather than blocking a confirm the reader really did press twice.
+            # Runs on the exit press too (Escape/'q' route through OnKey like every other key) - one
+            # extra RecordTime call per screen exit, whose value nothing on that path reads.
             $s.Now = & $recordAt
             $s.TooFast = ($null -ne $s.Now -and $null -ne $maintArmedAt -and ($s.Now - $maintArmedAt) -lt $confirmMs)
             # An unrelated key cancels an armed confirm AND its text: otherwise "press i again" stays

@@ -4010,6 +4010,21 @@ Assert-Equal 13 (Get-HitAt -RowMap $pm -X 5 -Y 15 -WindowTop 10).Row 'window top
 # Rows branch specifically (rather than the FirstRowY branch above) is caught too.
 Assert-Equal 2 (Get-HitAt -RowMap $lm -X 2 -Y 10 -WindowTop 3).Row.Index 'and WindowTop is subtracted for a launch row too'
 
+# BACKLOG 217 G2: the same two maps, HASHTABLE-built rather than pscustomobject - PSObject.Properties
+# on a hashtable enumerates its OWN members (Keys/Values/Count), never its entries, so a
+# hashtable-shaped row map used to answer 'none'/'footer only' for everything here silently.
+$lmHt = @{ Rows = @([pscustomobject]@{ Index = 2; Name = 'Effort'; Y = 7; Cells = @([pscustomobject]@{ Start = 15; End = 20; Value = 'high' }) })
+           FooterY = 12; Footer = @([pscustomobject]@{ Start = 4; End = 12; Key = 'Enter'; Char = ''; Line = 0 }) ; FooterLines = 1 }
+Assert-Equal 'footer' (Get-HitAt -RowMap $lmHt -X 6 -Y 12).Kind 'hashtable map: a click on a footer button is still a footer hit'
+Assert-Equal 'cell' (Get-HitAt -RowMap $lmHt -X 17 -Y 7).Kind 'hashtable map: a click inside an option cell is still a cell hit'
+Assert-Equal 'row' (Get-HitAt -RowMap $lmHt -X 2 -Y 7).Kind 'hashtable map: a click on the row outside any cell is still a row hit'
+Assert-Equal 'none' (Get-HitAt -RowMap $lmHt -X 2 -Y 3).Kind 'hashtable map: and a click nowhere is still none'
+$pmHt = @{ FirstRowY = 2; RowCount = 5; Start = 10; FooterY = 20; Footer = @(); FooterLines = 1
+           Action = [pscustomobject]@{ Y = 7; Cells = @([pscustomobject]@{ Start = 12; End = 18; Value = 'resume' }) } }
+Assert-Equal 13 (Get-HitAt -RowMap $pmHt -X 5 -Y 5).Row 'hashtable map: a list map still answers the ABSOLUTE row index'
+Assert-Equal 'action' (Get-HitAt -RowMap $pmHt -X 14 -Y 7).Kind 'hashtable map: the action row is still its own kind'
+Assert-Equal 'resume' (Get-HitAt -RowMap $pmHt -X 14 -Y 7).Value 'hashtable map: with the clicked value'
+
 
 # --- Invoke-ScreenLoop: the mechanics every screen shares -----------------------------------------
 $st = @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false; Log = @() }
@@ -4159,6 +4174,18 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
         DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
     }
 Assert-Equal 'dbl@4' $r 'a row double click on a Rows[]-shaped map moves the index to that row''s own Index, not to the row object'
+# BACKLOG 217 G2: a Rows[]-shaped row object with NO Index (a hand-built fixture, or a shape that
+# never grew one) must leave $State.Index untouched, not fall to [int]$null - which is 0, a silent
+# jump to the first row.
+$rq2 = [System.Collections.Queue]::new()
+$rq2.Enqueue((New-MouseEvent -X 2 -Y 7 -Left -Double))
+$rowShapeMapNoIndex = [pscustomobject]@{ Rows = @([pscustomobject]@{ Y = 7; Cells = @() })
+                                          FooterY = 9; FooterLines = 1; Footer = @() }
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 3; Hover = -1; Typing = $false } -Wait { $rq2.Dequeue() } -Draw { $rowShapeMapNoIndex } -Handlers @{
+        Rows        = { 5 }
+        DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
+    }
+Assert-Equal 'dbl@3' $r 'a row double click on a Rows[]-shaped map whose row object has no Index leaves $State.Index unchanged'
 # D4: a SCROLLED list map. RowMap.Start is the absolute index of the first VISIBLE row, so a click
 # on visible row 1 of a map scrolled to 2 means session 3 - dropping Start reads the click as row 1
 # and opens a session two above the one under the pointer. Driven through the picker, so the whole
@@ -4210,7 +4237,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1370) { Write-Host "COULD NOT RUN: expected 1370 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1378) { Write-Host "COULD NOT RUN: expected 1378 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
