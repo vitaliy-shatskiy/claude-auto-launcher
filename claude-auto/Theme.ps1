@@ -92,10 +92,14 @@ function Add-HoverSpanColor {
     if ($Line.IndexOf($open) -lt 0 -and $Line.IndexOf($close) -lt 0) { return $Line }
     if (-not $Enabled) { return ($Line -replace "[$open$close]", '') }
     # A MatchEvaluator rather than a replacement string: the band has to rewrite what it wraps (every
-    # inner Reset becomes Reset + background again), which no '$1' replacement can express. Reads
-    # $script:C directly, exactly as Add-LaunchColor's own evaluators do - so it needs no closure.
-    # .Replace, not -replace: the substitution text is an escape sequence, and a regex replacement
-    # would read any '$' in it as a group reference.
+    # inner Reset becomes Reset + background again), which no '$1' replacement can express. It reads
+    # $script:C rather than a local for CONSISTENCY with Add-LaunchColor's own evaluators, not out of
+    # necessity: a plain scriptblock handed to [regex]::Replace still resolves its free names against
+    # the scope that calls it, so the enclosing locals are in reach either way.
+    # .Replace, not -replace, for SPEED - an ordinal string swap over an already-matched group, where
+    # -replace would put a second regex on every match, and this runs once per banded line of every
+    # frame. Not to dodge a '$'-group hazard: the substitution text is two escape sequences and has
+    # no '$' in it to be read as a group reference.
     $paint = {
         param($m)
         $bg = $script:C.ButtonBg
