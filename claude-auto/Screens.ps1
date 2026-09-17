@@ -457,6 +457,138 @@ function Get-FooterHover {
     return [pscustomobject]@{ HasHover = $true; Key = $clickable[$Hover].Key; Char = $clickable[$Hover].Char }
 }
 
+# ONE memo per list screen (spec D11), keyed on every input EXCEPT the three hover ones. A hover is
+# the only input whose whole effect is a band on one row, one radio piece and one footer button - so
+# it is the only input that can be served by repainting those lines out of the last frame instead of
+# rebuilding the picture behind them, which is what a mouse asks for dozens of times a second. One
+# entry per builder: a screen only ever redraws its own last frame.
+$script:FrameMemo = @{}
+
+function Get-ListSignature {
+    # "The same list, unchanged" as one string - the part of a memo key that the rows come from.
+    # EVERY field a row or the preview is rendered from belongs in it: a field left out is a memo
+    # that keeps showing a row whose text has moved on. A reference-typed field (a RecentMessages
+    # array) is signed by object identity, which can only produce a false MISS - one rebuild too
+    # many - never a false hit.
+    param([array]$Items, [string[]]$Fields)
+    $sb = [Text.StringBuilder]::new()
+    $null = $sb.Append(@($Items).Count)
+    foreach ($it in $Items) {
+        foreach ($f in $Fields) {
+            $null = $sb.Append([char]31)
+            $v = $it.$f
+            if ($v -is [datetime]) { $null = $sb.Append($v.Ticks) }
+            elseif ($null -eq $v -or $v -is [string] -or $v -is [ValueType]) { $null = $sb.Append([string]$v) }
+            else { $null = $sb.Append([Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($v)) }
+        }
+    }
+    return $sb.ToString()
+}
+
+function Get-RowBandLength {
+    # How many CHARACTERS of a finished frame line the hover band wraps for one list row: the row
+    # itself plus the pad that follows it, because a hovered row carries that pad INSIDE its band
+    # (New-ListRow's right gutter, the free-path row's fill) while an unhovered row gets the
+    # identical spaces from New-Box or Join-Panes afterwards - the two lines are the same bytes.
+    # Measured on the row WITHOUT its markers: they cost no cells and no columns (Theme.ps1).
+    param([string]$Row, [int]$PaneWidth)
+    $plain = $Row
+    if ($plain.IndexOf($script:HoverOpen) -ge 0) { $plain = $plain.Replace([string]$script:HoverOpen, '').Replace([string]$script:HoverClose, '') }
+    return ($plain.Length + [Math]::Max(0, $PaneWidth - (Get-DisplayWidth -Text $plain)))
+}
+
+function Add-HoverSpanAt {
+    # Add-HoverSpan for a piece of an already-finished line: the same two markers, around the columns
+    # the builder itself would have wrapped. $null when the range does not fit - a line that New-Box
+    # or Join-Panes had already cut is one where the builder's markers would have landed elsewhere,
+    # and the caller must rebuild rather than guess.
+    param([string]$Line, [int]$Start, [int]$Length)
+    if ($Start -lt 0 -or $Length -le 0 -or ($Start + $Length) -gt $Line.Length) { return $null }
+    return $Line.Substring(0, $Start) + [string]$script:HoverOpen + $Line.Substring($Start, $Length) + [string]$script:HoverClose + $Line.Substring($Start + $Length)
+}
+
+function Format-FrameLine {
+    # The per-line tail of every frame - truncate, then paint - as ONE function, because the memo's
+    # repaint has to run the identical chain. The ORDER is the contract (dim spans first, then the
+    # body painter, then the hover band LAST - see Complete-PickerFrame's own comments); a second
+    # copy of it would drift, and a drifted repaint shows as one row painted unlike its neighbours.
+    param([string]$Line, [int]$Width, [hashtable]$Glyphs, [switch]$Color,
+          [ValidateSet('picker', 'launch')][string]$Body = 'picker',
+          [switch]$Footer, [array]$Spans = @(),
+          [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '', [array]$Selected = @())
+    $l = Limit-Line -Text $Line -Max $Width
+    # The footer is painted by column span, not by pattern: its words ('row', 'value', 'start') are
+    # ordinary English and a pattern-based rule would tint them wherever else they appear.
+    if ($Footer) { return (Add-HintColor -Line $l -Spans $Spans -Enabled:$Color -HasHover:$HasHover -HoverKey $HoverKey -HoverChar $HoverChar -Selected $Selected) }
+    # The dim spans a builder marked are resolved FIRST - before the pattern painters, which search
+    # for glyphs and words and would otherwise have to find them again inside an escape sequence -
+    # and on EVERY body line, coloured or not: with colour off this is what strips the markers, so
+    # nothing internal reaches a terminal or a check reference.
+    $l = Add-DimSpanColor -Line $l -Enabled:$Color
+    $l = if ($Body -eq 'launch') { Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
+         else { Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
+    # The hover band is resolved LAST (spec D10), after both painters above: it paints a BACKGROUND
+    # across text they have already tinted, and every Reset they left inside the band would end it -
+    # so the band has to be the pass that sees them and paints over each one. Unmarked lines leave
+    # it untouched, which is every line of every frame that has nothing hovered.
+    return (Add-HoverSpanColor -Line $l -Enabled:$Color)
+}
+
+function Get-MemoFrame {
+    # The hit path: the same frame with a different hover. Repaints only the lines whose hover state
+    # actually changed - the row that lost the band, the row that gained it, the action row when the
+    # value under the pointer moved, the footer lines when the lit button did - and hands back the
+    # rest of the cached picture untouched. $null means "nothing memoised for this key", and the
+    # caller builds; it is also the answer when a band would not fit the cached line, so a frame that
+    # was truncated somewhere unexpected is rebuilt rather than approximated.
+    param([string]$Builder, [string]$Key, [int]$HoverRow = -1, [string]$HoverValue = '', [int]$Hover = -1, $RowMap)
+    $e = $script:FrameMemo[$Builder]
+    if (-not $e -or $e.Key -ne $Key) { return $null }
+    # A frame built without a row map has none to hand back, and a caller asking for one needs the
+    # real thing - the hit test is derived from the same build that drew the rows, and a $null map
+    # would leave every click inert. Rebuild instead.
+    if ($RowMap -and $null -eq $e.Map) { return $null }
+    $painted = $e.Painted.Clone()
+    $was = $e.Hover
+
+    if ($was.Row -ne $HoverRow) {
+        # BOTH rows: the one losing the band needs repainting exactly as much as the one gaining it.
+        foreach ($idx in @($was.Row, $HoverRow)) {
+            $span = $e.Rows[$idx]
+            if (-not $span) { continue }
+            $line = $e.Unpainted[$span.Y]
+            if ($idx -eq $HoverRow) {
+                $line = Add-HoverSpanAt -Line $line -Start $span.Start -Length $span.Length
+                if ($null -eq $line) { return $null }
+            }
+            $painted[$span.Y] = Format-FrameLine -Line $line -Width $e.Width -Glyphs $e.Glyphs -Color:$e.Color -Body $e.Body
+        }
+    }
+    if ($e.Action -and $was.Value -ne $HoverValue) {
+        $line = $e.Unpainted[$e.Action.Y]
+        $span = $e.Action.Values[$HoverValue]
+        if ($span) {
+            $line = Add-HoverSpanAt -Line $line -Start $span.Start -Length $span.Length
+            if ($null -eq $line) { return $null }
+        }
+        $painted[$e.Action.Y] = Format-FrameLine -Line $line -Width $e.Width -Glyphs $e.Glyphs -Color:$e.Color -Body $e.Body
+    }
+    if ($was.Footer -ne $Hover) {
+        # Every footer line, not just one: the lit button is matched by (Key, Char) and can sit on
+        # any line the footer wrapped onto.
+        $hov = Get-FooterHover -Footer $e.Footer -Hover $Hover
+        for ($f = 0; $f -lt $e.FooterSpans.Count; $f++) {
+            $y = $e.FooterIndex + $f
+            $painted[$y] = Format-FrameLine -Line $e.Unpainted[$y] -Width $e.Width -Glyphs $e.Glyphs -Color:$e.Color -Body $e.Body `
+                                            -Footer -Spans $e.FooterSpans[$f] -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char -Selected $e.Selected
+        }
+    }
+    $e.Painted = $painted
+    $e.Hover = @{ Row = $HoverRow; Value = $HoverValue; Footer = $Hover }
+    if ($RowMap) { $RowMap.Value = $e.Map }
+    return @($painted)
+}
+
 function Complete-PickerFrame {
     # Appends the footer, records its clickable spans, and paints - the last three steps of every
     # screen. Shared because the picker returns from three different branches and three copies of
@@ -471,7 +603,12 @@ function Complete-PickerFrame {
         # Forwarded to Add-HintColor untouched. Every existing caller omits these, so every existing
         # frame paints exactly as before - only a caller that names a hovered (Key, Char) pair, or a
         # -Selected list, changes what comes out.
-        [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '', [array]$Selected = @()
+        [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '', [array]$Selected = @(),
+        # The bookkeeping a list screen hands in so its frame can be memoised (spec D11): the key,
+        # the hover state these lines were painted for, and where a band goes on every row and radio
+        # value the NEXT frame could hover. Omitted by the launch and maintenance screens, which
+        # keep no memo - one mouse move there is one frame, and always was.
+        [hashtable]$Memo = $null
     )
     $footerLines = @($Footer.Lines)
     if ($footerLines.Count -eq 0) { $footerLines = @([pscustomobject]@{ Text = $Footer.Text; Spans = @($Footer.Spans) }) }
@@ -498,25 +635,34 @@ function Complete-PickerFrame {
     }
     $painted = @()
     for ($i = 0; $i -lt $all.Count; $i++) {
-        $l = Limit-Line -Text $all[$i] -Max $Width
-        # The footer is painted by column span, not by pattern: its words ('row', 'value', 'start')
-        # are ordinary English and a pattern-based rule would tint them wherever else they appear.
-        if ($i -ge $footerIndex) { $painted += Add-HintColor -Line $l -Spans $footerLines[$i - $footerIndex].Spans -Enabled:$Color -HasHover:$HasHover -HoverKey $HoverKey -HoverChar $HoverChar -Selected $Selected }
-        else {
-            # The dim spans a builder marked are resolved FIRST - before the pattern painters, which
-            # search for glyphs and words and would otherwise have to find them again inside an
-            # escape sequence - and on EVERY body line, coloured or not: with colour off this is
-            # what strips the markers, so nothing internal reaches a terminal or a check reference.
-            $l = Add-DimSpanColor -Line $l -Enabled:$Color
-            $l = if ($Body -eq 'launch') { Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
-                 else { Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
-            # The hover band is resolved LAST (spec D10), after both painters above: it paints a
-            # BACKGROUND across text they have already tinted, and every Reset they left inside the
-            # band would end it - so the band has to be the pass that sees them and paints over
-            # each one. Unmarked lines leave it untouched, which is every line of every frame that
-            # has nothing hovered. The footer path above never reaches here: footers carry no
-            # hover markers, they are lit by (Key, Char) through Add-HintColor.
-            $painted += Add-HoverSpanColor -Line $l -Enabled:$Color
+        # Both branches through Format-FrameLine, which is also what the memo's repaint calls: one
+        # painter chain, never two. The footer path carries no hover markers - a footer is lit by
+        # (Key, Char) through Add-HintColor, never by a band.
+        if ($i -ge $footerIndex) {
+            $painted += Format-FrameLine -Line $all[$i] -Width $Width -Glyphs $Glyphs -Color:$Color -Body $Body `
+                                         -Footer -Spans $footerLines[$i - $footerIndex].Spans -HasHover:$HasHover -HoverKey $HoverKey -HoverChar $HoverChar -Selected $Selected
+        } else {
+            $painted += Format-FrameLine -Line $all[$i] -Width $Width -Glyphs $Glyphs -Color:$Color -Body $Body
+        }
+    }
+    if ($Memo) {
+        # Stored from the SAME $all these lines were painted from, with the hover markers taken back
+        # out: those markers are the only difference between a hovered row and an unhovered one -
+        # every pad a band adds inside itself is a pad the box or the pane would have added outside
+        # it - so one stripped copy answers every hover the next frame can ask for.
+        $unpainted = @(foreach ($l in $all) {
+            if ($l -and ($l.IndexOf($script:HoverOpen) -ge 0 -or $l.IndexOf($script:HoverClose) -ge 0)) {
+                $l.Replace([string]$script:HoverOpen, '').Replace([string]$script:HoverClose, '')
+            } else { [string]$l }
+        })
+        $script:FrameMemo[$Memo.Builder] = @{
+            Key = $Memo.Key; Unpainted = $unpainted; Painted = $painted
+            Hover = @{ Row = [int]$Memo.HoverRow; Value = [string]$Memo.HoverValue; Footer = [int]$Memo.Hover }
+            Rows = $Memo.Rows; Action = $Memo.Action
+            FooterIndex = $footerIndex; FooterSpans = @($footerLines | ForEach-Object { , @($_.Spans) })
+            Footer = $Footer; Selected = $Selected
+            Width = $Width; Glyphs = $Glyphs; Color = [bool]$Color; Body = $Body
+            Map = $(if ($RowMap) { $RowMap.Value } else { $null })
         }
     }
     return @($painted)
@@ -828,23 +974,33 @@ function New-RadioRow {
     $labelOf = { param([string]$v) if ($Labels.ContainsKey($v)) { "$($Labels[$v])" } else { "$v" } }
     $build = {
         param([bool]$Compact)
-        $pieces = @(foreach ($v in $Values) {
+        $plain = @(foreach ($v in $Values) {
             $text = & $labelOf $v
-            $piece =
-                if ($Compact) { if ($v -eq $Current) { "[$text]" } else { "$text" } }
-                elseif ($v -eq $Current) { "$($Glyphs.On) [$text]" }
-                else { "$($Glyphs.Off) $text" }
-            # The band goes over the piece as drawn, so the CURRENT value keeps its brackets and its
-            # On glyph under it (spec D10) - hovering the selected value must not redraw it as an
-            # unselected one, or the mouse would look like it had changed the setting.
-            if ($Hover -and $v -eq $Hover) { $piece = Add-HoverSpan -Text $piece }
-            $piece
+            if ($Compact) { if ($v -eq $Current) { "[$text]" } else { "$text" } }
+            elseif ($v -eq $Current) { "$($Glyphs.On) [$text]" }
+            else { "$($Glyphs.Off) $text" }
+        })
+        # Where each value's piece sits in CHARACTERS of the unmarked row. The frame memo wraps a
+        # band around exactly these columns when the pointer moves onto a value, and the markers it
+        # inserts cost none of them (Theme.ps1) - so an offset measured here holds there. Characters,
+        # not cells, because a band is a string operation; $cells below stays the CLICK arithmetic.
+        $chars = @()
+        $at = ($Prefix + $labelPart).Length
+        for ($i = 0; $i -lt $plain.Count; $i++) {
+            $chars += [pscustomobject]@{ Value = $Values[$i]; Start = $at; Length = $plain[$i].Length }
+            $at += $plain[$i].Length + 1
+        }
+        # The band goes over the piece as drawn, so the CURRENT value keeps its brackets and its
+        # On glyph under it (spec D10) - hovering the selected value must not redraw it as an
+        # unselected one, or the mouse would look like it had changed the setting.
+        $pieces = @(for ($i = 0; $i -lt $plain.Count; $i++) {
+            if ($Hover -and $Values[$i] -eq $Hover) { Add-HoverSpan -Text $plain[$i] } else { $plain[$i] }
         })
         # Spans off the pieces themselves, not off the joined line: the value a click means is the
         # piece it lands in, and re-finding it in the finished string would match the wrong one the
         # first time two values share a prefix.
         $cells = @(Measure-CellSpans -Pieces $pieces -Joiner ' ' -Values $Values -StartX (Get-DisplayWidth -Text ($Prefix + $labelPart)))
-        [pscustomobject]@{ Text = ($Prefix + $labelPart + ($pieces -join ' ')); Cells = $cells }
+        [pscustomobject]@{ Text = ($Prefix + $labelPart + ($pieces -join ' ')); Cells = $cells; Chars = @($chars) }
     }
     $full = & $build $false
     if ($MaxWidth -le 0 -or (Get-DisplayWidth -Text $full.Text) -le $MaxWidth) { return $full }
@@ -905,6 +1061,13 @@ function Get-ProjectFrame {
     }
     $g = Get-Glyphs -Ascii:$Ascii
     $frameWidth = Get-FrameWidth -Width $Width
+    # The memo (spec D11): every input EXCEPT the three hover ones. -Now to the MINUTE, because the
+    # only thing it feeds is the age column and that column changes once a minute - a key to the
+    # tick would miss on every single frame and the memo would never answer anything.
+    $memoKey = "$Width|$Height|$Color|$Ascii|$Index|$Filter|$Typing|$Notice|$Action|$Cwd|" + $Now.ToString('yyyyMMddHHmm') + '|' +
+               (Get-ListSignature -Items $Projects -Fields @('Name', 'Path', 'Slug', 'Worktree', 'LastActivity'))
+    $memoHit = Get-MemoFrame -Builder 'project' -Key $memoKey -HoverRow $HoverRow -HoverValue $HoverValue -Hover $Hover -RowMap $RowMap
+    if ($null -ne $memoHit) { return $memoHit }
     $items = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
     # The pinned rows are rows: they are selected, hit-tested and entered exactly like a project, so
     # the loop below never needs to know which kind it is looking at. The CURRENT DIRECTORY leads
@@ -965,6 +1128,10 @@ function Get-ProjectFrame {
     # longer be derived from a y by arithmetic, and the map carries the actual list instead.
     $body = @()
     $rowYs = @()
+    # Where a band goes on every visible row, for the memo: body index and how many characters of
+    # the finished line it wraps. Recorded here because this loop is the only place that knows which
+    # row is which - re-deriving it from the painted frame is the second copy this file keeps warning about.
+    $rowBands = @{}
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
         $r = $rows[$i]
         # The blank line ABOVE the free-path row - skipped when that row opens the viewport, since a
@@ -972,15 +1139,20 @@ function Get-ProjectFrame {
         if ($r.Kind -eq 'path' -and $body.Count -gt 0) { $body += '' }
         $mark = if ($i -eq $Index) { " $($g.Cursor) " } else { '   ' }
         $rowYs += $body.Count
+        $rowBandY = $body.Count
         if ($r.Kind -eq 'project') {
             $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
             $name = $r.Item.Name
             if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
-            $body += New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail -Hover:($i -eq $HoverRow)
+            $rowText = New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail -Hover:($i -eq $HoverRow)
+            $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $rowText -PaneWidth $inner) }
+            $body += $rowText
         } elseif ($r.Kind -eq 'cwd') {
             # The reader must see which directory the row means - rendered like a project row's
             # name+path columns, minus the age no pinned row has a real LastActivity for.
-            $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail -PathTail -Hover:($i -eq $HoverRow)
+            $rowText = New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail -PathTail -Hover:($i -eq $HoverRow)
+            $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $rowText -PaneWidth $inner) }
+            $body += $rowText
             # And the blank line UNDER it: the current directory is a group of its own, so the eye
             # stops there instead of reading it as the first entry of the registry (spec D6). Not
             # when the next visible row is the free-path row - it brings its own separator, and both
@@ -997,6 +1169,7 @@ function Get-ProjectFrame {
             # width, and an unhovered frame keeps the exact bytes it had. This row is far shorter
             # than the list rows above it, so its band was the ragged one.
             if ($i -eq $HoverRow) { $pathRow = Add-HoverSpan -Text ($pathRow + (' ' * [Math]::Max(0, $inner - (Get-DisplayWidth -Text $pathRow)))) }
+            $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $pathRow -PaneWidth $inner) }
             $body += $pathRow
         }
     }
@@ -1027,8 +1200,10 @@ function Get-ProjectFrame {
     $body += $radio.Text
 
     $lines = New-Box -Lines $body -Width $frameWidth -Title $title -Ascii:$Ascii
+    # Derived from the counts, never hardcoded, for the reason the map below records - and taken out
+    # here because the memo needs the same offset whether or not the caller asked for a map.
+    $firstRowY = $lines.Count - $body.Count - 1
     if ($RowMap) {
-        $firstRowY = $lines.Count - $body.Count - 1
         $RowMap.Value = [pscustomobject]@{
             # RowCount stays the LIST's own, so the field is never hit-tested as a project row
             # (Get-ClaudeMouseRow returns $null for it and the caller falls through to the field).
@@ -1059,7 +1234,14 @@ function Get-ProjectFrame {
         'worktree' { @(@{ Key = ''; Char = 't' }) }
         default    { @() }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char -Selected $selected)
+    # +1 on every Start for the box's own left border, which New-Box puts in front of every body
+    # line: these are FRAME columns, the same coordinates the row map's click cells are in.
+    $memoRows = @{}
+    foreach ($k in $rowBands.Keys) { $memoRows[$k] = @{ Y = $firstRowY + $rowBands[$k].Y; Start = 1; Length = $rowBands[$k].Length } }
+    $memoAction = @{ Y = $firstRowY + $actionIndex; Values = @{} }
+    foreach ($ch in @($radio.Chars)) { $memoAction.Values[$ch.Value] = @{ Start = $ch.Start + 1; Length = $ch.Length } }
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char -Selected $selected `
+                                 -Memo @{ Builder = 'project'; Key = $memoKey; HoverRow = $HoverRow; HoverValue = $HoverValue; Hover = $Hover; Rows = $memoRows; Action = $memoAction })
 }
 
 function Get-SessionExchange {
@@ -1178,11 +1360,40 @@ function Select-SessionMatch {
     })
 }
 
+$script:PickerRx = @{}
+
+function Get-PickerPatterns {
+    # Add-PickerColor's patterns, built ONCE per glyph set. Every one of them is a constant for a
+    # given set of glyphs, and building them per call put a pattern parse on every body line of
+    # every frame - the painter is called once per line, and a frame is fifty of them.
+    # IgnoreCase + CultureInvariant are the options PowerShell's own -replace applies: compiled
+    # without them, text differing only in case would stop matching and the frame would change.
+    param([hashtable]$Glyphs)
+    $key = "$($Glyphs.Cursor)$($Glyphs.RAngle)$($Glyphs.Bullet)$($Glyphs.Worktree)"
+    if ($script:PickerRx[$key]) { return $script:PickerRx[$key] }
+    $opt = [Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    $rA = [regex]::Escape($Glyphs.RAngle)
+    $markPattern = "$([string]$script:HoverOpen)?(?:   | $([regex]::Escape([string]$Glyphs.Cursor)) )"
+    $p = [pscustomobject]@{
+        Nothing  = [regex]::new('nothing matches', $opt)
+        You      = [regex]::new("(^|\s)you $rA ", $opt)
+        Claude   = [regex]::new("(^|\s)claude $rA ", $opt)
+        Bullet   = [regex]::new("(?<=^.$markPattern)($([regex]::Escape([string]$Glyphs.Bullet)))(?= enter a path)", $opt)
+        Cursor   = [regex]::new("([$($Glyphs.Cursor)])", $opt)
+        Worktree = [regex]::new("([$($Glyphs.Worktree)])", $opt)
+        Age      = [regex]::new('(\d+ (?:min|h|d)|now)$', $opt)
+        Msgs     = [regex]::new('(\d+ msgs)', $opt)
+    }
+    $script:PickerRx[$key] = $p
+    return $p
+}
+
 function Add-PickerColor {
     param([string]$Line, [switch]$Enabled, [hashtable]$Glyphs)
     if (-not $Enabled -or -not $Line) { return $Line }
     $c = $script:C
-    if ($Line -match 'nothing matches') { return $c.Dim + $Line + $c.Reset }
+    $rx = Get-PickerPatterns -Glyphs $Glyphs
+    if ($rx.Nothing.IsMatch($Line)) { return $c.Dim + $Line + $c.Reset }
     $out = $Line
 
     # Speaker attribution gets a colour so a wall of preview text reads as a back-and-forth at a
@@ -1194,13 +1405,12 @@ function Add-PickerColor {
     # BOTH '>', so the cursor rule below would repaint the '>' belonging to 'you >' - and would do
     # it in the middle of the escape sequence this rule had just inserted. Substituting first and
     # restoring last keeps the two rules from ever seeing each other's output.
-    $rA = [regex]::Escape($Glyphs.RAngle)
     # U+0003, not U+0001: U+0001 is $script:DimOpen, and a mark that collides with a dim-span marker
     # only works while Add-DimSpanColor happens to run first.
     $markUser = [string][char]3 + 'u' + [string][char]3
     $markClaude = [string][char]3 + 'a' + [string][char]3
-    $out = $out -replace "(^|\s)you $rA ", ('$1' + $markUser)
-    $out = $out -replace "(^|\s)claude $rA ", ('$1' + $markClaude)
+    $out = $rx.You.Replace($out, ('$1' + $markUser))
+    $out = $rx.Claude.Replace($out, ('$1' + $markClaude))
 
     # The bullet, ANCHORED to the row it belongs to and painted BEFORE the cursor rule (R13). In
     # ASCII mode Bullet is '+' - the same character as all four box corners - so a bare `([+])` rule
@@ -1214,12 +1424,11 @@ function Add-PickerColor {
     # free-path row keep its bullet: the band wraps the whole row, so its open marker sits in front
     # of the 3-cell mark (spec D10 puts it there for exactly this lookbehind) and an anchor that
     # could not step over it would leave the bullet unpainted on the one row the mouse is on.
-    $markPattern = "$([string]$script:HoverOpen)?(?:   | $([regex]::Escape([string]$Glyphs.Cursor)) )"
-    $out = $out -replace "(?<=^.$markPattern)($([regex]::Escape([string]$Glyphs.Bullet)))(?= enter a path)", ($c.Magenta + '$1' + $c.Reset)
-    $out = $out -replace "([$($Glyphs.Cursor)])", ($c.BrightYellow + '$1' + $c.Reset)
-    $out = $out -replace "([$($Glyphs.Worktree)])", ($c.Yellow + '$1' + $c.Reset)
-    $out = $out -replace '(\d+ (?:min|h|d)|now)$', ($c.Dim + '$1' + $c.Reset)
-    $out = $out -replace '(\d+ msgs)', ($c.Dim + '$1' + $c.Reset)
+    $out = $rx.Bullet.Replace($out, ($c.Magenta + '$1' + $c.Reset))
+    $out = $rx.Cursor.Replace($out, ($c.BrightYellow + '$1' + $c.Reset))
+    $out = $rx.Worktree.Replace($out, ($c.Yellow + '$1' + $c.Reset))
+    $out = $rx.Age.Replace($out, ($c.Dim + '$1' + $c.Reset))
+    $out = $rx.Msgs.Replace($out, ($c.Dim + '$1' + $c.Reset))
 
     # Restore the parked attributions. BrightCyan for the owner, the warm Accent for Claude - the
     # same accent the launcher uses elsewhere for Claude's own colour, so the pane reads as one
@@ -1275,6 +1484,12 @@ function Get-PickerFrame {
     }
     $g = Get-Glyphs -Ascii:$Ascii
     $frameWidth = Get-FrameWidth -Width $Width
+    # The memo (spec D11): every input EXCEPT the two hover ones. Same shape and the same
+    # minute-granularity -Now as Get-ProjectFrame's - see the comment there.
+    $memoKey = "$Width|$Height|$Color|$Ascii|$Index|$Filter|$Scope|$ProjectName|" + $Now.ToString('yyyyMMddHHmm') + '|' +
+               (Get-ListSignature -Items $Sessions -Fields @('SessionId', 'Path', 'Slug', 'Project', 'Worktree', 'Title', 'LastUser', 'LastAssistant', 'RecentMessages', 'Modified', 'PromptCount', 'SizeBytes'))
+    $memoHit = Get-MemoFrame -Builder 'picker' -Key $memoKey -HoverRow $HoverRow -Hover $Hover -RowMap $RowMap
+    if ($null -ne $memoHit) { return $memoHit }
     # A session nobody typed anything into is not offered - see Select-ResumableSessions. The count
     # is stated rather than the list just quietly getting shorter: dropping rows silently reads as
     # "these are all your sessions" when 16 of 40 were never a real conversation.
@@ -1322,7 +1537,10 @@ function Get-PickerFrame {
             elseif ($hiddenCount -gt 0) { "  all $hiddenCount sessions here are empty - nothing to resume" }
             else { '  no sessions found' }
         $lines = New-Box -Lines @('', $emptyMsg, '') -Width $frameWidth -Title $title -Ascii:$Ascii
-        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char)
+        # Memoised like the other two branches, with no rows to band: a footer button is still
+        # hoverable over an empty list, and that is exactly one footer repaint.
+        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char `
+                                     -Memo @{ Builder = 'picker'; Key = $memoKey; HoverRow = $HoverRow; HoverValue = ''; Hover = $Hover; Rows = @{}; Action = $null })
     }
 
     # Box top + box bottom + one headroom row + the footer's lines (one on a wide terminal, more
@@ -1373,8 +1591,12 @@ function Get-PickerFrame {
         $vp = Get-Viewport -Count $items.Count -Index $Index -Visible $listRows
 
         $list = @()
+        # Where a band goes on each visible row, for the memo - see Get-ProjectFrame's own $rowBands.
+        $rowBands = @{}
         for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
-            $list += New-SessionRow -Item $items[$i] -RowIndex $i
+            $rowText = New-SessionRow -Item $items[$i] -RowIndex $i
+            $rowBands[$i] = @{ Y = ($i - $vp.Start); Length = (Get-RowBandLength -Row $rowText -PaneWidth $leftWidth) }
+            $list += $rowText
         }
 
         # Single column: the selected session's preview goes underneath the list.
@@ -1396,20 +1618,31 @@ function Get-PickerFrame {
         # The list is the first $vp.Visible entries of $body, and New-Box wraps $body between a top
         # and a bottom border. Deriving the offset from the counts rather than hardcoding 1 means a
         # future change to the box cannot silently move every row by one.
+        $firstRowY = $lines.Count - $body.Count - 1
         if ($RowMap) {
             $RowMap.Value = [pscustomobject]@{
-                FirstRowY = $lines.Count - $body.Count - 1
+                FirstRowY = $firstRowY
                 RowCount  = $vp.Visible
                 Start     = $vp.Start
             }
         }
-        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char)
+        # +1 on Start for the box's own left border - the band covers the row, which in this layout
+        # is the whole inner width.
+        $memoRows = @{}
+        foreach ($k in $rowBands.Keys) { $memoRows[$k] = @{ Y = $firstRowY + $rowBands[$k].Y; Start = 1; Length = $rowBands[$k].Length } }
+        return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char `
+                                     -Memo @{ Builder = 'picker'; Key = $memoKey; HoverRow = $HoverRow; HoverValue = ''; Hover = $Hover; Rows = $memoRows; Action = $null })
     }
 
     $vp = Get-Viewport -Count $items.Count -Index $Index -Visible $bodyRows
     $list = @()
+    $rowBands = @{}
     for ($i = $vp.Start; $i -lt ($vp.Start + $vp.Visible); $i++) {
-        $list += New-SessionRow -Item $items[$i] -RowIndex $i
+        $rowText = New-SessionRow -Item $items[$i] -RowIndex $i
+        # The band covers the LEFT PANE only here, not the whole line: the right pane is the preview
+        # and nothing hovers it.
+        $rowBands[$i] = @{ Y = ($i - $vp.Start); Length = (Get-RowBandLength -Row $rowText -PaneWidth $leftWidth) }
+        $list += $rowText
     }
 
     $s = $items[$Index]
@@ -1433,14 +1666,18 @@ function Get-PickerFrame {
     $lines = New-Box -Lines $body -Width $frameWidth -Title $title -Ascii:$Ascii
     # Same derivation as the narrow branch. Join-Panes can make the body TALLER than the list when
     # the detail pane is longer, so the row count is the viewport's, never the body's.
+    $firstRowY = $lines.Count - $body.Count - 1
     if ($RowMap) {
         $RowMap.Value = [pscustomobject]@{
-            FirstRowY = $lines.Count - $body.Count - 1
+            FirstRowY = $firstRowY
             RowCount  = $vp.Visible
             Start     = $vp.Start
         }
     }
-    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char)
+    $memoRows = @{}
+    foreach ($k in $rowBands.Keys) { $memoRows[$k] = @{ Y = $firstRowY + $rowBands[$k].Y; Start = 1; Length = $rowBands[$k].Length } }
+    return (Complete-PickerFrame -Lines $lines -Footer $footer -Width $frameWidth -Glyphs $g -Color:$Color -RowMap $RowMap -HasHover:$hov.HasHover -HoverKey $hov.Key -HoverChar $hov.Char `
+                                 -Memo @{ Builder = 'picker'; Key = $memoKey; HoverRow = $HoverRow; HoverValue = ''; Hover = $Hover; Rows = $memoRows; Action = $null })
 }
 
 function Get-MaintenanceFrame {

@@ -4770,8 +4770,158 @@ foreach ($w in 50, 100, 101, 198) {
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old free-path bullet) measures two cells, as Windows Terminal draws it'
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
+
+# --- The frame memo (spec D11): a hover change repaints lines, it never rebuilds the frame --------
+# The two list screens keep ONE memo each, keyed on every input EXCEPT the three hover inputs. The
+# pins below are the contract: what comes out must be what a cold build would have produced (a memo
+# that changes a byte is a rendering fault nobody can see in a profile), a hit must not re-enter the
+# builders, and every non-hover input must miss.
+$memoSessions = @(1..8 | ForEach-Object {
+    [pscustomobject]@{ SessionId = "memo$_"; Project = "project-$_"; Worktree = $(if ($_ % 4 -eq 0) { 'feature-x' } else { '' })
+                       Title = "question $_"; LastUser = "snippet $_ text about the thing"; LastAssistant = "reply $_ text"
+                       Modified = $now.AddMinutes(-$_); PromptCount = $_; SizeBytes = 2048 }
+})
+$memoProjects = @(1..8 | ForEach-Object {
+    [pscustomobject]@{ Slug = "memo$_"; Path = "C:\Users\sample-user\Projects\project-name-$_"; Name = "project-name-$_"
+                       Worktree = $(if ($_ % 3 -eq 0) { 'feature-x' } else { $null }); LastActivity = $now.AddHours(-$_) }
+})
+# A SEQUENCE of hover states on one warm memo, not a cross product: the repaint is a transition (the
+# row that WAS hovered has to lose its band, which no single-state check can see), and a sequence is
+# also what a mouse actually produces.
+$memoHoverStates = @(
+    @{ R = 0;  B = -1 }, @{ R = 2;  B = -1 }, @{ R = 2;  B = 0 }, @{ R = 2;  B = 2 },
+    @{ R = -1; B = 2 },  @{ R = 5;  B = 1 },  @{ R = 5;  B = -1 }, @{ R = -1; B = -1 }
+)
+$memoActions = @(Get-ProjectActions)
+
+$goldPicker = ''
+$goldPickerCases = 0
+$goldProject = ''
+$goldProjectCases = 0
+foreach ($mw in @(80, 120, 198)) {
+    foreach ($mc in @($true, $false)) {
+        foreach ($ma in @($true, $false)) {
+            $script:FrameMemo = @{}
+            $null = Get-PickerFrame -Sessions $memoSessions -Index 1 -Width $mw -Height 24 -Now $now -Color:$mc -Ascii:$ma -HoverRow -1 -Hover -1
+            foreach ($st in $memoHoverStates) {
+                $goldPickerCases++
+                $warm = @(Get-PickerFrame -Sessions $memoSessions -Index 1 -Width $mw -Height 24 -Now $now -Color:$mc -Ascii:$ma -HoverRow $st.R -Hover $st.B)
+                # The cold rebuild refills the memo with this same state, so the next iteration
+                # continues the sequence from here.
+                $script:FrameMemo = @{}
+                $cold = @(Get-PickerFrame -Sessions $memoSessions -Index 1 -Width $mw -Height 24 -Now $now -Color:$mc -Ascii:$ma -HoverRow $st.R -Hover $st.B)
+                if (($warm -join "`n") -ne ($cold -join "`n") -and -not $goldPicker) { $goldPicker = "picker w=$mw color=$mc ascii=$ma row=$($st.R) button=$($st.B)" }
+            }
+            $script:FrameMemo = @{}
+            $null = Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\Users\sample-user\cwd' -Width $mw -Height 24 -Now $now -Color:$mc -Ascii:$ma -HoverRow -1 -HoverValue '' -Hover -1 -Action 'new'
+            $vi = 0
+            foreach ($st in $memoHoverStates) {
+                $goldProjectCases++
+                $hoverValue = $(if ($st.R -lt 0) { '' } else { $memoActions[$vi % $memoActions.Count] })
+                $vi++
+                $warmP = @(Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\Users\sample-user\cwd' -Width $mw -Height 24 -Now $now -Color:$mc -Ascii:$ma -HoverRow $st.R -HoverValue $hoverValue -Hover $st.B -Action 'new')
+                $script:FrameMemo = @{}
+                $coldP = @(Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\Users\sample-user\cwd' -Width $mw -Height 24 -Now $now -Color:$mc -Ascii:$ma -HoverRow $st.R -HoverValue $hoverValue -Hover $st.B -Action 'new')
+                if (($warmP -join "`n") -ne ($coldP -join "`n") -and -not $goldProject) { $goldProject = "project w=$mw color=$mc ascii=$ma row=$($st.R) value=$hoverValue button=$($st.B)" }
+            }
+        }
+    }
+}
+Assert-Equal '' $goldPicker 'the memoised picker frame is byte-identical to a cold build for every hover state, at 80/120/198 x colour x ascii'
+Assert-Equal 96 $goldPickerCases 'and every one of the 96 picker hover transitions was actually compared (a loop that silently ran zero times proves nothing)'
+Assert-Equal '' $goldProject 'the memoised project frame is byte-identical to a cold build for every hover row, action value and footer button'
+Assert-Equal 96 $goldProjectCases 'and every one of the 96 project hover transitions was actually compared'
+
+# A hit must not re-enter the builders. New-Box is the cheapest witness: exactly one call per frame
+# built, zero calls when the memo answered. Shadowed with the ORIGINAL param block and restored
+# immediately - an @args passthrough silently mangles the named switch this function takes.
+$memoOrigNewBox = ${function:New-Box}
+$script:memoBoxCalls = 0
+function New-Box {
+    param([string[]]$Lines, [int]$Width, [string]$Title = '', [switch]$Ascii)
+    $script:memoBoxCalls++
+    & $memoOrigNewBox @PSBoundParameters
+}
+try {
+    $script:FrameMemo = @{}
+    $script:memoBoxCalls = 0
+    $memoSeed = @(Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 198 -Height 24 -Now $now -Color -HoverRow -1 -Hover -1)
+    Assert-Equal 1 $script:memoBoxCalls 'the positive control: a cold picker build calls New-Box exactly once, so a zero below means the memo answered'
+    $script:memoBoxCalls = 0
+    $memoMoved = @()
+    foreach ($st in $memoHoverStates[0..4]) {
+        $memoMoved += (@(Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 198 -Height 24 -Now $now -Color -HoverRow $st.R -Hover $st.B) -join "`n")
+    }
+    Assert-Equal 0 $script:memoBoxCalls 'five hover changes in a row rebuild nothing - the memo repaints lines instead'
+    Assert-Equal 5 (@($memoMoved | Select-Object -Unique).Count) 'and the five frames are five DIFFERENT frames, so the zero above is a memo hit, not a frozen picture'
+    Assert-True ($memoMoved[0] -ne ($memoSeed -join "`n")) 'a hover change really does change the frame it returns'
+
+    # Every input that is NOT hover must miss. One rebuild each, which is what New-Box counts.
+    $script:memoBoxCalls = 0
+    $null = Get-PickerFrame -Sessions $memoSessions -Index 3 -Width 198 -Height 24 -Now $now -Color -HoverRow 2 -Hover -1
+    Assert-Equal 1 $script:memoBoxCalls 'a changed Index misses the memo and rebuilds'
+    $script:memoBoxCalls = 0
+    $null = Get-PickerFrame -Sessions $memoSessions -Index 3 -Filter 'project-2' -Width 198 -Height 24 -Now $now -Color -HoverRow 2 -Hover -1
+    Assert-Equal 1 $script:memoBoxCalls 'a changed Filter misses the memo and rebuilds'
+    $script:memoBoxCalls = 0
+    $null = Get-PickerFrame -Sessions $memoSessions -Index 3 -Filter 'project-2' -Width 198 -Height 24 -Now $now.AddMinutes(1) -Color -HoverRow 2 -Hover -1
+    Assert-Equal 1 $script:memoBoxCalls 'a -Now one minute later misses the memo - the age column is derived from it'
+    $script:memoBoxCalls = 0
+    $memoPlusOne = @($memoSessions) + [pscustomobject]@{ SessionId = 'memo9'; Project = 'project-9'; Worktree = ''; Title = 'question 9'; LastUser = 'snippet 9'; LastAssistant = 'reply 9'; Modified = $now.AddMinutes(-9); PromptCount = 9; SizeBytes = 2048 }
+    $null = Get-PickerFrame -Sessions $memoPlusOne -Index 3 -Filter 'project-2' -Width 198 -Height 24 -Now $now.AddMinutes(1) -Color -HoverRow 2 -Hover -1
+    Assert-Equal 1 $script:memoBoxCalls 'one more session in the list misses the memo'
+    $script:memoBoxCalls = 0
+    $null = Get-PickerFrame -Sessions $memoPlusOne -Index 3 -Filter 'project-2' -Width 198 -Height 30 -Now $now.AddMinutes(1) -Color -HoverRow 2 -Hover -1
+    Assert-Equal 1 $script:memoBoxCalls 'a changed Height misses the memo'
+
+    $script:FrameMemo = @{}
+    $null = Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'new'
+    $script:memoBoxCalls = 0
+    $null = Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'resume'
+    Assert-Equal 1 $script:memoBoxCalls 'a changed Action misses the project memo - it is not a hover input'
+} finally {
+    Set-Item -Path 'function:New-Box' -Value $memoOrigNewBox
+}
+
+# The repaint runs the same painter chain the cold build does, so the frame a HIT returns still
+# obeys the two rules every frame obeys: nothing wider than the terminal, and no internal marker or
+# escape surviving into what was drawn.
+$memoHitMap = $null
+$memoHitMapPlain = $null
+$script:FrameMemo = @{}
+$null = Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 120 -Height 24 -Now $now -Color -HoverRow -1 -Hover -1
+$memoHitColor = @(Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 120 -Height 24 -Now $now -Color -HoverRow 2 -Hover 1 -RowMap ([ref]$memoHitMap))
+$memoStripped = @($memoHitColor | ForEach-Object { Remove-AnsiColor -Text $_ })
+Assert-Equal 0 (@($memoStripped | Where-Object { (Get-DisplayWidth -Text $_) -gt 119 }).Count) 'no line of a memo-hit frame outgrows the terminal'
+Assert-Equal 0 (@($memoStripped | Where-Object { $_ -match "[$([char]1)$([char]2)$([char]4)$([char]5)$([char]27)]" }).Count) 'and no dim marker, hover marker or stray escape survives into it'
+$script:FrameMemo = @{}
+$null = Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 120 -Height 24 -Now $now -HoverRow -1 -Hover -1
+$memoHitPlain = @(Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 120 -Height 24 -Now $now -HoverRow 2 -Hover 1 -RowMap ([ref]$memoHitMapPlain))
+Assert-Equal ($memoHitPlain[0..($memoHitMapPlain.FooterY - 1)] -join "`n") ($memoStripped[0..($memoHitMap.FooterY - 1)] -join "`n") 'stripping the colour off a memo-hit frame returns the plain frame, body line for body line'
+Assert-Equal "$($memoHitMapPlain.FirstRowY)|$($memoHitMapPlain.RowCount)|$($memoHitMapPlain.Start)|$(@($memoHitMapPlain.Footer).Count)" "$($memoHitMap.FirstRowY)|$($memoHitMap.RowCount)|$($memoHitMap.Start)|$(@($memoHitMap.Footer).Count)" 'a memo hit hands back the same row map a cold build did - the hit test cannot drift from the picture'
+
+# Get-DisplayWidth memoises the code points it had to look up. The lookup is a ~50-range scan, it
+# runs for every box glyph of every line, and the answers never change.
+$memoOrigCp = ${function:Get-CodePointWidth}
+$script:memoCpCalls = 0
+function Get-CodePointWidth {
+    param([int]$CodePoint)
+    $script:memoCpCalls++
+    & $memoOrigCp @PSBoundParameters
+}
+try {
+    $script:CpWidth = @{}
+    $script:memoCpCalls = 0
+    $memoCjk = Get-DisplayWidth -Text ([string][char]0x4E2D + 'x' + [string][char]0x4E2D)
+    Assert-Equal 5 $memoCjk 'two CJK ideographs and an ASCII character measure five cells'
+    Assert-Equal 1 $script:memoCpCalls 'and the second occurrence of the same code point is answered from the memo, not by re-scanning the ranges'
+} finally {
+    Set-Item -Path 'function:Get-CodePointWidth' -Value $memoOrigCp
+    $script:CpWidth = @{}
+}
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1597) { Write-Host "COULD NOT RUN: expected 1597 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1617) { Write-Host "COULD NOT RUN: expected 1597 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

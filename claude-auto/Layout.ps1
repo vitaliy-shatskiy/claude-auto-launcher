@@ -29,6 +29,12 @@ $script:ZeroWidthCategories = @(
     [Globalization.UnicodeCategory]::Format
 )
 
+# Answers Get-CodePointWidth has already given. The table below is a ~50-range linear scan and the
+# screen is drawn from a handful of distinct non-ASCII code points - the box glyphs alone hit it on
+# every line of every frame, the two borders ~198 times each - so the scan runs thousands of times
+# per frame for a dozen distinct answers that can never change.
+$script:CpWidth = @{}
+
 function Get-CodePointWidth {
     param([int]$CodePoint)
     if ($CodePoint -lt 0x20) { return 0 }
@@ -62,7 +68,15 @@ function Get-DisplayWidth {
             $cp = [char]::ConvertToUtf32($ch, $Text[$i + 1])
             $i++
         }
-        $w += Get-CodePointWidth -CodePoint $cp
+        # Memoised (see $script:CpWidth): the same handful of code points arrive over and over and
+        # the range scan behind them is the most-called piece of a repaint.
+        $cw = $script:CpWidth[$cp]
+        if ($null -eq $cw) {
+            if ($null -eq $script:CpWidth) { $script:CpWidth = @{} }
+            $cw = Get-CodePointWidth -CodePoint $cp
+            $script:CpWidth[$cp] = $cw
+        }
+        $w += $cw
     }
     return $w
 }
