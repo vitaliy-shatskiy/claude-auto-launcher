@@ -479,6 +479,8 @@ function Complete-PickerFrame {
         # Stripped BEFORE Limit-Line and before the spans are measured against the cut: the footer is
         # painted by COLUMN INDEX, so a marker surviving into it would shift every span by one, and a
         # marker cut in half by the truncation would reach the terminal.
+        # No -Enabled here: footers cannot carry dim spans - stripped by design, always, whether or
+        # not colour is on.
         $footerText = Limit-Line -Text (Add-DimSpanColor -Line $footerLines[$f].Text) -Max $Width
         $all += $footerText
         # Spans past the truncation are dropped rather than clamped: half a hint is not a hint, and
@@ -806,6 +808,9 @@ function New-RadioRow {
     # caller's own overflow branch (Get-LaunchFrame's ‹ › collapse) handle it, exactly as before this
     # row existed. Controller ruling R4 - deliberately not a two-space or middle-dot separator, which
     # would change every row that already reads correctly.
+    # Keys on a literal space in the RENDERED label (labelOf's output - a Labels[] override when one
+    # exists, the raw value otherwise), never in $v itself: the value 'sonnet1m' has none, but the
+    # label it draws as, 'Sonnet 5[1M]', does.
     foreach ($v in $Values) {
         if ((& $labelOf $v) -match ' ') { return $full }
     }

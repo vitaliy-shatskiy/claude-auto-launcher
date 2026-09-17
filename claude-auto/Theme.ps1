@@ -26,10 +26,10 @@ $script:C = @{
     # Footer-button caps (Task 6, spec D1): idle is a dim inverse block, hover/selected the same
     # warm accent as Accent above but as a filled background so the button reads as PRESSABLE
     # rather than merely tinted text.
-    ButtonBg     = "$($script:E)[48;5;238m"
-    ButtonFg     = "$($script:E)[38;5;250m"
-    AccentBg     = "$($script:E)[48;5;209m"
-    AccentFg     = "$($script:E)[38;5;232m"
+    ButtonBg     = "$([char]27)[48;5;238m"
+    ButtonFg     = "$([char]27)[38;5;250m"
+    AccentBg     = "$([char]27)[48;5;209m"
+    AccentFg     = "$([char]27)[38;5;232m"
 }
 
 # Dim-span markers (spec D6). A builder wraps a COLUMN - a path, an age - in these two while the row
