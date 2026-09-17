@@ -9,6 +9,8 @@ $script:C = @{
     Reset        = "$([char]27)[0m"
     Bold         = "$([char]27)[1m"
     Dim          = "$([char]27)[2m"
+    # Kept although nothing PAINTS with it: Test-Ui's "never bare reverse video" pin (spec D1) reads
+    # it to prove the footer caps use the dim ButtonBg block instead.
     Reverse      = "$([char]27)[7m"
     Red          = "$([char]27)[31m"
     Green        = "$([char]27)[32m"

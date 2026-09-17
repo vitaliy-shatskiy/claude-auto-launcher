@@ -460,11 +460,8 @@ function Invoke-LaunchScreen {
         # comes back. Default returns $false so every existing caller that omits it is unaffected.
         [scriptblock]$OnKey = { param($k) $false }
     )
-    # A handler is a plain scriptblock run from INSIDE Invoke-ScreenLoop, and PowerShell resolves
-    # its names against that scope first: $Draw, $State, $Wait and $GetWindowTop there are the
-    # LOOP's parameters, not these (`Draw = { param($s) & $Draw $s.State }` recurses into itself).
-    # So every one a handler needs is aliased to a name the loop does not have, and this screen's
-    # own state travels as $s.State - never read as $State.
+    # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
+    # the rule; this screen's own state travels as $s.State, never as $State.
     $paintLaunch = $Draw
     $askCaller = $OnKey
     $tabPrefs = $Prefs
@@ -487,7 +484,7 @@ function Invoke-LaunchScreen {
         $s.Index = [int]$s.State.Row
     }
 
-    $st = @{ Index = [int]$State.Row; Hover = -1; HoverRow = -1; Typing = $false; State = $State }
+    $st = @{ Index = [int]$State.Row; Hover = -1; Typing = $false; State = $State }
     return (Invoke-ScreenLoop -Screen 'launch' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
         -Draw { param($s) & $paintLaunch $s.State } -Handlers @{
         # The cursor lives in two places - the loop's Index, and the state's Row that the frame
@@ -576,10 +573,8 @@ function Invoke-ProjectScreen {
         # block on a console prompt.
         [scriptblock]$ReadPath = { Read-Host '  path' }
     )
-    # A handler is a plain scriptblock run from INSIDE Invoke-ScreenLoop, and PowerShell resolves
-    # its names against THAT scope first: $Draw, $State, $Wait and $GetWindowTop there are the
-    # LOOP's parameters, not these ones. So every parameter a handler needs is aliased to a name
-    # the loop does not have, and everything this screen keeps travels on $s.
+    # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
+    # the rule; everything this screen keeps travels on $s.
     $paintProject = $Draw
     $askPath = $ReadPath
     $projectList = $Projects
@@ -669,6 +664,9 @@ function Invoke-ProjectScreen {
     # One pick, one notice, one record shape: Enter, a hotkey and a double click differ only in the
     # How they carry onto the result. A rejected pick still writes its key record - the press did
     # happen - and leaves the notice the next frame shows.
+    # N3's written scope, where the code says it: the pick-bearing records (Enter, c/r/t, doubleclick)
+    # are written AFTER the pick - the loop logs what this handler returns, so `action` on the record
+    # is the value the pick actually ran with, never the one the field held before it.
     $commit = {
         param($s, [string]$How)
         $picked = & $pickRow $s $How
@@ -696,7 +694,7 @@ function Invoke-ProjectScreen {
     # from every row, so it never needs focus - and the focus state it used to have could only be
     # entered from the LAST list row, which parked the commit on 'enter a path...' and made the
     # arrows-only path end at a Read-Host prompt.
-    $st = @{ Index = $startIndex; Hover = -1; HoverRow = -1; Typing = $false
+    $st = @{ Index = $startIndex; Hover = -1; Typing = $false
              Filter = ''; Notice = ''; Action = (Step-ProjectAction -Action $InitialAction -Delta 0); Rows = @() }
     return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
         -Draw { param($s) & $paintProject $projectList $s.Index $s.Filter $s.Typing $s.Hover $s.Notice $s.Action } -Handlers @{
@@ -922,10 +920,8 @@ function Invoke-SessionPicker {
         # behaves exactly as it did, and the cursor simply stops at the last row.
         [scriptblock]$FetchMore = $null
     )
-    # A handler is a plain scriptblock run from INSIDE Invoke-ScreenLoop, and PowerShell resolves its
-    # names against THAT scope first: $Draw, $State, $Wait and $GetWindowTop there are the LOOP's
-    # parameters, not these ones. So every parameter a handler needs is aliased to a name the loop
-    # does not have, and everything this screen keeps travels on $s.
+    # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
+    # the rule; everything this screen keeps travels on $s.
     $paintPicker = $Draw
     $fetchNext = $FetchMore
     $pickerTitle = $ProjectName
@@ -990,7 +986,7 @@ function Invoke-SessionPicker {
         return [pscustomobject]@{ Session = $shown[$s.Index]; Fork = $Fork }
     }
 
-    $st = @{ Index = 0; Hover = -1; HoverRow = -1; Typing = $false; Filter = ''
+    $st = @{ Index = 0; Hover = -1; Typing = $false; Filter = ''
              Scope = $openScope; Pages = @{}; Pool = @(); Resumable = @(); Items = @(); CanPage = $false
              # What the caller handed in. `rows` on the ENTER record is that page, never what
              # survived the scope, the zero-prompt drop and the filter - the two differing is
@@ -1193,10 +1189,9 @@ function Invoke-MaintenanceScreen {
         [scriptblock]$RecordTime = { try { Get-ClaudeInputRecordTime } catch { $null } },
         [int]$ConfirmMinMs = 150
     )
-    # A handler is a plain scriptblock run from INSIDE Invoke-ScreenLoop, and PowerShell resolves its
-    # names against THAT scope first: $Draw, $State, $Wait and $GetWindowTop there are the LOOP's
-    # parameters, not these ones. This screen also opens from inside the LAUNCH screen's OnKey, so
-    # its scope chain reaches that screen's locals too - which is why every name below is its own.
+    # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
+    # the rule. This screen also opens from inside the LAUNCH screen's OnKey, so its scope chain
+    # reaches that screen's locals too, which is why every name below is its own.
     $paintMaint = $Draw
     $drainAfter = $Drain
     $recordAt = $RecordTime
@@ -1231,17 +1226,8 @@ function Invoke-MaintenanceScreen {
         }
     }
     # The five built-in keys, then the configured actions - and a configured action never takes a
-    # built-in letter, exactly as the if/elseif chain this table replaces consulted $Actions only
-    # when none of u/r/d/m/p had matched.
-    #
-    # The loop presses every one of these through Test-ClaudeHotkey, never -eq. PowerShell's -eq is
-    # case-INSENSITIVE, so the uppercase letter that terminates an SGR mouse report
-    # (ESC [ < b ; x ; y M) pressed the very key its lowercase hint advertises: a hover over a
-    # terminal that delivers mouse reports as text ran `claude mcp list` again and again, with U, R,
-    # D, P and I - update, rename swap, doctor, prune and a five-minute fleet reindex - one
-    # character away. Caught live in a Rider terminal tab 2026-08-25. The matcher keeps that guard
-    # and adds the virtual key and the Cyrillic letter on the same physical key (owner, 2026-09-02:
-    # the keys must work on the Russian and Ukrainian layouts).
+    # built-in letter. Dispatched through Test-ClaudeHotkey, never -eq: its own header carries why
+    # (uppercase and modified keys are refused, and every layout is matched).
     $maintKeys = @{
         'u' = { param($s) $s.Status = 'running claude update...'; $null = & $paintMaint $s.Info $s.Status $s.Hover; $s.Status = (& $runMaint { (Invoke-ClaudeUpdate).Message }) }
         'r' = { param($s) $s.Status = (& $runMaint { (Repair-ClaudeBinaryByRename).Message }) }
@@ -1268,7 +1254,7 @@ function Invoke-MaintenanceScreen {
     }
 
     $maintState = @{
-        Index = 0; Hover = -1; HoverRow = -1; Typing = $false
+        Index = 0; Hover = -1; Typing = $false
         # What the frame on screen was drawn from, so an action's "running ..." frame repaints the
         # same install info the frame under it already showed.
         Info = $null
@@ -1333,16 +1319,10 @@ function Invoke-MaintenanceScreen {
         }
         Hotkeys = $maintKeys
     }
-    # No Rows: this screen's body is status text and it has no cursor, which is what keeps the loop's
-    # w/a/s/d aliases inert here - 'd' is doctor, and a configured action may sit on any letter (C1).
-    # No Click either: a click on a footer hint becomes that hint's key inside the loop, a double
-    # click on one is ignored there (it carries the button down with MOUSE_MOVED clear, and used to
-    # walk through as a SECOND press - enough to get past the confirm on prune and on the five-minute
-    # fleet reindex with one gesture), and nothing else on this screen is clickable. Escape and
-    # Ctrl+C are the loop's own default: they end the screen with nothing.
-    # -Silent: this screen writes no log records, and wrote none before the loop existed either.
-    # The install info is refreshed by the DRAW, so the frame and the info on it are always the same
-    # pass - exactly as they were when the draw sat at the top of this function's own loop.
+    # No Rows and no Click: this screen has no cursor (which keeps the loop's w/a/s/d aliases inert -
+    # 'd' is doctor) and nothing on it is clickable but the footer, which the loop already turns into
+    # that hint's key. -Silent: this screen writes no log records and never did.
+    # The install info is refreshed by the DRAW, so the frame and the info on it are always one pass.
     $null = Invoke-ScreenLoop -Screen 'maintenance' -State $maintState -Wait $Wait -GetWindowTop $GetWindowTop -Silent `
         -Draw { param($s) $s.Info = Get-ClaudeInstallInfo; & $paintMaint $s.Info $s.Status $s.Hover } -Handlers $maintHandlers
 }
