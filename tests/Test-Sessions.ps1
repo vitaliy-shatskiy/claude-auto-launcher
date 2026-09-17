@@ -836,6 +836,16 @@ Assert-Equal 0 @($busyOut | Where-Object { $_ -is [System.Management.Automation.
 Remove-Item -LiteralPath $shRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- the physical projects directory, resolved through EVERY component -----------------------------
+# $phRoot is built from $env:TEMP, which is the 8.3 short form on a runner whose account name is
+# longer than eight characters (the GitHub windows-latest runner logs in as runneradmin ->
+# C:\Users\RUNNER~1\...), while Get-PhysicalDirectoryPath always hands back the long form - the
+# .NET call underneath it (Directory.ResolveLinkTarget with returnFinalTarget:true, which opens a
+# handle and asks Windows for the final canonical path) resolves 8.3 components on the way, whether
+# or not the segment it is fixing is itself a link. A raw string compare fails on spelling alone and
+# is invisible on any machine with a short user name, which is why every local run was green. Same
+# canonicaliser both sides go through here, so the assertion is what it always should have been -
+# do both paths point at the SAME directory - and it still goes red if the resolver answers wrong.
+function Get-CanonicalTestPath { param([string]$Path) try { [IO.Path]::GetFullPath($Path) } catch { $Path } }
 $phRoot = Join-Path $env:TEMP ('claude-auto-phys-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $phHome = Join-Path $phRoot 'phys'
 $phProjects = Join-Path $phHome 'projects'
@@ -843,12 +853,12 @@ New-Item -ItemType Directory -Force -Path $phProjects | Out-Null
 $phAccA = Join-Path $phRoot 'accA'
 New-Item -ItemType Directory -Force -Path $phAccA | Out-Null
 $null = New-Item -ItemType Junction -Path (Join-Path $phAccA 'projects') -Target $phProjects
-Assert-Equal $phProjects (Get-PhysicalDirectoryPath -Path (Join-Path $phAccA 'projects')) 'a junction at the FINAL component resolves to its target'
+Assert-Equal (Get-CanonicalTestPath $phProjects) (Get-CanonicalTestPath (Get-PhysicalDirectoryPath -Path (Join-Path $phAccA 'projects'))) 'a junction at the FINAL component resolves to its target'
 # The junction one level UP: a junctioned profile root holding a real projects\ directory.
 $phAccB = Join-Path $phRoot 'accB'
 $null = New-Item -ItemType Junction -Path $phAccB -Target $phHome
-Assert-Equal $phProjects (Get-PhysicalDirectoryPath -Path (Join-Path $phAccB 'projects')) 'a junction on an INTERMEDIATE component is resolved too, not left as the caller spelled it'
-Assert-Equal (Get-SessionsCachePath -ProjectsRoot $phProjects) (Get-SessionsCachePath -ProjectsRoot (Join-Path $phAccB 'projects')) 'so a root reached through a junctioned profile root shares the one cache file'
+Assert-Equal (Get-CanonicalTestPath $phProjects) (Get-CanonicalTestPath (Get-PhysicalDirectoryPath -Path (Join-Path $phAccB 'projects'))) 'a junction on an INTERMEDIATE component is resolved too, not left as the caller spelled it'
+Assert-Equal (Get-CanonicalTestPath (Get-SessionsCachePath -ProjectsRoot $phProjects)) (Get-CanonicalTestPath (Get-SessionsCachePath -ProjectsRoot (Join-Path $phAccB 'projects'))) 'so a root reached through a junctioned profile root shares the one cache file'
 # The answer is MEMOISED for speed, and this launcher re-points junctions itself
 # (Repair-SharedJunction). Whatever does that has to be able to forget, or the memo keeps serving the
 # pre-repair target for the rest of the process (re-review 2 2026-09-16, N1).
@@ -857,12 +867,12 @@ $phB = Join-Path $phRoot 'targetB'
 $phLink = Join-Path $phRoot 'moving-link'
 New-Item -ItemType Directory -Force -Path $phA, $phB | Out-Null
 $null = New-Item -ItemType Junction -Path $phLink -Target $phA
-Assert-Equal $phA (Get-PhysicalDirectoryPath -Path $phLink) 'a junction resolves to the target it points at'
+Assert-Equal (Get-CanonicalTestPath $phA) (Get-CanonicalTestPath (Get-PhysicalDirectoryPath -Path $phLink)) 'a junction resolves to the target it points at'
 Remove-Item -LiteralPath $phLink -Force
 $null = New-Item -ItemType Junction -Path $phLink -Target $phB
-Assert-Equal $phA (Get-PhysicalDirectoryPath -Path $phLink) 'and keeps answering from the memo after it is re-pointed - which is what makes the memo fast'
+Assert-Equal (Get-CanonicalTestPath $phA) (Get-CanonicalTestPath (Get-PhysicalDirectoryPath -Path $phLink)) 'and keeps answering from the memo after it is re-pointed - which is what makes the memo fast'
 Clear-PhysicalDirectoryPathCache
-Assert-Equal $phB (Get-PhysicalDirectoryPath -Path $phLink) 'Clear-PhysicalDirectoryPathCache forgets it, so the next resolve sees the new target'
+Assert-Equal (Get-CanonicalTestPath $phB) (Get-CanonicalTestPath (Get-PhysicalDirectoryPath -Path $phLink)) 'Clear-PhysicalDirectoryPathCache forgets it, so the next resolve sees the new target'
 Remove-Item -LiteralPath $phRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- the pre-filter: each half pinned on its own, and what it may not change -----------------------
