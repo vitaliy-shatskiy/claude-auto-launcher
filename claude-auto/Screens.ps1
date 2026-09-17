@@ -549,6 +549,7 @@ function Get-LaunchFrame {
     $frameWidth = Get-FrameWidth -Width $Width
     $boxWidth = [Math]::Min($frameWidth, 100)
     $inner = $boxWidth - 4
+    # Layout breakpoint about the TERMINAL width, not the drawing budget - stays on $Width by design.
     $wide = $Width -ge $script:TwoPaneWidth
 
     # Header: brand on the left, versions on the right, with the update marker only when they differ.
@@ -560,7 +561,7 @@ function Get-LaunchFrame {
             $right += "  $($g.Up) $($Version.Newest)"
         }
     }
-    $pad = [Math]::Max(1, $inner - $left.Length - $right.Length)
+    $pad = [Math]::Max(1, $inner - (Get-DisplayWidth -Text $left) - (Get-DisplayWidth -Text $right))
     $header = @($left + (' ' * $pad) + $right)
 
     $body = @()
@@ -590,7 +591,7 @@ function Get-LaunchFrame {
                     $text = if ($withPercent -and $l -and $null -ne $l.FiveHour) { "$v $($l.FiveHour)%" } else { "$v" }
                     if ($v -eq $current) { "[$text]" } else { $text }
                 })
-                if (($prefix + $labelPart + ($cells -join $joiner)).Length -le $inner) { break }
+                if ((Get-DisplayWidth -Text ($prefix + $labelPart + ($cells -join $joiner))) -le $inner) { break }
             }
             # Column spans for each tab, measured off the same strings that were just joined. A click
             # inside one of these means "this account", which is what makes the strip a menu rather
@@ -1250,6 +1251,7 @@ function Get-PickerFrame {
     # The headroom row is the one Write-Frame's trailing newline needs (see Get-MaintenanceFrame);
     # until 2026-09-02 this budget lacked it and a full list filled the terminal exactly.
     $bodyRows = [Math]::Max(3, $Height - 3 - @($footer.Lines).Count)
+    # Layout breakpoint about the TERMINAL width, not the drawing budget - stays on $Width by design.
     $wide = $Width -ge $script:TwoPaneWidth
 
     $leftWidth = if ($wide) { [Math]::Max(28, [int](($frameWidth - 2) * 0.4)) } else { $frameWidth - 2 }

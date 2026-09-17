@@ -419,6 +419,33 @@ $tabColoredP = @(Get-LaunchFrame -State $selPersonal -Width 100 -Height 30 -Limi
 Assert-Equal $true ($tabColoredP.IndexOf($magenta) -lt $tabColoredP.IndexOf('[personal')) 'the personal tint opens the personal tab'
 Assert-Equal 1 ([regex]::Matches($tabColoredP, [regex]::Escape($boldEsc)).Count) 'still exactly one emphasised tab'
 
+# BACKLOG 217 G1: the tab-strip fit check must measure DISPLAY CELLS, not .Length - a CJK account
+# key is short in UTF-16 code units but wide on screen, so the two disagree on whether the
+# with-percent form still fits. The roster is swapped out for this probe and rebuilt from the real
+# config right after (finally) - Set-LaunchRoster mutates the Account row's Values IN PLACE, so
+# merely saving and restoring the $script:Rows ARRAY REFERENCE would leave that row's Values
+# pointing at the CJK probe's list forever; only re-running the real setup call undoes that.
+try {
+    $cjkKey = ([char]0x65E5).ToString() * 8
+    Set-LaunchRoster -Accounts @(
+        [pscustomobject]@{ Key = 'work'; Hidden = $false; Tint = 'Green' }
+        [pscustomobject]@{ Key = $cjkKey; Hidden = $false; Tint = 'Cyan' }
+    )
+    $cjkLimits = @{ work = [pscustomobject]@{ FiveHour = 40 }; $cjkKey = [pscustomobject]@{ FiveHour = 43 } }
+    # At 50 columns (inner 45) the with-percent form is 40 CODE UNITS (fits by .Length) but 48
+    # CELLS (does not fit); the names-only form is 40 cells, which DOES fit. A .Length-based check
+    # locks onto the with-percent form on its first pass and never tries names-only - the frame's
+    # own (correct) display-width overflow guard then collapses the whole strip to '<selected>'
+    # instead, skipping the names-only step that should have been shown.
+    $tf217 = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height 40 -Limits $cjkLimits)
+    $tabLine217 = @($tf217 | Where-Object { $_ -match '\baccount\b' })[0]
+    Assert-Equal $true ($tabLine217 -match [regex]::Escape('[work]')) 'a CJK account key at the width where .Length and cells disagree still gets the names-only form'
+    Assert-Equal $false ($tabLine217 -match [regex]::Escape('40%')) 'not the with-percent form, whose real cell width does not fit'
+    Assert-Equal 0 (@($tf217 | Where-Object { (Get-DisplayWidth -Text $_) -gt ($script:MinWidth - 1) }).Count) 'and no line overflows the box'
+} finally {
+    Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
+}
+
 # A long, fixed default label (this machine's real settings.json value, hardcoded so the test does
 # not depend on what the live file currently says) makes the overflow behaviour deterministic.
 $longDefaultLabel = 'default (claude-fable-5-1[1m])'
@@ -511,6 +538,19 @@ Assert-Equal 0 (@($f | Where-Object { $_ -match [regex]::Escape($needed) }).Coun
 
 $f = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -Version @{ Installed='2.1.226'; Newest='2.1.230' }
 Assert-Equal 1 (@($f | Where-Object { $_ -match '2\.1\.230' }).Count) 'an available update is visible on the launch screen'
+
+# BACKLOG 217 G1: the header pad is computed in DISPLAY CELLS, not .Length. Get-Glyphs carries no
+# wide glyphs to build this fixture from, so the wide character rides in on the version string
+# instead (an arbitrary caller-supplied value the header has to lay out correctly regardless).
+# Stripping the box border and the box's own trailing pad (always spaces, since the header content
+# is built to fill $inner and never overflows it) leaves exactly the raw header string, whose
+# display width must equal $inner - the same number Get-LaunchFrame computed the pad against.
+$hdrCjk = [char]0x4E2D
+$hf = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -Version @{ Installed = '2.1.226'; Newest = "2.1.230$hdrCjk" })
+$hdrLine = @($hf | Where-Object { $_ -match 'claude-auto' })[0]
+$hdrContent = $hdrLine.Substring(1, $hdrLine.Length - 2).TrimEnd(' ')
+$hdrInnerExpected = ([Math]::Min((Get-FrameWidth -Width 100), 100)) - 4
+Assert-Equal $hdrInnerExpected (Get-DisplayWidth -Text $hdrContent) 'the header line fills exactly $inner cells even with a two-cell glyph in the version string'
 
 # Restored rows are marked, and the notice appears only when something was actually restored.
 $f = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Restored @('Model') -RestoredAge '5 min'
@@ -4170,7 +4210,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1366) { Write-Host "COULD NOT RUN: expected 1366 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1370) { Write-Host "COULD NOT RUN: expected 1370 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
