@@ -642,8 +642,11 @@ $projDrawAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.A
 Assert-Equal 1 $projDrawAssign.Count 'and builds the project renderer in exactly one place'
 $projDrawText = "$($projDrawAssign[0].Right.Extent.Text)"
 Assert-True ($projDrawText -match '-Action\s+\$') 'the renderer forwards the action field to Get-ProjectFrame'
-Assert-True ($projDrawText -match '-HoverRow\s+\$') 'and the hovered row (spec D10)'
-Assert-True ($projDrawText -match '-HoverValue\s+\$') 'and the hovered action value - the band is drawn from those two alone'
+# The VARIABLE is named, not merely "some variable": -HoverRow $hv -HoverValue $hr satisfies a bare
+# `\$` on both lines and hands the frame builder a row index as a value and a value as a row index,
+# which paints a band on whichever row happens to share a name with the action - silently.
+Assert-True ($projDrawText -match '-HoverRow\s+\$hr') 'and the hovered row (spec D10), from the loop''s own $hr'
+Assert-True ($projDrawText -match '-HoverValue\s+\$hv') 'and the hovered action value from $hv - the band is drawn from those two alone, and swapping them is not a swap this pin accepts'
 $projDrawParams = @($projDrawAssign[0].Right.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParamBlockAst] }, $true))
 Assert-Equal 1 $projDrawParams.Count 'the renderer declares a parameter block'
 Assert-Equal 9 @($projDrawParams[0].Parameters).Count 'with all nine parameters the loop passes - one short and the field silently draws "new" forever, or no row is ever banded'
@@ -654,7 +657,9 @@ Assert-Equal 9 @($projDrawParams[0].Parameters).Count 'with all nine parameters 
 # control (the assignment must be found at all).
 foreach ($r in @(
     @{ Name = '$pdraw'; Count = 7; What = 'the session-picker renderer'
-       Forwards = @(@{ P = '-Hover\s+\$'; Why = 'the hovered button' }, @{ P = '-HoverRow\s+\$'; Why = 'the hovered row (spec D10)' }) }
+       # -HoverRow names its variable for the reason the project renderer's pins above record: the
+       # picker forwards -Hover $hv -HoverRow $hr, and a bare `\$` accepts the two swapped.
+       Forwards = @(@{ P = '-Hover\s+\$'; Why = 'the hovered button' }, @{ P = '-HoverRow\s+\$hr'; Why = 'the hovered row from $hr (spec D10)' }) }
     @{ Name = '$mdraw'; Count = 3; What = 'the maintenance renderer'
        Forwards = @(@{ P = '-Hover\s+\$'; Why = 'the hovered button' }) }
 )) {

@@ -1528,6 +1528,18 @@ $wHoverPickSame = New-EventReader @(
 $pickedHoverPickSame = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPickSame -Draw $hoverPickCounting -Wait $wHoverPickSame -GetWindowTop { 0 }
 Assert-True ($null -eq $pickedHoverPickSame) 'the same-row hover run on the picker still ends with Escape'
 Assert-Equal 2 $script:hoverPickDraws 'two moves onto row 0 draw twice: the initial frame and the band the first move put on it - the second, identical move draws nothing'
+# P12: the picker FORWARDS -InputPending to the loop. The same two moves with the queue reported
+# non-empty cost one frame, not two - R19 keeps the state change and drops the draw. A picker that
+# took the parameter and never passed it on would still draw twice here, whatever the caller said.
+$script:hoverPickDrawsPending = 0
+$hoverPickPending = { param($s, $i, $f, $sc, $pn) $script:hoverPickDrawsPending++; $hoverPickProbe }
+$wHoverPickPending = New-EventReader @(
+    (New-MouseEvent -X 3 -Y $hoverPickProbe.FirstRowY -Move),
+    (New-MouseEvent -X 4 -Y $hoverPickProbe.FirstRowY -Move),
+    $hoverPickEsc
+)
+$null = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPickPending -Draw $hoverPickPending -Wait $wHoverPickPending -GetWindowTop { 0 } -InputPending { $true }
+Assert-Equal 1 $script:hoverPickDrawsPending 'the picker forwards -InputPending: with the queue reported non-empty the hover frame is coalesced away and only the initial frame is drawn'
 
 # Moving onto a DIFFERENT row must cost a frame - a hover that recorded the row but never asked for
 # a frame would still pass every assertion above (Enter reads $s.Index straight off the state), so
@@ -2959,9 +2971,23 @@ try {
         (New-MouseEvent -X 4 -Y $hoverRowProbe.RowYs[0] -Move),   # still row 0
         $esc
     )
-    $pHoverSame = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverSame -Draw $hoverRowCounting -Wait $wHoverSame -GetWindowTop { 0 }
+    # -InputPending explicit for the reason the picker's own frame-counting run carries (P12): this
+    # screen forwards it to the loop, and a frame count must not depend on the console the suite
+    # happens to run under.
+    $pHoverSame = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverSame -Draw $hoverRowCounting -Wait $wHoverSame -GetWindowTop { 0 } -InputPending { $false }
     Assert-True ($null -eq $pHoverSame) 'the same-row hover run still ends with Escape'
     Assert-Equal 2 $script:hoverRowDraws 'two moves onto row 0 draw twice: the initial frame and the band the first move put on it - the second, identical move draws nothing'
+    # P12: this screen forwards -InputPending too, pinned the way the picker's is - with the queue
+    # reported non-empty the frame the first move earned is coalesced away.
+    $script:hoverRowDrawsPending = 0
+    $hoverRowPending = { param($p, $i, $f, $t, $h, $n, $a) $script:hoverRowDrawsPending++; $hoverRowProbe }
+    $wHoverPending = New-EventReader @(
+        (New-MouseEvent -X 3 -Y $hoverRowProbe.RowYs[0] -Move),
+        (New-MouseEvent -X 4 -Y $hoverRowProbe.RowYs[0] -Move),
+        $esc
+    )
+    $null = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverPending -Draw $hoverRowPending -Wait $wHoverPending -GetWindowTop { 0 } -InputPending { $true }
+    Assert-Equal 1 $script:hoverRowDrawsPending 'the project screen forwards -InputPending: the hover frame is coalesced away and only the initial frame is drawn'
 
     # Moving onto a DIFFERENT row must cost a frame - a hover that recorded the row but never asked
     # for a frame would still leave every other assertion here standing, so this is the ONLY thing
@@ -4160,7 +4186,12 @@ $mouse = @(
     [pscustomobject]@{ Kind = 'mouse'; X = 4; Y = 6; Left = $false; IsMove = $true; IsDoubleClick = $false; WheelUp = $false; WheelDown = $false }   # same button: no redraw
     [pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 6; Left = $true; IsMove = $false; IsDoubleClick = $false; WheelUp = $false; WheelDown = $false }   # click 'enter'
 )
-$q = [System.Collections.Queue]::new(); foreach ($m in $mouse) { $q.Enqueue($m) }
+# The trailing Escape is a SAFETY RAIL, not part of the gesture: a raw `-Wait { $q.Dequeue() }`
+# fixture that runs dry does not fail the assertion below it - Dequeue on an empty queue leaves
+# $loopKey $null and the loop spins forever, so a D9 regression HANGS the suite instead of
+# reporting. With an Escape behind the last event the regression ends the screen and the assertion
+# says what changed.
+$q = [System.Collections.Queue]::new(); foreach ($m in $mouse) { $q.Enqueue($m) }; $q.Enqueue($esc)
 $draws = 0; $clicked = @()
 $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $q.Dequeue() } -Draw { param($s) $script:draws++; $map } -Handlers @{
         Rows  = { 3 }
@@ -4260,12 +4291,88 @@ Assert-Equal 'screen:,key:Escape,screen:' ($script:launchDblRecords -join ',') '
 $dq = [System.Collections.Queue]::new()
 $dq.Enqueue([pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 3; Left = $true; IsMove = $false; IsDoubleClick = $false; WheelUp = $false; WheelDown = $false })
 $dq.Enqueue([pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 3; Left = $true; IsMove = $false; IsDoubleClick = $true; WheelUp = $false; WheelDown = $false })
+$dq.Enqueue($esc)   # the safety rail the sibling fixture above carries - a D9 regression must FAIL, never hang
 $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false } -Wait { $dq.Dequeue() } -Draw { $map } -Handlers @{
         Rows     = { 3 }
         Click    = { param($s, $h) if ($h.Kind -eq 'row') { $s.Index = [int]$h.Row } }
         Activate = { param($s, $h) @{ Done = $true; Result = "act@$($s.Index)" } }
     }
 Assert-Equal 'act@2' $r 'a physical double click on a row selects it and then activates it, on the row the pointer was over'
+# P7: the flag alone cannot find the twin. ConvertFrom-ClaudeMouseReport sets IsDoubleClick $false
+# ALWAYS - the VT mouse protocol has no double click (Input.ps1) - so in a VT terminal (Rider) one
+# physical double click on the already-selected row arrives as two ORDINARY presses and activates
+# twice. The loop therefore dedups by the record's own arrival stamp as well, injected the way
+# Invoke-MaintenanceScreen's -RecordTime is. Two presses 100 ms apart are one gesture; 800 ms apart
+# are two, and the SAME fixture answers both - only the stamps differ.
+$twinRun = {
+    # [object[]], never [int[]]: the no-stamp case passes $null twice, and [int[]] would coerce each
+    # of them to 0 - two equal stamps, which is the OPPOSITE of "this reader has no clock".
+    param([object[]]$Stamps)
+    $tq = [System.Collections.Queue]::new()
+    $tq.Enqueue((New-MouseEvent -X 3 -Y 3 -Left))   # selects visible row 2
+    $tq.Enqueue((New-MouseEvent -X 3 -Y 3 -Left))   # on the selected row: acts
+    $tq.Enqueue((New-MouseEvent -X 3 -Y 3 -Left))   # the twin - PLAIN, exactly as a VT terminal sends it
+    $tq.Enqueue($esc)
+    $stampQ = [System.Collections.Queue]::new(); foreach ($s in $Stamps) { $stampQ.Enqueue($s) }
+    $script:twinActs = 0
+    $null = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false } `
+        -Wait { $tq.Dequeue() } -Draw { $map } -InputPending { $false } `
+        -RecordTime { if ($stampQ.Count -gt 0) { $stampQ.Dequeue() } else { $null } } -Handlers @{
+            Rows     = { 3 }
+            Click    = { param($s, $h) if ($h.Kind -eq 'row') { $s.Index = [int]$h.Row } }
+            # Never Done: the screen stays up, which is the case the guard exists for - a rejected
+            # project pick is the live one.
+            Activate = { param($s, $h) $script:twinActs++; $null }
+        }
+    return $script:twinActs
+}
+Assert-Equal 1 (& $twinRun @(1000, 1100)) 'two PLAIN presses on the selected row 100 ms apart are one gesture - the VT twin is swallowed although no record is flagged'
+Assert-Equal 2 (& $twinRun @(1000, 1800)) 'and 800 ms apart they are two - the stamp guard swallows a twin, never a deliberate second click'
+Assert-Equal 2 (& $twinRun @($null, $null)) 'a reader with NO stamp keeps the flag-only behaviour exactly as before - an unflagged press always acts'
+# The two $loopActed resets are load-bearing rather than defensive: an Activate that does NOT end
+# the screen leaves the twin guard armed, and a press on that row after a detour through a footer
+# button or a gap is a NEW gesture that has to act. Without the reset the flagged press below is
+# swallowed and the second activation never happens.
+foreach ($detour in @(
+    @{ Name = 'a footer button'; Event = (New-MouseEvent -X 3 -Y 6 -Left) }
+    @{ Name = 'a gap';           Event = (New-MouseEvent -X 3 -Y 8 -Left) }
+)) {
+    $rq3 = [System.Collections.Queue]::new()
+    $rq3.Enqueue((New-MouseEvent -X 3 -Y 3 -Left))            # selects visible row 2
+    $rq3.Enqueue((New-MouseEvent -X 3 -Y 3 -Left))            # acts, and the screen stays up
+    $rq3.Enqueue($detour.Event)
+    $rq3.Enqueue((New-MouseEvent -X 3 -Y 3 -Left -Double))    # flagged: swallowed unless the detour disarmed the guard
+    $rq3.Enqueue($esc)
+    $script:detourActs = 0
+    $null = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false } `
+        -Wait { $rq3.Dequeue() } -Draw { $map } -InputPending { $false } -Handlers @{
+            Rows     = { 3 }
+            Click    = { param($s, $h) if ($h.Kind -eq 'row') { $s.Index = [int]$h.Row } }
+            Activate = { param($s, $h) $script:detourActs++; $null }
+        }
+    Assert-Equal 2 $script:detourActs "a press on the selected row after a detour through $($detour.Name) acts again - that detour disarms the twin guard"
+}
+# What a move over an ACTION-row cell publishes, pinned at the LOOP rather than at a frame builder.
+# Before this, deleting the loop's `action` branch outright, or the HoverValue term of its redraw
+# test, left every suite in the repository green.
+$actMap = [pscustomobject]@{
+    FirstRowY = 1; RowCount = 3; Start = 0; FooterY = 9; FooterLines = 1; Footer = @()
+    Action = [pscustomobject]@{ Y = 5; Cells = @(
+        [pscustomobject]@{ Start = 0; End = 5;  Value = 'new' }
+        [pscustomobject]@{ Start = 7; End = 14; Value = 'resume' }) }
+}
+$aq = [System.Collections.Queue]::new()
+$aq.Enqueue((New-MouseEvent -X 2  -Y 5 -Move))   # onto 'new'
+$aq.Enqueue((New-MouseEvent -X 10 -Y 5 -Move))   # onto 'resume' - the SAME row, a different cell
+$aq.Enqueue((New-MouseEvent -X 3  -Y 2 -Move))   # off the action row entirely
+$aq.Enqueue($esc)
+$script:actSeen = New-Object System.Collections.Generic.List[string]
+$actState = @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
+$null = Invoke-ScreenLoop -Screen 'probe' -State $actState -Wait { $aq.Dequeue() } `
+    -Draw { param($s) $script:actSeen.Add("$($s.HoverValue)"); $actMap } -InputPending { $false } -Handlers @{ Rows = { 3 } }
+Assert-Equal ',new,resume,' ($script:actSeen -join ',') 'a move onto an action cell publishes HoverValue and DRAWS; the next cell of the same row draws again; leaving the row clears it'
+Assert-Equal '' "$($actState.HoverValue)" 'and the state ends cleared rather than on the last value it saw'
+Assert-Equal 0 $actState.Index 'while a move over an action value moves no cursor (D8)'
 # R18/R9: the two row-map shapes answer a hit differently - a list map with an INDEX, a Rows[] map
 # (the launch and maintenance shape) with the row OBJECT. HoverRow is an int, so what a hover over
 # such a map publishes is that row's own Index; the object itself would land on the state as a
@@ -4407,6 +4514,30 @@ Assert-Equal $true ($hpf[$hpm.RowYs[0]].Contains($uniCursor) -and -not $hpf[$hpm
 $hpf2 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 120 -Height 24 -Color -HoverRow 3 -RowMap ([ref]$hpm))
 Assert-Equal $true ($hpf2[$hpm.RowYs[3]].Contains($hb)) 'the hovered free-path row carries the band'
 Assert-Equal $true ($hpf2[$hpm.RowYs[3]].Contains($script:C.Magenta)) 'and keeps its magenta bullet under it - the anchor steps over the open marker'
+# P10: every hovered row on the screen bands the SAME inner width. The three shapes reached it
+# differently - a project row carries an age column, the cwd row does not (its right gutter cell sat
+# OUTSIDE the band), and the free-path row is the one row not built by New-ListRow and was only as
+# wide as its own text. Read off the real frame at 80 columns: the band runs from its background
+# escape to the LAST Reset on the line, because the painter re-asserts the background behind every
+# inner Reset and the band therefore ends there and nowhere earlier.
+function Get-HoverBandCells {
+    # ORDINAL IndexOf/LastIndexOf, never the default overload: String.IndexOf(String) is
+    # CULTURE-sensitive, which treats ESC as an ignorable character and answers one position late -
+    # the orphaned '[48;5;238m' then survives Remove-AnsiColor and measures the band ten cells too
+    # wide. Measured here 17.09.2026 before this comment existed.
+    param([string]$Line)
+    $at = $Line.IndexOf($hb, [StringComparison]::Ordinal)
+    if ($at -lt 0) { return -1 }
+    $end = $Line.LastIndexOf($script:C.Reset, [StringComparison]::Ordinal)
+    if ($end -lt $at) { return -2 }
+    return (Get-DisplayWidth -Text (Remove-AnsiColor $Line.Substring($at, $end - $at)))
+}
+$hbm = $null
+$hbCells = @(0, 1, 3 | ForEach-Object {
+    $hbf = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 80 -Height 24 -Color -HoverRow $_ -RowMap ([ref]$hbm))
+    Get-HoverBandCells $hbf[$hbm.RowYs[$_]]
+})
+Assert-Equal '77,77,77' ($hbCells -join ',') 'the cwd row, a project row and the free-path row band the identical inner width at 80 columns (P10)'
 # The band on an action VALUE, read back out of the painted line: everything between the background
 # escape and the first Reset after it is what the band covers.
 $hpf3 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 120 -Height 24 -Color -HoverValue 'resume' -RowMap ([ref]$hpm))
@@ -4451,7 +4582,10 @@ $hProbe = $null
 $null = Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 120 -Height 24 -Color -RowMap ([ref]$hProbe)
 $hRowY = $hProbe.FirstRowY + 2
 $w = New-EventReader @((New-MouseEvent -Y $hRowY -Move), (New-MouseEvent -Y $hRowY -Left), (New-MouseEvent -Y $hRowY -Left))
-$hPicked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $hoverDraw -Wait $w -GetWindowTop { 0 }
+# -InputPending is passed EXPLICITLY (P12): this run counts frames, and the loop's default reader
+# would answer from whatever console the suite happens to run under. The picker forwards it to the
+# loop, so saying "the queue is empty" here is what makes every move below cost its frame.
+$hPicked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $hoverDraw -Wait $w -GetWindowTop { 0 } -InputPending { $false }
 Assert-Equal 0 $script:hIdx[1] 'a move over a picker row leaves the cursor where it was (D8)'
 Assert-Equal $true ($script:hFrames[1][$hRowY].Contains($hb)) 'and paints the band on the row it is over'
 Assert-Equal 2 $script:hIdx[2] 'the first click selects that row'
@@ -4497,16 +4631,30 @@ foreach ($w in 50, 100, 101, 198) {
       $hsm = $null
       $null = Get-LaunchFrame -State $hs -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii -RowMap ([ref]$hsm)
       $hsRow = @($hsm.Rows | Where-Object { $_.Name -eq 'Model' })[0]
+      # The MODEL row publishes NO cells at 50 columns - it collapses to the ‹ › compact caps - so a
+      # launch sweep that hovers only a model value asserts nothing whatever at the narrowest width
+      # this launcher draws at, which is exactly the corner the sweep exists for. The ACCOUNT strip
+      # keeps its cells at every width (measured: 3 at 50, 100, 101 and 198), so its SECOND account
+      # is hovered alongside and the 50-column corner stops being vacuous.
+      $hsAcct = @($hsm.Rows | Where-Object { $_.Name -eq 'Account' })[0]
+      $hsAcctValue = "$(@($hsAcct.Cells)[1].Value)"
       $plainSet = @{
           launch  = @(Get-LaunchFrame -State $hs -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
           project = @(Get-ProjectFrame -Projects $longProjects -Index 0 -Cwd 'C:\Users\sample' -Action 'resume' -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
           picker  = @(Get-PickerFrame -Sessions $sharedName -Index 0 -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
       }
+      $plainSet.launchAcct = @($plainSet.launch)
       $hs.HoverRow = $hsRow.Index; $hs.HoverValue = 'fable'
       $hoverSet = @{
           launch  = @(Get-LaunchFrame -State $hs -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
           project = @(Get-ProjectFrame -Projects $longProjects -Index 0 -Cwd 'C:\Users\sample' -Action 'resume' -HoverRow 1 -HoverValue 'resume' -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
           picker  = @(Get-PickerFrame -Sessions $sharedName -Index 0 -HoverRow 0 -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
+      }
+      $hs.HoverRow = $hsAcct.Index; $hs.HoverValue = $hsAcctValue
+      $hoverSet.launchAcct = @(Get-LaunchFrame -State $hs -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
+      # The band must actually BE there, or the two assertions below pass on a frame nothing painted.
+      if ($wColor) {
+          Assert-Equal $true ((@($hoverSet.launchAcct) -join "`n").Contains($script:C.ButtonBg)) "the hovered account tab is banded at $w columns (ascii=$wAscii) - this is what makes the sweep bite where the model row publishes no cells"
       }
       foreach ($k in $hoverSet.Keys) {
           $over = @($hoverSet[$k] | Where-Object { (Get-DisplayWidth -Text (Remove-AnsiColor $_)) -gt ($w - 1) })
@@ -4523,7 +4671,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1533) { Write-Host "COULD NOT RUN: expected 1533 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1584) { Write-Host "COULD NOT RUN: expected 1584 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
