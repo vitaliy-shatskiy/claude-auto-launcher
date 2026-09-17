@@ -4941,6 +4941,9 @@ function Get-CodePointWidth {
 }
 try {
     $script:CpWidth = @{}
+    # The whole-string memo in front of the loop would answer this from an earlier frame and the
+    # counter below would read zero for the wrong reason - both memos start cold here.
+    $script:WidthOfText.Clear()
     $script:memoCpCalls = 0
     $memoCjk = Get-DisplayWidth -Text ([string][char]0x4E2D + 'x' + [string][char]0x4E2D)
     Assert-Equal 5 $memoCjk 'two CJK ideographs and an ASCII character measure five cells'

@@ -85,6 +85,23 @@ Assert-Equal 'defgh' (Limit-CellsRight -Text 'abcdefgh' -Max 5) 'and Limit-Cells
 # 1 (ASCII) + 2 (CJK) + 1 (ASCII) + 0 (combining mark) + 2 (astral emoji).
 Assert-Equal 6 (Get-DisplayWidth -Text ('a' + $script:CJK + 'b' + [string][char]0x0301 + $script:Emoji)) 'a mixed ASCII/CJK/combining/astral string measures the sum of its parts'
 
+# --- the whole-STRING width memo ------------------------------------------------------------
+# The character loop above is the most-called piece of a repaint and the same strings arrive over
+# and over. A POISONED entry is the pin: a second call that still ran the loop would answer 3.
+$script:WidthOfText.Clear()
+Assert-Equal 3 (Get-DisplayWidth -Text 'qzx') 'a string measured for the first time still measures its own cells'
+Assert-Equal $true ($script:WidthOfText.ContainsKey('qzx')) 'and the answer is kept, so the next row carrying that text costs no loop'
+$script:WidthOfText['qzx'] = 99
+Assert-Equal 99 (Get-DisplayWidth -Text 'qzx') 'a second call with the same text is answered from the memo, without re-entering the loop'
+$script:WidthOfText.Clear()
+Assert-Equal 3 (Get-DisplayWidth -Text 'qzx') 'and clearing the memo puts the loop back'
+# Bounded: a filter typed character by character is the only thing here that can grow the table, and
+# it is dropped whole rather than evicted entry by entry.
+for ($memoPad = 0; $memoPad -lt 20000; $memoPad++) { $script:WidthOfText["pad$memoPad"] = 1 }
+$null = Get-DisplayWidth -Text 'qzx2'
+Assert-Equal 1 $script:WidthOfText.Count 'past 20000 entries the width memo is dropped whole, so it cannot grow without bound'
+$script:WidthOfText.Clear()
+
 # --- truncation --------------------------------------------------------------------------
 Assert-Equal 'abc' (Limit-Line -Text 'abc' -Max 10) 'a short line is untouched'
 Assert-Equal 4 (Limit-Line -Text 'abcdefgh' -Max 4).Length 'a long line is cut to the width'
@@ -339,7 +356,7 @@ Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line th
 if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
 $script:Ellipsis = [string][char]0x2026
 
-if ($script:Ran -ne 118) { Write-Host "COULD NOT RUN: expected 118 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 123) { Write-Host "COULD NOT RUN: expected 123 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

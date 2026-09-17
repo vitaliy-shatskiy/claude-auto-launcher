@@ -35,6 +35,21 @@ $script:ZeroWidthCategories = @(
 # per frame for a dozen distinct answers that can never change.
 $script:CpWidth = @{}
 
+# Answers Get-DisplayWidth has already given for a whole STRING. The per-code-point memo above took
+# the range scan out; what is left is a PowerShell loop over every character, and that loop is now
+# the most expensive thing a frame does (2651 calls per cold build). The same strings arrive over
+# and over - the mark column, the box borders, a row, a wrapped word, a glyph - within one frame and
+# again in the next, so one entry answers all of them. Ordinal on purpose: the default hashtable
+# folds case, and a width table has no business deciding that two different strings are one.
+# Cleared wholesale past 20 000 entries rather than evicted: the set a terminal actually shows is
+# small and bounded (measured: 666 distinct texts for a 198x50 frame over 40 sessions, and the same
+# 666 on every rebuild), and a filter typed character by character is the only thing that can grow it.
+# A HASHTABLE with an ordinal comparer, not a Dictionary[string,int]: PowerShell binds a generic
+# method call through reflection every time, and measured on this machine TryGetValue with a [ref]
+# out-parameter costs 27 us per call against 0.76 us for this indexer - at 2651 lookups per frame the
+# generic dictionary was 36x slower than the loop it was meant to replace.
+$script:WidthOfText = [hashtable]::new([StringComparer]::Ordinal)
+
 function Get-CodePointWidth {
     param([int]$CodePoint)
     if ($CodePoint -lt 0x20) { return 0 }
@@ -54,6 +69,10 @@ function Get-DisplayWidth {
     # desynchronises every repaint after it.
     param([string]$Text)
     if (-not $Text) { return 0 }
+    # Whole-string memo (see $script:WidthOfText): a hit skips the loop below entirely. One indexer
+    # read, $null when the text is new - the same shape $script:CpWidth uses one level down.
+    $w = $script:WidthOfText[$Text]
+    if ($null -ne $w) { return $w }
     $w = 0
     for ($i = 0; $i -lt $Text.Length; $i++) {
         $cp = [int]$Text[$i]
@@ -78,6 +97,8 @@ function Get-DisplayWidth {
         }
         $w += $cw
     }
+    if ($script:WidthOfText.Count -ge 20000) { $script:WidthOfText.Clear() }
+    $script:WidthOfText[$Text] = $w
     return $w
 }
 
