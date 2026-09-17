@@ -246,9 +246,9 @@ function Invoke-ScreenLoop {
     # the screen that wrote it. A local named $key, $rowsOf, $index or $logKey here would silently
     # answer a handler reaching for the screen's own (measured: a screen helper named $rowsOf is
     # shadowed outright). The PARAMETERS keep their interface names, so the rule for a handler is:
-    # never read $Screen/$State/$Draw/$Wait/$GetWindowTop/$Handlers/$Silent/$InputPending - it gets
-    # THIS loop's. A screen that must reach its own painter or state inside a handler keeps it under
-    # another name.
+    # never read $Screen/$State/$Draw/$Wait/$GetWindowTop/$Handlers/$Silent/$InputPending/$RecordTime
+    # - it gets THIS loop's. A screen that must reach its own painter or state inside a handler keeps
+    # it under another name.
     param(
         [Parameter(Mandatory)][string]$Screen,
         [Parameter(Mandatory)][hashtable]$State,
@@ -261,7 +261,14 @@ function Invoke-ScreenLoop {
         # "Is another input record already waiting" (R19). Injected so the coalescing below is
         # assertable without a console; the default answers $false wherever no console is armed, so
         # every keyboard-only caller and every existing suite behaves exactly as it did.
-        [scriptblock]$InputPending = { Test-ClaudeInputPending }
+        [scriptblock]$InputPending = { Test-ClaudeInputPending },
+        # When the terminal delivered the record now being handled (P7). Same shape and the same
+        # reason as Invoke-MaintenanceScreen's: from the INPUT RECORD, never from this loop's own
+        # clock - a redraw between two real presses easily outlasts any threshold worth setting,
+        # while the two halves of one gesture arrive milliseconds apart however slow the screen is.
+        # $null - a scripted reader, the keyboard-only path - leaves the stamp half of the twin
+        # guard below inert rather than swallowing a click the owner really did make twice.
+        [scriptblock]$RecordTime = { try { Get-ClaudeInputRecordTime } catch { $null } }
     )
     $loopH = $Handlers
     $loopIsCtrl = { param($loopK) [bool]($loopK.Modifiers -band [System.ConsoleModifiers]::Control) }
@@ -315,10 +322,18 @@ function Invoke-ScreenLoop {
     $null = & $loopLogScreen $State 'enter'
     $loopNeedDraw = $true
     $loopMap = $null
-    # Did the click just handled ACT (spec D9)? One physical double click arrives as a plain press
-    # AND a record flagged IsDoubleClick over the same spot (Input.ps1), so without this the twin
-    # would run the activation a second time wherever the screen did not end.
+    # Did the click just handled ACT (spec D9), on which row, and when? One physical double click
+    # arrives as a plain press AND a record flagged IsDoubleClick over the same spot (Input.ps1), so
+    # without this the twin would run the activation a second time wherever the screen did not end.
+    # The ROW and the STAMP ride along because the flag alone is not enough (P7): the VT text-mouse
+    # protocol has no double-click at all, so ConvertFrom-ClaudeMouseReport sets IsDoubleClick $false
+    # always, and in a VT terminal (Rider) the twin arrives as an ordinary second press - measured
+    # acts=2 on one gesture. Two records of the same gesture land within a few ms of each other;
+    # 500 ms is far under any human's second CLICK and far over any terminal's twin.
     $loopActed = $false
+    $loopActedRow = -1
+    $loopActedAt = $null
+    $loopTwinMs = 500
     while ($true) {
         if ($loopH.Before) { $null = & $loopH.Before $State }
         if ($loopNeedDraw) { $loopMap = & $Draw $State }
@@ -374,6 +389,10 @@ function Invoke-ScreenLoop {
             # its key, and a second synthetic press would fire the action twice (or -ReadPath twice).
             if ($loopHit.Kind -eq 'footer') {
                 if ($loopKey.IsDoubleClick) { continue }
+                # Disarms the twin guard above, and it is load-bearing rather than defensive: an
+                # Activate that does NOT end the screen (a rejected project pick) leaves it armed,
+                # and the next press on that row - after a detour through a button - is a NEW
+                # gesture that must act.
                 $loopActed = $false
                 $loopKey = New-SyntheticKey -Key $loopHit.Footer.Key -Char $loopHit.Footer.Char   # falls through to the key path
             } else {
@@ -385,11 +404,24 @@ function Invoke-ScreenLoop {
                 # maintenance) hands back the row OBJECT, so an Activate registered there is dead by
                 # design - those screens act on Enter and on their footer buttons.
                 if ($loopHit.Kind -eq 'row' -and $loopHit.Row -is [int] -and $loopHit.Row -eq $State.Index -and $loopH.Activate) {
-                    # The flagged twin of a press that JUST acted is the same gesture, not a second
-                    # one: without this a rejected project pick prompted for a path twice. A flagged
-                    # press that follows a plain SELECT is the other half of D9 and still acts.
-                    if ($loopKey.IsDoubleClick -and $loopActed) { continue }
+                    # The twin of a press that JUST acted is the same gesture, not a second one:
+                    # without this a rejected project pick prompted for a path twice. Two tests,
+                    # because only ONE of them works per terminal (P7) - a console mouse flags the
+                    # twin, a VT terminal cannot - and the SAME ROW as well, because a press that
+                    # walked to another row is a new gesture however fast it arrived. A press that
+                    # follows a plain SELECT is the other half of D9 and still acts.
+                    $loopNow = & $RecordTime
+                    if ($loopActed -and $loopHit.Row -eq $loopActedRow -and ($loopKey.IsDoubleClick -or
+                        ($null -ne $loopNow -and $null -ne $loopActedAt -and ($loopNow - $loopActedAt) -lt $loopTwinMs))) {
+                        # Nothing on the state changed, so there is nothing to repaint: a swallowed
+                        # twin used to cost a full frame (65-180 ms at 198 columns, 474 ms on a
+                        # 40-session picker) for a record that does nothing.
+                        $loopNeedDraw = $false
+                        continue
+                    }
                     $loopActed = $true
+                    $loopActedRow = [int]$loopHit.Row
+                    $loopActedAt = $loopNow
                     $loopRes = & $loopH.Activate $State $loopHit
                     $null = & $loopLogRes $State 'click' $loopRes @{ button = 'row' }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
@@ -403,7 +435,11 @@ function Invoke-ScreenLoop {
                         $null = & $loopLogRes $State $loopName $loopRes
                     }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
-                } else { $loopActed = $false }
+                } else {
+                    # A click on a gap, or a screen with no Click handler: disarms the twin guard for
+                    # the reason the footer branch above records - the press after it is a new gesture.
+                    $loopActed = $false
+                }
                 continue
             }
         }
@@ -603,7 +639,11 @@ function Invoke-ProjectScreen {
         [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
         # Reading a free path is I/O, so it is injected: the suites pass a scriptblock and never
         # block on a console prompt.
-        [scriptblock]$ReadPath = { Read-Host '  path' }
+        [scriptblock]$ReadPath = { Read-Host '  path' },
+        # Forwarded to the loop's hover coalescing (R19/P12). A pass-through, not a decision: the
+        # default is the loop's own, so a caller that omits it behaves exactly as before, and a
+        # suite driving this screen end to end can say "the queue is empty" and get every frame.
+        [scriptblock]$InputPending = { Test-ClaudeInputPending }
     )
     # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
     # the rule; everything this screen keeps travels on $s.
@@ -728,7 +768,7 @@ function Invoke-ProjectScreen {
     # arrows-only path end at a Read-Host prompt.
     $st = @{ Index = $startIndex; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false
              Filter = ''; Notice = ''; Action = (Step-ProjectAction -Action $InitialAction -Delta 0); Rows = @() }
-    return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
+    return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop -InputPending $InputPending `
         -Draw { param($s) & $paintProject $projectList $s.Index $s.Filter $s.Typing $s.Hover $s.Notice $s.Action $s.HoverRow $s.HoverValue } -Handlers @{
         # The filter decides the rows, so they are rebuilt before every frame and the cursor is
         # clamped to whatever survived it.
@@ -946,7 +986,11 @@ function Invoke-SessionPicker {
         # page instead of every session so the first frame costs one page's worth of summarising
         # rather than forty. $null for a caller that already holds the whole list - the picker then
         # behaves exactly as it did, and the cursor simply stops at the last row.
-        [scriptblock]$FetchMore = $null
+        [scriptblock]$FetchMore = $null,
+        # Forwarded to the loop's hover coalescing (R19/P12). A pass-through, not a decision: the
+        # default is the loop's own, so a caller that omits it behaves exactly as before, and a
+        # suite driving this screen end to end can say "the queue is empty" and get every frame.
+        [scriptblock]$InputPending = { Test-ClaudeInputPending }
     )
     # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
     # the rule; everything this screen keeps travels on $s.
@@ -1137,7 +1181,7 @@ function Invoke-SessionPicker {
         # was looking at from here on is the new one.
         $handlers.Tab = { param($s) $s.Scope = $(if ($s.Scope -eq 'project') { 'all' } else { 'project' }); $s.Index = 0; @{ Log = @{ scope = $s.Scope } } }
     }
-    return (Invoke-ScreenLoop -Screen 'picker' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
+    return (Invoke-ScreenLoop -Screen 'picker' -State $st -Wait $Wait -GetWindowTop $GetWindowTop -InputPending $InputPending `
         -Draw { param($s) & $paintPicker $s.Pool $s.Index $s.Filter $s.Scope $pickerTitle $s.Hover $s.HoverRow } -Handlers $handlers)
 }
 
@@ -1279,6 +1323,9 @@ function Invoke-MaintenanceScreen {
     }
 
     $maintState = @{
+        # HoverRow/HoverValue are seeded although nothing on this screen reads them (P11): it has
+        # nothing hoverable but its footer, and the seeds only keep the loop's change test off a
+        # missing key.
         Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false
         # What the frame on screen was drawn from, so an action's "running ..." frame repaints the
         # same install info the frame under it already showed.
