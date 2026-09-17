@@ -4,6 +4,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-17
+
+### Added
+
+- A **project screen** between the launch screen and the session picker: the current directory
+  first, then every known project (resolved from the transcripts, one row per real directory, paths
+  middle-truncated and dimmed), then a free path. `/` filters; a filter parks the cursor on its first
+  match. The last launched project is remembered per account.
+- An **action field** on that screen (`new` / `continue` / `resume` / `worktree`), a radio row driven
+  with the arrows or a click; hotkeys `c` `r` `t` set it and run at once. It is an indicator, never
+  remembered.
+- The session picker is **scoped to the chosen project**; `tab` widens it to the whole account.
+  Sessions are paged, so the first frame costs one page rather than every transcript.
+- **WASD** navigates every cursor screen beside the arrows. Footer hotkeys render as buttons: dim
+  when idle, accent when hovered or when they name the current action.
+- The launch screen **hides models the account's plan lacks**: on a Team plan Fable disappears from
+  the model and advisor rows, a remembered Fable snaps to `default`, and a settings default that
+  names Fable reads `default (plan default)`. The plan comes from claude-usage-widget's export
+  (`plan`, re-fetched hourly); no record or an unknown plan hides nothing.
+- One UI log: every screen and key writes a record through `Write-UiLog`; the UI block and the page
+  fetcher log an error record before failing; `tools\Show-LauncherRun.ps1` prints a run as a timeline.
+- `output-styles` joins the shared profile directories.
+
 ### Changed
 
 - The mouse highlights instead of choosing: the pointer paints the row, value or footer button under
@@ -20,6 +43,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - A cold frame measures each distinct piece of text once and remembers the answer, so the rows,
   borders and wrapped words that repeat down a screen and across redraws are no longer re-measured
   character by character.
+- Every screen is a handler table over one `Invoke-ScreenLoop`: draw, wait, resize, mouse, arrows,
+  Enter/Escape and the log records are written once; a screen contributes only what it alone does.
+- Every frame stops one cell short of the last console column and every glyph is one cell wide, so
+  nothing wraps on a terminal that fills the last column and no emoji-presentation glyph shifts a row.
+- Session summaries: one cache per physical projects directory, a substring pre-filter before the
+  JSON parse, a byte-bounded prompt counter (`N+` past the budget) — a cold picker opens in a
+  fraction of the time it took.
+
+### Fixed
+
+- A physical double click is two clicks and nothing more: its second half is recognised as the same
+  gesture by flag or by time, also across a screen change, so a rejected pick never prompts twice and
+  a click that ends one screen never opens something on the next.
+- A merged multi-slug project opened its picker on the whole account; a filter that hid one row
+  disabled paging; the shared session cache pruned, blocked and lied under two writers; a FILE was
+  accepted as a project directory; raw transcript text reached the screen — all found by an
+  adversarial pass and closed.
+- The launch screen's default label and the launcher's own arguments can never name a model the
+  account's plan lacks.
 
 ## [0.1.1] — 2026-09-09
 
