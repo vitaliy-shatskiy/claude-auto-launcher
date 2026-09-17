@@ -34,20 +34,20 @@ $script:ZeroWidthCategories = @(
 # every line of every frame, the two borders ~198 times each - so the scan runs thousands of times
 # per frame for a dozen distinct answers that can never change.
 $script:CpWidth = @{}
+# Both memos are created HERE, at load, and nothing ever sets either back to $null - so neither
+# lookup guards for it. One rule, both tables.
 
-# Answers Get-DisplayWidth has already given for a whole STRING. The per-code-point memo above took
-# the range scan out; what is left is a PowerShell loop over every character, and that loop is now
-# the most expensive thing a frame does (2651 calls per cold build). The same strings arrive over
-# and over - the mark column, the box borders, a row, a wrapped word, a glyph - within one frame and
-# again in the next, so one entry answers all of them. Ordinal on purpose: the default hashtable
-# folds case, and a width table has no business deciding that two different strings are one.
-# Cleared wholesale past 20 000 entries rather than evicted: the set a terminal actually shows is
-# small and bounded (measured: 666 distinct texts for a 198x50 frame over 40 sessions, and the same
-# 666 on every rebuild), and a filter typed character by character is the only thing that can grow it.
-# A HASHTABLE with an ordinal comparer, not a Dictionary[string,int]: PowerShell binds a generic
-# method call through reflection every time, and measured on this machine TryGetValue with a [ref]
-# out-parameter costs 27 us per call against 0.76 us for this indexer - at 2651 lookups per frame the
-# generic dictionary was 36x slower than the loop it was meant to replace.
+# Answers Get-DisplayWidth has already given for a whole STRING, in front of the code-point memo
+# above: with the range scan gone, what is left is a PowerShell loop over every character, and the
+# same strings arrive over and over (measured: 666 distinct texts for a 198x50 frame over 40
+# sessions, the same 666 on every rebuild).
+# A hashtable, and reached only through its INDEXER: a missing key answers $null, which is one
+# lookup. What must be avoided is PowerShell binding a GENERIC METHOD - measured here, TryGetValue
+# through a [ref] out-parameter costs ~23 us a call and ContainsKey ~12 us, against ~0.3 us for
+# either type's indexer - so a Dictionary, whose indexer THROWS on a missing key and would need a
+# ContainsKey in front of it, is the wrong shape here, not the wrong type.
+# Ordinal so the table cannot decide that two different strings are one; dropped whole past 20 000
+# entries, since a filter typed character by character is the only thing here that can grow it.
 $script:WidthOfText = [hashtable]::new([StringComparer]::Ordinal)
 
 function Get-CodePointWidth {
@@ -91,7 +91,6 @@ function Get-DisplayWidth {
         # the range scan behind them is the most-called piece of a repaint.
         $cw = $script:CpWidth[$cp]
         if ($null -eq $cw) {
-            if ($null -eq $script:CpWidth) { $script:CpWidth = @{} }
             $cw = Get-CodePointWidth -CodePoint $cp
             $script:CpWidth[$cp] = $cw
         }
@@ -218,7 +217,9 @@ function Split-TextLines {
             # produces a row wider than the pane, which wraps and drags every row below it out of
             # line - the one outcome this whole file exists to prevent. Drop it instead, and never
             # loop forever on a prefix that cannot shrink.
-            if (-not $head) { $token = ''; $tokenWidth = 0; break }
+            # $tokenWidth is deliberately not reset: this loop always empties $current on its first
+            # statement, so the fit test below takes the `-not $current` branch and never reads it.
+            if (-not $head) { $token = ''; break }
             $lines.Add($head)
             $token = $token.Substring($head.Length)
             $tokenWidth = Get-DisplayWidth -Text $token
