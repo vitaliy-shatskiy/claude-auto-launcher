@@ -2,6 +2,19 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The mouse highlights instead of choosing: the pointer paints the row, value or footer button under
+  it and moves nothing. A left click selects (on the session picker it also loads the preview), and a
+  click on the row that already carries the cursor runs or opens it. A double-click has no meaning of
+  its own - it is a select followed by a run.
+- Frames are measured without a function call per character: `Get-DisplayWidth`, `Limit-Cells` and
+  `Limit-CellsRight` decide printable ASCII and the zero-width markers inline and reach the width
+  table only for the characters that need it. Same widths, a session picker that answers a mouse
+  move far sooner.
+
 ## [0.1.1] — 2026-09-09
 
 ### Fixed
