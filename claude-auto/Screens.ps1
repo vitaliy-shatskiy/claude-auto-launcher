@@ -596,10 +596,7 @@ function Get-LaunchFrame {
             # inside one of these means "this account", which is what makes the strip a menu rather
             # than a picture of one.
             $line = $prefix + $labelPart + ($cells -join $joiner)
-            $spans = @(Measure-CellSpans -Pieces $cells -Joiner $joiner -StartX (Get-DisplayWidth -Text ($prefix + $labelPart)))
-            $cellHits = @(for ($c = 0; $c -lt $spans.Count; $c++) {
-                [pscustomobject]@{ Start = $spans[$c].Start; End = $spans[$c].End; Value = $row.Values[$c] }
-            })
+            $cellHits = @(Measure-CellSpans -Pieces $cells -Joiner $joiner -Values @($row.Values) -StartX (Get-DisplayWidth -Text ($prefix + $labelPart)))
         } else {
             # Every other row is a radio row, drawn by the builder the project screen's action field
             # uses too: one layout, one set of click cells, no second copy to drift.
@@ -752,13 +749,20 @@ function Measure-CellSpans {
     # DISPLAY CELLS - Get-DisplayWidth, never .Length, for the reason Theme.ps1 records. The account
     # tab strip and every radio row need exactly this arithmetic; written twice, the two copies drift
     # the first time a joiner changes and the drift shows up as clicks landing on the wrong value.
-    param([string[]]$Pieces = @(), [string]$Joiner = ' ', [int]$StartX = 0)
+    # -Values: the VALUE each piece stands for, carried on the span itself. Both callers zipped the
+    # spans back onto their own value list in a second for-loop afterwards - two copies of the same
+    # index arithmetic, which is exactly what this function exists to prevent (C2). A span with no
+    # -Values carries Value = $null; nothing reads it there.
+    param([string[]]$Pieces = @(), [string]$Joiner = ' ', [int]$StartX = 0, [string[]]$Values = @())
     $spans = @()
     $x = $StartX
     $joinerWidth = Get-DisplayWidth -Text $Joiner
-    foreach ($p in $Pieces) {
-        $w = Get-DisplayWidth -Text $p
-        $spans += [pscustomobject]@{ Start = $x; End = $x + $w - 1 }
+    for ($i = 0; $i -lt $Pieces.Count; $i++) {
+        $w = Get-DisplayWidth -Text $Pieces[$i]
+        $spans += [pscustomobject]@{
+            Start = $x; End = $x + $w - 1
+            Value = $(if ($i -lt $Values.Count) { $Values[$i] } else { $null })
+        }
         $x += $w + $joinerWidth
     }
     return @($spans)
@@ -774,10 +778,14 @@ function New-RadioRow {
     param([string]$Prefix = '   ', [string]$Label, [Parameter(Mandatory)][string[]]$Values, [string]$Current,
           [Parameter(Mandatory)][hashtable]$Glyphs, [hashtable]$Labels = @{}, [int]$LabelWidth = 12, [int]$MaxWidth = 0)
     $labelPart = $Label.PadRight($LabelWidth)
+    # ONE resolver for the text a value is drawn as (C3): the compact-form gate below asked the same
+    # question in its own copy, and the two answering differently is how a row would be laid out from
+    # one string and measured from another.
+    $labelOf = { param([string]$v) if ($Labels.ContainsKey($v)) { "$($Labels[$v])" } else { "$v" } }
     $build = {
         param([bool]$Compact)
         $pieces = @(foreach ($v in $Values) {
-            $text = if ($Labels.ContainsKey($v)) { $Labels[$v] } else { $v }
+            $text = & $labelOf $v
             if ($Compact) { if ($v -eq $Current) { "[$text]" } else { "$text" } }
             elseif ($v -eq $Current) { "$($Glyphs.On) [$text]" }
             else { "$($Glyphs.Off) $text" }
@@ -785,10 +793,7 @@ function New-RadioRow {
         # Spans off the pieces themselves, not off the joined line: the value a click means is the
         # piece it lands in, and re-finding it in the finished string would match the wrong one the
         # first time two values share a prefix.
-        $spans = @(Measure-CellSpans -Pieces $pieces -Joiner ' ' -StartX (Get-DisplayWidth -Text ($Prefix + $labelPart)))
-        $cells = @(for ($i = 0; $i -lt $pieces.Count; $i++) {
-            [pscustomobject]@{ Start = $spans[$i].Start; End = $spans[$i].End; Value = $Values[$i] }
-        })
+        $cells = @(Measure-CellSpans -Pieces $pieces -Joiner ' ' -Values $Values -StartX (Get-DisplayWidth -Text ($Prefix + $labelPart)))
         [pscustomobject]@{ Text = ($Prefix + $labelPart + ($pieces -join ' ')); Cells = $cells }
     }
     $full = & $build $false
@@ -801,8 +806,7 @@ function New-RadioRow {
     # row existed. Controller ruling R4 - deliberately not a two-space or middle-dot separator, which
     # would change every row that already reads correctly.
     foreach ($v in $Values) {
-        $text = if ($Labels.ContainsKey($v)) { "$($Labels[$v])" } else { "$v" }
-        if ($text -match ' ') { return $full }
+        if ((& $labelOf $v) -match ' ') { return $full }
     }
     return (& $build $true)
 }

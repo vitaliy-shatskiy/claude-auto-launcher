@@ -321,11 +321,21 @@ function Invoke-ScreenLoop {
             if ($loopKey.IsMove) {
                 if ($loopH.Hover) { $loopNeedDraw = [bool](& $loopH.Hover $State $loopHit) }
                 else {
-                    # Default: only a CHANGE of hovered footer button is worth a frame (the project
-                    # screen's throttle today). Row hover is a screen's own Hover handler (Task 10).
+                    # Default: only a CHANGE of hovered footer button is worth a frame.
+                    # HoverRows (C1): hovering a list row moves the cursor onto it, the way Claude
+                    # Code's own picker does (spec D3). Both list screens carried a byte-identical
+                    # handler for this whose only extra job was that move; it is a flag here instead,
+                    # so the footer bookkeeping below exists once and the copies cannot drift.
+                    # -is [int] (R18): a Rows[]-shaped map (launch, maintenance) hands back the row
+                    # OBJECT, which would otherwise land in $State.Index as a pscustomobject.
+                    # Both effects are applied before either verdict: a move from a lit button
+                    # straight onto a row has to clear that light in the SAME frame, not leave it lit
+                    # until some later move happens to land on a gap.
                     $loopBtn = if ($loopHit.Kind -eq 'footer') { $loopHit.FooterIndex } else { -1 }
-                    if ($loopBtn -eq $State.Hover) { $loopNeedDraw = $false }
-                    else { $State.Hover = $loopBtn; $loopNeedDraw = $true }
+                    $loopMoved = [bool]($loopH.HoverRows -and $loopHit.Kind -eq 'row' -and $loopHit.Row -is [int] -and $State.Index -ne $loopHit.Row)
+                    if ($loopMoved) { $State.Index = $loopHit.Row }
+                    if ($loopBtn -ne $State.Hover) { $State.Hover = $loopBtn; $loopNeedDraw = $true }
+                    else { $loopNeedDraw = $loopMoved }
                 }
                 # R19 - LAST MOVE WINS. A terminal delivers 6-12 mouse records per pixel of travel
                 # (Input.ps1) and a full render costs 65-180 ms at 198 columns, 474 ms on a 40-session
@@ -794,30 +804,9 @@ function Invoke-ProjectScreen {
         # filterLength, never the filter: a filter is often a pasted PATH, and the log is not the
         # place for it. Screen records only - the key records carry what the key itself changed.
         ScreenFields = { param($s) @{ filterLength = $s.Filter.Length } }
-        # Hover (Task 10, spec D3): hovering a list row moves the cursor there, the way Claude
-        # Code's own picker does - the `❯` follows the mouse, and a click still commits nothing
-        # more than today (only Enter, a hotkey or a double click does). Installing this handler
-        # replaces the loop's DEFAULT hover logic outright (see Invoke-ScreenLoop's IsMove branch),
-        # so the footer-button throttle below is reproduced by hand: only a CHANGE of the hovered
-        # button is worth a frame. Anything else (the action field, a gap) redraws nothing.
-        # HoverRow is never touched here: it is unused everywhere in this file today (every screen
-        # only ever writes -1 to it), and inventing a use for it was not asked for.
-        # Fix round 1, Important 1: the row branch used to `return $true` BEFORE the footer
-        # bookkeeping ran, so a move from a lit footer button straight onto a list row left that
-        # button lit on the very next frame - the row moved, but $s.Hover never went back to -1.
-        # $btn/$moved are now computed FIRST and the row move and the footer reset both happen
-        # before either return, so a row hit always clears a stale footer light in the same frame.
-        # -is [int] (R18): the same guard the loop's own DoubleClick path uses (Invoke-ScreenLoop) -
-        # a Rows[]-shaped map (launch, maintenance) hands back the row OBJECT, never reached by
-        # this screen today, but this handler would otherwise assign a pscustomobject to $s.Index.
-        Hover = {
-            param($s, $hit)
-            $btn = if ($hit.Kind -eq 'footer') { $hit.FooterIndex } else { -1 }
-            $moved = ($hit.Kind -eq 'row' -and $hit.Row -is [int] -and $s.Index -ne $hit.Row)
-            if ($moved) { $s.Index = $hit.Row }
-            if ($btn -ne $s.Hover) { $s.Hover = $btn; return $true }
-            return $moved
-        }
+        # Hovering a list row moves the cursor there (Task 10, spec D3) - the loop's own row-hover
+        # branch, not a handler of this screen's: the picker's copy was byte-identical (C1).
+        HoverRows = $true
     })
 }
 
@@ -1114,22 +1103,9 @@ function Invoke-SessionPicker {
         # place for it.
         ScreenFields = { param($s) @{ filterLength = $s.Filter.Length } }
         ScreenRows = { param($s, $phase) if ($phase -eq 'enter') { [int]$s.HandedIn } else { @($s.Items).Count } }
-        # Hover (Task 10, spec D3): the same handler Invoke-ProjectScreen carries - see its own
-        # comment for why this replaces, and by hand reproduces, the loop's default footer-only
-        # throttle. HoverRow stays untouched - unused everywhere in this file.
-        # Fix round 1, Important 1: $btn/$moved computed first, both effects applied before either
-        # return, so a move from a lit footer button onto a row clears the light in the same frame
-        # instead of leaving it lit until a later move happens to hit a gap/action/same row.
-        # -is [int] (R18): the same guard the loop's own DoubleClick path uses for a Rows[]-shaped
-        # map - never reached by this screen today, guarded anyway.
-        Hover = {
-            param($s, $hit)
-            $btn = if ($hit.Kind -eq 'footer') { $hit.FooterIndex } else { -1 }
-            $moved = ($hit.Kind -eq 'row' -and $hit.Row -is [int] -and $s.Index -ne $hit.Row)
-            if ($moved) { $s.Index = $hit.Row }
-            if ($btn -ne $s.Hover) { $s.Hover = $btn; return $true }
-            return $moved
-        }
+        # Hovering a list row moves the cursor there (Task 10, spec D3) - the loop's own row-hover
+        # branch, the same flag Invoke-ProjectScreen sets (C1).
+        HoverRows = $true
     }
     # Guarded on $hasScope by not existing at all: with nothing to scope to there is no "other" scope
     # to widen from or narrow to, so Tab does nothing rather than toggling between two labels that
