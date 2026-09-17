@@ -2874,12 +2874,15 @@ try {
     # does. Built through the REAL Get-ProjectFrame, never a hand-built map, so this is driven by
     # RowYs (Task 9) exactly as production computes it - a hand-built FirstRowY/RowCount map could
     # never catch a Hover handler that forgot the RowYs branch Get-HitAt prefers for this screen. ---
+    # No .GetNewClosure(): a plain scriptblock resolves $tmpCwd against this file's scope when the
+    # loop invokes it, which is all this needs - the sibling picker draw above ($hoverPickDraw) does
+    # the same job without one, and a closure here would only add a scope bubble nobody reads (D5).
     $hoverRowDraw = {
         param($p, $i, $f, $t, $h, $n, $a)
         $map = $null
         $null = Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Action $a -Cwd $tmpCwd -Width 100 -Height 24 -RowMap ([ref]$map)
         $map
-    }.GetNewClosure()
+    }
     $hoverRowProbe = $null
     $null = Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 100 -Height 24 -RowMap ([ref]$hoverRowProbe)
     # Row 2 in the frame's own row order (cwd, alpha, beta, enter-a-path) is beta.
@@ -4074,6 +4077,25 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
     }
 Assert-True ($null -eq $r) 'the footer double-click run ends on the Escape behind it'
 Assert-Equal 1 $script:footerEnters 'a double click on a footer button presses nothing - only the plain press after it reaches Enter'
+
+# D3: the same rule on a REAL screen. The launch screen's 'enter next' button ENDS the screen, so a
+# double click that walked through as a press would return the state instead of $null - and it would
+# leave a key record behind saying Enter was pressed. Both halves are asserted: a loop that merely
+# swallowed the frame would still have fired the handler.
+$launchDblMap = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -RowMap ([ref]$launchDblMap)
+$launchDblSpan = @($launchDblMap.Footer | Where-Object { $_.Key -eq 'Enter' })[0]
+$launchDblDraw = { param($s) $launchDblMap }
+$script:launchDblRecords = @()
+$script:UiLogSink = { param($stage, $data) $script:launchDblRecords += "$stage`:$($data.key)" }
+$wLaunchDbl = New-EventReader @(
+    (New-MouseEvent -X $launchDblSpan.Start -Y ($launchDblMap.FooterY + $launchDblSpan.Line) -Left -Double),
+    $esc
+)
+$launchDblOut = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $wLaunchDbl -Draw $launchDblDraw -Wait $wLaunchDbl -GetWindowTop { 0 }
+$script:UiLogSink = $null
+Assert-True ($null -eq $launchDblOut) 'a double click on the launch footer "enter next" button does NOT start the session - the Escape behind it is what ends the screen'
+Assert-Equal 'screen:,key:Escape,screen:' ($script:launchDblRecords -join ',') 'and leaves no key record for it either - enter/leave and the Escape, nothing else'
 # A double click on a ROW: the loop moves the cursor to the clicked row BEFORE the handler runs.
 # Both list screens select then pick today ($index = $target, then the pick), so a DoubleClick
 # handler that reads $s.Index must see the row the owner hit, not where the cursor happened to be.
@@ -4097,6 +4119,15 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
         DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
     }
 Assert-Equal 'dbl@4' $r 'a row double click on a Rows[]-shaped map moves the index to that row''s own Index, not to the row object'
+# D4: a SCROLLED list map. RowMap.Start is the absolute index of the first VISIBLE row, so a click
+# on visible row 1 of a map scrolled to 2 means session 3 - dropping Start reads the click as row 1
+# and opens a session two above the one under the pointer. Driven through the picker, so the whole
+# chain (Get-HitAt -> the Click handler -> Enter) is what answers, not the hit test alone.
+$scrollMap = [pscustomobject]@{ FirstRowY = 4; RowCount = 3; Start = 2; FooterY = 9; FooterLines = 1; Footer = @() }
+$scrollDraw = { param($s, $i, $f, $sc, $pn, $hv) $scrollMap }
+$wScroll = New-EventReader @((New-MouseEvent -X 3 -Y 5 -Left), $enter)
+$pickedScroll = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wScroll -Draw $scrollDraw -Wait $wScroll -GetWindowTop { 0 }
+Assert-Equal 's4' $pickedScroll.Session.SessionId 'a click on visible row 1 of a picker scrolled to Start = 2 selects the session at ABSOLUTE index 3'
 # A resize is not a key: the loop redraws and waits again, and no handler ever sees it. Every screen
 # skipped it in its own loop before Task 5; the skip is the loop's now, for all four. Without it the
 # maintenance screen's OnKey would read a window drag as a press and disarm an armed confirm.
@@ -4112,24 +4143,34 @@ Assert-Equal 2 $draws 'the resize costs exactly one redraw and one more wait'
 # $sharedName / $fakeInfo are the fixtures the file already uses for Get-PickerFrame and
 # Get-MaintenanceFrame elsewhere in this file - reused here rather than a fifth ad hoc fixture.
 # $longProjects is defined once, above the project-frame section, and is 40 entries since Task 9.
-foreach ($w in 60, 80, 120, 200) {
-    $m = $null
-    $frames = @{
-        launch  = @(Get-LaunchFrame -State (New-LaunchState) -Width $w -Height 24 -RowMap ([ref]$m))
-        project = @(Get-ProjectFrame -Projects $longProjects -Index 0 -Cwd 'C:\Users\sample' -Width $w -Height 24 -RowMap ([ref]$m))
-        picker  = @(Get-PickerFrame -Sessions $sharedName -Index 0 -Width $w -Height 24 -RowMap ([ref]$m))
-        maint   = @(Get-MaintenanceFrame -Info $fakeInfo -Width $w -Height 24 -RowMap ([ref]$m))
+# D1: 50 is $script:MinWidth (the narrowest frame that is drawn at all), 100 is $script:TwoPaneWidth
+# and 101 is one past it - the two-pane branch and its boundary, which the old 60/80/120/200 sweep
+# stepped straight over. Both switches are swept because -Color adds escapes (measured after
+# Remove-AnsiColor, so a paint that changed the TEXT shows up here) and -Ascii swaps every glyph.
+# The project frame carries a -Notice, a -Filter and a non-default -Action: the title suffixes and
+# the radio row are the parts that grow, and the empty frame the old sweep used could not overflow.
+foreach ($w in 50, 60, 80, 100, 101, 120, 200) {
+  foreach ($wColor in $true, $false) {
+    foreach ($wAscii in $true, $false) {
+      $m = $null
+      $frames = @{
+          launch  = @(Get-LaunchFrame -State (New-LaunchState) -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii -RowMap ([ref]$m))
+          project = @(Get-ProjectFrame -Projects $longProjects -Index 0 -Cwd 'C:\Users\sample' -Filter 'project' -Notice 'path not found' -Action 'resume' -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii -RowMap ([ref]$m))
+          picker  = @(Get-PickerFrame -Sessions $sharedName -Index 0 -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii -RowMap ([ref]$m))
+          maint   = @(Get-MaintenanceFrame -Info $fakeInfo -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii -RowMap ([ref]$m))
+      }
+      foreach ($k in $frames.Keys) {
+          $over = @($frames[$k] | Where-Object { (Get-DisplayWidth -Text (Remove-AnsiColor $_)) -gt ($w - 1) })
+          Assert-Equal 0 $over.Count "$k frame at $w columns (color=$wColor ascii=$wAscii): no line reaches column $w (the last console column wraps)"
+      }
     }
-    foreach ($k in $frames.Keys) {
-        $over = @($frames[$k] | Where-Object { (Get-DisplayWidth -Text (Remove-AnsiColor $_)) -gt ($w - 1) })
-        Assert-Equal 0 $over.Count "$k frame at $w columns: no line reaches column $w (the last console column wraps)"
-    }
+  }
 }
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old free-path bullet) measures two cells, as Windows Terminal draws it'
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1267) { Write-Host "COULD NOT RUN: expected 1267 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1366) { Write-Host "COULD NOT RUN: expected 1366 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

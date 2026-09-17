@@ -641,6 +641,51 @@ $projDrawParams = @($projDrawAssign[0].Right.FindAll({ param($n) $n -is [System.
 Assert-Equal 1 $projDrawParams.Count 'the renderer declares a parameter block'
 Assert-Equal 7 @($projDrawParams[0].Parameters).Count 'with all seven parameters the loop passes - one short and the field silently draws "new" forever'
 
+# The picker's and the maintenance screen's renderers carry the same trap since their footers learned
+# to light the hovered button (spec D1): one parameter short and the extra lands in $args, so the
+# button under the mouse is simply never lit and nothing says so. Same AST shape, same positive
+# control (the assignment must be found at all).
+foreach ($r in @(
+    @{ Name = '$pdraw'; Count = 6; Forward = '-Hover\s+\$'; What = 'the session-picker renderer' }
+    @{ Name = '$mdraw'; Count = 3; Forward = '-Hover\s+\$'; What = 'the maintenance renderer' }
+)) {
+    $rAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        "$($n.Left.Extent.Text)" -eq $r.Name }, $true))
+    Assert-Equal 1 $rAssign.Count "claude-auto.ps1 builds $($r.What) in exactly one place"
+    Assert-True ("$($rAssign[0].Right.Extent.Text)" -match $r.Forward) "and $($r.What) forwards the hovered button to its frame builder"
+    $rParams = @($rAssign[0].Right.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParamBlockAst] }, $true))
+    Assert-Equal 1 $rParams.Count "$($r.What) declares a parameter block"
+    Assert-Equal $r.Count @($rParams[0].Parameters).Count "with all $($r.Count) parameters the loop passes - one short and the hover is silently dropped into `$args"
+}
+
+# --- R5 (Ui.ps1): a handler must never read the LOOP's own names ----------------------------------
+# A handler is a plain scriptblock run from INSIDE Invoke-ScreenLoop, so PowerShell resolves its
+# variables against THAT scope first: a handler reading $Draw, $State or $Wait gets the LOOP's
+# parameter rather than the screen's (`Draw = { param($s) & $Draw $s.State }` recurses into itself),
+# and every loop local is named loop* so it cannot answer a handler reaching for the screen's own.
+# Four comment blocks state the rule; this is what makes it FALSE when it stops being true.
+# AST, never a -Raw regex: the comments that describe the rule contain every one of these names.
+# Invoke-SessionPicker is in the list although its name does not end in Screen - it is one of the
+# four screens and carries the largest handler table in the file.
+$uiAst = [System.Management.Automation.Language.Parser]::ParseFile("$PSScriptRoot\..\claude-auto\Ui.ps1", [ref]$null, [ref]$null)
+$uiScreens = @($uiAst.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    ("$($n.Name)" -like 'Invoke-*Screen' -or "$($n.Name)" -eq 'Invoke-SessionPicker') }, $true))
+Assert-Equal 4 $uiScreens.Count 'Ui.ps1 has exactly four screen entry points, each a handler table around Invoke-ScreenLoop'
+$uiForbidden = @('Draw', 'State', 'Wait', 'GetWindowTop', 'Handlers', 'Silent', 'Screen', 'InputPending')
+$uiLeaks = @()
+foreach ($uiFn in $uiScreens) {
+    foreach ($uiSb in @($uiFn.FindAll({ param($n) $n -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }, $true))) {
+        foreach ($uiVar in @($uiSb.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true))) {
+            $uiName = "$($uiVar.VariablePath.UserPath)"
+            # -in and -like are case-insensitive here on purpose: PowerShell variable names are, so
+            # $draw and $Draw are the SAME variable and both get the loop's.
+            if ($uiName -in $uiForbidden -or $uiName -like 'loop*') { $uiLeaks += "$($uiFn.Name):`$$uiName" }
+        }
+    }
+}
+Assert-Equal '' (@($uiLeaks | Sort-Object -Unique) -join ', ') 'no scriptblock inside a screen reads one of Invoke-ScreenLoop own parameter or local names - a handler that did would silently get the LOOP value'
+
 # Nothing writes the chosen action onto the launch state, because nothing may remember it.
 $projActionWrite = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     "$($n.Left.Extent.Text)" -eq '$state.ProjectAction' }, $true))
@@ -739,7 +784,7 @@ $preselectAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.
 Assert-Equal 1 $preselectAssign.Count 'the preselected path is captured in exactly one place'
 Assert-True ($preselectAssign[0].Extent.StartOffset -lt $projScreenCall[0].Extent.StartOffset) 'and BEFORE the project screen runs, or it is just the final pick under another name'
 
-if ($script:Ran -ne 155) { Write-Host "COULD NOT RUN: expected 155 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 165) { Write-Host "COULD NOT RUN: expected 165 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
