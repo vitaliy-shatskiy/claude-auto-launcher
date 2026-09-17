@@ -4657,6 +4657,28 @@ $hlf2 = @(Get-LaunchFrame -State $hls -Width 120 -Height 24 -Color -RowMap ([ref
 Assert-Equal $true ($hlf2[$hAccountRow.Y].Contains($hb)) 'the hovered account tab carries the band'
 $hAccountCells = @(@($hlm.Rows | Where-Object { $_.Name -eq 'Account' })[0].Cells)
 Assert-Equal ($hAccountValues -join '|') (@($hAccountCells | ForEach-Object { $_.Value }) -join '|') 'and the click cells are the same columns banded or not - the markers cost no cells'
+# The strip's own row check, pinned on the STRIP LINE rather than on a marker count: the pointer is
+# on the REMOTE row while the value published under it is one of the strip's tabs, which is reachable
+# because rows share values on this roster ('default' sits on three of them, and the accounts' names
+# are ordinary strings a future row could offer too). Dropping the row test from the strip lights a
+# tab nobody is pointing at, and the frame-wide sweeps could not see it - every other line of the
+# frame is identical either way, so only these two lines answer the question.
+$asState = New-LaunchState
+$asMap = $null
+$asIdle = @(Get-LaunchFrame -State $asState -Width 120 -Height 24 -Color -RowMap ([ref]$asMap))
+$asAccount = @($asMap.Rows | Where-Object { $_.Name -eq 'Account' })[0]
+$asRemote = @($asMap.Rows | Where-Object { $_.Name -eq 'Remote' })[0]
+$asTab = "$(@($asAccount.Cells)[0].Value)"
+$asState.HoverRow = $asRemote.Index
+$asState.HoverValue = $asTab
+$asElsewhere = @(Get-LaunchFrame -State $asState -Width 120 -Height 24 -Color)
+# Counted rather than compared byte for byte: the difference is one invisible background escape, and
+# a failure that prints two lines looking alike says nothing.
+$asBands = { param([string]$Line) ([regex]::Matches($Line, [regex]::Escape($hb))).Count }
+Assert-Equal (& $asBands $asIdle[$asAccount.Y]) (& $asBands $asElsewhere[$asAccount.Y]) "the account strip carries no band while the pointer sits on the remote row, although the value under it is the tab '$asTab'"
+$asState.HoverRow = $asAccount.Index
+$asOnStrip = @(Get-LaunchFrame -State $asState -Width 120 -Height 24 -Color)
+Assert-True ((& $asBands $asOnStrip[$asAccount.Y]) -gt (& $asBands $asIdle[$asAccount.Y])) 'the control: with the pointer on the strip itself that same value does band its tab, so the line under test is one that CAN change'
 
 # End to end through the real loop: a move paints and selects nothing, the first click selects and
 # loads the preview, the second click on that row opens it. The real frame's FirstRowY is 1, not the
@@ -5054,6 +5076,27 @@ try {
     }
     Assert-Equal '' ($projMissWrong -join ',') 'every non-hover input of the project screen misses the memo and rebuilds exactly once'
     Assert-Equal 12 $projMissCases.Count 'and all twelve of those inputs were actually exercised'
+
+    # The FIELDS of the project signature, one by one - the table above changes the list's length,
+    # which any key notices. LastActivity is the one the age column is derived from and the only one
+    # a list can differ in while every other field matches: dropping it from the key left the memo
+    # serving a stale age with the whole suite green (adversarial review 17.09). The clone that
+    # changes NOTHING is the control: this signature is by VALUE, so it has to HIT, and without it a
+    # miss below would prove only that the objects are new.
+    $projClone = { param($Shift) @($memoProjects | ForEach-Object {
+        [pscustomobject]@{ Slug = $_.Slug; Path = $_.Path; Name = $_.Name; Worktree = $_.Worktree
+                           LastActivity = $_.LastActivity.AddHours($Shift) } }) }
+    $projSame = & $projClone 0
+    $projOlder = & $projClone -3
+    $script:FrameMemo = @{}
+    $projFirst = @(Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'new')
+    $script:memoBoxCalls = 0
+    $null = Get-ProjectFrame -Projects $projSame -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'new'
+    Assert-Equal 0 $script:memoBoxCalls 'the control: a rebuilt project list with every field identical HITS - this signature is by value, not by object identity'
+    $script:memoBoxCalls = 0
+    $projAged = @(Get-ProjectFrame -Projects $projOlder -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'new')
+    Assert-Equal 1 $script:memoBoxCalls 'while a list differing ONLY in LastActivity misses and rebuilds - at the same -Now, so nothing but that field can be what the key noticed'
+    Assert-True (($projFirst -join "`n") -cne ($projAged -join "`n")) 'and the frame it rebuilds really is a different one - the age column moved three hours'
 } finally {
     Set-Item -Path 'function:New-Box' -Value $memoOrigNewBox
 }
@@ -5099,7 +5142,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1633
+$script:Expected = 1638
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
