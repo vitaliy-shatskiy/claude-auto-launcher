@@ -202,6 +202,13 @@ Assert-Equal 0 (@($w | Where-Object { $_.Length -gt 10 }).Count) 'a short final 
 
 Assert-Equal 0 (Split-TextLines -Text '' -Width 10).Count 'empty text wraps to nothing'
 
+# `-split '\s+'` leaves an empty element behind for text that ENDS in whitespace (a leading one is
+# harmless - the line being built is still empty there). Left in, it appends ' ' + '' to the current
+# line, and the pane carries a trailing space nobody can see until it pushes the next word over.
+$w = @(Split-TextLines -Text 'a b  ' -Width 12)
+Assert-Equal 1 $w.Count 'trailing whitespace adds no wrapped line of its own'
+Assert-Equal 'a b' $w[0] 'and no trailing space either - the empty token the split leaves behind is skipped'
+
 # --- word wrap in cells ---------------------------------------------------------------------
 $w = @(Split-TextLines -Text ((($script:CJK * 8) + ' ') * 4) -Width 12)
 Assert-Equal 0 (@($w | Where-Object { (Get-DisplayWidth -Text $_) -gt 12 }).Count) 'no wrapped line exceeds the width in cells'
@@ -367,7 +374,8 @@ Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line th
 if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
 $script:Ellipsis = [string][char]0x2026
 
-if ($script:Ran -ne 126) { Write-Host "COULD NOT RUN: expected 126 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+$script:Expected = 128
+if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

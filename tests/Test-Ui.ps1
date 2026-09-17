@@ -4909,6 +4909,57 @@ try {
     $script:memoBoxCalls = 0
     $null = Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'resume'
     Assert-Equal 1 $script:memoBoxCalls 'a changed Action misses the project memo - it is not a hover input'
+
+    # The project screen's memo, pinned the same way the picker's is above. Until this block the
+    # only thing asserted about it was the one Action miss, so a memo that never stored, never hit,
+    # or hit on a key missing half its inputs would have passed the suite.
+    $script:FrameMemo = @{}
+    $script:memoBoxCalls = 0
+    $memoProjSeed = @(Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'new' -HoverRow -1 -HoverValue '' -Hover -1)
+    Assert-Equal 1 $script:memoBoxCalls 'the positive control: a cold project build calls New-Box exactly once, so a zero below means the memo answered'
+    $script:memoBoxCalls = 0
+    $memoProjMoved = @()
+    foreach ($st in $memoHoverStates[0..4]) {
+        $hv = $(if ($st.R -lt 0) { '' } else { $memoActions[$st.R % $memoActions.Count] })
+        $memoProjMoved += (@(Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'new' -HoverRow $st.R -HoverValue $hv -Hover $st.B) -join "`n")
+    }
+    Assert-Equal 0 $script:memoBoxCalls 'five hover changes on the project screen - row, action value and footer button - rebuild nothing'
+    Assert-Equal 5 (@($memoProjMoved | Select-Object -Unique).Count) 'and the five are five DIFFERENT frames, so the zero above is a hit and not a frozen picture'
+    Assert-True ($memoProjMoved[0] -ne ($memoProjSeed -join "`n")) 'a hover change really does change the project frame it returns'
+
+    # Every input that is NOT hover must miss, exactly once each. Driven off a table so a new input
+    # is one row here rather than a block nobody remembers to add.
+    $projBase = @{ Projects = $memoProjects; Index = 1; Cwd = 'C:\x'; Width = 198; Height = 24; Now = $now
+                   Color = $true; Ascii = $false; Action = 'new'; Filter = ''; Notice = ''; Typing = $false
+                   HoverRow = -1; HoverValue = ''; Hover = -1 }
+    $projMissCases = @(
+        @{ N = 'Index';    O = @{ Index = 2 } }
+        @{ N = 'Filter';   O = @{ Filter = 'project-name-3' } }
+        @{ N = 'Typing';   O = @{ Typing = $true } }
+        @{ N = 'Notice';   O = @{ Notice = 'path not found' } }
+        @{ N = 'Action';   O = @{ Action = 'resume' } }
+        @{ N = 'Cwd';      O = @{ Cwd = 'C:\y' } }
+        @{ N = 'Width';    O = @{ Width = 120 } }
+        @{ N = 'Height';   O = @{ Height = 30 } }
+        @{ N = 'Color';    O = @{ Color = $false } }
+        @{ N = 'Ascii';    O = @{ Ascii = $true } }
+        @{ N = 'minute';   O = @{ Now = $now.AddMinutes(1) } }
+        @{ N = 'projects'; O = @{ Projects = @($memoProjects) + [pscustomobject]@{ Slug = 'memo9'
+                                             Path = 'C:\Users\sample-user\Projects\project-name-9'; Name = 'project-name-9'
+                                             Worktree = $null; LastActivity = $now.AddHours(-9) } } }
+    )
+    $projMissWrong = @()
+    foreach ($c in $projMissCases) {
+        $script:FrameMemo = @{}
+        $null = Get-ProjectFrame @projBase
+        $projArgs = $projBase.Clone()
+        foreach ($k in $c.O.Keys) { $projArgs[$k] = $c.O[$k] }
+        $script:memoBoxCalls = 0
+        $null = Get-ProjectFrame @projArgs
+        if ($script:memoBoxCalls -ne 1) { $projMissWrong += "$($c.N)=$script:memoBoxCalls" }
+    }
+    Assert-Equal '' ($projMissWrong -join ',') 'every non-hover input of the project screen misses the memo and rebuilds exactly once'
+    Assert-Equal 12 $projMissCases.Count 'and all twelve of those inputs were actually exercised'
 } finally {
     Set-Item -Path 'function:New-Box' -Value $memoOrigNewBox
 }
@@ -4954,7 +5005,8 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1620) { Write-Host "COULD NOT RUN: expected 1620 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+$script:Expected = 1626
+if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
