@@ -4375,6 +4375,90 @@ $null = Invoke-ScreenLoop -Screen 'probe' -State $dedupState2 -Wait $w -GetWindo
 Assert-Equal 2 $dedupState2.Index 'a physical double click on an unselected row selects it'
 Assert-Equal 1 $acts 'and then activates it - once'
 
+# --- Task 2 (spec D10): the hover band, one marker pair through all four frames ---------------
+# Read off the REAL frames, at the coordinates their own row maps give - the band is only useful if
+# it lands on the row the mouse is over, and a fixture map would prove nothing about that.
+$hb = $script:C.ButtonBg
+$uniCursor = [string](Get-Glyphs).Cursor
+
+$hm = $null
+$hf = @(Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 120 -Height 24 -Color -HoverRow 2 -RowMap ([ref]$hm))
+Assert-Equal $true ($hf[$hm.FirstRowY + 2].Contains($hb)) 'the hovered picker row carries the band'
+Assert-Equal $false ($hf[$hm.FirstRowY + 1].Contains($hb)) 'its neighbours do not'
+Assert-Equal $true ($hf[$hm.FirstRowY + 0].Contains($uniCursor)) 'the selected row keeps its cursor'
+$hf0 = @(Get-PickerFrame -Sessions $mouseSessions -Index 2 -Width 120 -Height 24 -Color -HoverRow 2 -RowMap ([ref]$hm))
+Assert-Equal $true ($hf0[$hm.FirstRowY + 2].Contains($hb) -and $hf0[$hm.FirstRowY + 2].Contains($uniCursor)) 'hover on the selected row = band + cursor (D10)'
+$hplain = @(Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 120 -Height 24 -HoverRow 2)
+Assert-Equal 0 @($hplain | Where-Object { $_.IndexOf([char]4) -ge 0 -or $_.IndexOf([char]5) -ge 0 }).Count 'no marker reaches a plain frame'
+# The narrow branch builds its rows in a second loop; without its own pin a band there could be
+# missing on every terminal under 100 columns and no assertion above would notice.
+$hmn = $null
+$hfn = @(Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 80 -Height 24 -Color -HoverRow 2 -RowMap ([ref]$hmn))
+Assert-Equal $true ($hfn[$hmn.FirstRowY + 2].Contains($hb)) 'and the single-column picker bands its hovered row too'
+
+# The project screen: a list row, the free-path row (which must keep its bullet UNDER the band) and
+# the action field's own value. $projs6 is the two-project fixture this file already uses, so all
+# four rows (cwd, two projects, enter a path) are visible in one 24-row frame.
+$hpm = $null
+$hpf = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 120 -Height 24 -Color -HoverRow 1 -RowMap ([ref]$hpm))
+Assert-Equal $true ($hpf[$hpm.RowYs[1]].Contains($hb)) 'the hovered project row carries the band'
+Assert-Equal $false ($hpf[$hpm.RowYs[2]].Contains($hb)) 'its neighbours do not'
+Assert-Equal $true ($hpf[$hpm.RowYs[0]].Contains($uniCursor) -and -not $hpf[$hpm.RowYs[0]].Contains($hb)) 'and the cursor stays on the selected row, unbanded'
+$hpf2 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 120 -Height 24 -Color -HoverRow 3 -RowMap ([ref]$hpm))
+Assert-Equal $true ($hpf2[$hpm.RowYs[3]].Contains($hb)) 'the hovered free-path row carries the band'
+Assert-Equal $true ($hpf2[$hpm.RowYs[3]].Contains($script:C.Magenta)) 'and keeps its magenta bullet under it - the anchor steps over the open marker'
+# The band on an action VALUE, read back out of the painted line: everything between the background
+# escape and the first Reset after it is what the band covers.
+$hpf3 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 120 -Height 24 -Color -HoverValue 'resume' -RowMap ([ref]$hpm))
+$hActionLine = $hpf3[$hpm.Action.Y]
+$hBandText = if ($hActionLine -match ([regex]::Escape($hb) + '(.*?)' + [regex]::Escape($script:C.Reset))) { $Matches[1] } else { '' }
+Assert-Equal $true ($hBandText -match 'resume') 'the hovered action value carries the band'
+Assert-Equal $false ($hBandText -match 'new') 'and the value the field actually reads does not'
+Assert-Equal $true ((Remove-AnsiColor $hActionLine) -match '\[new\]') 'hovering a value never changes the one the field reads - the brackets stay on it (D8)'
+
+# The launch screen: an option value on a radio row, and a tab in the account strip. Both are cells
+# on a Rows[] map, so both need the ROW as well as the value - 'default' sits on three rows at once.
+$hls = New-LaunchState
+$hlm = $null
+$null = Get-LaunchFrame -State $hls -Width 120 -Height 24 -Color -RowMap ([ref]$hlm)
+$hModelRow = @($hlm.Rows | Where-Object { $_.Name -eq 'Model' })[0]
+$hAccountRow = @($hlm.Rows | Where-Object { $_.Name -eq 'Account' })[0]
+$hModelBefore = "$($hls.Model)"
+$hls.HoverRow = $hModelRow.Index; $hls.HoverValue = 'fable'
+$hlf = @(Get-LaunchFrame -State $hls -Width 120 -Height 24 -Color -RowMap ([ref]$hlm))
+Assert-Equal $true ($hlf[$hModelRow.Y].Contains($hb)) 'the hovered launch option value carries the band'
+Assert-Equal $false ($hlf[$hAccountRow.Y].Contains($hb)) 'and no other row does - a value is banded only on the row under the pointer'
+Assert-Equal $hModelBefore "$($hls.Model)" 'hovering a launch value never changes it (D8)'
+$hAccountValues = @($hlm.Rows | Where-Object { $_.Name -eq 'Account' } | ForEach-Object { $_.Cells } | ForEach-Object { $_.Value })
+$hls.HoverRow = $hAccountRow.Index; $hls.HoverValue = "$($hAccountValues[-1])"
+$hlf2 = @(Get-LaunchFrame -State $hls -Width 120 -Height 24 -Color -RowMap ([ref]$hlm))
+Assert-Equal $true ($hlf2[$hAccountRow.Y].Contains($hb)) 'the hovered account tab carries the band'
+$hAccountCells = @(@($hlm.Rows | Where-Object { $_.Name -eq 'Account' })[0].Cells)
+Assert-Equal ($hAccountValues -join '|') (@($hAccountCells | ForEach-Object { $_.Value }) -join '|') 'and the click cells are the same columns banded or not - the markers cost no cells'
+
+# End to end through the real loop: a move paints and selects nothing, the first click selects and
+# loads the preview, the second click on that row opens it. The real frame's FirstRowY is 1, not the
+# hand-built fixture's 4, so the events are aimed off the map the renderer itself hands back.
+$script:hFrames = @(); $script:hIdx = @()
+$hoverDraw = {
+    param($s, $i, $f, $sc, $pn, $hv, $hr)
+    $mm = $null
+    $script:hFrames += , @(Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -Hover $hv -HoverRow $hr -Width 120 -Height 24 -Color -RowMap ([ref]$mm))
+    $script:hIdx += [int]$i
+    $mm
+}
+$hProbe = $null
+$null = Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 120 -Height 24 -Color -RowMap ([ref]$hProbe)
+$hRowY = $hProbe.FirstRowY + 2
+$w = New-EventReader @((New-MouseEvent -Y $hRowY -Move), (New-MouseEvent -Y $hRowY -Left), (New-MouseEvent -Y $hRowY -Left))
+$hPicked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $hoverDraw -Wait $w -GetWindowTop { 0 }
+Assert-Equal 0 $script:hIdx[1] 'a move over a picker row leaves the cursor where it was (D8)'
+Assert-Equal $true ($script:hFrames[1][$hRowY].Contains($hb)) 'and paints the band on the row it is over'
+Assert-Equal 2 $script:hIdx[2] 'the first click selects that row'
+Assert-Equal $true ((@($script:hFrames[2]) -join "`n") -match 'u3') 'and only then does the preview name its session'
+Assert-Equal 's3' $hPicked.Session.SessionId 'the second click on the selected row opens it'
+Assert-Equal $false $hPicked.Fork 'and opens it rather than forking it'
+
 # --- Task 7 (spec D4): every frame fits - no rendered line reaches the last console column -----
 # $sharedName / $fakeInfo are the fixtures the file already uses for Get-PickerFrame and
 # Get-MaintenanceFrame elsewhere in this file - reused here rather than a fifth ad hoc fixture.
@@ -4402,11 +4486,44 @@ foreach ($w in 50, 60, 80, 100, 101, 120, 200) {
     }
   }
 }
+# Spec D10's own half of the same contract: a HOVERED frame is the plain frame plus escapes and
+# nothing else. Both halves matter - the markers cost no cells, so a band must not push a line past
+# the last column, and Add-HoverSpanColor must never leave a marker or a character behind. The three
+# hoverable frames only, at D1's widths plus the owner's 198.
+foreach ($w in 50, 100, 101, 198) {
+  foreach ($wColor in $true, $false) {
+    foreach ($wAscii in $true, $false) {
+      $hs = New-LaunchState
+      $hsm = $null
+      $null = Get-LaunchFrame -State $hs -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii -RowMap ([ref]$hsm)
+      $hsRow = @($hsm.Rows | Where-Object { $_.Name -eq 'Model' })[0]
+      $plainSet = @{
+          launch  = @(Get-LaunchFrame -State $hs -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
+          project = @(Get-ProjectFrame -Projects $longProjects -Index 0 -Cwd 'C:\Users\sample' -Action 'resume' -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
+          picker  = @(Get-PickerFrame -Sessions $sharedName -Index 0 -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
+      }
+      $hs.HoverRow = $hsRow.Index; $hs.HoverValue = 'fable'
+      $hoverSet = @{
+          launch  = @(Get-LaunchFrame -State $hs -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
+          project = @(Get-ProjectFrame -Projects $longProjects -Index 0 -Cwd 'C:\Users\sample' -Action 'resume' -HoverRow 1 -HoverValue 'resume' -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
+          picker  = @(Get-PickerFrame -Sessions $sharedName -Index 0 -HoverRow 0 -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
+      }
+      foreach ($k in $hoverSet.Keys) {
+          $over = @($hoverSet[$k] | Where-Object { (Get-DisplayWidth -Text (Remove-AnsiColor $_)) -gt ($w - 1) })
+          Assert-Equal 0 $over.Count "hovered $k frame at $w columns (color=$wColor ascii=$wAscii): no line reaches column $w"
+          $differs = @(0..([Math]::Max(0, $hoverSet[$k].Count - 1)) | Where-Object {
+              (Remove-AnsiColor $hoverSet[$k][$_]) -ne (Remove-AnsiColor $plainSet[$k][$_]) })
+          Assert-Equal 0 $differs.Count "hovered $k frame at $w columns (color=$wColor ascii=$wAscii): the band changes no text, only colour"
+      }
+    }
+  }
+}
+
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old free-path bullet) measures two cells, as Windows Terminal draws it'
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1412) { Write-Host "COULD NOT RUN: expected 1412 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1533) { Write-Host "COULD NOT RUN: expected 1533 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

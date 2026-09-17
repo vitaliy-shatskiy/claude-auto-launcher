@@ -58,6 +58,55 @@ function Add-DimSpanColor {
     return ($out -replace $close, $script:C.Reset)
 }
 
+# Hover-band markers (spec D10). Same contract as the dim-span pair above: zero cells, wrapped by a
+# builder around already-plain text, resolved once per line by the painter below. A SECOND pair
+# rather than a reuse of the first, because the two are resolved at opposite ends of the pass:
+# the dim spans go first, before the pattern painters hunt for glyphs and words, and the band goes
+# LAST - only then are the Resets those painters wove into the row there to be painted over, and a
+# band that did not re-assert its background behind each of them would end at the first one.
+$script:HoverOpen = [char]4
+$script:HoverClose = [char]5
+
+function Add-HoverSpan {
+    # Marks a finished piece of PLAIN text as hovered. Wrapped after the caller's own width
+    # arithmetic, never before it - the markers cost no cells, and that only holds if nothing
+    # measured them as text (New-ListRow's dim markers carry the same rule).
+    param([string]$Text)
+    return ([string]$script:HoverOpen + $Text + [string]$script:HoverClose)
+}
+
+function Add-HoverSpanColor {
+    # Resolves the hover markers: to a background band with colour on, to nothing with it off. Like
+    # Add-DimSpanColor, EVERY body line goes through it either way - a marker is an internal signal
+    # and must never reach a terminal, a check reference or anything that stores what was drawn.
+    #
+    # An UNPAIRED open marker is closed at the end of the line for the reason the dim painter records:
+    # markers cost no cells, so Limit-Line spends the whole budget on visible text and can cut a row
+    # between an open marker and its close - and a background with no Reset paints the rest of the row.
+    param([string]$Line, [switch]$Enabled)
+    if (-not $Line) { return $Line }
+    $open = [string]$script:HoverOpen
+    $close = [string]$script:HoverClose
+    # Every body line of every frame passes here; an unmarked one costs two IndexOf and leaves with
+    # the identical string it arrived as.
+    if ($Line.IndexOf($open) -lt 0 -and $Line.IndexOf($close) -lt 0) { return $Line }
+    if (-not $Enabled) { return ($Line -replace "[$open$close]", '') }
+    # A MatchEvaluator rather than a replacement string: the band has to rewrite what it wraps (every
+    # inner Reset becomes Reset + background again), which no '$1' replacement can express. Reads
+    # $script:C directly, exactly as Add-LaunchColor's own evaluators do - so it needs no closure.
+    # .Replace, not -replace: the substitution text is an escape sequence, and a regex replacement
+    # would read any '$' in it as a group reference.
+    $paint = {
+        param($m)
+        $bg = $script:C.ButtonBg
+        $rs = $script:C.Reset
+        return ($bg + $m.Groups[1].Value.Replace($rs, $rs + $bg) + $rs)
+    }
+    $out = [regex]::Replace($Line, "$open([^$open$close]*)$close", $paint)
+    if ($out.Contains($open)) { $out = [regex]::Replace($out + $close, "$open([^$open$close]*)$close", $paint) }
+    return ($out -replace $close, '')
+}
+
 function Test-ColorSupported {
     # NO_COLOR is the de facto opt-out (no-color.org) and a dumb terminal cannot render escapes.
     if ($env:NO_COLOR) { return $false }

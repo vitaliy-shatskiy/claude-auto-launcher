@@ -642,22 +642,28 @@ $projDrawAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.A
 Assert-Equal 1 $projDrawAssign.Count 'and builds the project renderer in exactly one place'
 $projDrawText = "$($projDrawAssign[0].Right.Extent.Text)"
 Assert-True ($projDrawText -match '-Action\s+\$') 'the renderer forwards the action field to Get-ProjectFrame'
+Assert-True ($projDrawText -match '-HoverRow\s+\$') 'and the hovered row (spec D10)'
+Assert-True ($projDrawText -match '-HoverValue\s+\$') 'and the hovered action value - the band is drawn from those two alone'
 $projDrawParams = @($projDrawAssign[0].Right.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParamBlockAst] }, $true))
 Assert-Equal 1 $projDrawParams.Count 'the renderer declares a parameter block'
-Assert-Equal 7 @($projDrawParams[0].Parameters).Count 'with all seven parameters the loop passes - one short and the field silently draws "new" forever'
+Assert-Equal 9 @($projDrawParams[0].Parameters).Count 'with all nine parameters the loop passes - one short and the field silently draws "new" forever, or no row is ever banded'
 
 # The picker's and the maintenance screen's renderers carry the same trap since their footers learned
 # to light the hovered button (spec D1): one parameter short and the extra lands in $args, so the
 # button under the mouse is simply never lit and nothing says so. Same AST shape, same positive
 # control (the assignment must be found at all).
 foreach ($r in @(
-    @{ Name = '$pdraw'; Count = 6; Forward = '-Hover\s+\$'; What = 'the session-picker renderer' }
-    @{ Name = '$mdraw'; Count = 3; Forward = '-Hover\s+\$'; What = 'the maintenance renderer' }
+    @{ Name = '$pdraw'; Count = 7; What = 'the session-picker renderer'
+       Forwards = @(@{ P = '-Hover\s+\$'; Why = 'the hovered button' }, @{ P = '-HoverRow\s+\$'; Why = 'the hovered row (spec D10)' }) }
+    @{ Name = '$mdraw'; Count = 3; What = 'the maintenance renderer'
+       Forwards = @(@{ P = '-Hover\s+\$'; Why = 'the hovered button' }) }
 )) {
     $rAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
         "$($n.Left.Extent.Text)" -eq $r.Name }, $true))
     Assert-Equal 1 $rAssign.Count "claude-auto.ps1 builds $($r.What) in exactly one place"
-    Assert-True ("$($rAssign[0].Right.Extent.Text)" -match $r.Forward) "and $($r.What) forwards the hovered button to its frame builder"
+    foreach ($fwd in $r.Forwards) {
+        Assert-True ("$($rAssign[0].Right.Extent.Text)" -match $fwd.P) "and $($r.What) forwards $($fwd.Why) to its frame builder"
+    }
     $rParams = @($rAssign[0].Right.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParamBlockAst] }, $true))
     Assert-Equal 1 $rParams.Count "$($r.What) declares a parameter block"
     Assert-Equal $r.Count @($rParams[0].Parameters).Count "with all $($r.Count) parameters the loop passes - one short and the hover is silently dropped into `$args"
@@ -789,7 +795,7 @@ $preselectAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.
 Assert-Equal 1 $preselectAssign.Count 'the preselected path is captured in exactly one place'
 Assert-True ($preselectAssign[0].Extent.StartOffset -lt $projScreenCall[0].Extent.StartOffset) 'and BEFORE the project screen runs, or it is just the final pick under another name'
 
-if ($script:Ran -ne 165) { Write-Host "COULD NOT RUN: expected 165 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 168) { Write-Host "COULD NOT RUN: expected 168 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

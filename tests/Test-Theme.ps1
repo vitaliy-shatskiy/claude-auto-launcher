@@ -130,7 +130,21 @@ Assert-Equal 2 ([int][char]$script:DimClose) 'and its close marker is U+0002'
 Assert-Equal ($script:C.Dim + 'x' + $script:C.Reset) (Add-DimSpanColor -Line ([string]$script:DimOpen + 'x' + [string]$script:DimClose) -Enabled) 'with colour on, a span becomes Dim ... Reset'
 Assert-Equal 'x' (Add-DimSpanColor -Line ([string]$script:DimOpen + 'x' + [string]$script:DimClose)) 'and with colour off it is stripped to the bare text'
 
-if ($script:Ran -ne 72) { Write-Host "COULD NOT RUN: expected 72 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# Hover-band markers (spec D10). Same C0 contract as the dim pair above - zero cells, wrapped on
+# plain text by a builder, resolved once per line - with one difference that is the whole point of a
+# second pair: this one is resolved LAST, after the pattern painters, so the band can re-assert its
+# background behind every Reset they wove into the row. A single pair could not: the dim spans have
+# to be resolved first, before those same painters go looking for glyphs and words.
+Assert-Equal 4 ([int][char]$script:HoverOpen) 'the hover-band open marker is U+0004'
+Assert-Equal 5 ([int][char]$script:HoverClose) 'and its close marker is U+0005'
+Assert-Equal 0 (Get-DisplayWidth -Text ([string]$script:HoverOpen + [string]$script:HoverClose)) 'both cost zero cells, so a banded row lays out by the same numbers as a plain one'
+$band = Add-HoverSpanColor -Line ("ab" + (Add-HoverSpan -Text ("cd" + $script:C.Dim + "ee" + $script:C.Reset + "f")) + "g") -Enabled
+Assert-Equal ("ab" + $script:C.ButtonBg + "cd" + $script:C.Dim + "ee" + $script:C.Reset + $script:C.ButtonBg + "f" + $script:C.Reset + "g") $band 'the band re-asserts its background after every inner Reset'
+Assert-Equal 'abcdeefg' (Remove-AnsiColor -Text $band) 'painting never changes the text'
+Assert-Equal 'abcdf' (Add-HoverSpanColor -Line ("ab" + (Add-HoverSpan -Text 'cd') + "f")) 'colour off strips the markers'
+Assert-Equal ($script:C.ButtonBg + 'xy' + $script:C.Reset) (Add-HoverSpanColor -Line ([string]$script:HoverOpen + 'xy') -Enabled) 'an unpaired open marker is closed at the end of the line'
+
+if ($script:Ran -ne 79) { Write-Host "COULD NOT RUN: expected 79 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

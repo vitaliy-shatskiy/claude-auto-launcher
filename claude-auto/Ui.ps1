@@ -590,10 +590,13 @@ function Invoke-ProjectScreen {
         # `claude`.
         [string]$InitialAction = 'new',
         [Parameter(Mandatory)][scriptblock]$ReadKey,
+        # The hover pair is APPENDED (spec D1's rule for every renderer seam): a caller's Draw that
+        # is two parameters short does not fail - the extras land in $args - it simply never paints
+        # a band, which is what this screen did before spec D10.
         [scriptblock]$Draw = {
-            param($p, $i, $f, $t, $h, $n, $a)
+            param($p, $i, $f, $t, $h, $n, $a, $hr, $hv)
             $map = $null
-            Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Action $a -Cwd $Cwd -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
+            Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Action $a -Cwd $Cwd -HoverRow $hr -HoverValue $hv -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
             $map
         },
         [scriptblock]$Wait = { & $ReadKey },
@@ -726,7 +729,7 @@ function Invoke-ProjectScreen {
     $st = @{ Index = $startIndex; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false
              Filter = ''; Notice = ''; Action = (Step-ProjectAction -Action $InitialAction -Delta 0); Rows = @() }
     return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
-        -Draw { param($s) & $paintProject $projectList $s.Index $s.Filter $s.Typing $s.Hover $s.Notice $s.Action } -Handlers @{
+        -Draw { param($s) & $paintProject $projectList $s.Index $s.Filter $s.Typing $s.Hover $s.Notice $s.Action $s.HoverRow $s.HoverValue } -Handlers @{
         # The filter decides the rows, so they are rebuilt before every frame and the cursor is
         # clamped to whatever survived it.
         Before = {
@@ -925,13 +928,13 @@ function Invoke-SessionPicker {
         # $Draw RETURNS the row map when it can - where the session rows landed on screen - so a
         # click can be turned into an index by the same arithmetic that drew them. A Draw that
         # returns nothing (every existing test injects one) simply leaves the mouse inert.
-        # SIX parameters since the picker footer learned to light its hovered button (spec D1): a
-        # renderer one short does not fail - the extra argument lands in $args - it simply never
-        # lights anything, which is what the pre-D1 screen did.
+        # SEVEN parameters since the rows learned a hover band on top of the footer's lit button
+        # (spec D1, then D10): a renderer one short does not fail - the extra argument lands in
+        # $args - it simply never paints, which is what the screen did before each of them.
         [scriptblock]$Draw = {
-            param($s, $i, $f, $sc, $pn, $hv)
+            param($s, $i, $f, $sc, $pn, $hv, $hr)
             $map = $null
-            Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -Hover $hv -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
+            Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -Hover $hv -HoverRow $hr -RowMap ([ref]$map) | ForEach-Object { Write-Host $_ }
             $map
         },
         [scriptblock]$Wait = { & $ReadKey },
@@ -1135,7 +1138,7 @@ function Invoke-SessionPicker {
         $handlers.Tab = { param($s) $s.Scope = $(if ($s.Scope -eq 'project') { 'all' } else { 'project' }); $s.Index = 0; @{ Log = @{ scope = $s.Scope } } }
     }
     return (Invoke-ScreenLoop -Screen 'picker' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
-        -Draw { param($s) & $paintPicker $s.Pool $s.Index $s.Filter $s.Scope $pickerTitle $s.Hover } -Handlers $handlers)
+        -Draw { param($s) & $paintPicker $s.Pool $s.Index $s.Filter $s.Scope $pickerTitle $s.Hover $s.HoverRow } -Handlers $handlers)
 }
 
 function ConvertTo-StatusText {

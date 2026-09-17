@@ -508,8 +508,15 @@ function Complete-PickerFrame {
             # escape sequence - and on EVERY body line, coloured or not: with colour off this is
             # what strips the markers, so nothing internal reaches a terminal or a check reference.
             $l = Add-DimSpanColor -Line $l -Enabled:$Color
-            if ($Body -eq 'launch') { $painted += Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
-            else { $painted += Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
+            $l = if ($Body -eq 'launch') { Add-LaunchColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
+                 else { Add-PickerColor -Line $l -Enabled:$Color -Glyphs $Glyphs }
+            # The hover band is resolved LAST (spec D10), after both painters above: it paints a
+            # BACKGROUND across text they have already tinted, and every Reset they left inside the
+            # band would end it - so the band has to be the pass that sees them and paints over
+            # each one. Unmarked lines leave it untouched, which is every line of every frame that
+            # has nothing hovered. The footer path above never reaches here: footers carry no
+            # hover markers, they are lit by (Key, Char) through Add-HintColor.
+            $painted += Add-HoverSpanColor -Line $l -Enabled:$Color
         }
     }
     return @($painted)
@@ -572,6 +579,11 @@ function Get-LaunchFrame {
     $body = @()
     $rowHits = @()
     $limit = $Limits[$State.Account]
+    # What the mouse is over (spec D8/D10), read off the state exactly as $State.Hover already is -
+    # and defaulted the same way, because a hand-built fixture carries neither field and hovers
+    # nothing rather than row 0.
+    $hoverRow = if ($null -ne $State.HoverRow) { [int]$State.HoverRow } else { -1 }
+    $hoverValue = "$($State.HoverValue)"
     for ($i = 0; $i -lt $script:Rows.Count; $i++) {
         $row = $script:Rows[$i]
         $current = $State.($row.Name)
@@ -601,7 +613,14 @@ function Get-LaunchFrame {
             # Column spans for each tab, measured off the same strings that were just joined. A click
             # inside one of these means "this account", which is what makes the strip a menu rather
             # than a picture of one.
-            $line = $prefix + $labelPart + ($cells -join $joiner)
+            # Drawn from a marked copy, measured from the plain one: the click cells are the reason
+            # this strip is a menu, and they must be the identical columns whether or not the mouse
+            # happens to be over one of them (the markers are zero cells, so the two agree anyway -
+            # this keeps them agreeing by construction rather than by arithmetic).
+            $drawCells = @(for ($ci = 0; $ci -lt $cells.Count; $ci++) {
+                if ($hoverRow -eq $i -and "$($row.Values[$ci])" -eq $hoverValue) { Add-HoverSpan -Text $cells[$ci] } else { $cells[$ci] }
+            })
+            $line = $prefix + $labelPart + ($drawCells -join $joiner)
             $cellHits = @(Measure-CellSpans -Pieces $cells -Joiner $joiner -Values @($row.Values) -StartX (Get-DisplayWidth -Text ($prefix + $labelPart)))
         } else {
             # Every other row is a radio row, drawn by the builder the project screen's action field
@@ -610,7 +629,11 @@ function Get-LaunchFrame {
             foreach ($v in $row.Values) {
                 $optionLabels[$v] = Get-RowOptionText -Row $row -Key $v -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel
             }
-            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values @($row.Values) -Current $current -Glyphs $g -Labels $optionLabels -MaxWidth $inner
+            # The band goes on the hovered VALUE, and only while the pointer is on this row: two rows
+            # can offer the same value ('default' is on three of them), and matching on the value
+            # alone would light every one of them at once.
+            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values @($row.Values) -Current $current -Glyphs $g -Labels $optionLabels -MaxWidth $inner `
+                                  -Hover $(if ($hoverRow -eq $i) { $hoverValue } else { '' })
             $line = $radio.Text
             $cellHits = @($radio.Cells)
         }
@@ -723,8 +746,12 @@ function New-ListRow {
     # -PathTail (spec D4): the tail is a PATH, so cut it in the MIDDLE and keep its leaf. Only the
     # caller knows which it is - the project rows pass paths, the picker's rows pass a conversation
     # snippet, and middle-truncating a snippet cuts away the one half of it anybody reads.
+    # -Hover (spec D10): the row is the one under the pointer, so the WHOLE row - mark column
+    # included - carries the band. Wrapped after the arithmetic like the dim markers below, and
+    # before the mark rather than after it, which is what keeps the free-path row's bullet anchor
+    # in Add-PickerColor able to find the mark column at all.
     param([string]$Mark = '   ', [string]$Label = '', [string]$Tail = '', [string]$Age = '', [int]$Width, [switch]$Ascii, [switch]$TrailingSpace,
-          [switch]$DimTail, [switch]$DimAge, [switch]$PathTail)
+          [switch]$DimTail, [switch]$DimAge, [switch]$PathTail, [switch]$Hover)
     $ageW = Get-DisplayWidth -Text $Age
     $ageCol = if ($Age) { if ($TrailingSpace) { $Age + ' ' } else { ' ' + $Age } } else { '' }
     # Review fix round 1 (C1): the reserve here is mark + a 1-cell minimum pad + the age's OWN
@@ -747,7 +774,9 @@ function New-ListRow {
     # column, so a marked row and an unmarked one are laid out by the identical numbers.
     if ($DimTail -and $tail) { $tail = [string]$script:DimOpen + $tail + [string]$script:DimClose }
     if ($DimAge -and $ageCol) { $ageCol = [string]$script:DimOpen + $ageCol + [string]$script:DimClose }
-    return $Mark + $label + (' ' * $pad) + $tail + $ageCol
+    $row = $Mark + $label + (' ' * $pad) + $tail + $ageCol
+    if ($Hover) { $row = Add-HoverSpan -Text $row }
+    return $row
 }
 
 function Measure-CellSpans {
@@ -781,8 +810,13 @@ function New-RadioRow {
     # -MaxWidth: when the full form does not fit, the COMPACT form drops the On/Off glyphs and keeps
     # only the brackets ('label  a  [b]  c'); the cells still cover each value. Measured in cells
     # (Get-DisplayWidth), never .Length - Theme's rule.
+    # -Hover (spec D10): the VALUE under the pointer, '' for none. Only that value's piece gets the
+    # band - a row is a menu of several options and banding all of it would say the whole row is
+    # under the mouse. The spans below are measured on the marked pieces, which is safe because the
+    # markers are zero cells (Theme.ps1): the click cells land exactly where they land unhovered.
     param([string]$Prefix = '   ', [string]$Label, [Parameter(Mandatory)][string[]]$Values, [string]$Current,
-          [Parameter(Mandatory)][hashtable]$Glyphs, [hashtable]$Labels = @{}, [int]$LabelWidth = 12, [int]$MaxWidth = 0)
+          [Parameter(Mandatory)][hashtable]$Glyphs, [hashtable]$Labels = @{}, [int]$LabelWidth = 12, [int]$MaxWidth = 0,
+          [string]$Hover = '')
     $labelPart = $Label.PadRight($LabelWidth)
     # ONE resolver for the text a value is drawn as (C3): the compact-form gate below asked the same
     # question in its own copy, and the two answering differently is how a row would be laid out from
@@ -792,9 +826,15 @@ function New-RadioRow {
         param([bool]$Compact)
         $pieces = @(foreach ($v in $Values) {
             $text = & $labelOf $v
-            if ($Compact) { if ($v -eq $Current) { "[$text]" } else { "$text" } }
-            elseif ($v -eq $Current) { "$($Glyphs.On) [$text]" }
-            else { "$($Glyphs.Off) $text" }
+            $piece =
+                if ($Compact) { if ($v -eq $Current) { "[$text]" } else { "$text" } }
+                elseif ($v -eq $Current) { "$($Glyphs.On) [$text]" }
+                else { "$($Glyphs.Off) $text" }
+            # The band goes over the piece as drawn, so the CURRENT value keeps its brackets and its
+            # On glyph under it (spec D10) - hovering the selected value must not redraw it as an
+            # unselected one, or the mouse would look like it had changed the setting.
+            if ($Hover -and $v -eq $Hover) { $piece = Add-HoverSpan -Text $piece }
+            $piece
         })
         # Spans off the pieces themselves, not off the joined line: the value a click means is the
         # piece it lands in, and re-finding it in the finished string would match the wrong one the
@@ -846,6 +886,13 @@ function Get-ProjectFrame {
         # takes no focus parameter. A value outside Get-ProjectActions renders as the first one
         # rather than being printed raw.
         [string]$Action = 'new',
+        # What the mouse is over (spec D10), from the loop's own state: -HoverRow is a LIST index
+        # (the same index -Index is, not a screen line), -1 for none; -HoverValue is the action
+        # value under the pointer, '' for none. Hover PAINTS only - the cursor, the action and the
+        # preview are wherever a click or a key put them (spec D8), so neither of these is ever read
+        # as a selection here.
+        [int]$HoverRow = -1,
+        [string]$HoverValue = '',
         [ref]$RowMap
     )
     if ($RowMap) { $RowMap.Value = [pscustomobject]@{ FirstRowY = 0; RowCount = 0; Start = 0 } }
@@ -925,11 +972,11 @@ function Get-ProjectFrame {
             $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
             $name = $r.Item.Name
             if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
-            $body += New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail
+            $body += New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail -Hover:($i -eq $HoverRow)
         } elseif ($r.Kind -eq 'cwd') {
             # The reader must see which directory the row means - rendered like a project row's
             # name+path columns, minus the age no pinned row has a real LastActivity for.
-            $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail -PathTail
+            $body += New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail -PathTail -Hover:($i -eq $HoverRow)
             # And the blank line UNDER it: the current directory is a group of its own, so the eye
             # stops there instead of reading it as the first entry of the registry (spec D6). Not
             # when the next visible row is the free-path row - it brings its own separator, and both
@@ -937,7 +984,12 @@ function Get-ProjectFrame {
             # nothing, and with an empty registry).
             if ($i -lt ($vp.Start + $vp.Visible - 1) -and $rows[$i + 1].Kind -ne 'path') { $body += '' }
         } else {
-            $body += $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
+            # The one row not built by New-ListRow, so it marks itself. Same rule as there: the open
+            # marker goes in FRONT of the mark column, which is where Add-PickerColor's bullet
+            # anchor expects to be able to step over it.
+            $pathRow = $mark + $($g.Bullet) + ' ' + (Limit-Line -Text $r.Item.Name -Max ($inner - $mark.Length - 3))
+            if ($i -eq $HoverRow) { $pathRow = Add-HoverSpan -Text $pathRow }
+            $body += $pathRow
         }
     }
 
@@ -955,7 +1007,10 @@ function Get-ProjectFrame {
     # (spec D2). It carries no cursor: the arrows step it from every row.
     # -Current through the same canonicaliser the stepper uses, so what is DRAWN and what Right steps
     # from can never be two different strings (review W4: 'RESUME' rendered, then stepped from 'new').
-    $radio = New-RadioRow -Prefix '   ' -Label 'action' -Values (Get-ProjectActions) -Current (Step-ProjectAction -Action $Action -Delta 0) -Glyphs $g -LabelWidth 8 -MaxWidth $inner
+    # -Hover is the raw hovered value: the action row is the only cell-bearing row on this screen
+    # (the list rows carry no cells), so a HoverValue can have come from nowhere else and needs no
+    # row check of its own - unlike the launch screen, where several rows offer the same value.
+    $radio = New-RadioRow -Prefix '   ' -Label 'action' -Values (Get-ProjectActions) -Current (Step-ProjectAction -Action $Action -Delta 0) -Glyphs $g -LabelWidth 8 -MaxWidth $inner -Hover $HoverValue
     # Where the field actually lands in the body, taken before it is appended: with the separators in
     # the box the field is no longer $vp.Visible lines below the first row, and a Y computed that way
     # points at a blank line - a click on the field would do nothing and a click on a gap would step
@@ -1147,7 +1202,11 @@ function Add-PickerColor {
     # alone is not unique - a project NAMED '+ something' sits in the identical columns - so this
     # rule is deliberately coupled to the text Get-ProjectFrame gives that row. Before the cursor
     # rule, because that rule paints the mark itself and its escapes would break this lookbehind.
-    $markPattern = "(?:   | $([regex]::Escape([string]$Glyphs.Cursor)) )"
+    # The optional hover-open marker between the border and the mark column is what lets a HOVERED
+    # free-path row keep its bullet: the band wraps the whole row, so its open marker sits in front
+    # of the 3-cell mark (spec D10 puts it there for exactly this lookbehind) and an anchor that
+    # could not step over it would leave the bullet unpainted on the one row the mouse is on.
+    $markPattern = "$([string]$script:HoverOpen)?(?:   | $([regex]::Escape([string]$Glyphs.Cursor)) )"
     $out = $out -replace "(?<=^.$markPattern)($([regex]::Escape([string]$Glyphs.Bullet)))(?= enter a path)", ($c.Magenta + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Cursor)])", ($c.BrightYellow + '$1' + $c.Reset)
     $out = $out -replace "([$($Glyphs.Worktree)])", ($c.Yellow + '$1' + $c.Reset)
@@ -1191,6 +1250,11 @@ function Get-PickerFrame {
         # Get-ProjectFrame and Get-LaunchFrame carry (spec D1/D3). Without it this screen kept the
         # hover state and repainted a byte-identical frame for every footer-button crossing.
         [int]$Hover = -1,
+        # -HoverRow is the session row under the pointer (spec D10), a LIST index like -Index and -1
+        # for none. It paints and nothing else: the cursor and the preview follow -Index, which only
+        # a click or a key moves (spec D8): a row highlighted under the mouse, and a preview that
+        # stays locked on whatever was last chosen.
+        [int]$HoverRow = -1,
         # Where the session rows landed, for hit-testing a mouse click. Filled by the SAME code that
         # renders them - the alternative is a second copy of the viewport arithmetic, and the two
         # would eventually disagree about which index sits on which line, which is precisely the
@@ -1289,7 +1353,7 @@ function Get-PickerFrame {
             $sep = if ($where) { '  ' } else { '' }
             $label = $where + $sep + (Limit-Line -Text $what -Max ($room - $where.Length - $sep.Length))
         }
-        return (New-ListRow -Mark $mark -Label $label -Age $age -Width $leftWidth -Ascii:$Ascii -TrailingSpace)
+        return (New-ListRow -Mark $mark -Label $label -Age $age -Width $leftWidth -Ascii:$Ascii -TrailingSpace -Hover:($RowIndex -eq $HoverRow))
     }
 
     if (-not $wide) {

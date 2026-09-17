@@ -308,17 +308,18 @@ if ($UseUi) {
                 }
                 exit 0
             }
-            # SEVEN parameters, and the last one forwarded. A renderer one short does not fail: the
-            # extra argument lands in $args and the action field draws 'new' on every frame while
-            # the loop is on 'resume' - which is exactly what a preview run showed before this line
-            # existed. Test-Maintenance pins the shape as source, because this scriptblock has a
+            # NINE parameters, and every one of the trailing ones forwarded. A renderer one short
+            # does not fail: the extra argument lands in $args and the action field draws 'new' on
+            # every frame while the loop is on 'resume' - which is exactly what a preview run showed
+            # before this line existed - or, since spec D10, the row under the mouse is never
+            # banded. Test-Maintenance pins the shape as source, because this scriptblock has a
             # console and no suite can drive it.
             $projDraw = {
-                param($p, $i, $f, $t, $h, $n, $a)
+                param($p, $i, $f, $t, $h, $n, $a, $hr, $hv)
                 $w, $hh = & $size
                 $pmap = $null
                 & $paint (Get-ProjectFrame -Projects $p -Index $i -Filter $f -Typing:$t -Hover $h -Notice $n -Cwd $LaunchCwd `
-                          -Action $a `
+                          -Action $a -HoverRow $hr -HoverValue $hv `
                           -Width $w -Height $hh -Color:$useColor -Ascii:$ascii -RowMap ([ref]$pmap))
                 $pmap
             }
@@ -338,17 +339,18 @@ if ($UseUi) {
             if ($state.Action -ne 'resume') { break }
 
             $projectName = Split-Path -Path $state.Project -Leaf
-            # SIX parameters, and the last one forwarded - same rule as $projDraw above: one short
-            # and the hovered footer button never lights, silently (the extra lands in $args).
+            # SEVEN parameters, and the trailing ones forwarded - same rule as $projDraw above: one
+            # short and the hovered footer button never lights, or the row under the mouse is never
+            # banded, silently (the extra lands in $args).
             $pdraw = {
-                param($s, $i, $f, $scope, $name, $hv)
+                param($s, $i, $f, $scope, $name, $hv, $hr)
                 $w, $h = & $size
                 # The row map is the ONLY thing this returns: $paint writes through
                 # [Console]::Write / Write-Host and emits nothing to the pipeline. The picker needs
                 # it to turn a click into a session, and it comes from the renderer so the two can
                 # never disagree about which line holds which row.
                 $map = $null
-                & $paint (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $scope -ProjectName $name -Hover $hv -Width $w -Height $h -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
+                & $paint (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $scope -ProjectName $name -Hover $hv -HoverRow $hr -Width $w -Height $h -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
                 $map
             }
             # deferred review finding: this used to call Get-ClaudeSessions with no root at all,
