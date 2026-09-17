@@ -1741,10 +1741,11 @@ $w = New-EventReader @((New-MouseEvent -Y $umap.Rows[$mvIdx].Y -X $fableOldCell.
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $uDraw -Wait $w -GetWindowTop { 0 } -Limits $teamLim
 Assert-Equal 'default' $out.Model 'a click at the hidden option''s former column selects nothing'
 
-# Snap-to-default: a state that remembers a now-hidden value snaps before the frame is built, so
-# Get-LaunchArgs cannot emit a --model or --advisor the plan does not include.
+# Snap-to-default: a state that remembers a now-hidden value snaps in the loop's Before handler,
+# before the first frame, so Get-LaunchArgs cannot emit a --model or --advisor the plan lacks. Driven
+# through the screen, not through the frame builder - the builder is a pure renderer (pinned below).
 $stSnap = New-LaunchState; $stSnap.Account = 'work'; $stSnap.Model = 'fable'; $stSnap.Advisor = 'fable'
-$null = Get-LaunchFrame -State $stSnap -Width 100 -Height 30 -Limits $teamLim
+$stSnap = Invoke-LaunchScreen -State $stSnap -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $teamLim
 Assert-Equal 'default' $stSnap.Model 'a remembered Model fable snaps to default on a Team account'
 Assert-Equal 'default' $stSnap.Advisor 'and a remembered Advisor fable snaps to default too'
 $snapArgs = @(Get-LaunchArgs -State $stSnap)
@@ -1753,7 +1754,7 @@ Assert-Equal 0 (@($snapArgs | Where-Object { $_ -eq '--advisor' }).Count) 'and n
 Assert-Equal 0 (@($snapArgs | Where-Object { $_ -eq 'fable' }).Count) 'and the word fable reaches no argument'
 # The same remembered fable SURVIVES on a plan that includes it - the snap is the rule, not a reset.
 $stKeep = New-LaunchState; $stKeep.Account = 'work'; $stKeep.Model = 'fable'; $stKeep.Advisor = 'fable'
-$null = Get-LaunchFrame -State $stKeep -Width 100 -Height 30 -Limits (New-PlanLimit -Plan 'Max 20x')
+$stKeep = Invoke-LaunchScreen -State $stKeep -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits (New-PlanLimit -Plan 'Max 20x')
 Assert-Equal 'fable' $stKeep.Model 'a remembered fable is left alone on Max'
 Assert-Equal 'fable' $stKeep.Advisor 'on both rows'
 
@@ -1794,6 +1795,71 @@ foreach ($acc in @('work', 'personal', 'low')) {
         Assert-Equal $lu $lf "the $other row is untouched by the plan filter ($acc)"
     }
 }
+
+# --- 'default' is not exempt from the plan. settings.json holds ONE model for all four accounts, so
+# on a Team account the model row drew '[default (Fable 5.1[1M])]' as the selected option while Fable
+# is exactly what that plan lacks - the option was hidden and the default still named it. The label,
+# and only the label, changes: what Get-LaunchArgs emits for 'default' is untouched. -----------------
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Plan 'Team') 'a resolved default that names a plan-hidden family is drawn as default (plan default)'
+Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Plan 'Max 20x') 'the same label is left alone on a plan that has Fable'
+Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])') 'and left alone when there is no plan at all'
+Assert-Equal 'default (Opus 5)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Opus 5)' -Plan 'Team') 'a default naming a family the plan DOES have is left alone on Team'
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (claude-fable-5-1[1m])' -Plan 'Team') 'the family is found in a raw model id too, not only in the friendly name'
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $advRowDef -Key 'default' -DefaultAdvisorLabel 'default (fable)' -Plan 'Team') 'the advisor default gets the same treatment'
+Assert-Equal 'default (opus)' (Get-RowOptionText -Row $advRowDef -Key 'default' -DefaultAdvisorLabel 'default (opus)' -Plan 'Team') 'and an advisor default the plan has is left alone'
+Assert-Equal 'Fable 5.1' (Get-RowOptionText -Row $modelRowDef -Key 'fable' -Plan 'Team') 'only the default key is rewritten - a static label is never touched'
+# On the drawn frame, where the owner actually reads it.
+$defTeam = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $teamLim -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultAdvisorLabel 'default (fable)')
+$defTeamModel = @($defTeam | Where-Object { $_ -match '\bmodel\b' })[0]
+Assert-True ($defTeamModel -match 'default \(plan default\)') 'the drawn Model row shows default (plan default) on Team'
+Assert-Equal $false ($defTeamModel -match 'Fable') 'and the word Fable is gone from that row entirely'
+Assert-True ((@($defTeam | Where-Object { $_ -match '\badvisor\b' })[0]) -match 'default \(plan default\)') 'and the drawn Advisor row says the same'
+$defMax = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits (New-PlanLimit -Plan 'Max 20x') -DefaultModelLabel 'default (Fable 5.1[1M])')
+Assert-True ((@($defMax | Where-Object { $_ -match '\bmodel\b' })[0]) -match 'Fable 5\.1') 'while on Max the resolved default still names Fable'
+# The flags are NOT touched: 'default' means no flag on every plan, exactly as before.
+$defState = New-LaunchState; $defState.Account = 'work'
+Assert-Equal 0 (@(Get-LaunchArgs -State $defState).Count) 'a default state still emits no arguments at all on a Team account'
+
+# --- The snap lives in the loop's Before handler, not in the frame builder: it runs before the first
+# draw, so a -Draw {} caller snaps too, and Get-LaunchFrame no longer writes to the state it renders.
+$drawlessTeam = New-LaunchState; $drawlessTeam.Account = 'work'; $drawlessTeam.Model = 'fable'; $drawlessTeam.Advisor = 'fable'
+$out = Invoke-LaunchScreen -State $drawlessTeam -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $teamLim
+Assert-Equal 'default' $out.Model 'a -Draw {} run snaps the remembered Model fable before the first frame'
+Assert-Equal 'default' $out.Advisor 'and the remembered Advisor fable with it'
+$drawlessArgs = @(Get-LaunchArgs -State $out)
+Assert-Equal 0 (@($drawlessArgs | Where-Object { $_ -eq '--model' }).Count) 'so a -Draw {} launch emits no --model'
+Assert-Equal 0 (@($drawlessArgs | Where-Object { $_ -eq '--advisor' }).Count) 'and no --advisor'
+# Purity: building a frame is a read. The renderer that edited its argument could not be called twice.
+$pureState = New-LaunchState; $pureState.Account = 'work'; $pureState.Model = 'fable'; $pureState.Advisor = 'fable'
+$null = Get-LaunchFrame -State $pureState -Width 100 -Height 30 -Limits $teamLim
+Assert-Equal 'fable' $pureState.Model 'Get-LaunchFrame does not write the Model row of the state it renders'
+Assert-Equal 'fable' $pureState.Advisor 'nor the Advisor row'
+
+# --- The snap fires for a value the PLAN hides, never merely for one the row does not list. A value
+# no family map knows - a hand-built fixture, a pref from an older build - is none of this rule's
+# business and survives exactly as it did before the filter existed.
+$bogusNoPlan = New-LaunchState; $bogusNoPlan.Account = 'work'; $bogusNoPlan.Model = 'bogus'
+$out = Invoke-LaunchScreen -State $bogusNoPlan -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits (New-PlanLimit)
+Assert-Equal 'bogus' $out.Model 'with no plan an unknown Model value is left alone, not reset to default'
+$bogusTeam = New-LaunchState; $bogusTeam.Account = 'work'; $bogusTeam.Model = 'bogus'; $bogusTeam.Advisor = 'bogus'
+$out = Invoke-LaunchScreen -State $bogusTeam -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $teamLim
+Assert-Equal 'bogus' $out.Model 'and on Team too - Team hides the fable family, not everything off the row'
+Assert-Equal 'bogus' $out.Advisor 'on the Advisor row as well'
+$okTeam = New-LaunchState; $okTeam.Account = 'work'; $okTeam.Model = 'haiku'
+$out = Invoke-LaunchScreen -State $okTeam -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $teamLim
+Assert-Equal 'haiku' $out.Model 'a visible option is never snapped either'
+
+# --- A snapped row stops claiming it was restored: the '*' mark and the banner under the rows say
+# "this came back from your last launch", and a row the screen just reset did not come back.
+$restTeam = New-LaunchState; $restTeam.Account = 'work'; $restTeam.Model = 'fable'; $restTeam.Restored = @('Model', 'Effort'); $restTeam.RestoredAge = '2 h'
+$out = Invoke-LaunchScreen -State $restTeam -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $teamLim
+Assert-Equal 'Effort' (@($out.Restored) -join ',') 'the snapped Model row drops out of Restored, and the rows that were not snapped stay'
+$restFrame = @(Get-LaunchFrame -State $out -Width 100 -Height 30 -Limits $teamLim)
+Assert-Equal $false ((@($restFrame | Where-Object { $_ -match '\bmodel\b' })[0]) -match 'model\*') 'so the Model row carries no restore mark'
+Assert-True ((@($restFrame | Where-Object { $_ -match '\beffort\b' })[0]) -match 'effort\*') 'while the effort row keeps its own'
+$restMax = New-LaunchState; $restMax.Account = 'work'; $restMax.Model = 'fable'; $restMax.Restored = @('Model')
+$out = Invoke-LaunchScreen -State $restMax -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits (New-PlanLimit -Plan 'Max 20x')
+Assert-Equal 'Model' (@($out.Restored) -join ',') 'a row that was not snapped keeps its restore mark on a plan that has the model'
 
 # --- Clickable footer hints (owner ask 2026-08-15). A click becomes the KEY the hint advertises and
 # takes the ordinary keyboard path, so what is asserted here is that the SAME outcome arrives. ---
@@ -5290,7 +5356,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1712
+$script:Expected = 1739
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

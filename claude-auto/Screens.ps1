@@ -63,6 +63,18 @@ $script:OptionModelFamily = @{
     Advisor = @{ fable = 'fable'; opus   = 'opus' }
 }
 
+function Get-PlanHiddenFamilies {
+    # The model families a plan does NOT include. The only reader of $script:PlanHiddenFamilies, so
+    # the row filter, the snap and the 'default' label all answer from one rule rather than three.
+    # The plan key is the FIRST WORD lower-cased: the label carries a multiplier the rule never looks
+    # at ('Max 20x'), and a whole word so a longer one that merely starts the same ('Teams') is a
+    # different plan. Guarded against an empty key because a hashtable lookup on $null throws.
+    param([string]$Plan)
+    $key = if ($Plan) { (([string]$Plan).Trim() -split '\s+')[0].ToLowerInvariant() } else { '' }
+    if ($key -and $script:PlanHiddenFamilies.ContainsKey($key)) { return @($script:PlanHiddenFamilies[$key]) }
+    return @()
+}
+
 function Get-VisibleRowValues {
     # A row's Values minus what the account's PLAN does not include. Entitlement comes from the plan
     # label, never from which weekly buckets the account happens to have: on Max, Opus sits in the
@@ -74,14 +86,38 @@ function Get-VisibleRowValues {
     # byte-identical there.
     param([Parameter(Mandatory)]$Row, [string]$Plan)
     $fam = $script:OptionModelFamily[$Row.Name]
-    # The FIRST WORD only, lower-cased: the label carries a multiplier the rule never looks at, and
-    # a whole word so a longer one that merely starts the same ('Teams') is a different plan. Guarded
-    # against an empty key because a hashtable lookup on $null throws.
-    $key = if ($Plan) { (([string]$Plan).Trim() -split '\s+')[0].ToLowerInvariant() } else { '' }
-    $hidden = if ($key -and $script:PlanHiddenFamilies.ContainsKey($key)) { @($script:PlanHiddenFamilies[$key]) } else { @() }
+    $hidden = @(Get-PlanHiddenFamilies -Plan $Plan)
     if (-not $fam -or $hidden.Count -eq 0) { return @($Row.Values) }
     # $fam[$_] is $null for an option with no family, and $null is in no hidden list, so it stays.
     @($Row.Values | Where-Object { $fam[$_] -notin $hidden })
+}
+
+function Set-LaunchPlanSnap {
+    # A remembered Model/Advisor whose family the plan does not include goes back to 'default', so
+    # the screen never carries a value it does not draw and Get-LaunchArgs never emits one. Called
+    # from the screen loop's Before handler, not from the frame builder: Before runs once before the
+    # first draw and again every iteration, which snaps for a -Draw {} caller too, and it keeps
+    # Get-LaunchFrame pure (a renderer that edits the state it is handed is a renderer that cannot
+    # be called twice).
+    #
+    # Hidden BY THE PLAN, never merely "not in the row's Values": a value nothing maps to a family -
+    # a hand-built fixture, a pref written by an older build - is none of this rule's business and
+    # survives untouched, exactly as it did before the filter existed.
+    param($State, [string]$Plan)
+    $hidden = @(Get-PlanHiddenFamilies -Plan $Plan)
+    if ($hidden.Count -eq 0) { return $State }
+    foreach ($rn in @('Model', 'Advisor')) {
+        $fam = $script:OptionModelFamily[$rn]
+        if (-not $fam) { continue }
+        $f = $fam[[string]$State.($rn)]
+        if ($f -and ($f -in $hidden)) {
+            $State.($rn) = 'default'
+            # The restore mark goes with it: the '*' and the banner under the rows say "this came
+            # back from your last launch", and a row the screen just reset does not get to claim it.
+            if ($State.Restored) { $State.Restored = @($State.Restored | Where-Object { $_ -ne $rn }) }
+        }
+    }
+    return $State
 }
 
 function Set-LaunchRoster {
@@ -227,14 +263,35 @@ function Step-LaunchValue {
     return $State
 }
 
+function Get-HonestDefaultLabel {
+    # The resolved 'default' label, or 'default (plan default)' when what it resolved to belongs to a
+    # family this plan does not include. Short on purpose: the screen cannot know which model the CLI
+    # will fall back to, only that it will not be the one settings.json names, and a label that
+    # guesses would be the same lie one step later. No plan, or a label naming nothing hidden,
+    # returns the label untouched - so the frame is unchanged wherever the filter does nothing.
+    param([string]$Label, [string]$Plan)
+    foreach ($f in @(Get-PlanHiddenFamilies -Plan $Plan)) {
+        if ($Label -match "(?i)\b$([regex]::Escape($f))\b") { return 'default (plan default)' }
+    }
+    return $Label
+}
+
 function Get-RowOptionText {
     # The single place that turns a row's internal key into what the owner reads on screen. Most
     # rows have no Labels table at all, so the key IS the label (work, personal, high, ...). The
     # model row's 'default' key has no static label - what "default" means depends on
     # settings.json - so the caller supplies it already resolved.
-    param($Row, [string]$Key, [string]$DefaultModelLabel = 'default', [string]$DefaultAdvisorLabel = 'default')
-    if ($Row.Name -eq 'Model' -and $Key -eq 'default') { return $DefaultModelLabel }
-    if ($Row.Name -eq 'Advisor' -and $Key -eq 'default') { return $DefaultAdvisorLabel }
+    #
+    # -Plan makes that resolved label honest. 'default' is never hidden, but what it RESOLVES to can
+    # be: settings.json holds one model for all four accounts, so on a Team account the model row
+    # drew '[default (Fable 5.1[1M])]' as the selected option while Fable is exactly what that plan
+    # does not have. Naming the family is the lie, not offering the option - the CLI falls back to
+    # the plan's own default - so the label says that instead. Matched on the family WORD inside the
+    # rendered label, which is the only thing the caller hands in; both the friendly name
+    # ('Fable 5.1[1M]') and a raw id ('claude-fable-5-1[1m]') carry it on word boundaries.
+    param($Row, [string]$Key, [string]$DefaultModelLabel = 'default', [string]$DefaultAdvisorLabel = 'default', [string]$Plan)
+    if ($Row.Name -eq 'Model' -and $Key -eq 'default') { return (Get-HonestDefaultLabel -Label $DefaultModelLabel -Plan $Plan) }
+    if ($Row.Name -eq 'Advisor' -and $Key -eq 'default') { return (Get-HonestDefaultLabel -Label $DefaultAdvisorLabel -Plan $Plan) }
     if ($Row.Labels -and $Row.Labels.ContainsKey($Key)) { return $Row.Labels[$Key] }
     return $Key
 }
@@ -800,15 +857,10 @@ function Get-LaunchFrame {
     # $limit record the bars use; an absent Plan property, a $null one and no record at all all read
     # as "no plan", which hides nothing - so the frame is byte-identical to before this filter
     # existed for every account whose widget has not reported a plan yet.
+    # This function stays PURE - it reads the plan, it never writes the state. Snapping a remembered
+    # hidden value back to 'default' is Set-LaunchPlanSnap's job, called from the screen loop's
+    # Before handler, which runs before the first draw and before every one after it.
     $plan = "$($limit.Plan)"
-    # Snap a hidden Model/Advisor to default BEFORE the rows are built: Get-LaunchArgs reads these off
-    # the same state, so a value the plan does not include (a remembered pref, or the account was just
-    # switched to one lacking it) must never survive to the command line. 'default' is never hidden,
-    # so this always lands on a visible option; with no plan nothing is hidden and nothing snaps.
-    foreach ($rn in @('Model', 'Advisor')) {
-        $rdef = $script:Rows | Where-Object { $_.Name -eq $rn } | Select-Object -First 1
-        if ($rdef -and ($State.($rn) -notin @(Get-VisibleRowValues -Row $rdef -Plan $plan))) { $State.($rn) = 'default' }
-    }
     # What the mouse is over (spec D8/D10), read off the state exactly as $State.Hover already is -
     # and defaulted the same way, because a hand-built fixture carries neither field and hovers
     # nothing rather than row 0.
@@ -857,7 +909,7 @@ function Get-LaunchFrame {
             # uses too: one layout, one set of click cells, no second copy to drift.
             $optionLabels = @{}
             foreach ($v in $row.Values) {
-                $optionLabels[$v] = Get-RowOptionText -Row $row -Key $v -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel
+                $optionLabels[$v] = Get-RowOptionText -Row $row -Key $v -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel -Plan $plan
             }
             # The band goes on the hovered VALUE, and only while the pointer is on this row: two rows
             # can offer the same value ('default' is on three of them), and matching on the value
@@ -877,7 +929,7 @@ function Get-LaunchFrame {
         # what this exists to avoid. Collapse to the selected value alone, marked with ‹ › to say
         # more options exist off-screen (the footer already explains left/right cycles them).
         if ((Get-DisplayWidth -Text $line) -gt $inner) {
-            $selText = Get-RowOptionText -Row $row -Key $current -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel
+            $selText = Get-RowOptionText -Row $row -Key $current -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel -Plan $plan
             $line = $prefix + $labelPart + "$($g.LAngle) $selText $($g.RAngle)"
             # Collapsed: the other options are not on screen, so there is nothing to click. The ROW
             # is still clickable; offering cell hits here would select values the owner cannot see.
