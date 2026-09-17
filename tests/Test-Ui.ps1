@@ -1435,11 +1435,20 @@ $w = New-EventReader @((New-MouseEvent -Y 5 -Left), (New-MouseEvent -Y 5), $ente
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $mapDraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal 's2' $picked.Session.SessionId 'a click alone only moves the selection; the release that follows it does nothing'
 
-# A double click opens immediately - and returns without needing the Enter that follows it, which
-# is what the un-consumed event proves.
-$w = New-EventReader @((New-MouseEvent -Y 4 -Left -Double), $enter)
+# Spec D9: a double click carries no meaning of its own - it is two clicks. One flagged record on a
+# row that is NOT the selected one may therefore only select it, and the Enter behind it is what
+# opens the row it moved to.
+$w = New-EventReader @((New-MouseEvent -Y 5 -Left -Double), $enter)
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $mapDraw -Wait $w -GetWindowTop { 0 }
-Assert-Equal 's1' $picked.Session.SessionId 'a double click opens the row under the pointer'
+Assert-Equal 's2' $picked.Session.SessionId 'a double-click flag on an unselected row only selects it'
+Assert-Equal $false $picked.Fork 'and opens it rather than forking it'
+
+# The second click on the SELECTED row opens it, with no Enter needed - which is what the Escape
+# behind it proves: reaching that Escape would return $null, not a session.
+$twoClickEsc = [System.ConsoleKeyInfo]::new([char]27, [System.ConsoleKey]::Escape, $false, $false, $false)
+$w = New-EventReader @((New-MouseEvent -Y 5 -Left), (New-MouseEvent -Y 5 -Left), $twoClickEsc)
+$picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $mapDraw -Wait $w -GetWindowTop { 0 }
+Assert-Equal 's2' $picked.Session.SessionId 'the first click selects the row, the second one opens it (D9)'
 Assert-Equal $false $picked.Fork 'and opens it rather than forking it'
 
 # Scrolling moves the selection, in both directions.
@@ -1464,13 +1473,12 @@ Assert-Equal 's1' $picked.Session.SessionId 'a click on the box border changes n
 # only guard on this (Invoke-ScreenLoop's mouse dispatch: `-not ($loopKey.Left -and -not
 # $loopKey.IsMove)`) is unpinned. Ending on Escape instead makes a COMMITTING drag observable: it
 # would return a session object, never $null. The loop reads a drag as a plain MOVE - Left rides
-# along on the event but the IsMove branch never looks at it - so once hovering a row moves the
-# cursor, a drag moves it exactly the same way a genuine hover would; the bare-move-then-Enter
-# commit proof (a drag's cursor move really does stick) lives further down, at $wHoverPick.
+# along on the event but the IsMove branch never looks at it - so a drag paints exactly what a
+# genuine hover paints and selects exactly as little (D8).
 $dragEsc = [System.ConsoleKeyInfo]::new([char]27, [System.ConsoleKey]::Escape, $false, $false, $false)
 $w = New-EventReader @((New-MouseEvent -Y 6 -Left -Move), $dragEsc)
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $mapDraw -Wait $w -GetWindowTop { 0 }
-Assert-True ($null -eq $picked) 'a drag moves the cursor but commits nothing on its own - only Enter (or a double click) does'
+Assert-True ($null -eq $picked) 'a drag paints but commits nothing on its own - only Enter or a click on the selected row does'
 
 # The window has scrolled: the same session now sits at a higher BUFFER row, and forgetting that
 # is how a click lands rows away from the pointer.
@@ -1484,11 +1492,14 @@ $w = New-EventReader @((New-MouseEvent -Y 6 -Left), $enter)
 $picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $w -Draw $noMapDraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal 's1' $picked.Session.SessionId 'without a row map a click is inert, not fatal'
 
-# --- Task 10 (spec D3): hovering a list row moves the cursor there, built through the REAL
-# Get-PickerFrame so this is driven by the same FirstRowY/RowCount/Start production computes -
-# proven independently of the project screen's RowYs-shaped map above. ---
+# --- spec D8 (which reverses the 16.09 D3 reading pinned here before): hovering a list row PAINTS
+# it and moves nothing. Built through the REAL Get-PickerFrame so this is driven by the same
+# FirstRowY/RowCount/Start production computes - proven independently of the project screen's
+# RowYs-shaped map above. ---
+$script:hoverPickIndexes = New-Object System.Collections.Generic.List[int]
 $hoverPickDraw = {
     param($s, $i, $f, $sc, $pn)
+    $script:hoverPickIndexes.Add([int]$i)
     $map = $null
     $null = Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $sc -ProjectName $pn -Width 100 -Height 24 -RowMap ([ref]$map)
     $map
@@ -1497,9 +1508,11 @@ $hoverPickProbe = $null
 $null = Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 100 -Height 24 -RowMap ([ref]$hoverPickProbe)
 $wHoverPick = New-EventReader @((New-MouseEvent -X 3 -Y ($hoverPickProbe.FirstRowY + 2) -Move), $enter)
 $pickedHoverPick = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPick -Draw $hoverPickDraw -Wait $wHoverPick -GetWindowTop { 0 }
-Assert-Equal 's3' $pickedHoverPick.Session.SessionId 'hovering onto row 2 moves the picker cursor there too; the Enter that follows commits the hovered row'
+Assert-Equal 's1' $pickedHoverPick.Session.SessionId 'hovering onto row 2 leaves the picker cursor where it was; the Enter that follows still commits row 0 (D8)'
+Assert-Equal '0,0' ($script:hoverPickIndexes -join ',') 'and the frame the move DID cost still stands on row 0 - the hover painted, it did not select'
 
-# A move that lands on the row the cursor already stands on must not force a redraw.
+# The row the cursor already stands on is hovered like any other (D10: band + cursor), so the FIRST
+# move onto it costs a frame; a second, identical move does not.
 # A LOCAL Escape key, not the outer $esc: at this point in the file $esc is still the plain
 # [char]27 from line 1301 (it becomes a real ConsoleKeyInfo only at line 1465, below) - passing
 # that through New-EventReader here would hand the loop a bare char, never end the screen, and
@@ -1514,11 +1527,11 @@ $wHoverPickSame = New-EventReader @(
 )
 $pickedHoverPickSame = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wHoverPickSame -Draw $hoverPickCounting -Wait $wHoverPickSame -GetWindowTop { 0 }
 Assert-True ($null -eq $pickedHoverPickSame) 'the same-row hover run on the picker still ends with Escape'
-Assert-Equal 1 $script:hoverPickDraws 'two moves that never leave row 0 (already the cursor) draw only the initial frame'
+Assert-Equal 2 $script:hoverPickDraws 'two moves onto row 0 draw twice: the initial frame and the band the first move put on it - the second, identical move draws nothing'
 
-# Moving onto a DIFFERENT row must cost a frame - a handler that moved $s.Index but always
-# returned $false would still pass every assertion above (Enter reads $s.Index straight off the
-# state), so this is the ONLY thing that catches it.
+# Moving onto a DIFFERENT row must cost a frame - a hover that recorded the row but never asked for
+# a frame would still pass every assertion above (Enter reads $s.Index straight off the state), so
+# this is the ONLY thing that catches it.
 $script:hoverPickDraws2 = 0
 $hoverPickCounting2 = { param($s, $i, $f, $sc, $pn) $script:hoverPickDraws2++; $hoverPickProbe }
 $wHoverPickRedraw = New-EventReader @((New-MouseEvent -X 3 -Y ($hoverPickProbe.FirstRowY + 2) -Move), $hoverPickEsc)
@@ -2736,8 +2749,8 @@ try {
     $pVanished = Invoke-ProjectScreen -Projects $vanishedProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('s', 'Enter', 'Escape')) -Draw {}
     Assert-True ($null -eq $pVanished) 'Enter on a registry row whose directory has vanished does not return - the loop stays open'
 
-    # --- Mouse: a single click only moves the selection; nothing but a double click or a hotkey may
-    # start a session. ---
+    # --- Mouse: a click on a row the cursor is not on only moves the selection; nothing but a
+    # second click on that row, Enter or a hotkey may start a session (spec D9). ---
     # Deliberately WITHOUT RowYs: this hand-built map is the old FirstRowY/RowCount shape, which is
     # what the session picker still hands Get-HitAt - so these runs keep that fallback branch covered
     # while the real project map (RowYs) is driven further down.
@@ -2757,16 +2770,22 @@ try {
     $p11 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w11 -Draw $pDraw -Wait $w11 -GetWindowTop { 0 }
     Assert-Equal $tmpAlpha $p11.Path 'the click DID move the selection - Enter afterwards commits the row the click moved to'
 
-    # --- IMPORTANT 2: a double click on a ROW commits, the way Invoke-SessionPicker's does - no
-    # further key needed. ---
-    # The trailing Escape is never reached when the double click commits (the function returns
-    # immediately); it is there so a regression that stops the double click from committing fails
-    # this assertion cleanly instead of exhausting the scripted reader with an uncaught exception
+    # --- IMPORTANT 2: a second click on the SELECTED row commits, the way Invoke-SessionPicker's
+    # does - no further key needed (spec D9). ---
+    # The trailing Escape is never reached when that click commits (the function returns
+    # immediately); it is there so a regression that stops it from committing fails this assertion
+    # cleanly instead of exhausting the scripted reader with an uncaught exception
     # (fix round 3, SMALL 2).
-    $w14 = New-EventReader @((New-MouseEvent -Y 5 -Left -Double), $esc)
+    $w14 = New-EventReader @((New-MouseEvent -Y 5 -Left), (New-MouseEvent -Y 5 -Left), $esc)
     $p14 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w14 -Draw $pDraw -Wait $w14 -GetWindowTop { 0 }
-    Assert-Equal $tmpAlpha $p14.Path 'a double click on a row commits it immediately'
+    Assert-Equal $tmpAlpha $p14.Path 'a second click on the selected row commits it immediately'
     Assert-Equal 'new' $p14.Action 'as a new session, with no further key pressed'
+
+    # And one record flagged IsDoubleClick is not a shortcut past that first click: on a row the
+    # cursor is not on it selects and nothing else, so the Escape behind it is what ends the screen.
+    $w14b = New-EventReader @((New-MouseEvent -Y 5 -Left -Double), $esc)
+    $p14b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w14b -Draw $pDraw -Wait $w14b -GetWindowTop { 0 }
+    Assert-True ($null -eq $p14b) 'a double-click flag on an unselected row starts nothing'
 
     # A double click landing on a FOOTER button, unlike one landing on a row, does nothing - it
     # mirrors Invoke-MaintenanceScreen excluding IsDoubleClick from its footer-hit guard. The probe:
@@ -2909,11 +2928,11 @@ try {
     Assert-Equal 'path not found' $script:noticeSequence[5] 'a mouse move (even one that changes the hover) leaves the notice standing'
     Assert-Equal '' $script:noticeSequence[6] 'the next KEY event clears it'
 
-    # --- Task 10 (spec D3): hovering a list row moves the cursor there, the way Claude Code's own
-    # picker does - a click still commits nothing more than today, only Enter (or a double click)
-    # does. Built through the REAL Get-ProjectFrame, never a hand-built map, so this is driven by
-    # RowYs (Task 9) exactly as production computes it - a hand-built FirstRowY/RowCount map could
-    # never catch a Hover handler that forgot the RowYs branch Get-HitAt prefers for this screen. ---
+    # --- spec D8 (which reverses the 16.09 D3 reading pinned here before): hovering a list row
+    # PAINTS it, the way Claude Code's own agents list does - the cursor stays where a click or a
+    # key put it. Built through the REAL Get-ProjectFrame, never a hand-built map, so this is driven
+    # by RowYs (Task 9) exactly as production computes it - a hand-built FirstRowY/RowCount map
+    # could never catch a hover branch that forgot the RowYs branch Get-HitAt prefers here. ---
     # No .GetNewClosure(): a plain scriptblock resolves $tmpCwd against this file's scope when the
     # loop invokes it, which is all this needs - the sibling picker draw above ($hoverPickDraw) does
     # the same job without one, and a closure here would only add a scope bubble nobody reads (D5).
@@ -2928,10 +2947,11 @@ try {
     # Row 2 in the frame's own row order (cwd, alpha, beta, enter-a-path) is beta.
     $wHoverRow = New-EventReader @((New-MouseEvent -X 3 -Y $hoverRowProbe.RowYs[2] -Move), $enterKey)
     $pHoverRow = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverRow -Draw $hoverRowDraw -Wait $wHoverRow -GetWindowTop { 0 }
-    Assert-Equal $tmpBeta $pHoverRow.Path 'hovering onto row 2 (beta) moves the cursor there; the Enter that follows commits the hovered row'
+    Assert-Equal $tmpCwd $pHoverRow.Path 'hovering onto row 2 (beta) leaves the cursor on row 0; the Enter that follows still commits the current directory (D8)'
 
-    # A move that lands on the SAME row the cursor already stands on must not force a redraw - the
-    # same throttle the footer already gets, now proven for a row too.
+    # A second, identical move must not force a redraw - the same throttle the footer already gets,
+    # now proven for a row too. The FIRST move onto row 0 does cost a frame: the row the cursor
+    # stands on is hovered like any other (D10: band + cursor).
     $script:hoverRowDraws = 0
     $hoverRowCounting = { param($p, $i, $f, $t, $h, $n, $a) $script:hoverRowDraws++; $hoverRowProbe }
     $wHoverSame = New-EventReader @(
@@ -2941,11 +2961,11 @@ try {
     )
     $pHoverSame = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wHoverSame -Draw $hoverRowCounting -Wait $wHoverSame -GetWindowTop { 0 }
     Assert-True ($null -eq $pHoverSame) 'the same-row hover run still ends with Escape'
-    Assert-Equal 1 $script:hoverRowDraws 'two moves that never leave row 0 (already the cursor) draw only the initial frame'
+    Assert-Equal 2 $script:hoverRowDraws 'two moves onto row 0 draw twice: the initial frame and the band the first move put on it - the second, identical move draws nothing'
 
-    # Moving onto a DIFFERENT row must cost a frame - a handler that moved $s.Index but always
-    # returned $false would still pass the commit assertion above (Enter reads $s.Index straight
-    # off the state, whether or not the move ever redrew), so this is the ONLY thing that catches it.
+    # Moving onto a DIFFERENT row must cost a frame - a hover that recorded the row but never asked
+    # for a frame would still leave every other assertion here standing, so this is the ONLY thing
+    # that catches it.
     $script:hoverRowDraws2 = 0
     $hoverRowCounting2 = { param($p, $i, $f, $t, $h, $n, $a) $script:hoverRowDraws2++; $hoverRowProbe }
     $wHoverRowRedraw = New-EventReader @((New-MouseEvent -X 3 -Y $hoverRowProbe.RowYs[2] -Move), $esc)
@@ -2976,7 +2996,7 @@ try {
     Assert-True ($null -eq $pHoverClear) 'the footer-then-row hover run still ends with Escape'
     Assert-Equal 3 $script:hoverClearCalls.Count 'three draws: the initial frame, the footer hover, and the row hover that follows it'
     Assert-Equal 0 $script:hoverClearCalls[1].Hover 'the footer button is lit on the frame right after hovering it'
-    Assert-Equal 2 $script:hoverClearCalls[2].Index 'the row move landed on row 2'
+    Assert-Equal 0 $script:hoverClearCalls[2].Index 'the row move painted row 2 without moving the cursor off row 0 (D8)'
     Assert-Equal (-1) $script:hoverClearCalls[2].Hover 'and the footer light is cleared on THAT SAME frame - never left lit until a later move happens to hit a gap'
 
     # --- R18: a hover over the ACTION row (below the list, not a list row) must leave Index
@@ -3287,11 +3307,11 @@ try {
     Assert-Equal 4 $script:stepCalls 'pins the SHAPE of the walk (the call count), not behaviour: the -InitialAction canonicalisation plus three steps from new to worktree'
     Assert-Equal 'worktree' $pWalk.Action 'and the walk lands on the value that was clicked'
 
-    # A double click on a row commits the FIELD, not a hardcoded 'new'.
+    # An activating click commits the FIELD, not a hardcoded 'new'.
     $rightArrowKey = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::RightArrow, $false, $false, $false)
-    $wDbl = New-EventReader @($rightArrowKey, (New-MouseEvent -Y 5 -Left -Double), $esc)
+    $wDbl = New-EventReader @($rightArrowKey, (New-MouseEvent -Y 5 -Left), (New-MouseEvent -Y 5 -Left), $esc)
     $pDbl = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $wDbl -Draw $pDraw -Wait $wDbl -GetWindowTop { 0 }
-    Assert-Equal 'continue' $pDbl.Action 'a double click commits whatever the field says'
+    Assert-Equal 'continue' $pDbl.Action 'a click on the selected row commits whatever the field says'
     Assert-Equal $tmpAlpha $pDbl.Path 'on the row it landed on'
 
     # --- Task 9 (spec D6/D7): the current directory FIRST, the pinned rows kept apart by a blank
@@ -3817,15 +3837,19 @@ try {
     $null = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey $wUiSame -Draw $uiMapDraw -Wait $wUiSame -GetWindowTop { 0 }
     Assert-Equal 0 (@($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'click' }).Count) 'a click on the already-selected action value writes no record'
 
+    # Row 0 already carries the cursor when the screen opens, so ONE click on it activates (D9) -
+    # and an activation is a click record naming the row button, never a record of its own.
     $script:uiRecords = @()
-    $wUiDbl = New-EventReader @((New-MouseEvent -X 4 -Y $uiMap.FirstRowY -Left -Double), $esc)
-    $uiDbl = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey $wUiDbl -Draw $uiMapDraw -Wait $wUiDbl -GetWindowTop { 0 }
-    Assert-Equal $uiLogProj $uiDbl.Path 'a double click on the first row commits it'
+    $wUiAct = New-EventReader @((New-MouseEvent -X 4 -Y $uiMap.FirstRowY -Left), $esc)
+    $uiAct = Invoke-ProjectScreen -Projects $uiProjs -Cwd $uiLogProj -ReadKey $wUiAct -Draw $uiMapDraw -Wait $wUiAct -GetWindowTop { 0 }
+    Assert-Equal $uiLogProj $uiAct.Path 'a click on the row that already carries the cursor commits it'
     Assert-Equal (@(
         'screen:project:enter -> filterLength,index,name,phase,rows'
-        'key:project:doubleclick -> action,button,index,key,screen'
+        'key:project:click -> action,button,index,key,screen'
         'screen:project:leave -> filterLength,index,ms,name,phase,rows'
-    ) -join ' | ') ((& $uiFields) -join ' | ') 'and the double click record names the row button and the action it committed'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'and the activating click record names the row button and the action it committed'
+    $uiActRec = @($script:uiRecords | Where-Object { $_.Stage -eq 'key' -and $_.Data.key -eq 'click' })[0]
+    Assert-Equal 'row' $uiActRec.Data.button 'the button it names is a row, which is what tells it apart from an action-field click'
 
     # The PICKER's own records. The 11-record run above drives Tab and Escape only; everything else
     # this screen writes - the fork, the three filter records, a double click, and the two presses
@@ -3917,20 +3941,21 @@ try {
         'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
     ) -join ' | ') ((& $uiFields) -join ' | ') 'and write no key record at all - only the Escape that left'
 
-    # The double click, over a REAL frame's row map so the coordinates are the ones a click arrives
-    # in. Second row: the record must name the row the pointer was on, not where the cursor started.
+    # The activating click, over a REAL frame's row map so the coordinates are the ones a click
+    # arrives in. Second row, so two clicks are needed: the first selects it, the second activates -
+    # and only the second writes a record, naming the row the pointer was on.
     $pkMap = $null
     $null = Get-PickerFrame -Sessions $pkFake -Index 0 -Filter '' -Scope 'project' -ProjectName 'gamma' -Width 80 -Height 24 -RowMap ([ref]$pkMap)
     $pkMapDraw = { param($s, $i, $f, $sc, $pn) $pkMap }.GetNewClosure()
     $script:uiRecords = @()
-    $wPkDbl = New-EventReader @((New-MouseEvent -X 4 -Y ($pkMap.FirstRowY + 1) -Left -Double))
+    $wPkDbl = New-EventReader @((New-MouseEvent -X 4 -Y ($pkMap.FirstRowY + 1) -Left), (New-MouseEvent -X 4 -Y ($pkMap.FirstRowY + 1) -Left))
     $pkDbl = Invoke-SessionPicker -Sessions $pkFake -ProjectSlug @('G') -ProjectName 'gamma' -ReadKey $wPkDbl -Draw $pkMapDraw -Wait $wPkDbl -GetWindowTop { 0 }
-    Assert-Equal 'pk000002' $pkDbl.Session.SessionId 'a double click opens the row under the pointer'
+    Assert-Equal 'pk000002' $pkDbl.Session.SessionId 'a second click on the selected row opens it'
     Assert-Equal (@(
         'screen:picker:enter -> filterLength,index,name,phase,rows,scope'
-        'key:picker:doubleclick -> button,index,key,scope,screen'
+        'key:picker:click -> button,index,key,scope,screen'
         'screen:picker:leave -> filterLength,index,ms,name,phase,rows,scope'
-    ) -join ' | ') ((& $uiFields) -join ' | ') 'and its record names the row button, the index it landed on and the scope'
+    ) -join ' | ') ((& $uiFields) -join ' | ') 'and its record names the row button, the index it landed on and the scope - the selecting click before it writes nothing'
 
     # The free path is the owner's own directory name - the one string on these screens that is
     # nobody's business but his. Read-ClaudeFreePath is driven directly here: the project screen's
@@ -4153,8 +4178,6 @@ Assert-Equal 3 $draws 'four events, three draws: the move inside the same button
 # Three moves onto three DIFFERENT rows, each of which would otherwise cost a frame; the reader
 # reports pending for the first two only.
 $coMap = [pscustomobject]@{ FirstRowY = 1; RowCount = 5; Start = 0; FooterY = 9; FooterLines = 1; Footer = @() }
-# The row-hover handler both list screens carry, written out here so this probe stands on its own.
-$coHover = { param($s, $hit) if ($hit.Kind -eq 'row' -and $hit.Row -is [int] -and $s.Index -ne $hit.Row) { $s.Index = $hit.Row; return $true }; return $false }
 $coQ = [System.Collections.Queue]::new()
 $coQ.Enqueue((New-MouseEvent -X 3 -Y 2 -Move))
 $coQ.Enqueue((New-MouseEvent -X 3 -Y 3 -Move))
@@ -4163,14 +4186,14 @@ $coQ.Enqueue($esc)
 $script:coPending = [System.Collections.Queue]::new()
 @($true, $true, $false) | ForEach-Object { $script:coPending.Enqueue($_) }
 $script:coDraws = 0
-$coState = @{ Index = 0; Hover = -1; Typing = $false }
+$coState = @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
 $r = Invoke-ScreenLoop -Screen 'probe' -State $coState -Wait { $coQ.Dequeue() } `
     -Draw { param($s) $script:coDraws++; $coMap } `
     -InputPending { if ($script:coPending.Count -gt 0) { $script:coPending.Dequeue() } else { $false } } `
-    -Handlers @{ Rows = { 5 }; Hover = $coHover }
+    -Handlers @{ Rows = { 5 } }
 Assert-True ($null -eq $r) 'the coalescing run still ends with Escape'
 Assert-Equal 2 $script:coDraws 'three row-move events draw exactly twice: the initial frame, and ONE more after the last move - the two coalesced frames were never rendered'
-Assert-Equal 3 $coState.Index 'and the frame that was drawn carries the LAST move, not the first - only the draw is dropped, never the state'
+Assert-Equal 3 $coState.HoverRow 'and the frame that was drawn carries the LAST move, not the first - only the draw is dropped, never the state'
 # The positive control: the same three moves with nothing pending cost a frame each.
 $coQ2 = [System.Collections.Queue]::new()
 $coQ2.Enqueue((New-MouseEvent -X 3 -Y 2 -Move))
@@ -4178,24 +4201,26 @@ $coQ2.Enqueue((New-MouseEvent -X 3 -Y 3 -Move))
 $coQ2.Enqueue((New-MouseEvent -X 3 -Y 4 -Move))
 $coQ2.Enqueue($esc)
 $script:coDraws2 = 0
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $coQ2.Dequeue() } `
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false } -Wait { $coQ2.Dequeue() } `
     -Draw { param($s) $script:coDraws2++; $coMap } -InputPending { $false } `
-    -Handlers @{ Rows = { 5 }; Hover = $coHover }
+    -Handlers @{ Rows = { 5 } }
 Assert-True ($null -eq $r) 'the un-coalesced run ends with Escape too'
 Assert-Equal 4 $script:coDraws2 'with an empty queue every one of the three moves draws - so the assertion above is not satisfied by a loop that simply stopped drawing'
 
 # T10 (deferred): a DRAG is a move. Left rides along on the record and the IsMove branch never looks
-# at it, so dragging across row 2 moves the cursor exactly as a bare hover does - and the NEXT frame
-# has to carry it, which is the half a commit-only assertion cannot see.
+# at it, so dragging across row 2 paints it exactly as a bare hover does - and the NEXT frame has to
+# carry that, which is the half a commit-only assertion cannot see. The cursor stays put (D8).
 $dragQ = [System.Collections.Queue]::new()
 $dragQ.Enqueue((New-MouseEvent -X 3 -Y 3 -Left -Move))   # drag over visible row 2
 $dragQ.Enqueue($esc)
+$dragState = @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
 $script:dragSeen = New-Object System.Collections.Generic.List[int]
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $dragQ.Dequeue() } `
-    -Draw { param($s) $script:dragSeen.Add([int]$s.Index); $coMap } -InputPending { $false } `
-    -Handlers @{ Rows = { 5 }; Hover = $coHover }
+$r = Invoke-ScreenLoop -Screen 'probe' -State $dragState -Wait { $dragQ.Dequeue() } `
+    -Draw { param($s) $script:dragSeen.Add([int]$s.HoverRow); $coMap } -InputPending { $false } `
+    -Handlers @{ Rows = { 5 } }
 Assert-True ($null -eq $r) 'the drag run ends with Escape'
-Assert-Equal '0,2' ($script:dragSeen -join ',') 'a drag over row 2 puts the NEXT frame on Index = 2 - a drag moves the cursor exactly as a hover does'
+Assert-Equal '-1,2' ($script:dragSeen -join ',') 'a drag over row 2 puts the NEXT frame on HoverRow = 2 - a drag paints exactly as a hover does'
+Assert-Equal 0 $dragState.Index 'and moves the cursor no more than a hover does'
 # C2: a double click on a FOOTER button is ignored outright. The first press already became that
 # button's key, so turning the doubleclick-flagged record into a second synthetic press fires the
 # action twice - which is how one gesture on the free-path row ran -ReadPath twice. Every screen
@@ -4230,41 +4255,43 @@ $launchDblOut = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $wLaunchDb
 $script:UiLogSink = $null
 Assert-True ($null -eq $launchDblOut) 'a double click on the launch footer "enter next" button does NOT start the session - the Escape behind it is what ends the screen'
 Assert-Equal 'screen:,key:Escape,screen:' ($script:launchDblRecords -join ',') 'and leaves no key record for it either - enter/leave and the Escape, nothing else'
-# A double click on a ROW: the loop moves the cursor to the clicked row BEFORE the handler runs.
-# Both list screens select then pick today ($index = $target, then the pick), so a DoubleClick
-# handler that reads $s.Index must see the row the owner hit, not where the cursor happened to be.
+# Activating a ROW: the Click before it is what put the cursor there, so an Activate handler that
+# reads $s.Index sees the row the owner hit - the loop itself moves nothing (D8).
 $dq = [System.Collections.Queue]::new()
+$dq.Enqueue([pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 3; Left = $true; IsMove = $false; IsDoubleClick = $false; WheelUp = $false; WheelDown = $false })
 $dq.Enqueue([pscustomobject]@{ Kind = 'mouse'; X = 3; Y = 3; Left = $true; IsMove = $false; IsDoubleClick = $true; WheelUp = $false; WheelDown = $false })
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $dq.Dequeue() } -Draw { $map } -Handlers @{
-        Rows        = { 3 }
-        DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false } -Wait { $dq.Dequeue() } -Draw { $map } -Handlers @{
+        Rows     = { 3 }
+        Click    = { param($s, $h) if ($h.Kind -eq 'row') { $s.Index = [int]$h.Row } }
+        Activate = { param($s, $h) @{ Done = $true; Result = "act@$($s.Index)" } }
     }
-Assert-Equal 'dbl@2' $r 'a row double click moves the index to the clicked row before the handler picks'
-# R9: the two row-map shapes answer a hit differently - a list map with an INDEX, a Rows[] map (the
-# launch and maintenance shape) with the row OBJECT. The move-before-pick above has to read that
-# row's own Index: the object casts to [int] nowhere, so it throws in the key record and, on a
-# -Silent screen, would put a pscustomobject in $State.Index without a sound.
+Assert-Equal 'act@2' $r 'a physical double click on a row selects it and then activates it, on the row the pointer was over'
+# R18/R9: the two row-map shapes answer a hit differently - a list map with an INDEX, a Rows[] map
+# (the launch and maintenance shape) with the row OBJECT. HoverRow is an int, so what a hover over
+# such a map publishes is that row's own Index; the object itself would land on the state as a
+# pscustomobject and reach a frame builder that expects a number.
 $rq = [System.Collections.Queue]::new()
-$rq.Enqueue((New-MouseEvent -X 2 -Y 7 -Left -Double))
-$rowShapeMap = [pscustomobject]@{ Rows = @([pscustomobject]@{ Y = 7; Index = 4; Cells = @() })
+$rq.Enqueue((New-MouseEvent -X 2 -Y 7 -Move))
+$rq.Enqueue($esc)
+$rowShapeMap = [pscustomobject]@{ Rows = @([pscustomobject]@{ Y = 7; Index = 4; Cells = @([pscustomobject]@{ Start = 0; End = 5; Value = 'v4' }) })
                                   FooterY = 9; FooterLines = 1; Footer = @() }
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $rq.Dequeue() } -Draw { $rowShapeMap } -Handlers @{
-        Rows        = { 5 }
-        DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
-    }
-Assert-Equal 'dbl@4' $r 'a row double click on a Rows[]-shaped map moves the index to that row''s own Index, not to the row object'
+$rowShapeState = @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
+$r = Invoke-ScreenLoop -Screen 'probe' -State $rowShapeState -Wait { $rq.Dequeue() } -Draw { $rowShapeMap } -InputPending { $false } -Handlers @{ Rows = { 5 } }
+Assert-Equal 4 $rowShapeState.HoverRow 'a hover over a Rows[]-shaped map names that row''s own Index, not the row object'
+Assert-Equal 'v4' $rowShapeState.HoverValue 'and the value of the cell under the pointer'
+Assert-Equal 0 $rowShapeState.Index 'while the cursor stays where it was'
 # deferred-minors sweep (17.09.2026) G2: a Rows[]-shaped row object with NO Index (a hand-built fixture, or a shape that
-# never grew one) must leave $State.Index untouched, not fall to [int]$null - which is 0, a silent
-# jump to the first row.
+# never grew one) must name NO row, not fall to [int]$null - which is 0, a band silently painted on
+# the first row while the pointer is elsewhere.
 $rq2 = [System.Collections.Queue]::new()
-$rq2.Enqueue((New-MouseEvent -X 2 -Y 7 -Left -Double))
-$rowShapeMapNoIndex = [pscustomobject]@{ Rows = @([pscustomobject]@{ Y = 7; Cells = @() })
+$rq2.Enqueue((New-MouseEvent -X 2 -Y 7 -Move))
+$rq2.Enqueue($esc)
+$rowShapeMapNoIndex = [pscustomobject]@{ Rows = @([pscustomobject]@{ Y = 7; Cells = @([pscustomobject]@{ Start = 0; End = 5; Value = 'v' }) })
                                           FooterY = 9; FooterLines = 1; Footer = @() }
-$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 3; Hover = -1; Typing = $false } -Wait { $rq2.Dequeue() } -Draw { $rowShapeMapNoIndex } -Handlers @{
-        Rows        = { 5 }
-        DoubleClick = { param($s, $h) @{ Done = $true; Result = "dbl@$($s.Index)" } }
-    }
-Assert-Equal 'dbl@3' $r 'a row double click on a Rows[]-shaped map whose row object has no Index leaves $State.Index unchanged'
+$noIndexState = @{ Index = 3; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
+$r = Invoke-ScreenLoop -Screen 'probe' -State $noIndexState -Wait { $rq2.Dequeue() } -Draw { $rowShapeMapNoIndex } -InputPending { $false } -Handlers @{ Rows = { 5 } }
+Assert-Equal (-1) $noIndexState.HoverRow 'a hover over a Rows[]-shaped row object with no Index names no row at all'
+Assert-Equal 3 $noIndexState.Index 'and leaves the cursor alone'
 # D4: a SCROLLED list map. RowMap.Start is the absolute index of the first VISIBLE row, so a click
 # on visible row 1 of a map scrolled to 2 means session 3 - dropping Start reads the click as row 1
 # and opens a session two above the one under the pointer. Driven through the picker, so the whole
@@ -4285,6 +4312,69 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing =
 Assert-True ($null -eq $r) 'a resize does not end the screen'
 Assert-Equal 'Escape' ($script:sawKeys -join ',') 'and no handler ever sees it - only the Escape behind it'
 Assert-Equal 2 $draws 'the resize costs exactly one redraw and one more wait'
+
+# --- spec D8: a hover PAINTS and never selects -------------------------------------------------
+# $mouseMap is FirstRowY 4, RowCount 5, Start 0, so Y 6 is row 2 and Y 40 is past the last row. The
+# cursor is wherever a click or a key put it; a move may only publish what it is over, as HoverRow
+# and HoverValue on the state - the one channel a frame builder has to the pointer.
+$draws = 0
+$script:sawHover = $false
+$hoverState = @{ Index = 1; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
+$w = New-EventReader @((New-MouseEvent -Y 6 -Move), (New-MouseEvent -Y 6 -Move), (New-MouseEvent -Y 40 -Move), $esc)
+$null = Invoke-ScreenLoop -Screen 'probe' -State $hoverState -Wait $w -GetWindowTop { 0 } -InputPending { $false } `
+    -Draw { param($s) $script:draws++; if ($s.HoverRow -eq 2) { $script:sawHover = $true }; $mouseMap } -Handlers @{ Rows = { 5 } }
+Assert-Equal 1 $hoverState.Index 'a hovered row never moves the cursor (D8)'
+Assert-Equal $true $script:sawHover 'a hovered row reaches the frame as HoverRow'
+Assert-Equal 3 $draws 'first move draws, an identical move does not, leaving the rows clears the hover and draws (1 + 0 + 1 + initial)'
+Assert-Equal (-1) $hoverState.HoverRow 'a move below the last row hovers nothing (D12)'
+
+# --- spec D9: the first click selects, a second click on the selected row activates -------------
+$acts = 0
+$clickState = @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
+$w = New-EventReader @((New-MouseEvent -Y 6 -Left), (New-MouseEvent -Y 6 -Left))
+$res = Invoke-ScreenLoop -Screen 'probe' -State $clickState -Wait $w -GetWindowTop { 0 } -InputPending { $false } `
+    -Draw { param($s) $mouseMap } -Handlers @{
+        Rows = { 5 }
+        Click = { param($s, $hit) if ($hit.Kind -eq 'row') { $s.Index = [int]$hit.Row } }
+        Activate = { param($s, $hit) $script:acts++; @{ Done = $true; Result = "row$($s.Index)" } }
+    }
+Assert-Equal 'row2' $res 'the second click on the selected row activates it'
+Assert-Equal 1 $acts 'the first click only selected'
+
+# A double click carries no meaning of its own: it is two clicks, so one flagged record on a row
+# that is NOT the selected one may only select it.
+$acts = 0; $clickState.Index = 0
+$w = New-EventReader @((New-MouseEvent -Y 6 -Left -Double), $esc)
+$null = Invoke-ScreenLoop -Screen 'probe' -State $clickState -Wait $w -GetWindowTop { 0 } -InputPending { $false } -Draw { param($s) $mouseMap } -Handlers @{
+    Rows = { 5 }; Click = { param($s, $hit) if ($hit.Kind -eq 'row') { $s.Index = [int]$hit.Row } }
+    Activate = { param($s, $hit) $script:acts++; @{ Done = $true; Result = 'no' } } }
+Assert-Equal 2 $clickState.Index 'a double-click flag on an unselected row selects it'
+Assert-Equal 0 $acts 'and does not activate it'
+
+# One PHYSICAL double click is a plain press followed by a record flagged IsDoubleClick over the
+# same spot (Input.ps1). On the row that already carries the cursor the press activates, so the
+# flagged twin must be swallowed - a screen that does not END on the activation (a rejected project
+# pick) would otherwise run it twice, which is how one gesture prompted for a path two times.
+$acts = 0
+$dedupState = @{ Index = 2; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
+$w = New-EventReader @((New-MouseEvent -Y 6 -Left), (New-MouseEvent -Y 6 -Left -Double), $esc)
+$null = Invoke-ScreenLoop -Screen 'probe' -State $dedupState -Wait $w -GetWindowTop { 0 } -InputPending { $false } -Draw { param($s) $mouseMap } -Handlers @{
+    Rows = { 5 }; Click = { param($s, $hit) if ($hit.Kind -eq 'row') { $s.Index = [int]$hit.Row } }
+    Activate = { param($s, $hit) $script:acts++; $null } }
+Assert-Equal 1 $acts 'a physical double click on the selected row activates exactly once'
+
+# The same two records on a row the cursor is NOT on are D9 spelled out: the press selects, the
+# flagged twin lands on the now-selected row and acts. The flag is swallowed only right after an
+# activation, never after a select.
+$acts = 0
+$dedupState2 = @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false }
+$w = New-EventReader @((New-MouseEvent -Y 6 -Left), (New-MouseEvent -Y 6 -Left -Double), $esc)
+$null = Invoke-ScreenLoop -Screen 'probe' -State $dedupState2 -Wait $w -GetWindowTop { 0 } -InputPending { $false } -Draw { param($s) $mouseMap } -Handlers @{
+    Rows = { 5 }; Click = { param($s, $hit) if ($hit.Kind -eq 'row') { $s.Index = [int]$hit.Row } }
+    Activate = { param($s, $hit) $script:acts++; $null } }
+Assert-Equal 2 $dedupState2.Index 'a physical double click on an unselected row selects it'
+Assert-Equal 1 $acts 'and then activates it - once'
+
 # --- Task 7 (spec D4): every frame fits - no rendered line reaches the last console column -----
 # $sharedName / $fakeInfo are the fixtures the file already uses for Get-PickerFrame and
 # Get-MaintenanceFrame elsewhere in this file - reused here rather than a fifth ad hoc fixture.
@@ -4316,7 +4406,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1392) { Write-Host "COULD NOT RUN: expected 1392 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1412) { Write-Host "COULD NOT RUN: expected 1412 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

@@ -122,9 +122,12 @@ function New-LaunchState {
     [pscustomobject]@{
         Account = $script:DefaultAccount; Model = 'default'; Effort = 'default'; Advisor = 'default'
         Permission = 'default'; Remote = 'on'; Action = 'new'; Mode = 'normal'; Row = 0
-        # The footer button the mouse is over, -1 for none. On the STATE because the screen's -Draw
-        # takes the state and nothing else, so that is the only channel a hover has to the frame.
+        # What the mouse is over: the footer button (-1 for none), the row (-1 for none) and the
+        # option value ('' for none). On the STATE because the screen's -Draw takes the state and
+        # nothing else, so that is the only channel a hover has to the frame.
         Hover = -1
+        HoverRow = -1
+        HoverValue = ''
         # Per-tab state (Prefs.ps1). Profiles is this session's stash of the five habit rows per
         # account; Restored/RestoredAge are recomputed on every tab switch, which is why the frame
         # reads them from here rather than from a copy the launcher captured before the screen.

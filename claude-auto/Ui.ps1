@@ -315,6 +315,10 @@ function Invoke-ScreenLoop {
     $null = & $loopLogScreen $State 'enter'
     $loopNeedDraw = $true
     $loopMap = $null
+    # Did the click just handled ACT (spec D9)? One physical double click arrives as a plain press
+    # AND a record flagged IsDoubleClick over the same spot (Input.ps1), so without this the twin
+    # would run the activation a second time wherever the screen did not end.
+    $loopActed = $false
     while ($true) {
         if ($loopH.Before) { $null = & $loopH.Before $State }
         if ($loopNeedDraw) { $loopMap = & $Draw $State }
@@ -332,24 +336,26 @@ function Invoke-ScreenLoop {
             }
             $loopHit = Get-HitAt -RowMap $loopMap -X $loopKey.X -Y $loopKey.Y -WindowTop $loopTop
             if ($loopKey.IsMove) {
-                if ($loopH.Hover) { $loopNeedDraw = [bool](& $loopH.Hover $State $loopHit) }
-                else {
-                    # Default: only a CHANGE of hovered footer button is worth a frame.
-                    # HoverRows (C1): hovering a list row moves the cursor onto it, the way Claude
-                    # Code's own picker does (spec D3). Both list screens carried a byte-identical
-                    # handler for this whose only extra job was that move; it is a flag here instead,
-                    # so the footer bookkeeping below exists once and the copies cannot drift.
-                    # -is [int] (R18): a Rows[]-shaped map (launch, maintenance) hands back the row
-                    # OBJECT, which would otherwise land in $State.Index as a pscustomobject.
-                    # Both effects are applied before either verdict: a move from a lit button
-                    # straight onto a row has to clear that light in the SAME frame, not leave it lit
-                    # until some later move happens to land on a gap.
-                    $loopBtn = if ($loopHit.Kind -eq 'footer') { $loopHit.FooterIndex } else { -1 }
-                    $loopMoved = [bool]($loopH.HoverRows -and $loopHit.Kind -eq 'row' -and $loopHit.Row -is [int] -and $State.Index -ne $loopHit.Row)
-                    if ($loopMoved) { $State.Index = $loopHit.Row }
-                    if ($loopBtn -ne $State.Hover) { $State.Hover = $loopBtn; $loopNeedDraw = $true }
-                    else { $loopNeedDraw = $loopMoved }
+                # Spec D8: a move PAINTS, never selects. A footer button, a list row and an option
+                # value are the three things a hover can name; it publishes them on the state and the
+                # frame reads them from there. Nothing here touches Index - the cursor is wherever a
+                # click or a key put it, and so are the action, the preview and every record.
+                # All three are set before either verdict: a move from a lit button straight onto a
+                # row has to clear that light in the SAME frame, not leave it lit until some later
+                # move happens to land on a gap.
+                # -is [int] (R18): a Rows[]-shaped map (launch, maintenance) hands back the row
+                # OBJECT, a list map the row INDEX; the object's own Index is the row number, and a
+                # row object that never grew one names no row rather than row 0.
+                $loopBtn = if ($loopHit.Kind -eq 'footer') { $loopHit.FooterIndex } else { -1 }
+                $loopRow = -1; $loopVal = ''
+                if ($loopHit.Kind -eq 'row' -and $loopHit.Row -is [int]) { $loopRow = $loopHit.Row }
+                elseif ($loopHit.Kind -eq 'cell') {
+                    $loopRow = $(if ($null -ne $loopHit.Row.Index) { [int]$loopHit.Row.Index } else { -1 })
+                    $loopVal = "$($loopHit.Value)"
                 }
+                elseif ($loopHit.Kind -eq 'action') { $loopVal = "$($loopHit.Value)" }
+                $loopNeedDraw = ($loopBtn -ne $State.Hover) -or ($loopRow -ne $State.HoverRow) -or ($loopVal -ne $State.HoverValue)
+                $State.Hover = $loopBtn; $State.HoverRow = $loopRow; $State.HoverValue = $loopVal
                 # R19 - LAST MOVE WINS. A terminal delivers 6-12 mouse records per pixel of travel
                 # (Input.ps1) and a full render costs 65-180 ms at 198 columns, 474 ms on a 40-session
                 # picker: every frame but the last of a sweep is overwritten before anyone sees it.
@@ -368,27 +374,27 @@ function Invoke-ScreenLoop {
             # its key, and a second synthetic press would fire the action twice (or -ReadPath twice).
             if ($loopHit.Kind -eq 'footer') {
                 if ($loopKey.IsDoubleClick) { continue }
+                $loopActed = $false
                 $loopKey = New-SyntheticKey -Key $loopHit.Footer.Key -Char $loopHit.Footer.Char   # falls through to the key path
             } else {
-                if ($loopKey.IsDoubleClick -and $loopH.DoubleClick -and $loopHit.Kind -eq 'row') {
-                    # Move first, pick second - the invariant both list screens keep today (the
-                    # index is set to the clicked row before the pick runs), so a DoubleClick
-                    # handler reads $s.Index and never has to re-derive the row from the hit.
-                    # Both map shapes, because Get-HitAt answers both: a list map hands back the
-                    # row INDEX, a Rows[] map (launch, maintenance) the row OBJECT - assigning that
-                    # object put a pscustomobject in $State.Index, silently on a -Silent screen.
-                    # A Rows[]-shaped row object with no Index (a hand-built fixture, or a future
-                    # row shape that never grew one) falls through to $State.Index unchanged rather
-                    # than [int]$null, which is 0 - a silent jump to the first row.
-                    $State.Index = $(
-                        if ($loopHit.Row -is [int]) { $loopHit.Row }
-                        elseif ($null -ne $loopHit.Row.Index) { [int]$loopHit.Row.Index }
-                        else { $State.Index }
-                    )
-                    $loopRes = & $loopH.DoubleClick $State $loopHit
-                    $null = & $loopLogRes $State 'doubleclick' $loopRes @{ button = 'row' }
+                # Spec D9: a click on the row that already carries the cursor ACTS - it means what
+                # Enter means on this screen. Every other click goes to Click, which only selects.
+                # A double click is two clicks: the first selects, the second lands on the selected
+                # row and acts, so there is no IsDoubleClick branch on rows at all.
+                # Reachable for LIST maps only (Row -is [int]): a Rows[]-shaped screen (launch,
+                # maintenance) hands back the row OBJECT, so an Activate registered there is dead by
+                # design - those screens act on Enter and on their footer buttons.
+                if ($loopHit.Kind -eq 'row' -and $loopHit.Row -is [int] -and $loopHit.Row -eq $State.Index -and $loopH.Activate) {
+                    # The flagged twin of a press that JUST acted is the same gesture, not a second
+                    # one: without this a rejected project pick prompted for a path twice. A flagged
+                    # press that follows a plain SELECT is the other half of D9 and still acts.
+                    if ($loopKey.IsDoubleClick -and $loopActed) { continue }
+                    $loopActed = $true
+                    $loopRes = & $loopH.Activate $State $loopHit
+                    $null = & $loopLogRes $State 'click' $loopRes @{ button = 'row' }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
                 } elseif ($loopHit.Kind -ne 'none' -and $loopH.Click) {
+                    $loopActed = $false
                     $loopRes = & $loopH.Click $State $loopHit
                     # A click that logs says so by naming its own key ('click'); one that does not
                     # (a plain row select) leaves no record, exactly as the screens do today.
@@ -397,7 +403,7 @@ function Invoke-ScreenLoop {
                         $null = & $loopLogRes $State $loopName $loopRes
                     }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
-                }
+                } else { $loopActed = $false }
                 continue
             }
         }
@@ -507,13 +513,13 @@ function Invoke-LaunchScreen {
         $s.Index = [int]$s.State.Row
     }
 
-    $st = @{ Index = [int]$State.Row; Hover = -1; Typing = $false; State = $State }
+    $st = @{ Index = [int]$State.Row; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false; State = $State }
     return (Invoke-ScreenLoop -Screen 'launch' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
         -Draw { param($s) & $paintLaunch $s.State } -Handlers @{
         # The cursor lives in two places - the loop's Index, and the state's Row that the frame
         # draws and Step-LaunchValue steps. Index wins here; a handler that replaces the state
-        # copies Row back onto Index itself. Hover reaches the frame the same way (spec D3).
-        Before = { param($s) $s.State.Row = $s.Index; $s.State.Hover = $s.Hover }
+        # copies Row back onto Index itself. The three hover fields reach the frame the same way.
+        Before = { param($s) $s.State.Row = $s.Index; $s.State.Hover = $s.Hover; $s.State.HoverRow = $s.HoverRow; $s.State.HoverValue = $s.HoverValue }
         Rows   = { @(Get-LaunchRows).Count }
         Left   = { param($s) $null = & $walkRow $s (-1) 1 }
         Right  = { param($s) $null = & $walkRow $s 1 1 }
@@ -684,10 +690,10 @@ function Invoke-ProjectScreen {
         return [pscustomobject]@{ Path = $target; Action = $s.Action; How = $How; Slug = $(if ($slugs.Count -gt 0) { $slugs[0] } else { '' }); Slugs = $slugs }
     }
 
-    # One pick, one notice, one record shape: Enter, a hotkey and a double click differ only in the
-    # How they carry onto the result. A rejected pick still writes its key record - the press did
-    # happen - and leaves the notice the next frame shows.
-    # N3's written scope, where the code says it: the pick-bearing records (Enter, c/r/t, doubleclick)
+    # One pick, one notice, one record shape: Enter, a hotkey and a click on the selected row differ
+    # only in the How they carry onto the result. A rejected pick still writes its key record - the
+    # press did happen - and leaves the notice the next frame shows.
+    # N3's written scope, where the code says it: the pick-bearing records (Enter, c/r/t, click)
     # are written AFTER the pick - the loop logs what this handler returns, so `action` on the record
     # is the value the pick actually ran with, never the one the field held before it.
     $commit = {
@@ -717,7 +723,7 @@ function Invoke-ProjectScreen {
     # from every row, so it never needs focus - and the focus state it used to have could only be
     # entered from the LAST list row, which parked the commit on 'enter a path...' and made the
     # arrows-only path end at a Read-Host prompt.
-    $st = @{ Index = $startIndex; Hover = -1; Typing = $false
+    $st = @{ Index = $startIndex; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false
              Filter = ''; Notice = ''; Action = (Step-ProjectAction -Action $InitialAction -Delta 0); Rows = @() }
     return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
         -Draw { param($s) & $paintProject $projectList $s.Index $s.Filter $s.Typing $s.Hover $s.Notice $s.Action } -Handlers @{
@@ -816,18 +822,14 @@ function Invoke-ProjectScreen {
             if ($hit.Kind -eq 'row') { $s.Index = [int]$hit.Row }
             return
         }
-        # A double click is the exception to that rule: two presses close enough to register as one
-        # gesture are unambiguous intent. It commits the FIELD, not a hardcoded 'new' - the gesture
-        # means "this row, that action", and two answers to "what does a commit do here" would
-        # disagree the first time one of them changed. The loop has already moved the cursor to the
-        # clicked row, and ignores a double click on a footer button outright.
-        DoubleClick = { param($s, $hit) & $commit $s 'mouse' }
+        # A click on the row that already carries the cursor is the exception to that rule (spec D9):
+        # it is Enter's gesture with a mouse. It commits the FIELD, not a hardcoded 'new' - the
+        # gesture means "this row, that action", and two answers to "what does a commit do here"
+        # would disagree the first time one of them changed.
+        Activate = { param($s, $hit) & $commit $s 'mouse' }
         # filterLength, never the filter: a filter is often a pasted PATH, and the log is not the
         # place for it. Screen records only - the key records carry what the key itself changed.
         ScreenFields = { param($s) @{ filterLength = $s.Filter.Length } }
-        # Hovering a list row moves the cursor there (Task 10, spec D3) - the loop's own row-hover
-        # branch, not a handler of this screen's: the picker's copy was byte-identical (C1).
-        HoverRows = $true
     })
 }
 
@@ -1009,7 +1011,7 @@ function Invoke-SessionPicker {
         return [pscustomobject]@{ Session = $shown[$s.Index]; Fork = $Fork }
     }
 
-    $st = @{ Index = 0; Hover = -1; Typing = $false; Filter = ''
+    $st = @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false; Filter = ''
              Scope = $openScope; Pages = @{}; Pool = @(); Resumable = @(); Items = @(); CanPage = $false
              # What the caller handed in. `rows` on the ENTER record is that page, never what
              # survived the scope, the zero-prompt drop and the filter - the two differing is
@@ -1106,14 +1108,14 @@ function Invoke-SessionPicker {
             'f' = { param($s) $picked = & $takeRow $s $true; if ($picked) { return @{ Done = $true; Result = $picked; Log = @{ fork = $true } } }; return @{ NoLog = $true } }
             '/' = { param($s) $s.Typing = $true; @{ Log = @{ filter = 'open' } } }
         }
-        # Deliberately conservative about what opens a session: a single click only MOVES the
-        # selection, and only a double click (or Enter) opens one. A stray click that launched a
-        # session would be the kind of mistake nobody forgives, and the cost of the caution is one
-        # extra click for people who want it. A click past the end of the list moves nothing.
+        # Deliberately conservative about what opens a session: a click on a row the cursor is not on
+        # only MOVES the selection (and loads its preview), and only a click on the SELECTED row - or
+        # Enter - opens one. A stray click that launched a session would be the kind of mistake
+        # nobody forgives, and the cost of the caution is one extra click. A click past the end of
+        # the list moves nothing.
         Click = { param($s, $hit) if ($hit.Kind -eq 'row' -and $hit.Row -ge 0 -and $hit.Row -lt @($s.Items).Count) { $s.Index = [int]$hit.Row }; return }
-        # The loop has already moved the cursor onto the clicked row, and ignores a double click on a
-        # footer button outright.
-        DoubleClick = { param($s, $hit) $picked = & $takeRow $s $false; if ($picked) { return @{ Done = $true; Result = $picked } }; return @{ NoLog = $true } }
+        # Enter's gesture with a mouse (spec D9); the loop ignores a click on a footer button here.
+        Activate = { param($s, $hit) $picked = & $takeRow $s $false; if ($picked) { return @{ Done = $true; Result = $picked } }; return @{ NoLog = $true } }
         # `scope` rides on EVERY record: Tab is the one key here that changes what the whole list
         # MEANS, and "the picker was empty" reads completely differently scoped to a project than
         # widened to the account.
@@ -1122,9 +1124,6 @@ function Invoke-SessionPicker {
         # place for it.
         ScreenFields = { param($s) @{ filterLength = $s.Filter.Length } }
         ScreenRows = { param($s, $phase) if ($phase -eq 'enter') { [int]$s.HandedIn } else { @($s.Items).Count } }
-        # Hovering a list row moves the cursor there (Task 10, spec D3) - the loop's own row-hover
-        # branch, the same flag Invoke-ProjectScreen sets (C1).
-        HoverRows = $true
     }
     # Guarded on $hasScope by not existing at all: with nothing to scope to there is no "other" scope
     # to widen from or narrow to, so Tab does nothing rather than toggling between two labels that
@@ -1277,7 +1276,7 @@ function Invoke-MaintenanceScreen {
     }
 
     $maintState = @{
-        Index = 0; Hover = -1; Typing = $false
+        Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false
         # What the frame on screen was drawn from, so an action's "running ..." frame repaints the
         # same install info the frame under it already showed.
         Info = $null
