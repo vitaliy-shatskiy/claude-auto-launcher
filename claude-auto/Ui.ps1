@@ -446,6 +446,14 @@ function Invoke-ScreenLoop {
                     # twin, a VT terminal cannot - and the SAME ROW as well, because a press that
                     # walked to another row is a new gesture however fast it arrived. A press that
                     # follows a plain SELECT is the other half of D9 and still acts.
+                    #
+                    # SECOND LINE ONLY since P14 armed the script-scope record above, and measured
+                    # as such: reverting this test to flag-only leaves every suite green, because
+                    # the record catches the twin one branch earlier for every sequence a terminal
+                    # actually sends (a console double click is two down records, a VT one is two
+                    # press reports - releases never reach this path). What is left here is a THIRD
+                    # record of one gesture, which no terminal has been observed to send. Kept as
+                    # defence in depth pending a ruling, NOT because a pin holds it up.
                     if ($loopActed -and $loopHit.Row -eq $loopActedRow -and ($loopKey.IsDoubleClick -or
                         ($null -ne $loopNow -and $null -ne $loopActedAt -and ($loopNow - $loopActedAt) -lt $loopTwinMs))) {
                         # Nothing on the state changed, so there is nothing to repaint: a swallowed
