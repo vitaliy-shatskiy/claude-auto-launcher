@@ -4326,9 +4326,12 @@ $twinRun = {
         }
     return $script:twinActs
 }
-Assert-Equal 1 (& $twinRun @(1000, 1100)) 'two PLAIN presses on the selected row 100 ms apart are one gesture - the VT twin is swallowed although no record is flagged'
-Assert-Equal 2 (& $twinRun @(1000, 1800)) 'and 800 ms apart they are two - the stamp guard swallows a twin, never a deliberate second click'
-Assert-Equal 2 (& $twinRun @($null, $null)) 'a reader with NO stamp keeps the flag-only behaviour exactly as before - an unflagged press always acts'
+# THREE stamps, one per Left press: the loop reads -RecordTime once for every press it handles (the
+# select, the activation, the twin), not only for the ones that reach the Activate branch. The gap
+# under test is the one between the SECOND and the THIRD.
+Assert-Equal 1 (& $twinRun @(900, 1000, 1100)) 'two PLAIN presses on the selected row 100 ms apart are one gesture - the VT twin is swallowed although no record is flagged'
+Assert-Equal 2 (& $twinRun @(900, 1000, 1800)) 'and 800 ms apart they are two - the stamp guard swallows a twin, never a deliberate second click'
+Assert-Equal 2 (& $twinRun @($null, $null, $null)) 'a reader with NO stamp keeps the flag-only behaviour exactly as before - an unflagged press always acts'
 # The two $loopActed resets are load-bearing rather than defensive: an Activate that does NOT end
 # the screen leaves the twin guard armed, and a press on that row after a detour through a footer
 # button or a gap is a NEW gesture that has to act. Without the reset the flagged press below is
@@ -4352,6 +4355,25 @@ foreach ($detour in @(
         }
     Assert-Equal 2 $script:detourActs "a press on the selected row after a detour through $($detour.Name) acts again - that detour disarms the twin guard"
 }
+# The same P7 argument for a FOOTER button, which the flag-only guard left exposed: a VT terminal
+# sends no double-click flag at all, so one gesture on a button fired its key TWICE there.
+$ftRun = {
+    param([object[]]$Events, [object[]]$Stamps)
+    $ftQ = [System.Collections.Queue]::new(); foreach ($e in $Events) { $ftQ.Enqueue($e) }
+    $ftS = [System.Collections.Queue]::new(); foreach ($s in $Stamps) { $ftS.Enqueue($s) }
+    $script:ftFires = 0
+    $script:LastActivation = $null   # a new gesture: nothing here follows an activation
+    $null = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false } `
+        -Wait { $ftQ.Dequeue() } -Draw { $map } -InputPending { $false } `
+        -RecordTime { if ($ftS.Count -gt 0) { $ftS.Dequeue() } else { $null } } -Handlers @{
+            Rows  = { 3 }
+            Enter = { param($s) $script:ftFires++; $null }
+        }
+    return $script:ftFires
+}
+Assert-Equal 1 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left -Double), $esc) @()) 'a console double click on a footer button fires its key once - the flagged twin is dropped'
+Assert-Equal 1 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left), $esc) @(1000, 1080)) 'and so does the VT one, where the twin is a second PLAIN press 80 ms later and no record carries a flag'
+Assert-Equal 2 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left), $esc) @(1000, 1800)) 'while two presses 800 ms apart are two clicks and fire the button twice'
 # What a move over an ACTION-row cell publishes, pinned at the LOOP rather than at a frame builder.
 # Before this, deleting the loop's `action` branch outright, or the HoverValue term of its redraw
 # test, left every suite in the repository green.
@@ -4450,6 +4472,12 @@ Assert-Equal 1 $acts 'the first click only selected'
 
 # A double click carries no meaning of its own: it is two clicks, so one flagged record on a row
 # that is NOT the selected one may only select it.
+# $script:LastActivation is cleared first because this fixture is a NEW gesture and nothing in it
+# says so: the run above ended on an Activate at this very Y, which arms the P14 record, and the
+# first record HERE is flagged - the exact shape that record exists to swallow. No real terminal
+# produces it, because a physical double click is a PLAIN press followed by the flagged one and
+# that plain press consumes the record harmlessly; only a fixture can start on the flag.
+$script:LastActivation = $null
 $acts = 0; $clickState.Index = 0
 $w = New-EventReader @((New-MouseEvent -Y 6 -Left -Double), $esc)
 $null = Invoke-ScreenLoop -Screen 'probe' -State $clickState -Wait $w -GetWindowTop { 0 } -InputPending { $false } -Draw { param($s) $mouseMap } -Handlers @{
@@ -4593,6 +4621,47 @@ Assert-Equal $true ((@($script:hFrames[2]) -join "`n") -match 'u3') 'and only th
 Assert-Equal 's3' $hPicked.Session.SessionId 'the second click on the selected row opens it'
 Assert-Equal $false $hPicked.Fork 'and opens it rather than forking it'
 
+# --- P14: the twin that OUTLIVES its screen -----------------------------------------------------
+# ONE event queue through the REAL project screen and then the REAL picker, the way the launcher
+# chains them. A double click on the already-selected project row activates on the FIRST press and
+# the screen ends; the second record of that one gesture is still queued and arrives at the picker,
+# whose row 0 sits on the very same screen line - and opened a session nobody chose. Driven off the
+# real row maps, because the whole defect is a coordinate that means one thing on one screen and
+# something else on the next; a fixture map could not show it.
+$p14Cwd = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-p14-$([Guid]::NewGuid().ToString('N'))")
+$null = New-Item -ItemType Directory -Path $p14Cwd -Force   # must EXIST: a vanished cwd is a REJECTED pick, and then the screen never ends
+$p14Probe = $null
+$null = Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd $p14Cwd -Width 120 -Height 24 -RowMap ([ref]$p14Probe)
+$p14PickProbe = $null
+$null = Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 120 -Height 24 -RowMap ([ref]$p14PickProbe)
+Assert-Equal ([int]$p14Probe.RowYs[0]) ([int]$p14PickProbe.FirstRowY) 'the project screen''s cwd row and the picker''s row 0 sit on the SAME screen line - which is what lets one queued press mean two different things'
+$p14Y = [int]$p14Probe.RowYs[0]
+$p14Run = {
+    param([object[]]$Events, [object[]]$Stamps)
+    $p14Q = [System.Collections.Queue]::new(); foreach ($e in $Events) { $p14Q.Enqueue($e) }
+    $p14S = [System.Collections.Queue]::new(); foreach ($s in $Stamps) { $p14S.Enqueue($s) }
+    $p14Read  = { if ($p14Q.Count -eq 0) { throw 'events exhausted' }; $p14Q.Dequeue() }.GetNewClosure()
+    $p14Clock = { if ($p14S.Count -gt 0) { $p14S.Dequeue() } else { $null } }.GetNewClosure()
+    $p14DrawA = { param($p, $i, $f, $t, $h, $n, $a, $hr, $hv) $script:p14MapA = $null
+        $null = Get-ProjectFrame -Projects $p -Index $i -Cwd $p14Cwd -Action $a -HoverRow $hr -HoverValue $hv -Width 120 -Height 24 -RowMap ([ref]$script:p14MapA); $script:p14MapA }
+    $p14DrawB = { param($s, $i, $f, $sc, $pn, $hv, $hr) $script:p14MapB = $null
+        $null = Get-PickerFrame -Sessions $s -Index $i -Hover $hv -HoverRow $hr -Width 120 -Height 24 -RowMap ([ref]$script:p14MapB); $script:p14MapB }
+    $script:LastActivation = $null   # each run is its own gesture; nothing before it is in flight
+    $p14Chosen = Invoke-ProjectScreen -Projects $projs6 -Cwd $p14Cwd -InitialAction 'resume' -ReadKey $p14Read -Draw $p14DrawA -Wait $p14Read -GetWindowTop { 0 } -InputPending { $false } -RecordTime $p14Clock
+    $p14Picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $p14Read -Draw $p14DrawB -Wait $p14Read -GetWindowTop { 0 } -InputPending { $false } -RecordTime $p14Clock
+    return [pscustomobject]@{ Chosen = $p14Chosen; Picked = $p14Picked; Left = $p14Q.Count }
+}
+$p14Console = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left -Double), $esc) @()
+Assert-Equal $p14Cwd "$($p14Console.Chosen.Path)" 'P14: the first press of the double click picks the current directory and ends the project screen'
+Assert-True ($null -eq $p14Console.Picked) 'and the flagged twin behind it opens NOTHING on the picker - the record is dropped rather than handed to the next screen'
+Assert-Equal 0 $p14Console.Left 'exactly one record was left for the Escape that ends the picker'
+$p14Vt = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1080)
+Assert-True ($null -eq $p14Vt.Picked) 'the VT twin - a second PLAIN press 80 ms later, the only shape that terminal can send - is dropped just as the flagged one is'
+Assert-Equal 0 $p14Vt.Left 'and leaves the same single record for Escape'
+$p14Late = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1800)
+Assert-Equal 's1' "$($p14Late.Picked.Session.SessionId)" 'while a plain press 800 ms later is a real second click and still reaches the picker - the guard swallows a twin, never a decision'
+Remove-Item -LiteralPath $p14Cwd -Recurse -Force -ErrorAction SilentlyContinue
+
 # --- Task 7 (spec D4): every frame fits - no rendered line reaches the last console column -----
 # $sharedName / $fakeInfo are the fixtures the file already uses for Get-PickerFrame and
 # Get-MaintenanceFrame elsewhere in this file - reused here rather than a fifth ad hoc fixture.
@@ -4674,7 +4743,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1584) { Write-Host "COULD NOT RUN: expected 1584 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1594) { Write-Host "COULD NOT RUN: expected 1594 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

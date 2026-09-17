@@ -688,7 +688,7 @@ $uiScreens = @($uiAst.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
     ("$($n.Name)" -like 'Invoke-*Screen' -or "$($n.Name)" -eq 'Invoke-SessionPicker') }, $true))
 Assert-Equal 4 $uiScreens.Count 'Ui.ps1 has exactly four screen entry points, each a handler table around Invoke-ScreenLoop'
-$uiForbidden = @('Draw', 'State', 'Wait', 'GetWindowTop', 'Handlers', 'Silent', 'Screen', 'InputPending')
+$uiForbidden = @('Draw', 'State', 'Wait', 'GetWindowTop', 'Handlers', 'Silent', 'Screen', 'InputPending', 'RecordTime')
 $uiLeaks = @()
 foreach ($uiFn in $uiScreens) {
     foreach ($uiSb in @($uiFn.FindAll({ param($n) $n -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }, $true))) {
