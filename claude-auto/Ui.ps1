@@ -233,8 +233,9 @@ function Invoke-ScreenLoop {
     # the screen that wrote it. A local named $key, $rowsOf, $index or $logKey here would silently
     # answer a handler reaching for the screen's own (measured: a screen helper named $rowsOf is
     # shadowed outright). The PARAMETERS keep their interface names, so the rule for a handler is:
-    # never read $Screen/$State/$Draw/$Wait/$GetWindowTop/$Handlers/$Silent - it gets THIS loop's.
-    # A screen that must reach its own painter or state inside a handler keeps it under another name.
+    # never read $Screen/$State/$Draw/$Wait/$GetWindowTop/$Handlers/$Silent/$InputPending - it gets
+    # THIS loop's. A screen that must reach its own painter or state inside a handler keeps it under
+    # another name.
     param(
         [Parameter(Mandatory)][string]$Screen,
         [Parameter(Mandatory)][hashtable]$State,
@@ -243,7 +244,11 @@ function Invoke-ScreenLoop {
         [scriptblock]$GetWindowTop = { try { [Console]::WindowTop } catch { 0 } },
         [hashtable]$Handlers = @{},
         # No screen/key records at all - the maintenance screen logs nothing today and keeps it so.
-        [switch]$Silent
+        [switch]$Silent,
+        # "Is another input record already waiting" (R19). Injected so the coalescing below is
+        # assertable without a console; the default answers $false wherever no console is armed, so
+        # every keyboard-only caller and every existing suite behaves exactly as it did.
+        [scriptblock]$InputPending = { Test-ClaudeInputPending }
     )
     $loopH = $Handlers
     $loopIsCtrl = { param($loopK) [bool]($loopK.Modifiers -band [System.ConsoleModifiers]::Control) }
@@ -314,12 +319,22 @@ function Invoke-ScreenLoop {
             }
             $loopHit = Get-HitAt -RowMap $loopMap -X $loopKey.X -Y $loopKey.Y -WindowTop $loopTop
             if ($loopKey.IsMove) {
-                if ($loopH.Hover) { $loopNeedDraw = [bool](& $loopH.Hover $State $loopHit); continue }
-                # Default: only a CHANGE of hovered footer button is worth a frame (the project
-                # screen's throttle today). Row hover is a screen's own Hover handler (Task 10).
-                $loopBtn = if ($loopHit.Kind -eq 'footer') { $loopHit.FooterIndex } else { -1 }
-                if ($loopBtn -eq $State.Hover) { $loopNeedDraw = $false; continue }
-                $State.Hover = $loopBtn
+                if ($loopH.Hover) { $loopNeedDraw = [bool](& $loopH.Hover $State $loopHit) }
+                else {
+                    # Default: only a CHANGE of hovered footer button is worth a frame (the project
+                    # screen's throttle today). Row hover is a screen's own Hover handler (Task 10).
+                    $loopBtn = if ($loopHit.Kind -eq 'footer') { $loopHit.FooterIndex } else { -1 }
+                    if ($loopBtn -eq $State.Hover) { $loopNeedDraw = $false }
+                    else { $State.Hover = $loopBtn; $loopNeedDraw = $true }
+                }
+                # R19 - LAST MOVE WINS. A terminal delivers 6-12 mouse records per pixel of travel
+                # (Input.ps1) and a full render costs 65-180 ms at 198 columns, 474 ms on a 40-session
+                # picker: every frame but the last of a sweep is overwritten before anyone sees it.
+                # Only the DRAW is dropped - the state above is already updated, so the frame the
+                # next event does draw carries every move that led to it. The check is one
+                # non-blocking read of the queue's depth (no sleep, no wait, no consume), so an empty
+                # queue always draws and the mouse can never leave a stale frame standing.
+                if ($loopNeedDraw -and (& $InputPending)) { $loopNeedDraw = $false }
                 continue
             }
             if (-not ($loopKey.Left -and -not $loopKey.IsMove)) { continue }

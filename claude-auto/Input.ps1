@@ -203,13 +203,19 @@ function Open-ClaudeConsoleInput {
         # The keyboard-only [Console]::ReadKey path reads this flag rather than the console mode, so
         # both have to agree; $tcc above is what the restore puts back.
         try { [Console]::TreatControlCAsInput = $true } catch { }
-        return [pscustomobject]@{
+        $state = [pscustomobject]@{
             Handle = $h; OriginalMode = $mode; ArmedMode = $armed; Closed = $false
             OriginalTreatControlC = $tcc
             # Set the first time a genuine MOUSE_EVENT record arrives. A console that sends those
             # must never be downgraded to the text protocol - see Switch-ClaudeMouseToText.
             SawConsoleMouse = $false
         }
+        # Parked here as well as returned, for the ONE caller that has no state to thread:
+        # Invoke-ScreenLoop's hover coalescing asks "is another event already waiting" and has only
+        # the handler table, never the console. Read-only - nothing reachable from there consumes a
+        # record - so a stale reference cannot eat input; Close- clears it anyway.
+        $script:ClaudeInputState = $state
+        return $state
     } catch { return $null }
 }
 
@@ -241,7 +247,10 @@ function Close-ClaudeConsoleInput {
     # the `finally` block makes on an unwind - into a no-op, so a failed restore was both silent and
     # unretryable. What it leaves behind is the reader's terminal with QuickEdit off for the rest of
     # the day, and nothing said so.
-    if ($ok) { $State.Closed = $true }
+    if ($ok) {
+        $State.Closed = $true
+        if ([object]::ReferenceEquals($script:ClaudeInputState, $State)) { $script:ClaudeInputState = $null }
+    }
     else {
         try { [Console]::Error.WriteLine('claude-auto: the console mode could not be restored; QuickEdit may still be off in this terminal') } catch { }
     }
@@ -740,6 +749,27 @@ function Clear-ClaudeInputQueue {
     param($State)
     if (-not $State -or $State.Closed) { return $false }
     try { return [ClaudeAuto.ConsoleInput]::FlushConsoleInputBuffer($State.Handle) } catch { return $false }
+}
+
+function Test-ClaudeInputPending {
+    # Is another input record ALREADY waiting? ONE non-blocking snapshot of the queue's depth - no
+    # wait, no sleep, no read - so asking costs a single syscall and can never consume the very event
+    # it reports. That is the whole contract Invoke-ScreenLoop's hover coalescing rests on
+    # (controller ruling R19: never a sleep, never a busy-wait, never a new blocking read).
+    #
+    # GetNumberOfConsoleInputEvents, never [Console]::KeyAvailable: KeyAvailable silently DEQUEUES a
+    # mouse record while scanning for a key (measured - see Wait-KeyOrResize's own comment), and this
+    # stands next to exactly that queue.
+    #
+    # $false wherever there is no armed console - the keyboard-only path, a suite, a redirected run -
+    # which makes the coalescing a no-op there rather than a behaviour change.
+    param($State = $script:ClaudeInputState)
+    if (-not $State -or $State.Closed) { return $false }
+    try {
+        [uint32]$n = 0
+        if (-not [ClaudeAuto.ConsoleInput]::GetNumberOfConsoleInputEvents($State.Handle, [ref]$n)) { return $false }
+        return ([int]$n -gt 0)
+    } catch { return $false }
 }
 
 function New-SyntheticKey {

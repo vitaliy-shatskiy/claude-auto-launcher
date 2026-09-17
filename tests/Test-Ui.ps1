@@ -4008,6 +4008,57 @@ $r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow
 Assert-Equal 'enter@1' $r 'a row click moves the index and a footer click becomes Enter'
 Assert-Equal 'row:1' ($clicked -join ',') 'the Click handler saw the row hit'
 Assert-Equal 3 $draws 'four events, three draws: the move inside the same button skipped one'
+
+# --- R19: hover coalescing. A terminal delivers 6-12 mouse records per pixel of travel and a full
+# render costs 65-180 ms, so every frame but the LAST of a sweep is overwritten before anyone sees
+# it. -InputPending answers "is another record already waiting" from a single non-blocking queue
+# read; while it says yes the loop keeps the state change and drops the draw.
+# Three moves onto three DIFFERENT rows, each of which would otherwise cost a frame; the reader
+# reports pending for the first two only.
+$coMap = [pscustomobject]@{ FirstRowY = 1; RowCount = 5; Start = 0; FooterY = 9; FooterLines = 1; Footer = @() }
+# The row-hover handler both list screens carry, written out here so this probe stands on its own.
+$coHover = { param($s, $hit) if ($hit.Kind -eq 'row' -and $hit.Row -is [int] -and $s.Index -ne $hit.Row) { $s.Index = $hit.Row; return $true }; return $false }
+$coQ = [System.Collections.Queue]::new()
+$coQ.Enqueue((New-MouseEvent -X 3 -Y 2 -Move))
+$coQ.Enqueue((New-MouseEvent -X 3 -Y 3 -Move))
+$coQ.Enqueue((New-MouseEvent -X 3 -Y 4 -Move))
+$coQ.Enqueue($esc)
+$script:coPending = [System.Collections.Queue]::new()
+@($true, $true, $false) | ForEach-Object { $script:coPending.Enqueue($_) }
+$script:coDraws = 0
+$coState = @{ Index = 0; Hover = -1; Typing = $false }
+$r = Invoke-ScreenLoop -Screen 'probe' -State $coState -Wait { $coQ.Dequeue() } `
+    -Draw { param($s) $script:coDraws++; $coMap } `
+    -InputPending { if ($script:coPending.Count -gt 0) { $script:coPending.Dequeue() } else { $false } } `
+    -Handlers @{ Rows = { 5 }; Hover = $coHover }
+Assert-True ($null -eq $r) 'the coalescing run still ends with Escape'
+Assert-Equal 2 $script:coDraws 'three row-move events draw exactly twice: the initial frame, and ONE more after the last move - the two coalesced frames were never rendered'
+Assert-Equal 3 $coState.Index 'and the frame that was drawn carries the LAST move, not the first - only the draw is dropped, never the state'
+# The positive control: the same three moves with nothing pending cost a frame each.
+$coQ2 = [System.Collections.Queue]::new()
+$coQ2.Enqueue((New-MouseEvent -X 3 -Y 2 -Move))
+$coQ2.Enqueue((New-MouseEvent -X 3 -Y 3 -Move))
+$coQ2.Enqueue((New-MouseEvent -X 3 -Y 4 -Move))
+$coQ2.Enqueue($esc)
+$script:coDraws2 = 0
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $coQ2.Dequeue() } `
+    -Draw { param($s) $script:coDraws2++; $coMap } -InputPending { $false } `
+    -Handlers @{ Rows = { 5 }; Hover = $coHover }
+Assert-True ($null -eq $r) 'the un-coalesced run ends with Escape too'
+Assert-Equal 4 $script:coDraws2 'with an empty queue every one of the three moves draws - so the assertion above is not satisfied by a loop that simply stopped drawing'
+
+# T10 (deferred): a DRAG is a move. Left rides along on the record and the IsMove branch never looks
+# at it, so dragging across row 2 moves the cursor exactly as a bare hover does - and the NEXT frame
+# has to carry it, which is the half a commit-only assertion cannot see.
+$dragQ = [System.Collections.Queue]::new()
+$dragQ.Enqueue((New-MouseEvent -X 3 -Y 3 -Left -Move))   # drag over visible row 2
+$dragQ.Enqueue($esc)
+$script:dragSeen = New-Object System.Collections.Generic.List[int]
+$r = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; Typing = $false } -Wait { $dragQ.Dequeue() } `
+    -Draw { param($s) $script:dragSeen.Add([int]$s.Index); $coMap } -InputPending { $false } `
+    -Handlers @{ Rows = { 5 }; Hover = $coHover }
+Assert-True ($null -eq $r) 'the drag run ends with Escape'
+Assert-Equal '0,2' ($script:dragSeen -join ',') 'a drag over row 2 puts the NEXT frame on Index = 2 - a drag moves the cursor exactly as a hover does'
 # C2: a double click on a FOOTER button is ignored outright. The first press already became that
 # button's key, so turning the doubleclick-flagged record into a second synthetic press fires the
 # action twice - which is how one gesture on the free-path row ran -ReadPath twice. Every screen
@@ -4078,7 +4129,7 @@ Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x23FA)) 'U+23FA (the old 
 Assert-Equal 2 (Get-DisplayWidth -Text ([string][char]0x2B06)) 'and so does U+2B06'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1260) { Write-Host "COULD NOT RUN: expected 1260 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1267) { Write-Host "COULD NOT RUN: expected 1267 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
