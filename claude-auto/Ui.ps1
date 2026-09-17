@@ -14,6 +14,15 @@
 # and Step-LaunchValue now live in Screens.ps1. This file keeps the input loops and the session
 # picker screen.
 
+# The last row activation, as @{ Y = <the record's own screen Y>; At = <record stamp or $null> },
+# $null when none is armed (spec P14). SCRIPT scope on purpose and this is the whole point: an
+# Activate whose result ends the screen returns from inside Invoke-ScreenLoop, and the second record
+# of that one physical gesture is still sitting in the terminal's queue. It reaches the NEXT screen,
+# which has no idea a gesture was in progress, and lands there as an ordinary press on whatever
+# occupies the same Y - measured: picking a project opened a session on the picker's row 0 that
+# nobody chose. A loop-local guard cannot see across that boundary; this can.
+$script:LastActivation = $null
+
 function Test-AltBufferSupported {
     # Redirected output is not a terminal, and preview mode must print linearly so its output can be
     # captured. Everything else is assumed capable and repaired by Exit-AltBuffer's finally.
@@ -334,6 +343,10 @@ function Invoke-ScreenLoop {
     $loopActedRow = -1
     $loopActedAt = $null
     $loopTwinMs = 500
+    # The same question for a FOOTER button, which has no Activate to hang off: when did the press
+    # that became this button's key arrive, and over which Y.
+    $loopFooterY = -1
+    $loopFooterAt = $null
     while ($true) {
         if ($loopH.Before) { $null = & $loopH.Before $State }
         if ($loopNeedDraw) { $loopMap = & $Draw $State }
@@ -385,10 +398,33 @@ function Invoke-ScreenLoop {
             # branch above always `continue`s the loop, so a move event never reaches this line - the
             # IsMove block above is the real move guard.
             if (-not $loopKey.Left) { continue }
+            # Read ONCE for all three twin tests below - the cross-screen record, the footer guard
+            # and the row guard - so a press costs one -RecordTime call rather than three.
+            $loopNow = & $RecordTime
+            # P14: the twin that OUTLIVED its screen (the header carries the whole argument). Every
+            # Left press in every screen looks at the record first, footer presses included - the Y
+            # decides, because the next screen's rows are not this one's. It guards the NEXT press
+            # and only that one: matched or not, it is consumed right here, so an ordinary click
+            # that happens to follow an activation is never swallowed twice over.
+            if ($script:LastActivation) {
+                $loopLast = $script:LastActivation
+                $script:LastActivation = $null
+                if ($loopKey.Y -eq $loopLast.Y -and ($loopKey.IsDoubleClick -or
+                    ($null -ne $loopNow -and $null -ne $loopLast.At -and ($loopNow - $loopLast.At) -lt $loopTwinMs))) {
+                    $loopNeedDraw = $false
+                    continue
+                }
+            }
             # A double click on a footer button is ignored outright: the first press already became
             # its key, and a second synthetic press would fire the action twice (or -ReadPath twice).
             if ($loopHit.Kind -eq 'footer') {
-                if ($loopKey.IsDoubleClick) { continue }
+                # The FLAG is the console's answer and the STAMP is the only one a VT terminal can
+                # give (P7): ConvertFrom-ClaudeMouseReport has no double click to report, so one
+                # gesture on a button fired its key twice there - probe, 2 fires 80 ms apart.
+                if ($loopKey.IsDoubleClick -or ($loopKey.Y -eq $loopFooterY -and $null -ne $loopNow -and
+                    $null -ne $loopFooterAt -and ($loopNow - $loopFooterAt) -lt $loopTwinMs)) { $loopNeedDraw = $false; continue }
+                $loopFooterY = $loopKey.Y
+                $loopFooterAt = $loopNow
                 # Disarms the twin guard above, and it is load-bearing rather than defensive: an
                 # Activate that does NOT end the screen (a rejected project pick) leaves it armed,
                 # and the next press on that row - after a detour through a button - is a NEW
@@ -410,7 +446,6 @@ function Invoke-ScreenLoop {
                     # twin, a VT terminal cannot - and the SAME ROW as well, because a press that
                     # walked to another row is a new gesture however fast it arrived. A press that
                     # follows a plain SELECT is the other half of D9 and still acts.
-                    $loopNow = & $RecordTime
                     if ($loopActed -and $loopHit.Row -eq $loopActedRow -and ($loopKey.IsDoubleClick -or
                         ($null -ne $loopNow -and $null -ne $loopActedAt -and ($loopNow - $loopActedAt) -lt $loopTwinMs))) {
                         # Nothing on the state changed, so there is nothing to repaint: a swallowed
@@ -422,6 +457,12 @@ function Invoke-ScreenLoop {
                     $loopActed = $true
                     $loopActedRow = [int]$loopHit.Row
                     $loopActedAt = $loopNow
+                    # The cross-screen half of the same record (P14), armed BEFORE the handler runs:
+                    # a handler that ends the screen returns out of this loop, so anything written
+                    # after it would never be written at all. The Y is the RECORD's own, not the
+                    # row's - the twin carries the same one, and the next screen's rows are not this
+                    # screen's.
+                    $script:LastActivation = @{ Y = $loopKey.Y; At = $loopNow }
                     $loopRes = & $loopH.Activate $State $loopHit
                     $null = & $loopLogRes $State 'click' $loopRes @{ button = 'row' }
                     if ($loopRes -and $loopRes.Done) { return (& $loopFinish $State $loopRes) }
@@ -643,7 +684,10 @@ function Invoke-ProjectScreen {
         # Forwarded to the loop's hover coalescing (R19/P12). A pass-through, not a decision: the
         # default is the loop's own, so a caller that omits it behaves exactly as before, and a
         # suite driving this screen end to end can say "the queue is empty" and get every frame.
-        [scriptblock]$InputPending = { Test-ClaudeInputPending }
+        [scriptblock]$InputPending = { Test-ClaudeInputPending },
+        # Forwarded the same way, and for P14 it has to be: the record that survives this screen is
+        # compared against a stamp taken on the NEXT one, so both screens must read the same clock.
+        [scriptblock]$RecordTime = { try { Get-ClaudeInputRecordTime } catch { $null } }
     )
     # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
     # the rule; everything this screen keeps travels on $s.
@@ -768,7 +812,7 @@ function Invoke-ProjectScreen {
     # arrows-only path end at a Read-Host prompt.
     $st = @{ Index = $startIndex; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false
              Filter = ''; Notice = ''; Action = (Step-ProjectAction -Action $InitialAction -Delta 0); Rows = @() }
-    return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop -InputPending $InputPending `
+    return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop -InputPending $InputPending -RecordTime $RecordTime `
         -Draw { param($s) & $paintProject $projectList $s.Index $s.Filter $s.Typing $s.Hover $s.Notice $s.Action $s.HoverRow $s.HoverValue } -Handlers @{
         # The filter decides the rows, so they are rebuilt before every frame and the cursor is
         # clamped to whatever survived it.
@@ -990,7 +1034,10 @@ function Invoke-SessionPicker {
         # Forwarded to the loop's hover coalescing (R19/P12). A pass-through, not a decision: the
         # default is the loop's own, so a caller that omits it behaves exactly as before, and a
         # suite driving this screen end to end can say "the queue is empty" and get every frame.
-        [scriptblock]$InputPending = { Test-ClaudeInputPending }
+        [scriptblock]$InputPending = { Test-ClaudeInputPending },
+        # Forwarded the same way, and for P14 it has to be: the record that survives the PREVIOUS
+        # screen is compared against a stamp taken here, so both screens must read the same clock.
+        [scriptblock]$RecordTime = { try { Get-ClaudeInputRecordTime } catch { $null } }
     )
     # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
     # the rule; everything this screen keeps travels on $s.
@@ -1181,7 +1228,7 @@ function Invoke-SessionPicker {
         # was looking at from here on is the new one.
         $handlers.Tab = { param($s) $s.Scope = $(if ($s.Scope -eq 'project') { 'all' } else { 'project' }); $s.Index = 0; @{ Log = @{ scope = $s.Scope } } }
     }
-    return (Invoke-ScreenLoop -Screen 'picker' -State $st -Wait $Wait -GetWindowTop $GetWindowTop -InputPending $InputPending `
+    return (Invoke-ScreenLoop -Screen 'picker' -State $st -Wait $Wait -GetWindowTop $GetWindowTop -InputPending $InputPending -RecordTime $RecordTime `
         -Draw { param($s) & $paintPicker $s.Pool $s.Index $s.Filter $s.Scope $pickerTitle $s.Hover $s.HoverRow } -Handlers $handlers)
 }
 
