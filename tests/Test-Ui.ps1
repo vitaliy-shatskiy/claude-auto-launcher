@@ -4653,8 +4653,11 @@ foreach ($w in 50, 100, 101, 198) {
       $hs.HoverRow = $hsAcct.Index; $hs.HoverValue = $hsAcctValue
       $hoverSet.launchAcct = @(Get-LaunchFrame -State $hs -Width $w -Height 24 -Color:$wColor -Ascii:$wAscii)
       # The band must actually BE there, or the two assertions below pass on a frame nothing painted.
+      # On the ACCOUNT ROW'S OWN LINE, never on the joined frame: the footer caps paint ButtonBg on
+      # every frame there is, so a whole-frame Contains is a check that cannot fail (measured - it
+      # stayed green with the launch band deleted outright).
       if ($wColor) {
-          Assert-Equal $true ((@($hoverSet.launchAcct) -join "`n").Contains($script:C.ButtonBg)) "the hovered account tab is banded at $w columns (ascii=$wAscii) - this is what makes the sweep bite where the model row publishes no cells"
+          Assert-Equal $true ($hoverSet.launchAcct[$hsAcct.Y].Contains($script:C.ButtonBg)) "the hovered account tab is banded on its own row at $w columns (ascii=$wAscii) - this is what makes the sweep bite where the model row publishes no cells"
       }
       foreach ($k in $hoverSet.Keys) {
           $over = @($hoverSet[$k] | Where-Object { (Get-DisplayWidth -Text (Remove-AnsiColor $_)) -gt ($w - 1) })
