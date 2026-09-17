@@ -343,6 +343,20 @@ function Invoke-ScreenLoop {
     $loopActedRow = -1
     $loopActedAt = $null
     $loopTwinMs = 500
+    # One twin test for all three guards below (the row, the footer button, the cross-screen record),
+    # and the LOWER bound is why it exists: a twin arrives after the gesture it repeats, so a
+    # negative delta is not one. `-lt $loopTwinMs` alone read every backwards step of the clock as a
+    # twin and swallowed the press. Not reachable through Get-ClaudeInputRecordTime (TickCount64,
+    # monotonic), but -RecordTime is a public parameter of this function and of all three screens,
+    # and a caller handing in a wall clock or a per-screen stopwatch would eat clicks with every
+    # suite green. $loopNow is a free name resolved against this scope at call time, exactly as
+    # $loopAlias reads $loopKey.
+    $loopIsTwin = {
+        param($loopAt)
+        if ($null -eq $loopNow -or $null -eq $loopAt) { return $false }
+        $loopDelta = $loopNow - $loopAt
+        return ($loopDelta -ge 0 -and $loopDelta -lt $loopTwinMs)
+    }
     # The same question for a FOOTER button, which has no Activate to hang off: when did the press
     # that became this button's key arrive, and over WHICH BUTTON. The button, not merely the line:
     # every hint on a footer line shares that line's Y, so a Y-only test swallowed a deliberate
@@ -357,6 +371,22 @@ function Invoke-ScreenLoop {
         $loopNeedDraw = $true
         $loopKey = & $Wait
         if ("$loopKey" -eq 'resize') { continue }
+        # A KEY press is a gesture of its own and disarms ALL THREE twin guards, for the reason the
+        # footer and gap branches below record: the press after it is a NEW gesture. Without it a
+        # click that followed a keyboard detour was swallowed - click a row, click it again (a
+        # rejected pick leaves the screen up), Down, Up, click: two real key presses happened and the
+        # click still read as the twin of the activation before them. The cross-screen record is
+        # cleared here too, and it is the one that swallowed that click: an Activate that does not
+        # end the screen leaves the record armed, and it matches on the POINT, which a detour through
+        # the arrows returns to. HERE rather than on the key path below, which a FOOTER click reaches
+        # through a synthetic key that must not disarm the guard its own press just armed.
+        if ($null -eq $loopKey -or $loopKey.Kind -ne 'mouse') {
+            $loopActed = $false
+            $loopFooterY = -1
+            $loopFooterIndex = -1
+            $loopFooterAt = $null
+            $script:LastActivation = $null
+        }
 
         if ($loopKey -and $loopKey.Kind -eq 'mouse') {
             $loopTop = & $GetWindowTop
@@ -414,8 +444,8 @@ function Invoke-ScreenLoop {
             if ($script:LastActivation) {
                 $loopLast = $script:LastActivation
                 $script:LastActivation = $null
-                if ($loopKey.X -eq $loopLast.X -and $loopKey.Y -eq $loopLast.Y -and ($loopKey.IsDoubleClick -or
-                    ($null -ne $loopNow -and $null -ne $loopLast.At -and ($loopNow - $loopLast.At) -lt $loopTwinMs))) {
+                if ($loopKey.X -eq $loopLast.X -and $loopKey.Y -eq $loopLast.Y -and
+                    ($loopKey.IsDoubleClick -or (& $loopIsTwin $loopLast.At))) {
                     $loopNeedDraw = $false
                     continue
                 }
@@ -427,7 +457,7 @@ function Invoke-ScreenLoop {
                 # give (P7): ConvertFrom-ClaudeMouseReport has no double click to report, so one
                 # gesture on a button fired its key twice there - probe, 2 fires 80 ms apart.
                 if ($loopKey.IsDoubleClick -or ($loopKey.Y -eq $loopFooterY -and $loopHit.FooterIndex -eq $loopFooterIndex -and
-                    $null -ne $loopNow -and $null -ne $loopFooterAt -and ($loopNow - $loopFooterAt) -lt $loopTwinMs)) { $loopNeedDraw = $false; continue }
+                    (& $loopIsTwin $loopFooterAt))) { $loopNeedDraw = $false; continue }
                 $loopFooterY = $loopKey.Y
                 $loopFooterIndex = [int]$loopHit.FooterIndex
                 $loopFooterAt = $loopNow
@@ -460,8 +490,8 @@ function Invoke-ScreenLoop {
                     # press reports - releases never reach this path). What is left here is a THIRD
                     # record of one gesture, which no terminal has been observed to send. Kept as
                     # defence in depth pending a ruling, NOT because a pin holds it up.
-                    if ($loopActed -and $loopHit.Row -eq $loopActedRow -and ($loopKey.IsDoubleClick -or
-                        ($null -ne $loopNow -and $null -ne $loopActedAt -and ($loopNow - $loopActedAt) -lt $loopTwinMs))) {
+                    if ($loopActed -and $loopHit.Row -eq $loopActedRow -and
+                        ($loopKey.IsDoubleClick -or (& $loopIsTwin $loopActedAt))) {
                         # Nothing on the state changed, so there is nothing to repaint: a swallowed
                         # twin used to cost a full frame (65-180 ms at 198 columns, 474 ms on a
                         # 40-session picker) for a record that does nothing.

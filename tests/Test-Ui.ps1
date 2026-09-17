@@ -4332,6 +4332,12 @@ $twinRun = {
 Assert-Equal 1 (& $twinRun @(900, 1000, 1100)) 'two PLAIN presses on the selected row 100 ms apart are one gesture - the VT twin is swallowed although no record is flagged'
 Assert-Equal 2 (& $twinRun @(900, 1000, 1800)) 'and 800 ms apart they are two - the stamp guard swallows a twin, never a deliberate second click'
 Assert-Equal 2 (& $twinRun @($null, $null, $null)) 'a reader with NO stamp keeps the flag-only behaviour exactly as before - an unflagged press always acts'
+# A twin arrives AFTER the gesture it repeats, so the window has a LOWER bound as well: without one
+# a negative difference satisfied "< 500 ms" and every backwards step of the clock read as a twin.
+# Get-ClaudeInputRecordTime cannot go backwards (TickCount64), but -RecordTime is a public parameter
+# of this loop and of all three screens, and a caller handing in a wall clock or a per-screen
+# stopwatch would have eaten clicks with this suite green.
+Assert-Equal 2 (& $twinRun @(9000, 9100, 1000)) 'a third press whose stamp moves BACKWARDS is not a twin - it acts, however far under the window the difference reads'
 # The two $loopActed resets are load-bearing rather than defensive: an Activate that does NOT end
 # the screen leaves the twin guard armed, and a press on that row after a detour through a footer
 # button or a gap is a NEW gesture that has to act. Without the reset the flagged press below is
@@ -4355,6 +4361,37 @@ foreach ($detour in @(
         }
     Assert-Equal 2 $script:detourActs "a press on the selected row after a detour through $($detour.Name) acts again - that detour disarms the twin guard"
 }
+# The third detour: the KEYBOARD. Down then Up walks the cursor off the activated row and back onto
+# it, so two real key presses sit between the two clicks and the second one is unmistakably a new
+# gesture - and it was swallowed. Row 1 of 3, not the last row: Down on the last row is clamped and
+# Up then lands one row above, which never returns the cursor to the row it activated. What swallowed
+# it was the CROSS-SCREEN record, not the row flag: an Activate that does not end the screen leaves
+# that record armed and it matches on the POINT the arrows come back to - so a key clears all three
+# guards, not only the flag.
+$kdDown = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::DownArrow, $false, $false, $false)
+$kdUp = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::UpArrow, $false, $false, $false)
+$kdRun = {
+    param([object[]]$Detour, [object[]]$Stamps)
+    $kdQ = [System.Collections.Queue]::new()
+    $kdQ.Enqueue((New-MouseEvent -X 3 -Y 2 -Left))   # selects visible row 1
+    $kdQ.Enqueue((New-MouseEvent -X 3 -Y 2 -Left))   # acts, and the screen stays up
+    foreach ($d in $Detour) { $kdQ.Enqueue($d) }
+    $kdQ.Enqueue((New-MouseEvent -X 3 -Y 2 -Left))   # the press under test, inside the twin window
+    $kdQ.Enqueue($esc)
+    $kdS = [System.Collections.Queue]::new(); foreach ($s in $Stamps) { $kdS.Enqueue($s) }
+    $script:kdActs = 0
+    $script:LastActivation = $null   # a new gesture: nothing here follows an activation
+    $null = Invoke-ScreenLoop -Screen 'probe' -State @{ Index = 0; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false } `
+        -Wait { $kdQ.Dequeue() } -Draw { $map } -InputPending { $false } `
+        -RecordTime { if ($kdS.Count -gt 0) { $kdS.Dequeue() } else { $null } } -Handlers @{
+            Rows     = { 3 }
+            Click    = { param($s, $h) if ($h.Kind -eq 'row') { $s.Index = [int]$h.Row } }
+            Activate = { param($s, $h) $script:kdActs++; $null }
+        }
+    return $script:kdActs
+}
+Assert-Equal 2 (& $kdRun @($kdDown, $kdUp) @(1000, 1100, 1400)) 'a press on the activated row after a detour through the ARROWS acts again - a key press ends the gesture too'
+Assert-Equal 1 (& $kdRun @() @(1000, 1100, 1400)) 'the control: with no detour at all those same three presses are one gesture and act exactly once'
 # The same P7 argument for a FOOTER button, which the flag-only guard left exposed: a VT terminal
 # sends no double-click flag at all, so one gesture on a button fired its key TWICE there.
 $ftRun = {
@@ -4374,6 +4411,8 @@ $ftRun = {
 Assert-Equal 1 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left -Double), $esc) @()) 'a console double click on a footer button fires its key once - the flagged twin is dropped'
 Assert-Equal 1 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left), $esc) @(1000, 1080)) 'and so does the VT one, where the twin is a second PLAIN press 80 ms later and no record carries a flag'
 Assert-Equal 2 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left), $esc) @(1000, 1800)) 'while two presses 800 ms apart are two clicks and fire the button twice'
+# The footer guard carries the same lower bound as the row guard above, for the same reason.
+Assert-Equal 2 (& $ftRun @((New-MouseEvent -X 3 -Y 6 -Left), (New-MouseEvent -X 3 -Y 6 -Left), $esc) @(9000, 1000)) 'and a second press whose stamp moves BACKWARDS fires the button too - a negative difference is not a twin'
 # Every button on a footer LINE shares that line's Y, so a twin test that names only the Y swallows a
 # deliberate press on the NEXT button along (probe: 'c' then 'r' 300 ms apart fired only 'c'). A twin
 # is the same BUTTON, and the button is named by its footer index - not by X, because one gesture may
@@ -4688,6 +4727,11 @@ $p14ElseWhere = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEven
 Assert-Equal 's1' "$($p14ElseWhere.Picked.Session.SessionId)" 'a flagged press at another X on the same line is NOT this gesture''s twin and still reaches the picker'
 $p14Late = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1800)
 Assert-Equal 's1' "$($p14Late.Picked.Session.SessionId)" 'while a plain press 800 ms later is a real second click and still reaches the picker - the guard swallows a twin, never a decision'
+# The cross-screen record needs the lower bound the row and footer guards carry: a stamp lower than
+# the activation's is not "within 500 ms of it", and reading it as one blinded the next screen's
+# first click.
+$p14Back = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(9000, 1000)
+Assert-Equal 's1' "$($p14Back.Picked.Session.SessionId)" 'a press on the next screen whose stamp moves BACKWARDS is the owner, not the twin, and reaches the picker'
 Remove-Item -LiteralPath $p14Cwd -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- Task 7 (spec D4): every frame fits - no rendered line reaches the last console column -----
@@ -5005,7 +5049,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1626
+$script:Expected = 1631
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
