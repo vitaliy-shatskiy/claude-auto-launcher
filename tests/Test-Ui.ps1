@@ -4874,6 +4874,36 @@ try {
     $null = Get-PickerFrame -Sessions $memoPlusOne -Index 3 -Filter 'project-2' -Width 198 -Height 30 -Now $now.AddMinutes(1) -Color -HoverRow 2 -Hover -1
     Assert-Equal 1 $script:memoBoxCalls 'a changed Height misses the memo'
 
+    # The session part of the key is the OBJECTS (controller ruling P19), not their fields: the picker
+    # loop rebuilds its filtered array on every iteration out of the same session objects, and that
+    # must still hit.
+    $script:FrameMemo = @{}
+    $null = Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 198 -Height 24 -Now $now -Color -HoverRow 2 -Hover -1
+    $memoSameObjects = @($memoSessions | ForEach-Object { $_ })
+    $script:memoBoxCalls = 0
+    $null = Get-PickerFrame -Sessions $memoSameObjects -Index 1 -Width 198 -Height 24 -Now $now -Color -HoverRow 3 -Hover -1
+    Assert-Equal 0 $script:memoBoxCalls 'a fresh ARRAY over the same session objects still hits the memo - the key is the objects, not the array'
+    # And the other direction: identical VALUES in new objects miss. A false hit here would be a row
+    # showing another session's text, so the key errs toward rebuilding.
+    $memoClones = @($memoSessions | ForEach-Object {
+        [pscustomobject]@{ SessionId = $_.SessionId; Project = $_.Project; Worktree = $_.Worktree; Title = $_.Title
+                           LastUser = $_.LastUser; LastAssistant = $_.LastAssistant; Modified = $_.Modified
+                           PromptCount = $_.PromptCount; SizeBytes = $_.SizeBytes }
+    })
+    $script:memoBoxCalls = 0
+    $null = Get-PickerFrame -Sessions $memoClones -Index 1 -Width 198 -Height 24 -Now $now -Color -HoverRow 3 -Hover -1
+    Assert-Equal 1 $script:memoBoxCalls 'a list of NEW objects carrying the same values misses - identity is what the key trusts'
+    # Project is the one field Get-ClaudeSessions refreshes in place on a summary the picker may
+    # already hold, so it is read by value and a change to it misses on the very same object.
+    $script:FrameMemo = @{}
+    $null = Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 198 -Height 24 -Now $now -Color -HoverRow 2 -Hover -1
+    $memoOldProject = $memoSessions[0].Project
+    $memoSessions[0].Project = 'project-renamed-in-place'
+    $script:memoBoxCalls = 0
+    $null = Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 198 -Height 24 -Now $now -Color -HoverRow 3 -Hover -1
+    $memoSessions[0].Project = $memoOldProject
+    Assert-Equal 1 $script:memoBoxCalls 'a Project rewritten in place on a session object the picker already holds misses - the field identity cannot speak for'
+
     $script:FrameMemo = @{}
     $null = Get-ProjectFrame -Projects $memoProjects -Index 1 -Cwd 'C:\x' -Width 198 -Height 24 -Now $now -Color -Action 'new'
     $script:memoBoxCalls = 0
@@ -4921,7 +4951,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-if ($script:Ran -ne 1617) { Write-Host "COULD NOT RUN: expected 1597 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 1620) { Write-Host "COULD NOT RUN: expected 1620 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

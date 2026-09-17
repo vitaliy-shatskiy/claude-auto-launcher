@@ -485,6 +485,28 @@ function Get-ListSignature {
     return $sb.ToString()
 }
 
+function Get-SessionListSignature {
+    # The same answer as Get-ListSignature for the picker's twelve session fields, at a quarter of
+    # the property reads - and this key is rebuilt on every hover, hit or miss. A session object is
+    # constructed once and never written to after Get-ClaudeSessions hands it over, so its IDENTITY
+    # already stands for Title, LastUser, RecentMessages and the rest (controller ruling P19).
+    # Path and Project are the two exceptions and stay read by value: Get-ClaudeSessions refreshes
+    # both IN PLACE on a cached summary, and Read-SessionsCache's busy fallback can serve the SAME
+    # object to a second call - identity alone would leave a renamed project on the row.
+    # Modified.Ticks costs one read and closes the remaining gap: a transcript that grew arrives as
+    # a new object anyway, but a fixture built twice from one template would not.
+    param([array]$Items)
+    $parts = [Collections.Generic.List[string]]::new()
+    $parts.Add([string]@($Items).Count)
+    foreach ($it in $Items) {
+        $parts.Add([string][Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($it))
+        $parts.Add([string]$it.Modified.Ticks)
+        $parts.Add([string]$it.Path)
+        $parts.Add([string]$it.Project)
+    }
+    return ($parts -join [string][char]31)
+}
+
 function Get-RowBandLength {
     # How many CHARACTERS of a finished frame line the hover band wraps for one list row: the row
     # itself plus the pad that follows it, because a hovered row carries that pad INSIDE its band
@@ -1487,7 +1509,7 @@ function Get-PickerFrame {
     # The memo (spec D11): every input EXCEPT the two hover ones. Same shape and the same
     # minute-granularity -Now as Get-ProjectFrame's - see the comment there.
     $memoKey = "$Width|$Height|$Color|$Ascii|$Index|$Filter|$Scope|$ProjectName|" + $Now.ToString('yyyyMMddHHmm') + '|' +
-               (Get-ListSignature -Items $Sessions -Fields @('SessionId', 'Path', 'Slug', 'Project', 'Worktree', 'Title', 'LastUser', 'LastAssistant', 'RecentMessages', 'Modified', 'PromptCount', 'SizeBytes'))
+               (Get-SessionListSignature -Items $Sessions)
     $memoHit = Get-MemoFrame -Builder 'picker' -Key $memoKey -HoverRow $HoverRow -Hover $Hover -RowMap $RowMap
     if ($null -ne $memoHit) { return $memoHit }
     # A session nobody typed anything into is not offered - see Select-ResumableSessions. The count
