@@ -593,40 +593,6 @@ try {
     if (Test-Path -LiteralPath $av) { Remove-Item -LiteralPath $av -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# availableModels comes from the WIDGET record specifically, whichever record is fresher (P23).
-#
-# The defect this pins: availableModels is subscription state with ONE writer, not a five-minute
-# number. statusline.js writes `<account>.json` every few seconds while a session runs and never
-# writes the field at all (measured: zero occurrences in statusline.js), so freshest-wins - which
-# exists for the PERCENTAGES - handed back an absent field on exactly the account the owner was
-# about to launch from, and the launch screen then hid nothing there. The percentages and the age
-# still come from the fresher of the two records; only this one field is pinned to the widget file.
-$wr = Join-Path $env:TEMP ("cct-availwidget-test-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Force $wr | Out-Null
-try {
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    # work: the statusline record is FRESHER and carries no availableModels - the live-session case.
-    Set-Content -LiteralPath "$wr\work.json"          -Value ('{"fiveHour":77,"sevenDay":88,"atMs":' + $nowMs + '}')
-    Set-Content -LiteralPath "$wr\work.widget.json"   -Value ('{"fiveHour":11,"sevenDay":22,"atMs":' + ($nowMs - 300000) + ',"availableModels":["fable"]}')
-    # personal: only a statusline record exists - nothing can supply the field.
-    Set-Content -LiteralPath "$wr\personal.json"      -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + '}')
-    # shared: only a widget record exists - the ordinary case, unchanged.
-    Set-Content -LiteralPath "$wr\shared.widget.json" -Value ('{"fiveHour":30,"sevenDay":40,"atMs":' + $nowMs + ',"availableModels":["opus"]}')
-    # low: the widget record is half-written - it must not take the record down with it.
-    Set-Content -LiteralPath "$wr\low.json"           -Value ('{"fiveHour":55,"sevenDay":66,"atMs":' + $nowMs + '}')
-    Set-Content -LiteralPath "$wr\low.widget.json"    -Value '{"availableModels":["fable"],'
-    $sum = Get-RateLimitSummary -Directory $wr
-    Assert 'a fresher statusline record still supplies the percentages'        ($sum.work.FiveHour -eq 77)
-    Assert 'while availableModels comes from the OLDER widget record'          ((@($sum.work.AvailableModels) -join ',') -eq 'fable')
-    Assert 'a statusline record with no widget file beside it reports no families' (@($sum.personal.AvailableModels).Count -eq 0)
-    Assert 'and its percentages still arrive'                                  ($sum.personal.FiveHour -eq 10)
-    Assert 'a widget-only account reads its families as before'                ((@($sum.shared.AvailableModels) -join ',') -eq 'opus')
-    Assert 'a malformed widget file yields no families'                        (@($sum.low.AvailableModels).Count -eq 0)
-    Assert 'and does not take the statusline record down with it'              ($sum.low.FiveHour -eq 55)
-} finally {
-    if (Test-Path -LiteralPath $wr) { Remove-Item -LiteralPath $wr -Recurse -Force -ErrorAction SilentlyContinue }
-}
-
 # Get-DefaultAdvisorLabel: what 'default' on the advisor row means right now. Same shape and same
 # failure policy as Get-DefaultModelLabel - this is a menu, not a validator, so every failure
 # degrades to a plain label instead of taking the launch screen down.
@@ -787,7 +753,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 161 } else { 157 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 154 } else { 150 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

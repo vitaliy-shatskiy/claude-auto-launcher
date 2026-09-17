@@ -782,25 +782,13 @@ function Get-RateLimitSummary {
             # draws no third bar - correct, not a gap.
             if ($null -ne $j.fiveHour -or $null -ne $j.sevenDay) {
                 # availableModels (widget payload v3): the account's model-bucket families, lower-cased.
-                # Read from the WIDGET record specifically, NOT from $j (P23). This field is
-                # subscription state with ONE writer, not a five-minute number: statusline.js writes
-                # `<name>.json` every few seconds while a session runs and never writes this field at
-                # all, so freshest-wins - which exists for the PERCENTAGES and their age - reported "no
-                # families" on exactly the account a running session was about to launch from, and the
-                # launch screen then hid nothing there. Everything else still comes from $j.
-                # A guarded array, never a bare @(...): PowerShell's @($null) is a ONE-element array
-                # holding $null (Count 1), so an absent field (old widget build) or a JSON null would
-                # read downstream as "a non-empty set that lacks fable/opus" and hide them for everyone
-                # - the exact inversion of the fail-safe. Absent, null, [], no widget file at all and a
-                # half-written one all become an empty set; any null/empty member is stripped.
+                # A guarded array, never a bare @($j.availableModels): PowerShell's @($null) is a
+                # ONE-element array holding $null (Count 1), so an absent field (old widget build) or a
+                # JSON null would read downstream as "a non-empty set that lacks fable/opus" and hide
+                # them for everyone - the exact inversion of the fail-safe. Absent/null/[] all become
+                # an empty set here, and any null/empty member is stripped.
                 $fams = @()
-                $widgetPath = Join-Path $Directory "$profileName.widget.json"
-                if (Test-Path -LiteralPath $widgetPath) {
-                    try {
-                        $wj = Get-Content -LiteralPath $widgetPath -Raw | ConvertFrom-Json
-                        if ($null -ne $wj.availableModels) { $fams = @($wj.availableModels | Where-Object { $_ }) }
-                    } catch { }   # half-written widget file: no families, never a broken record
-                }
+                if ($null -ne $j.availableModels) { $fams = @($j.availableModels | Where-Object { $_ }) }
                 $out[$profileName] = [pscustomobject]@{
                     FiveHour        = if ($null -ne $j.fiveHour) { [int]$j.fiveHour } else { $null }
                     SevenDay        = if ($null -ne $j.sevenDay) { [int]$j.sevenDay } else { $null }
