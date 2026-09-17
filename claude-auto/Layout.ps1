@@ -50,8 +50,14 @@ function Get-DisplayWidth {
     if (-not $Text) { return 0 }
     $w = 0
     for ($i = 0; $i -lt $Text.Length; $i++) {
+        $cp = [int]$Text[$i]
+        # The two cases every row is actually made of - a C0 marker and a printable ASCII character -
+        # are decided here rather than in a call: one frame measures thousands of characters, and a
+        # function call per character is what the resume screen could not afford. The table below
+        # still decides everything else, and returns the same widths as it did for these two.
+        if ($cp -lt 0x20) { continue }
+        if ($cp -lt 0x7F) { $w++; continue }
         $ch = $Text[$i]
-        $cp = [int]$ch
         if ([char]::IsHighSurrogate($ch) -and ($i + 1) -lt $Text.Length -and [char]::IsLowSurrogate($Text[$i + 1])) {
             $cp = [char]::ConvertToUtf32($ch, $Text[$i + 1])
             $i++
@@ -72,7 +78,9 @@ function Limit-Cells {
     for ($i = 0; $i -lt $Text.Length; $i++) {
         $len = if ([char]::IsHighSurrogate($Text[$i]) -and ($i + 1) -lt $Text.Length -and [char]::IsLowSurrogate($Text[$i + 1])) { 2 } else { 1 }
         $piece = $Text.Substring($i, $len)
-        $cw = Get-DisplayWidth -Text $piece
+        # Same inline decision as Get-DisplayWidth, for the same reason: this loop runs once per
+        # character of every truncated row, so the call itself - not the measuring - is the cost.
+        $cw = if ($len -eq 1 -and [int]$Text[$i] -lt 0x7F) { if ([int]$Text[$i] -lt 0x20) { 0 } else { 1 } } else { Get-DisplayWidth -Text $piece }
         if (($w + $cw) -gt $Max) { break }
         $null = $sb.Append($piece)
         $w += $cw
@@ -113,7 +121,7 @@ function Limit-CellsRight {
     while ($start -gt 0) {
         $len = if ($start -ge 2 -and [char]::IsLowSurrogate($Text[$start - 1]) -and [char]::IsHighSurrogate($Text[$start - 2])) { 2 } else { 1 }
         $piece = $Text.Substring($start - $len, $len)
-        $cw = Get-DisplayWidth -Text $piece
+        $cw = if ($len -eq 1 -and [int]$Text[$start - 1] -lt 0x7F) { if ([int]$Text[$start - 1] -lt 0x20) { 0 } else { 1 } } else { Get-DisplayWidth -Text $piece }
         if (($w + $cw) -gt $Max) { break }
         $w += $cw
         $start -= $len

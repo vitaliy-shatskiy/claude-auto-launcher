@@ -60,6 +60,31 @@ Assert-Equal 0 (Get-CodePointWidth -CodePoint 1) 'a C0 control character measure
 Assert-Equal 0 (Get-DisplayWidth -Text ([string]$script:DimOpen + [string]$script:DimClose)) 'so the dim-span markers cost a line nothing'
 Assert-Equal 2 (Get-DisplayWidth -Text ([string]$script:DimOpen + 'ab' + [string]$script:DimClose)) 'and a marked segment measures only its content'
 
+# --- the width loops decide ASCII and C0 without a call (spec D11) --------------------------
+# One frame measures thousands of characters, nearly all of them ASCII or a C0 marker; a function
+# call per character is what a resume screen cannot afford. The counters below are the pin: the
+# table is reached only by the characters that actually need it. Breakpoint, not a wrapper, so the
+# real function under test runs.
+$script:cpCalls = 0
+$bp = Set-PSBreakpoint -Command Get-CodePointWidth -Action { $script:cpCalls++ }
+$null = Get-DisplayWidth -Text ('abc' + [char]1 + 'def')
+Remove-PSBreakpoint $bp
+Assert-Equal 0 $script:cpCalls 'ASCII and C0 never reach the per-codepoint path'
+Assert-Equal 6 (Get-DisplayWidth -Text ('abc' + [char]1 + 'def')) 'and they measure exactly as before: six printable cells, nothing for the control'
+
+$script:cpCalls = 0
+$bp = Set-PSBreakpoint -Command Get-DisplayWidth -Action { $script:cpCalls++ }
+$null = Limit-Cells -Text 'abcdefgh' -Max 5
+$null = Limit-CellsRight -Text 'abcdefgh' -Max 5
+Remove-PSBreakpoint $bp
+Assert-Equal 0 $script:cpCalls 'the cell-budget loops measure an ASCII character inline, not through a call per character'
+Assert-Equal 'abcde' (Limit-Cells -Text 'abcdefgh' -Max 5) 'and Limit-Cells still returns the longest prefix that fits'
+Assert-Equal 'defgh' (Limit-CellsRight -Text 'abcdefgh' -Max 5) 'and Limit-CellsRight the longest suffix'
+
+# One string carrying all four cases at once, whose total the fast path and the table must agree on:
+# 1 (ASCII) + 2 (CJK) + 1 (ASCII) + 0 (combining mark) + 2 (astral emoji).
+Assert-Equal 6 (Get-DisplayWidth -Text ('a' + $script:CJK + 'b' + [string][char]0x0301 + $script:Emoji)) 'a mixed ASCII/CJK/combining/astral string measures the sum of its parts'
+
 # --- truncation --------------------------------------------------------------------------
 Assert-Equal 'abc' (Limit-Line -Text 'abc' -Max 10) 'a short line is untouched'
 Assert-Equal 4 (Limit-Line -Text 'abcdefgh' -Max 4).Length 'a long line is cut to the width'
@@ -314,7 +339,7 @@ Assert-Equal 0 (Get-NonAsciiCount -Lines @(New-Box -Lines @('a very long line th
 if ($null -eq $savedAscii) { [Environment]::SetEnvironmentVariable('CLAUDE_AUTO_ASCII', $null, 'Process') } else { $env:CLAUDE_AUTO_ASCII = $savedAscii }
 $script:Ellipsis = [string][char]0x2026
 
-if ($script:Ran -ne 112) { Write-Host "COULD NOT RUN: expected 112 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 118) { Write-Host "COULD NOT RUN: expected 118 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
