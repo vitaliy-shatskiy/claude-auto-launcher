@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Changed
+
+- The launch screen hides Fable where the account has no Fable, by the account's own weekly
+  model bucket in claude-usage-widget's export (`availableModels`): the field missing means
+  nothing is hidden, a list without `fable` hides it on the model and advisor rows. Nothing else
+  is ever hidden. This replaces 0.2.0's plan-based rule, which could not tell two accounts on one
+  Team plan apart and hid Opus everywhere.
+
 ## [0.2.0] — 2026-09-17
 
 ### Added
