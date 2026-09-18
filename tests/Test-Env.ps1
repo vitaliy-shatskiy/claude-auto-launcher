@@ -571,6 +571,89 @@ try {
     if (Test-Path -LiteralPath $ml) { Remove-Item -LiteralPath $ml -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# availableModels (widget payload, spec 2026-09-17 v3): the model families that have a weekly bucket
+# of their own on this account, from real ConvertFrom-Json inputs. The launch screen hides a
+# hideable family the account does not have, so this reader's whole job is to keep THREE states
+# apart: the field ABSENT (an older widget build - no information), present with members, and
+# present with none. Present-and-empty is an ANSWER, not a gap - an account with no model bucket at
+# all is exactly what the account without Fable looks like - so presence is read off the parsed
+# object's property list, never by truthiness.
+#
+# Read from the WIDGET record specifically, whichever record is fresher. The defect that pins:
+# statusline.js rewrites `<account>.json` every few seconds while a session runs and never carries
+# the field, so freshest-wins - which exists for the PERCENTAGES and their age - would report "no
+# information" on exactly the account the owner was about to launch from.
+$pl = Join-Path $env:TEMP ("cct-avail-test-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $pl | Out-Null
+try {
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    # work: the statusline record is FRESHER and carries a DIFFERENT list, so freshest-wins cannot
+    # answer this by accident - a reader that picked $j would report a fable bucket here.
+    Set-Content -LiteralPath "$pl\work.json"          -Value ('{"fiveHour":77,"sevenDay":88,"atMs":' + $nowMs + ',"availableModels":["fable"]}')
+    Set-Content -LiteralPath "$pl\work.widget.json"   -Value ('{"fiveHour":11,"sevenDay":22,"atMs":' + ($nowMs - 300000) + ',"availableModels":[]}')
+    # personal: only a statusline record exists - nothing can supply the field.
+    Set-Content -LiteralPath "$pl\personal.json"      -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + '}')
+    # shared: only a widget record exists - the ordinary case, with a real list.
+    Set-Content -LiteralPath "$pl\shared.widget.json" -Value ('{"fiveHour":30,"sevenDay":40,"atMs":' + $nowMs + ',"availableModels":["fable","opus"]}')
+    # low: the widget record is half-written - it must not take the record down with it.
+    Set-Content -LiteralPath "$pl\low.json"           -Value ('{"fiveHour":55,"sevenDay":66,"atMs":' + $nowMs + '}')
+    Set-Content -LiteralPath "$pl\low.widget.json"    -Value '{"availableModels":[],'
+    $sum = Get-RateLimitSummary -Directory $pl
+    Assert 'availableModels comes from the OLDER widget record, never the fresher statusline one' ($null -ne $sum.work.AvailableModels -and @($sum.work.AvailableModels).Count -eq 0)
+    Assert 'while the fresher statusline record still supplies the percentages'                   ($sum.work.FiveHour -eq 77)
+    Assert 'a statusline record with no widget file beside it reports no availability info'       ($null -eq $sum.personal.AvailableModels)
+    Assert 'and its percentages still arrive'                                                     ($sum.personal.FiveHour -eq 10)
+    Assert 'a widget-only account reads its list whole, every member'                             ((@($sum.shared.AvailableModels) -join ',') -eq 'fable,opus')
+    Assert 'a malformed widget file yields no availability info'                                  ($null -eq $sum.low.AvailableModels)
+    Assert 'and does not take the statusline record down with it'                                 ($sum.low.FiveHour -eq 55)
+} finally {
+    if (Test-Path -LiteralPath $pl) { Remove-Item -LiteralPath $pl -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# The shapes a widget record takes, and the line that must not blur. ABSENT is the only "no
+# information" state. A JSON null field, and a list whose only members are null or an empty string,
+# are the widget ANSWERING with nothing: present-and-empty, which is the spec's "present" rule and
+# the state that hides Fable. @($null).Count is 1 in PowerShell, so the reader has to strip those
+# members rather than count them.
+$pn = Join-Path $env:TEMP ("cct-availempty-test-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $pn | Out-Null
+try {
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    Set-Content -LiteralPath "$pn\work.widget.json"     -Value ('{"fiveHour":40,"sevenDay":48,"atMs":' + $nowMs + '}')
+    Set-Content -LiteralPath "$pn\personal.widget.json" -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"availableModels":null}')
+    Set-Content -LiteralPath "$pn\low.widget.json"      -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"availableModels":[null,""]}')
+    Set-Content -LiteralPath "$pn\shared.widget.json"   -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"availableModels":["fable"]}')
+    $sum = Get-RateLimitSummary -Directory $pn
+    Assert 'an ABSENT availableModels field is the only no-information state' ($null -eq $sum.work.AvailableModels)
+    Assert 'a JSON null field is PRESENT and empty, never absent'             ($null -ne $sum.personal.AvailableModels -and @($sum.personal.AvailableModels).Count -eq 0)
+    Assert 'and so is a list whose only members are null and an empty string' ($null -ne $sum.low.AvailableModels -and @($sum.low.AvailableModels).Count -eq 0)
+    Assert 'a real list arrives with its members'                             ((@($sum.shared.AvailableModels) -join ',') -eq 'fable')
+} finally {
+    if (Test-Path -LiteralPath $pn) { Remove-Item -LiteralPath $pn -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# atMs is the widget's own stamp on every record it writes (Get-FreshestRateLimitRecord already
+# refuses a record without one), so a widget file carrying availableModels and no atMs is not a
+# widget export: a truncated write that still parsed, or a file something else left there. It yields
+# no availability info - and no info hides nothing, so a stray file can never hide a model the
+# account has.
+$pa = Join-Path $env:TEMP ("cct-availstamp-test-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $pa | Out-Null
+try {
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    Set-Content -LiteralPath "$pa\work.json"            -Value ('{"fiveHour":40,"sevenDay":48,"atMs":' + $nowMs + '}')
+    Set-Content -LiteralPath "$pa\work.widget.json"     -Value '{"availableModels":[]}'
+    # personal: the same record WITH the stamp - the control that says the refusal is the stamp.
+    Set-Content -LiteralPath "$pa\personal.json"        -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + '}')
+    Set-Content -LiteralPath "$pa\personal.widget.json" -Value ('{"availableModels":[],"atMs":' + $nowMs + '}')
+    $sum = Get-RateLimitSummary -Directory $pa
+    Assert 'a widget record with availableModels but no atMs carries no availability info' ($null -eq $sum.work.AvailableModels)
+    Assert 'and its statusline percentages still arrive'                                   ($sum.work.FiveHour -eq 40)
+    Assert 'the same record WITH atMs does carry it, present and empty'                    ($null -ne $sum.personal.AvailableModels -and @($sum.personal.AvailableModels).Count -eq 0)
+} finally {
+    if (Test-Path -LiteralPath $pa) { Remove-Item -LiteralPath $pa -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # Get-DefaultAdvisorLabel: what 'default' on the advisor row means right now. Same shape and same
 # failure policy as Get-DefaultModelLabel - this is a menu, not a validator, so every failure
 # degrades to a plain label instead of taking the launch screen down.
@@ -731,7 +814,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 150 } else { 146 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 164 } else { 160 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

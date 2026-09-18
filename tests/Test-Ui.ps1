@@ -1647,6 +1647,272 @@ $w = New-EventReader @((New-MouseEvent -Wheel -128), (New-MouseEvent -Wheel -128
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ldraw -Wait $w -GetWindowTop { 0 }
 Assert-Equal 2 $out.Row 'two notches down move two rows down'
 
+# --- Model/advisor AVAILABILITY filter (spec 2026-09-17 v3). An option whose model family the
+# account does not have is hidden from its row - in rendering, in stepping and in click
+# hit-testing - and a remembered hidden value snaps to default so Get-LaunchArgs can never emit it.
+# The whole rule is one constant ($script:HideableFamilies) plus the option->family map: an option
+# is hidden iff its family is HIDEABLE, the account's availableModels is known, and the family is
+# not in it. Opus is deliberately not hideable: no account has an opus bucket of its own (Opus
+# comes out of the shared pool), so hiding by bucket alone made Opus vanish everywhere (v1), and
+# plan tier cannot decide it either - two accounts on the same plan differ on Fable (v2). Both
+# reverted. Every assertion ships a red. ----------------------------------------------------------
+$mvIdx = Get-RowIndex -Name 'Model'
+$avIdx = Get-RowIndex -Name 'Advisor'
+$modelRowDef = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Model' }
+$advRowDef   = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Advisor' }
+$modelAll = @($modelRowDef.Values) -join ','
+$advAll   = @($advRowDef.Values) -join ','
+# -NoField leaves the property off the record entirely (an older widget build); omitting -Available
+# writes it as $null. Both are "no information" and both must hide nothing.
+function New-AvailLimit {
+    param([string]$Account = 'work', $Available, [switch]$NoField)
+    $h = @{ FiveHour = 40; SevenDay = 48; AgeText = 'now'; Model = $null; ModelLabel = $null }
+    if (-not $NoField) { $h['AvailableModels'] = $Available }
+    @{ $Account = [pscustomobject]$h }
+}
+function Get-FrameDigest {
+    param([string[]]$Lines)
+    $ms = [IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes(($Lines -join "`n")))
+    try { (Get-FileHash -InputStream $ms -Algorithm SHA256).Hash } finally { $ms.Dispose() }
+}
+
+# The rule at its one source, all four states of availableModels.
+Assert-Equal 'fable' (@(Get-HiddenFamilies -Available @()) -join ',') 'a KNOWN and empty availableModels hides the one hideable family'
+Assert-Equal '' (@(Get-HiddenFamilies -Available $null) -join ',') 'no information at all hides nothing'
+Assert-Equal '' (@(Get-HiddenFamilies) -join ',') 'and an omitted -Available hides nothing either'
+Assert-Equal '' (@(Get-HiddenFamilies -Available @('fable')) -join ',') 'a list containing fable hides nothing'
+Assert-Equal 'fable' (@(Get-HiddenFamilies -Available @('opus')) -join ',') 'a list WITHOUT fable hides fable, whatever else is in it'
+
+Assert-Equal 'default,opus1m,sonnet1m,haiku' (@(Get-VisibleRowValues -Row $modelRowDef -Available @()) -join ',') 'an empty availableModels drops fable from the Model row and keeps every other option'
+Assert-Equal 'default,opus,off' (@(Get-VisibleRowValues -Row $advRowDef -Available @()) -join ',') 'and drops fable from the Advisor row, keeping default, opus and off'
+Assert-Equal $modelAll (@(Get-VisibleRowValues -Row $modelRowDef -Available @('fable')) -join ',') 'a list containing fable hides nothing on the Model row'
+Assert-Equal $advAll (@(Get-VisibleRowValues -Row $advRowDef -Available @('fable')) -join ',') 'nor on the Advisor row'
+Assert-Equal $modelAll (@(Get-VisibleRowValues -Row $modelRowDef -Available @('Fable')) -join ',') 'the family match is case-insensitive'
+Assert-Equal $modelAll (@(Get-VisibleRowValues -Row $modelRowDef -Available @('fable', 'opus', 'sonnet')) -join ',') 'and a longer list containing it hides nothing either'
+# ['opus'] is the pin that separates this rule from v1: opus is not a hideable family, so a list
+# with an opus bucket and no fable bucket hides fable and leaves opus1m exactly where it was.
+Assert-Equal 'default,opus1m,sonnet1m,haiku' (@(Get-VisibleRowValues -Row $modelRowDef -Available @('opus')) -join ',') 'availableModels = [opus] hides fable'
+Assert-True (@(Get-VisibleRowValues -Row $modelRowDef -Available @('opus')) -contains 'opus1m') 'and keeps opus1m, which no account has a bucket for'
+Assert-Equal 'default,opus,off' (@(Get-VisibleRowValues -Row $advRowDef -Available @('opus')) -join ',') 'the Advisor row keeps its own opus option the same way'
+Assert-Equal $modelAll (@(Get-VisibleRowValues -Row $modelRowDef -Available $null) -join ',') 'no information hides nothing'
+Assert-Equal $modelAll (@(Get-VisibleRowValues -Row $modelRowDef) -join ',') 'and an omitted -Available hides nothing on a row either'
+# Rows with no family map are never touched, whatever the account has - the other five stay whole.
+foreach ($otherRow in @((Get-LaunchRows) | Where-Object { $_.Name -notin @('Model', 'Advisor') })) {
+    Assert-Equal (@($otherRow.Values) -join ',') (@(Get-VisibleRowValues -Row $otherRow -Available @()) -join ',') "the $($otherRow.Name) row has no family map and is untouched"
+}
+
+# Rendering: with no fable bucket the Model row has no fable CELL and no Fable LABEL, and every
+# other option keeps both. The cells and the drawn text come from the same visible list, so they
+# cannot disagree.
+$noneLim  = New-AvailLimit -Available @()
+$fableLim = New-AvailLimit -Available @('fable')
+$opusLim  = New-AvailLimit -Available @('opus')
+$mfMap = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $noneLim -RowMap ([ref]$mfMap)
+Assert-Equal 0 (@($mfMap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'the hidden fable option gets no click cell on the Model row'
+Assert-Equal 'default,opus1m,sonnet1m,haiku' (@($mfMap.Rows[$mvIdx].Cells | ForEach-Object Value) -join ',') 'and the Model row cells are exactly the visible options'
+Assert-Equal 0 (@($mfMap.Rows[$avIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'the hidden fable option gets no click cell on the Advisor row'
+Assert-Equal 'default,opus,off' (@($mfMap.Rows[$avIdx].Cells | ForEach-Object Value) -join ',') 'and the Advisor row cells are exactly the visible options'
+$noneFrame = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $noneLim)
+$mfLine = @($noneFrame | Where-Object { $_ -match '\bmodel\b' })[0]
+Assert-Equal $false ($mfLine -match 'Fable 5\.1') 'the drawn Model row no longer shows the Fable 5.1 label'
+Assert-True (($mfLine -match 'Opus 5') -and ($mfLine -match 'Sonnet 5') -and ($mfLine -match 'Haiku 4\.5')) 'while Opus, Sonnet and Haiku are all still drawn there'
+$afLine = @($noneFrame | Where-Object { $_ -match '\badvisor\b' })[0]
+Assert-Equal $false ($afLine -match 'fable') 'the drawn Advisor row no longer offers fable'
+Assert-True (($afLine -match 'opus') -and ($afLine -match 'off')) 'while opus and off are both still drawn there'
+# The account that HAS the bucket keeps everything, and the [opus] account loses fable alone.
+$fbMap = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $fableLim -RowMap ([ref]$fbMap)
+Assert-Equal 1 (@($fbMap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'an account whose list HAS fable keeps the fable cell'
+$opMap = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $opusLim -RowMap ([ref]$opMap)
+Assert-Equal 0 (@($opMap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'an [opus] account loses the fable cell'
+Assert-Equal 1 (@($opMap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'opus1m' }).Count) 'and keeps its opus1m cell'
+# Fail safe, the three shapes of "no information" a real record takes: the property absent (an older
+# widget), the property $null, and no record for that account at all. All three keep the fable cell.
+$mfAbsent = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits (New-AvailLimit -NoField) -RowMap ([ref]$mfAbsent)
+Assert-Equal 1 (@($mfAbsent.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'a limit record with no AvailableModels property at all keeps the fable cell (fail safe)'
+$mfNull = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits (New-AvailLimit) -RowMap ([ref]$mfNull)
+Assert-Equal 1 (@($mfNull.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'and a record whose AvailableModels is $null keeps it too'
+$mfNoRec = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits @{} -RowMap ([ref]$mfNoRec)
+Assert-Equal 1 (@($mfNoRec.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'and so does an account with no rate-limit record at all'
+
+# No information must draw EXACTLY what a list containing fable draws - that identity is what keeps
+# the launch frame byte-identical to the build before this filter existed. Whole frames plus their
+# row maps, at every width the launcher draws at, colour and ascii both, with fable selected and
+# with a fable-named default so every place the family can reach the screen is in the comparison.
+$absentDigest = @(); $fableDigest = @(); $nullDigest = @()
+foreach ($fw in @(50, 78, 100, 120, 198)) {
+    foreach ($col in @($true, $false)) {
+        foreach ($asc in @($true, $false)) {
+            foreach ($pair in @(@{ K = 'absent'; L = (New-AvailLimit -NoField) }, @{ K = 'fable'; L = $fableLim }, @{ K = 'null'; L = (New-AvailLimit) })) {
+                $stI = New-LaunchState; $stI.Account = 'work'; $stI.Model = 'fable'; $stI.Advisor = 'fable'; $stI.Row = 1
+                $mapI = $null
+                $lines = @(Get-LaunchFrame -State $stI -Width $fw -Height 30 -Limits $pair.L -Color:$col -Ascii:$asc -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultAdvisorLabel 'default (fable)' -RowMap ([ref]$mapI))
+                $cells = @($mapI.Rows | ForEach-Object { "$($_.Index):$($_.Y):" + (@($_.Cells | ForEach-Object { "$($_.Value)@$($_.Start)-$($_.End)" }) -join ',') })
+                $d = Get-FrameDigest -Lines ($lines + $cells)
+                switch ($pair.K) { 'absent' { $absentDigest += $d } 'fable' { $fableDigest += $d } 'null' { $nullDigest += $d } }
+            }
+        }
+    }
+}
+Assert-Equal ($fableDigest -join ' ') ($absentDigest -join ' ') 'an absent availableModels draws exactly what a list containing fable draws - 20 frames and row maps, 50/78/100/120/198 x colour x ascii'
+Assert-Equal ($fableDigest -join ' ') ($nullDigest -join ' ') 'and so does a $null one'
+
+# Stepping skips the hidden option in both directions, through Invoke-LaunchScreen - the owner's
+# surface - with the arrows and with the w/a/s/d aliases the same keys reach.
+$stR = New-LaunchState; $stR.Account = 'work'; $stR.Model = 'default'
+$out = Invoke-LaunchScreen -State $stR -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $noneLim
+Assert-Equal 'opus1m' $out.Model 'a Right step from default skips the hidden fable and lands on opus1m'
+$stL = New-LaunchState; $stL.Account = 'work'; $stL.Model = 'opus1m'
+$out = Invoke-LaunchScreen -State $stL -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('LeftArrow', 'Enter'))) -Draw {} -Limits $noneLim
+Assert-Equal 'default' $out.Model 'a Left step from opus1m lands on default, never on fable'
+$stD = New-LaunchState; $stD.Account = 'work'; $stD.Model = 'default'
+$out = Invoke-LaunchScreen -State $stD -ReadKey (New-ScriptedKeyReader -Keys (@('s') * $mvIdx + @('d', 'Enter'))) -Draw {} -Limits $noneLim
+Assert-Equal 'opus1m' $out.Model 's then d - the w/a/s/d aliases - skips fable the same way'
+$stA2 = New-LaunchState; $stA2.Account = 'work'; $stA2.Model = 'opus1m'
+$out = Invoke-LaunchScreen -State $stA2 -ReadKey (New-ScriptedKeyReader -Keys (@('s') * $mvIdx + @('a', 'Enter'))) -Draw {} -Limits $noneLim
+Assert-Equal 'default' $out.Model 'and a - the Left alias - never lands on fable either'
+# A full lap of the row can never touch a hidden value: four steps over four visible options.
+$stLap = New-LaunchState; $stLap.Account = 'work'; $stLap.Model = 'default'
+$out = Invoke-LaunchScreen -State $stLap -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('RightArrow', 'RightArrow', 'RightArrow', 'RightArrow', 'Enter'))) -Draw {} -Limits $noneLim
+Assert-Equal 'default' $out.Model 'four Right steps are one full lap of the four visible options, back to default'
+$stAdvStep = New-LaunchState; $stAdvStep.Account = 'work'; $stAdvStep.Advisor = 'default'
+$out = Invoke-LaunchScreen -State $stAdvStep -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $avIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $noneLim
+Assert-Equal 'opus' $out.Advisor 'a Right step on the Advisor row skips fable and lands on opus'
+
+# Click hit-testing: a click at fable's OLD column (from an unfiltered map) selects nothing when the
+# account has no fable bucket - the handler walks the visible list, where fable is not.
+$umap = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -RowMap ([ref]$umap)
+$fableOldCell = @($umap.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' })[0]
+# A plain scriptblock, not .GetNewClosure(): it only reads $umap, which this scope already answers.
+$uDraw = { param($s) $umap }
+$w = New-EventReader @((New-MouseEvent -Y $umap.Rows[$mvIdx].Y -X $fableOldCell.Start -Left), $enterKey)
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $uDraw -Wait $w -GetWindowTop { 0 } -Limits $noneLim
+Assert-Equal 'default' $out.Model 'a click at the hidden option''s former column selects nothing'
+
+# Snap-to-default: a state that remembers a now-hidden value snaps in the loop's Before handler,
+# before the first frame, so Get-LaunchArgs cannot emit a --model or --advisor the account lacks.
+# Driven through the screen, not through the frame builder - the builder is a pure renderer.
+$stSnap = New-LaunchState; $stSnap.Account = 'work'; $stSnap.Model = 'fable'; $stSnap.Advisor = 'fable'
+$stSnap = Invoke-LaunchScreen -State $stSnap -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $noneLim
+Assert-Equal 'default' $stSnap.Model 'a remembered Model fable snaps to default on an account with no fable bucket'
+Assert-Equal 'default' $stSnap.Advisor 'and a remembered Advisor fable snaps to default too'
+$snapArgs = @(Get-LaunchArgs -State $stSnap)
+Assert-Equal 0 (@($snapArgs | Where-Object { $_ -eq '--model' }).Count) 'so Get-LaunchArgs emits no --model at all'
+Assert-Equal 0 (@($snapArgs | Where-Object { $_ -eq '--advisor' }).Count) 'and no --advisor either'
+Assert-Equal 0 (@($snapArgs | Where-Object { $_ -eq 'fable' }).Count) 'and the word fable reaches no argument'
+# The same remembered fable SURVIVES where the account has the bucket - the snap is the rule, not a reset.
+$stKeep = New-LaunchState; $stKeep.Account = 'work'; $stKeep.Model = 'fable'; $stKeep.Advisor = 'fable'
+$stKeep = Invoke-LaunchScreen -State $stKeep -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $fableLim
+Assert-Equal 'fable' $stKeep.Model 'a remembered fable is left alone on an account that has it'
+Assert-Equal 'fable' $stKeep.Advisor 'on both rows'
+
+# Per account, from ONE limits table: work has no fable bucket and hides it, personal has one and
+# shows it, and switching tabs switches which rows the owner sees.
+$mixed = (New-AvailLimit -Account 'work' -Available @()) + (New-AvailLimit -Account 'personal' -Available @('fable'))
+$mixWork = $null
+$stW = New-LaunchState; $stW.Account = 'work'
+$null = Get-LaunchFrame -State $stW -Width 100 -Height 30 -Limits $mixed -RowMap ([ref]$mixWork)
+Assert-Equal 0 (@($mixWork.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'on the work tab (no fable bucket) the Model row has no fable cell'
+$mixPersonal = $null
+$stP = New-LaunchState; $stP.Account = 'personal'
+$null = Get-LaunchFrame -State $stP -Width 100 -Height 30 -Limits $mixed -RowMap ([ref]$mixPersonal)
+Assert-Equal 1 (@($mixPersonal.Rows[$mvIdx].Cells | Where-Object { $_.Value -eq 'fable' }).Count) 'and on the personal tab it has one - same table, same frame builder'
+# Through the screen: the SAME keys land on a different value because the tab switch changed accounts.
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * $mvIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $mixed
+Assert-Equal 'opus1m' $out.Model 'staying on work, a Right step on the Model row skips fable'
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys (@('RightArrow') + @('DownArrow') * $mvIdx + @('RightArrow', 'Enter'))) -Draw {} -Limits $mixed
+Assert-Equal 'personal' $out.Account 'a Right step on the account row switches to the personal tab'
+Assert-Equal 'fable' $out.Model 'and the same Right step on the Model row then lands ON fable, which that account has'
+
+# Every row without a family map is untouched, at every account: only Model/Advisor may change.
+foreach ($acc in @('work', 'personal', 'low')) {
+    $stA = New-LaunchState; $stA.Account = $acc
+    $unfiltered = @(Get-LaunchFrame -State $stA -Width 100 -Height 30 -Limits (New-AvailLimit -Account $acc -Available @('fable')))
+    $stB = New-LaunchState; $stB.Account = $acc
+    $filtered   = @(Get-LaunchFrame -State $stB -Width 100 -Height 30 -Limits (New-AvailLimit -Account $acc -Available @()))
+    $accU = @($unfiltered | Where-Object { $_ -match '\baccount\b' })[0]
+    $accF = @($filtered   | Where-Object { $_ -match '\baccount\b' })[0]
+    Assert-Equal $accU $accF "the account tab strip is untouched by the availability filter ($acc)"
+    foreach ($other in @('effort', 'permission', 'mode', 'remote')) {
+        $lu = @($unfiltered | Where-Object { $_ -match "\b$other\b" })[0]
+        $lf = @($filtered   | Where-Object { $_ -match "\b$other\b" })[0]
+        Assert-Equal $lu $lf "the $other row is untouched by the availability filter ($acc)"
+    }
+}
+
+# --- 'default' is not exempt. settings.json holds ONE model for all four accounts, so on an account
+# without Fable the model row drew '[default (Fable 5.1[1M])]' as the SELECTED option while Fable is
+# exactly what that account lacks - the option was hidden and the default still named it. The label,
+# and only the label, changes: what Get-LaunchArgs emits for 'default' is untouched. The wording
+# stays 'default (plan default)' - the screen cannot know which model the CLI will fall back to,
+# only that it will not be the one settings.json names. --------------------------------------------
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @()) 'a resolved default naming a hidden family is drawn as default (plan default)'
+Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @('fable')) 'the same label is left alone on an account that has Fable'
+Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])') 'and left alone when there is no availability information at all'
+Assert-Equal 'default (Opus 5)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Opus 5)' -Available @()) 'a default naming a family that is never hidden is left alone'
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (claude-fable-5-1[1m])' -Available @()) 'the family is found in a raw model id too, not only in the friendly name'
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $advRowDef -Key 'default' -DefaultAdvisorLabel 'default (fable)' -Available @()) 'the advisor default gets the same treatment'
+Assert-Equal 'default (opus)' (Get-RowOptionText -Row $advRowDef -Key 'default' -DefaultAdvisorLabel 'default (opus)' -Available @()) 'and an advisor default the account can use is left alone'
+Assert-Equal 'Fable 5.1' (Get-RowOptionText -Row $modelRowDef -Key 'fable' -Available @()) 'only the default key is rewritten - a static label is never touched'
+# On the drawn frame, where the owner actually reads it.
+$defNone = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $noneLim -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultAdvisorLabel 'default (fable)')
+$defNoneModel = @($defNone | Where-Object { $_ -match '\bmodel\b' })[0]
+Assert-True ($defNoneModel -match 'default \(plan default\)') 'the drawn Model row shows default (plan default) with no fable bucket'
+Assert-Equal $false ($defNoneModel -match 'Fable') 'and the word Fable is gone from that row entirely'
+Assert-True ((@($defNone | Where-Object { $_ -match '\badvisor\b' })[0]) -match 'default \(plan default\)') 'and the drawn Advisor row says the same'
+$defFable = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $fableLim -DefaultModelLabel 'default (Fable 5.1[1M])')
+Assert-True ((@($defFable | Where-Object { $_ -match '\bmodel\b' })[0]) -match 'Fable 5\.1') 'while on an account that has Fable the resolved default still names it'
+# The flags are NOT touched: 'default' means no flag everywhere, exactly as before.
+$defState = New-LaunchState; $defState.Account = 'work'
+Assert-Equal 0 (@(Get-LaunchArgs -State $defState).Count) 'a default state still emits no arguments at all'
+
+# --- The snap lives in the loop's Before handler, not in the frame builder: it runs before the first
+# draw, so a -Draw {} caller snaps too, and Get-LaunchFrame no longer writes to the state it renders.
+$drawlessNone = New-LaunchState; $drawlessNone.Account = 'work'; $drawlessNone.Model = 'fable'; $drawlessNone.Advisor = 'fable'
+$out = Invoke-LaunchScreen -State $drawlessNone -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $noneLim
+Assert-Equal 'default' $out.Model 'a -Draw {} run snaps the remembered Model fable before the first frame'
+Assert-Equal 'default' $out.Advisor 'and the remembered Advisor fable with it'
+$drawlessArgs = @(Get-LaunchArgs -State $out)
+Assert-Equal 0 (@($drawlessArgs | Where-Object { $_ -eq '--model' }).Count) 'so a -Draw {} launch emits no --model'
+Assert-Equal 0 (@($drawlessArgs | Where-Object { $_ -eq '--advisor' }).Count) 'and no --advisor'
+# Purity: building a frame is a read. The renderer that edited its argument could not be called twice.
+$pureState = New-LaunchState; $pureState.Account = 'work'; $pureState.Model = 'fable'; $pureState.Advisor = 'fable'
+$null = Get-LaunchFrame -State $pureState -Width 100 -Height 30 -Limits $noneLim
+Assert-Equal 'fable' $pureState.Model 'Get-LaunchFrame does not write the Model row of the state it renders'
+Assert-Equal 'fable' $pureState.Advisor 'nor the Advisor row'
+
+# --- The snap fires for a value the ACCOUNT cannot use, never merely for one the row does not list.
+# A value no family map knows - a hand-built fixture, a pref from an older build - is none of this
+# rule's business and survives exactly as it did before the filter existed.
+$bogusNoInfo = New-LaunchState; $bogusNoInfo.Account = 'work'; $bogusNoInfo.Model = 'bogus'
+$out = Invoke-LaunchScreen -State $bogusNoInfo -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits (New-AvailLimit)
+Assert-Equal 'bogus' $out.Model 'with no availability information an unknown Model value is left alone'
+$bogusNone = New-LaunchState; $bogusNone.Account = 'work'; $bogusNone.Model = 'bogus'; $bogusNone.Advisor = 'bogus'
+$out = Invoke-LaunchScreen -State $bogusNone -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $noneLim
+Assert-Equal 'bogus' $out.Model 'and with an empty one too - the rule hides the fable family, not everything off the row'
+Assert-Equal 'bogus' $out.Advisor 'on the Advisor row as well'
+$okNone = New-LaunchState; $okNone.Account = 'work'; $okNone.Model = 'haiku'
+$out = Invoke-LaunchScreen -State $okNone -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $noneLim
+Assert-Equal 'haiku' $out.Model 'a visible option is never snapped either'
+
+# --- A snapped row stops claiming it was restored: the '*' mark and the banner under the rows say
+# "this came back from your last launch", and a row the screen just reset did not come back.
+$restNone = New-LaunchState; $restNone.Account = 'work'; $restNone.Model = 'fable'; $restNone.Restored = @('Model', 'Effort'); $restNone.RestoredAge = '2 h'
+$out = Invoke-LaunchScreen -State $restNone -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $noneLim
+Assert-Equal 'Effort' (@($out.Restored) -join ',') 'the snapped Model row drops out of Restored, and the rows that were not snapped stay'
+$restFrame = @(Get-LaunchFrame -State $out -Width 100 -Height 30 -Limits $noneLim)
+Assert-Equal $false ((@($restFrame | Where-Object { $_ -match '\bmodel\b' })[0]) -match 'model\*') 'so the Model row carries no restore mark'
+Assert-True ((@($restFrame | Where-Object { $_ -match '\beffort\b' })[0]) -match 'effort\*') 'while the effort row keeps its own'
+$restKeep = New-LaunchState; $restKeep.Account = 'work'; $restKeep.Model = 'fable'; $restKeep.Restored = @('Model')
+$out = Invoke-LaunchScreen -State $restKeep -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {} -Limits $fableLim
+Assert-Equal 'Model' (@($out.Restored) -join ',') 'a row that was not snapped keeps its restore mark on an account that has the model'
+
 # --- Clickable footer hints (owner ask 2026-08-15). A click becomes the KEY the hint advertises and
 # takes the ordinary keyboard path, so what is asserted here is that the SAME outcome arrives. ---
 function Get-HintSpan { param($Map, [string]$Key, [string]$Char)
@@ -5142,7 +5408,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1638
+$script:Expected = 1736
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

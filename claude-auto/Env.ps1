@@ -781,12 +781,45 @@ function Get-RateLimitSummary {
             # fields at all, so when its record is the fresher one both are $null and the screen
             # draws no third bar - correct, not a gap.
             if ($null -ne $j.fiveHour -or $null -ne $j.sevenDay) {
+                # availableModels (widget payload): the model families that have a weekly bucket of
+                # their own on this account. It reaches the launch screen, which hides a hideable
+                # family the account does not have.
+                # Read from the WIDGET record specifically, NOT from $j. This is entitlement state
+                # with ONE writer, not a five-minute number: statusline.js writes `<name>.json` every
+                # few seconds while a session runs and never writes this field at all, so
+                # freshest-wins - which exists for the PERCENTAGES and their age - reported "no
+                # information" on exactly the account a running session was about to launch from, and
+                # the launch screen then hid nothing there. Everything else still comes from $j.
+                #
+                # THREE-STATE, and the states must not collapse: $null is "the widget never reported"
+                # (no file, a half-written one, no stamp, or a build older than the field) and hides
+                # nothing; an ARRAY is an answer, so an empty one means "this account has no model
+                # bucket", which is exactly what an account without Fable looks like. Presence is
+                # therefore read off the parsed object's property list - [] and JSON null are both
+                # falsy, and a truthiness test would read them as absent (the v1 mistake).
+                $available = $null
+                $widgetPath = Join-Path $Directory "$profileName.widget.json"
+                if (Test-Path -LiteralPath $widgetPath) {
+                    try {
+                        $wj = Get-Content -LiteralPath $widgetPath -Raw | ConvertFrom-Json
+                        # atMs is the widget's own stamp on every record it writes, so a record
+                        # without one is not a widget export - a truncated write that still parsed,
+                        # or a file something else left there. Its list is not trusted.
+                        if ($null -ne $wj.atMs -and $wj.PSObject.Properties['availableModels']) {
+                            # @($null).Count is 1 in PowerShell, so a JSON null would arrive as a
+                            # one-member array of nothing: strip the empty members instead of
+                            # counting them. Present and empty either way - that is the rule.
+                            $available = @(@($wj.availableModels) | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' })
+                        }
+                    } catch { }   # half-written widget file: no information, never a broken record
+                }
                 $out[$profileName] = [pscustomobject]@{
-                    FiveHour   = if ($null -ne $j.fiveHour) { [int]$j.fiveHour } else { $null }
-                    SevenDay   = if ($null -ne $j.sevenDay) { [int]$j.sevenDay } else { $null }
-                    AgeText    = $ageText
-                    Model      = if ($null -ne $j.modelSevenDay) { [int]$j.modelSevenDay } else { $null }
-                    ModelLabel = if ($j.modelLabel) { [string]$j.modelLabel } else { $null }
+                    FiveHour        = if ($null -ne $j.fiveHour) { [int]$j.fiveHour } else { $null }
+                    SevenDay        = if ($null -ne $j.sevenDay) { [int]$j.sevenDay } else { $null }
+                    AgeText         = $ageText
+                    Model           = if ($null -ne $j.modelSevenDay) { [int]$j.modelSevenDay } else { $null }
+                    ModelLabel      = if ($j.modelLabel) { [string]$j.modelLabel } else { $null }
+                    AvailableModels = $available
                 }
             }
         } catch { }   # unreadable or malformed: show nothing rather than a wrong number
