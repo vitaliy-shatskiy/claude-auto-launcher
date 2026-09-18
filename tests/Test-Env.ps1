@@ -571,61 +571,6 @@ try {
     if (Test-Path -LiteralPath $ml) { Remove-Item -LiteralPath $ml -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# plan (widget payload, spec 2026-09-17 v2): the account's subscription label, from real
-# ConvertFrom-Json inputs. It is read from the WIDGET record specifically, whichever record is
-# fresher. The defect that pins: plan is subscription state with ONE writer, while statusline.js
-# rewrites `<account>.json` every few seconds during a session and never carries the field, so
-# freshest-wins - which exists for the PERCENTAGES and their age - reported no plan on exactly the
-# account the owner was about to launch from, and the launch screen then hid nothing there.
-$pl = Join-Path $env:TEMP ("cct-plan-test-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Force $pl | Out-Null
-try {
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    # work: the statusline record is FRESHER and carries a DIFFERENT plan, so freshest-wins cannot
-    # answer this by accident - a reader that picked $j would report Max here.
-    Set-Content -LiteralPath "$pl\work.json"          -Value ('{"fiveHour":77,"sevenDay":88,"atMs":' + $nowMs + ',"plan":"Max 20x"}')
-    Set-Content -LiteralPath "$pl\work.widget.json"   -Value ('{"fiveHour":11,"sevenDay":22,"atMs":' + ($nowMs - 300000) + ',"plan":"Team"}')
-    # personal: only a statusline record exists - nothing can supply the field.
-    Set-Content -LiteralPath "$pl\personal.json"      -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + '}')
-    # shared: only a widget record exists - the ordinary case. The label arrives whole, multiplier
-    # included; reducing it to a plan key is the launch screen's job, not this reader's.
-    Set-Content -LiteralPath "$pl\shared.widget.json" -Value ('{"fiveHour":30,"sevenDay":40,"atMs":' + $nowMs + ',"plan":"Max 20x"}')
-    # low: the widget record is half-written - it must not take the record down with it.
-    Set-Content -LiteralPath "$pl\low.json"           -Value ('{"fiveHour":55,"sevenDay":66,"atMs":' + $nowMs + '}')
-    Set-Content -LiteralPath "$pl\low.widget.json"    -Value '{"plan":"Team",'
-    $sum = Get-RateLimitSummary -Directory $pl
-    Assert 'plan comes from the OLDER widget record, never the fresher statusline one' ($sum.work.Plan -eq 'Team')
-    Assert 'while the fresher statusline record still supplies the percentages'        ($sum.work.FiveHour -eq 77)
-    Assert 'a statusline record with no widget file beside it reports no plan'         ($null -eq $sum.personal.Plan)
-    Assert 'and its percentages still arrive'                                          ($sum.personal.FiveHour -eq 10)
-    Assert 'a widget-only account reads its plan label whole, multiplier included'     ($sum.shared.Plan -eq 'Max 20x')
-    Assert 'a malformed widget file yields no plan'                                    ($null -eq $sum.low.Plan)
-    Assert 'and does not take the statusline record down with it'                      ($sum.low.FiveHour -eq 55)
-} finally {
-    if (Test-Path -LiteralPath $pl) { Remove-Item -LiteralPath $pl -Recurse -Force -ErrorAction SilentlyContinue }
-}
-
-# The three shapes of "no plan" inside a widget record that exists: absent (an older widget build),
-# JSON null (the subscription was never fetched) and an empty string. All three must read as $null
-# and not as '' or a truthy object, because the launch screen's hide rule keys off truthiness and
-# hides nothing without a plan.
-$pn = Join-Path $env:TEMP ("cct-planempty-test-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Force $pn | Out-Null
-try {
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    Set-Content -LiteralPath "$pn\work.widget.json"     -Value ('{"fiveHour":40,"sevenDay":48,"atMs":' + $nowMs + '}')
-    Set-Content -LiteralPath "$pn\personal.widget.json" -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"plan":null}')
-    Set-Content -LiteralPath "$pn\low.widget.json"      -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"plan":""}')
-    Set-Content -LiteralPath "$pn\shared.widget.json"   -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"plan":"Team"}')
-    $sum = Get-RateLimitSummary -Directory $pn
-    Assert 'an ABSENT plan field reads as $null' ($null -eq $sum.work.Plan)
-    Assert 'a JSON null plan reads as $null'     ($null -eq $sum.personal.Plan)
-    Assert 'an EMPTY plan string reads as $null' ($null -eq $sum.low.Plan)
-    Assert 'and a present plan still arrives'    ($sum.shared.Plan -eq 'Team')
-} finally {
-    if (Test-Path -LiteralPath $pn) { Remove-Item -LiteralPath $pn -Recurse -Force -ErrorAction SilentlyContinue }
-}
-
 # Get-DefaultAdvisorLabel: what 'default' on the advisor row means right now. Same shape and same
 # failure policy as Get-DefaultModelLabel - this is a menu, not a validator, so every failure
 # degrades to a plain label instead of taking the launch screen down.
@@ -786,7 +731,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 161 } else { 157 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 150 } else { 146 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

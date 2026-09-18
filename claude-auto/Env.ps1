@@ -781,31 +781,12 @@ function Get-RateLimitSummary {
             # fields at all, so when its record is the fresher one both are $null and the screen
             # draws no third bar - correct, not a gap.
             if ($null -ne $j.fiveHour -or $null -ne $j.sevenDay) {
-                # plan (widget payload): the account's subscription label - 'Team', 'Max 20x', 'Pro'.
-                # It reaches the launch screen, which hides what the plan does not include.
-                # Read from the WIDGET record specifically, NOT from $j. This is subscription state
-                # with ONE writer, not a five-minute number: statusline.js writes `<name>.json` every
-                # few seconds while a session runs and never writes this field at all, so
-                # freshest-wins - which exists for the PERCENTAGES and their age - reported "no plan"
-                # on exactly the account a running session was about to launch from, and the launch
-                # screen then hid nothing there. Everything else still comes from $j.
-                # Absent, JSON null, an empty string, no widget file at all and a half-written one all
-                # yield $null, and the launch screen hides nothing without a plan (fail safe to show).
-                $plan = $null
-                $widgetPath = Join-Path $Directory "$profileName.widget.json"
-                if (Test-Path -LiteralPath $widgetPath) {
-                    try {
-                        $wj = Get-Content -LiteralPath $widgetPath -Raw | ConvertFrom-Json
-                        if ($wj.plan) { $plan = [string]$wj.plan }
-                    } catch { }   # half-written widget file: no plan, never a broken record
-                }
                 $out[$profileName] = [pscustomobject]@{
                     FiveHour   = if ($null -ne $j.fiveHour) { [int]$j.fiveHour } else { $null }
                     SevenDay   = if ($null -ne $j.sevenDay) { [int]$j.sevenDay } else { $null }
                     AgeText    = $ageText
                     Model      = if ($null -ne $j.modelSevenDay) { [int]$j.modelSevenDay } else { $null }
                     ModelLabel = if ($j.modelLabel) { [string]$j.modelLabel } else { $null }
-                    Plan       = $plan
                 }
             }
         } catch { }   # unreadable or malformed: show nothing rather than a wrong number
