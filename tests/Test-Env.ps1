@@ -626,26 +626,6 @@ try {
     if (Test-Path -LiteralPath $pn) { Remove-Item -LiteralPath $pn -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# atMs is the widget's own stamp on every record it writes (Get-FreshestRateLimitRecord already
-# refuses a record without one), so a widget file carrying a plan and no atMs is not a widget export:
-# a truncated write that still parsed, or a file something else left there. Its plan is not trusted.
-$pa = Join-Path $env:TEMP ("cct-planstamp-test-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Force $pa | Out-Null
-try {
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    Set-Content -LiteralPath "$pa\work.json"            -Value ('{"fiveHour":40,"sevenDay":48,"atMs":' + $nowMs + '}')
-    Set-Content -LiteralPath "$pa\work.widget.json"     -Value '{"plan":"Team"}'
-    # personal: the same record WITH the stamp - the control that says the refusal is the stamp.
-    Set-Content -LiteralPath "$pa\personal.json"        -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + '}')
-    Set-Content -LiteralPath "$pa\personal.widget.json" -Value ('{"plan":"Team","atMs":' + $nowMs + '}')
-    $sum = Get-RateLimitSummary -Directory $pa
-    Assert 'a widget record with a plan but no atMs is not trusted for the plan' ($null -eq $sum.work.Plan)
-    Assert 'and its statusline percentages still arrive'                         ($sum.work.FiveHour -eq 40)
-    Assert 'the same record WITH atMs does carry its plan'                        ($sum.personal.Plan -eq 'Team')
-} finally {
-    if (Test-Path -LiteralPath $pa) { Remove-Item -LiteralPath $pa -Recurse -Force -ErrorAction SilentlyContinue }
-}
-
 # Get-DefaultAdvisorLabel: what 'default' on the advisor row means right now. Same shape and same
 # failure policy as Get-DefaultModelLabel - this is a menu, not a validator, so every failure
 # degrades to a plain label instead of taking the launch screen down.
@@ -806,7 +786,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 164 } else { 160 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 161 } else { 157 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

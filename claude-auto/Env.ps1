@@ -796,10 +796,7 @@ function Get-RateLimitSummary {
                 if (Test-Path -LiteralPath $widgetPath) {
                     try {
                         $wj = Get-Content -LiteralPath $widgetPath -Raw | ConvertFrom-Json
-                        # atMs is the widget's own stamp on every record it writes, so a record
-                        # without one is not a widget export - a truncated write that still parsed,
-                        # or a file something else left there. Its plan is not trusted.
-                        if ($null -ne $wj.atMs -and $wj.plan) { $plan = [string]$wj.plan }
+                        if ($wj.plan) { $plan = [string]$wj.plan }
                     } catch { }   # half-written widget file: no plan, never a broken record
                 }
                 $out[$profileName] = [pscustomobject]@{

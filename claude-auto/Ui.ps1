@@ -649,12 +649,7 @@ function Invoke-LaunchScreen {
         # The cursor lives in two places - the loop's Index, and the state's Row that the frame
         # draws and Step-LaunchValue steps. Index wins here; a handler that replaces the state
         # copies Row back onto Index itself. The three hover fields reach the frame the same way.
-        # The snap lives here, not in the frame builder: Before runs once before the FIRST draw and
-        # again every iteration, so a -Draw {} caller snaps exactly as a drawing one does, and
-        # Get-LaunchFrame stays a pure renderer. It fires only for a value the PLAN hides.
-        Before = { param($s)
-            $s.State.Row = $s.Index; $s.State.Hover = $s.Hover; $s.State.HoverRow = $s.HoverRow; $s.State.HoverValue = $s.HoverValue
-            $s.State = Set-LaunchPlanSnap -State $s.State -Plan "$($launchLimits[$s.State.Account].Plan)" }
+        Before = { param($s) $s.State.Row = $s.Index; $s.State.Hover = $s.Hover; $s.State.HoverRow = $s.HoverRow; $s.State.HoverValue = $s.HoverValue }
         Rows   = { @(Get-LaunchRows).Count }
         Left   = { param($s) $null = & $walkRow $s (-1) 1 }
         Right  = { param($s) $null = & $walkRow $s 1 1 }
