@@ -1240,7 +1240,7 @@ Assert-Equal 0 (@($noColor | Where-Object { $_ -match "$([char]27)\[" }).Count) 
 # unchanged. This block is what makes that mutation visible.
 Assert-Equal 'Fable 5.1[1M]' (Get-FriendlyModelName -Raw 'claude-fable-5-1[1m]') 'friendly name: alias-in-full-id form, case-insensitive, plus the [1M] suffix'
 Assert-Equal 'Fable 5.1' (Get-FriendlyModelName -Raw 'fable') 'friendly name: the bare fable alias (what /model writes) is the current Fable release'
-Assert-Equal 'Opus 5[1M]' (Get-FriendlyModelName -Raw 'opus[1m]') 'friendly name: bare alias form also resolves'
+Assert-Equal 'Opus 5.5[1M]' (Get-FriendlyModelName -Raw 'opus[1m]') 'friendly name: bare alias form also resolves'
 Assert-Equal 'Sonnet 5' (Get-FriendlyModelName -Raw 'claude-sonnet-4-6') 'friendly name: a non-1M full id has no [1M] suffix appended'
 Assert-Equal 'Haiku 4.5' (Get-FriendlyModelName -Raw 'haiku') 'friendly name: haiku maps too'
 $longUnknown = 'some-unknown-model-id-xyz-12345678'
@@ -1265,17 +1265,19 @@ Assert-Equal 'default' (Get-DefaultModelLabel -Path (Join-Path $env:TEMP ('claud
 
 # --- model row: shortened default label fits at 100/120, still collapses at 60/80 --------------
 # The model row's five options must all render in full form once the resolved default label is
-# shortened to a friendly name - at width 100/120 the box caps at 100 columns (inner 96), and the
+# shortened to a friendly name - the box caps at 100 columns (inner 96) from width 102 up, and the
 # old raw '--model' id alone ('claude-fable-5[1m]', 28 chars) left no room for all five before
 # Get-LaunchFrame's own overflow guard collapsed the row to the compact '‹ selected ›' form. That
 # guard is intentionally kept - width 60/80 must still collapse - only the label length changed.
+# The full row is exactly 96 characters with 'Opus 5.5[1M]', so it fills the capped inner width to
+# the last column: width 102 and above show it in full, width 100 (box 99, inner 95) collapses.
 $widthState = New-LaunchState
 $widthState.Row = (Get-RowIndex -Name 'Model')
-foreach ($w in @(100, 120)) {
+foreach ($w in @(102, 120)) {
     $frame = Get-LaunchFrame -State $widthState -Width $w -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])'
     $line = @($frame | Where-Object { $_ -match 'model' })[0]
     $hasAllFive = ($line -match [regex]::Escape('default (Fable 5.1[1M])')) -and ($line -match [regex]::Escape(' Fable 5.1 ')) -and
-                  ($line -match [regex]::Escape('Opus 5[1M]')) -and ($line -match [regex]::Escape('Sonnet 5[1M]')) -and
+                  ($line -match [regex]::Escape('Opus 5.5[1M]')) -and ($line -match [regex]::Escape('Sonnet 5[1M]')) -and
                   ($line -match [regex]::Escape('Haiku 4.5')) -and ($line -notmatch [regex]::Escape($glyphs.LAngle))
     Assert-Equal $true $hasAllFive "at width $w the model row shows all five options in full form, not collapsed"
 }
@@ -1286,7 +1288,7 @@ foreach ($w in @(60, 80)) {
 }
 
 # --- nested-bracket highlight (model row: labels can carry their own literal brackets) ---------
-# A selected label like 'Opus 5[1M]' becomes the cell "<On-glyph> [Opus 5[1M]]" - one bracket
+# A selected label like 'Opus 5.5[1M]' becomes the cell "<On-glyph> [Opus 5.5[1M]]" - one bracket
 # nested inside another. A highlight regex that matches ANY '[...]' pair, not anchored to the
 # selection marker, lands on the wrong span: the INNER '[1M]' instead of the whole selected cell,
 # and it goes on to paint an UNselected cell's own literal bracket text ('Sonnet 5[1M]', shown but
@@ -1296,8 +1298,10 @@ foreach ($w in @(60, 80)) {
 $nestedState = New-LaunchState
 $nestedState.Model = 'opus1m'
 $nestedState.Row = (Get-RowIndex -Name 'Model')
-$nestedPlain = Get-LaunchFrame -State $nestedState -Width 100 -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])'
-$nestedColored = Get-LaunchFrame -State $nestedState -Width 100 -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])' -Color
+# Width 120, not 100: this block tests where the highlight lands, which needs the row in full form,
+# and at width 100 the 96-character row collapses (see the width loop above).
+$nestedPlain = Get-LaunchFrame -State $nestedState -Width 120 -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])'
+$nestedColored = Get-LaunchFrame -State $nestedState -Width 120 -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])' -Color
 $nestedModelPlain = @($nestedPlain | Where-Object { $_ -match 'model' })[0]
 $nestedModelColored = @($nestedColored | Where-Object { $_ -match 'model' })[0]
 
@@ -1305,7 +1309,7 @@ $nestedModelColored = @($nestedColored | Where-Object { $_ -match 'model' })[0]
 Assert-Equal $nestedModelPlain (Remove-AnsiColor -Text $nestedModelColored) 'nested-bracket model row: stripping colour returns the plain row exactly'
 
 # Property 2: the highlight covers EXACTLY the selected label, brackets included, and nothing else.
-$expectedHighlight = $script:C.Bold + $script:C.Green + '[Opus 5[1M]]' + $script:C.Reset
+$expectedHighlight = $script:C.Bold + $script:C.Green + '[Opus 5.5[1M]]' + $script:C.Reset
 Assert-Equal $true ($nestedModelColored.Contains($expectedHighlight)) 'nested-bracket model row: the highlight wraps the whole selected label, brackets included'
 
 # The specific old-bug shape: only the inner '[1M]' of the selected cell gets its own wrapper.
@@ -1716,7 +1720,7 @@ Assert-Equal 'default,opus,off' (@($mfMap.Rows[$avIdx].Cells | ForEach-Object Va
 $noneFrame = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $noneLim)
 $mfLine = @($noneFrame | Where-Object { $_ -match '\bmodel\b' })[0]
 Assert-Equal $false ($mfLine -match 'Fable 5\.1') 'the drawn Model row no longer shows the Fable 5.1 label'
-Assert-True (($mfLine -match 'Opus 5') -and ($mfLine -match 'Sonnet 5') -and ($mfLine -match 'Haiku 4\.5')) 'while Opus, Sonnet and Haiku are all still drawn there'
+Assert-True (($mfLine -match 'Opus 5\.5') -and ($mfLine -match 'Sonnet 5') -and ($mfLine -match 'Haiku 4\.5')) 'while Opus, Sonnet and Haiku are all still drawn there'
 $afLine = @($noneFrame | Where-Object { $_ -match '\badvisor\b' })[0]
 Assert-Equal $false ($afLine -match 'fable') 'the drawn Advisor row no longer offers fable'
 Assert-True (($afLine -match 'opus') -and ($afLine -match 'off')) 'while opus and off are both still drawn there'
@@ -1855,7 +1859,7 @@ foreach ($acc in @('work', 'personal', 'low')) {
 Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @()) 'a resolved default naming a hidden family is drawn as default (plan default)'
 Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @('fable')) 'the same label is left alone on an account that has Fable'
 Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])') 'and left alone when there is no availability information at all'
-Assert-Equal 'default (Opus 5)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Opus 5)' -Available @()) 'a default naming a family that is never hidden is left alone'
+Assert-Equal 'default (Opus 5.5)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Opus 5.5)' -Available @()) 'a default naming a family that is never hidden is left alone'
 Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (claude-fable-5-1[1m])' -Available @()) 'the family is found in a raw model id too, not only in the friendly name'
 Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $advRowDef -Key 'default' -DefaultAdvisorLabel 'default (fable)' -Available @()) 'the advisor default gets the same treatment'
 Assert-Equal 'default (opus)' (Get-RowOptionText -Row $advRowDef -Key 'default' -DefaultAdvisorLabel 'default (opus)' -Available @()) 'and an advisor default the account can use is left alone'

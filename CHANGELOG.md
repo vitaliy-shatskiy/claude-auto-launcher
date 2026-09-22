@@ -4,6 +4,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-09-22
+
+### Changed
+
+- The launch screen names the Opus family by its current release: `Opus 5.5[1M]` on the model row
+  and `default (Opus 5.5)` for a settings default of `opus`. The `opus` / `opus[1m]` arguments are
+  unchanged — the CLI resolves the alias, and 2.1.280 points it at Claude Opus 5.5.
+- The full-form model row is now 96 characters, the capped inner width exactly, so it shows in full
+  from a 102-column terminal instead of 100; at 96-101 columns the row uses its compact form, as it
+  always did below that.
+
 ## [0.3.0] — 2026-09-22
 
 ### Fixed
@@ -138,3 +149,4 @@ First public release.
 
 [0.1.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/tag/v0.1.0
 [0.3.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/tag/v0.3.0
+[0.3.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/tag/v0.3.1

@@ -26,7 +26,7 @@ $script:Rows = @(
     # (Invoke-ProjectScreen's -Action) sets it in claude-auto.ps1 - only the row that let this
     # screen edit it directly is gone.
     @{ Name = 'Model';      Label = 'model';      Values = @('default', 'fable', 'opus1m', 'sonnet1m', 'haiku')
-       Labels = @{ fable = 'Fable 5.1'; opus1m = 'Opus 5[1M]'; sonnet1m = 'Sonnet 5[1M]'; haiku = 'Haiku 4.5' }
+       Labels = @{ fable = 'Fable 5.1'; opus1m = 'Opus 5.5[1M]'; sonnet1m = 'Sonnet 5[1M]'; haiku = 'Haiku 4.5' }
        Args   = @{ fable = 'fable';   opus1m = 'opus[1m]';   sonnet1m = 'sonnet[1m]';   haiku = 'haiku' } }
     # 'ultracode' added 2026-09-04: 2.1.260 accepts it silently, where a bogus --effort value warns
     # on stderr. That warning is the only test the CLI offers, so the row is what it accepts and not
@@ -368,9 +368,9 @@ function Add-LaunchColor {
     # Painted AFTER layout. Brackets are matched in ONE pass with '[' and ']' excluded from the
     # group: an escape sequence itself contains '[', so a looser pattern swallows half an escape
     # and leaves '2m' behind once the colour is stripped. That guard alone is not enough once a
-    # label can carry its own literal bracket, though ('Opus 5[1M]', and the resolved default
+    # label can carry its own literal bracket, though ('Opus 5.5[1M]', and the resolved default
     # label 'default (Fable 5.1[1M])'): a bare '\[([^\[\]]+)\]' matches whichever bracket pair it
-    # meets first, which on the selected cell "[Opus 5[1M]]" is the INNER '[1M]' only - and the
+    # meets first, which on the selected cell "[Opus 5.5[1M]]" is the INNER '[1M]' only - and the
     # same pattern goes on to paint an UNselected cell's own literal '[1M]' text (e.g. 'Sonnet
     # 5[1M]' shown but not chosen) as if it were selected too, because nothing in that pattern
     # cares whether a '[' is preceded by the selection marker.

@@ -699,7 +699,7 @@ function Get-FriendlyModelName {
     if (-not $Raw) { return $Raw }
     $families = [ordered]@{
         fable  = 'Fable 5.1'
-        opus   = 'Opus 5'
+        opus   = 'Opus 5.5'
         sonnet = 'Sonnet 5'
         haiku  = 'Haiku 4.5'
     }
