@@ -4,6 +4,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- The model row reads its labels out of the installed `claude.exe`: the catalog embedded in the
+  binary (`{id, family, display_name}` records plus `latest_per_family`, the map every alias
+  resolves through) names what `fable` / `opus[1m]` start TODAY, so the screen can no longer say
+  `Opus 5` on the day the CLI starts Opus 5.5. Cached per binary (path, size, mtime) in
+  `~/.claude/claude-auto-models.json`; the hard-coded table is only the fallback for an npm shim or
+  a preview with a cold cache. A preview run serves the cache and never scans or writes.
+- Before the launch screen the launcher asks the release channel (`autoUpdatesChannel` in
+  `settings.json`, `latest` by default) for its current version, cached 30 minutes in
+  `~/.claude/claude-auto-update.json`, and when it is newer than the installed build runs the
+  updater first - the same `u` path, rename swap included - so the catalog above describes the
+  build that will actually run. A failed check is remembered five minutes, so an offline launch
+  costs one timeout, not one per launch. `CLAUDE_AUTO_NO_UPDATE=1` skips the step; preview never
+  touches the network.
+- The launch rows show what `default` RESOLVES to for the current account, as the bare value,
+  and fold the option that reads the same into that cell: with `effortLevel: high` the effort row
+  is `low medium [high] xhigh max ultracode`, with `defaultMode: auto` the permission row is
+  `plan [auto] acceptEdits bypass`, with `advisorModel: opus` the advisor row is
+  `fable [opus] off`, and the model row's `default (Fable 5.1[1M])` becomes `Fable 5.1[1M]`. A key
+  the account's `settings.json` does not set still reads `default`. A remembered value pinned to
+  the folded twin highlights the default cell; arrows and clicks walk the same folded list. Read
+  per account (`Get-DefaultLabels`), since the roots differ.
+
+### Changed
+
+- Account keys no longer need distinct first letters. The no-UI fallback prompt advertises each
+  key's shortest unique prefix (`[mai]n / [mam]oru`) and resolves the key typed in full, the
+  longest advertised prefix, or the default when the answer is ambiguous (`m` beside both).
+- The header's update arrow names the release channel's version when nothing newer has been
+  downloaded yet, and `claude --version` is reduced to its bare version token before the compare.
+
 ## [0.3.1] — 2026-09-22
 
 ### Changed
