@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-22
+
 ### Added
 
 - The model row reads its labels out of the installed `claude.exe`: the catalog embedded in the
