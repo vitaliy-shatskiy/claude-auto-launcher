@@ -100,7 +100,12 @@ function Get-ComparableLines {
     # fails, only the port is normalised.
     # Whether Rider is RUNNING is environmental too - the reference was captured with Rider open
     # (URL form) and cried regression the first time the probe ran with Rider closed ("not found"
-    # form). Collapse both variants to one token.
+    # form). Collapsing both variants to one token was not enough: with `riderMcp: auto` a machine
+    # with no Rider prints NO line at all, so the line's PRESENCE flips with an IDE nobody involved
+    # in this check controls - a reference recorded either way makes the gate red on the other, and
+    # a red gate that means "Rider is open" teaches people to ignore it. The line is dropped from
+    # the comparison entirely; what it would have covered - that a running Rider reaches the MCP
+    # config - is Test-Remote's and Test-Env's job, where it is asserted rather than transcribed.
     # The Claude Code version number is environmental as well: `--version` is the probe this check
     # runs, so every CLI update rewrote that line. Normalise the DIGITS, keep the line: a launcher
     # that stops printing a version still fails.
@@ -108,7 +113,7 @@ function Get-ComparableLines {
     $lines = @(Get-Content -LiteralPath $Path |
         Where-Object { $line = $_; -not ($OneShotLines | Where-Object { $line -match $_ }) } |
         ForEach-Object { $_ -replace '127\.0\.0\.1:\d+', '127.0.0.1:<port>' } |
-        ForEach-Object { $_ -replace '^(\s*rider MCP: )(http://127\.0\.0\.1:<port>/stream|not found \(is the IDE MCP server enabled\?\))$', '$1<rider-state>' } |
+        Where-Object { $_ -notmatch '^\s*rider MCP: ' } |
         ForEach-Object { $_ -replace '^\d+\.\d+\.\d+(\S*) \(Claude Code\)$', '<version> (Claude Code)' })
     # Trailing blank lines are an artefact of how each file was captured, never launcher behaviour.
     # Counted down rather than sliced: `$lines[0..($n-2)]` with one element is `0..-1`, which
