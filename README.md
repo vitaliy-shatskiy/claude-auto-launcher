@@ -129,7 +129,8 @@ belongs to the CLI.
 - `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day
 - `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan
 - `claude-auto\ConsoleInput.dll` - compiled from `ConsoleInput.cs` into this clone on first run (gitignored)
-- `<file>.pre-relink` beside a shared file a sharing repair just replaced (see Multi-account sharing)
+- `<file>.pre-relink`, and `<file>.pre-relink.<yyyyMMdd-HHmmss>` for the three before it, beside a
+  shared file a sharing repair just replaced (see Multi-account sharing)
 
 The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer; nothing in this repo writes that file.
 
@@ -139,8 +140,9 @@ The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer;
 pwsh -File tests\checkpoint.ps1
 ```
 
-17 checks: 13 unit suites (`Theme`, `Layout`, `Sessions`, `Projects`, `Ui`, `Maintenance`, `Remote`,
-`Prefs`, `Env`, `Config`, `Input`, `Install`, `Mirror`), a privacy scan, and three launcher-level checks.
+18 checks: 14 unit suites (`Theme`, `Layout`, `Sessions`, `Projects`, `Ui`, `Maintenance`, `Remote`,
+`Prefs`, `Env`, `Config`, `Input`, `Install`, `Mirror`, `Tools`), a privacy scan, and three
+launcher-level checks.
 Every exit code is read on its own line, and **`2` means the check could not run — never a pass**.
 
 Any suite runs alone: `pwsh -File tests\Test-Ui.ps1`. `Test-Input.ps1 -Live` adds the console-mode
@@ -169,7 +171,7 @@ pwsh -File tests\check-preview.ps1 -Record
 
 ## Multi-account sharing
 
-`sharing: true` (two or more accounts; OFF in `config.example.json` on purpose) hardlinks `settings.json` and `statusline.js`, and junctions `projects`, `plugins`, `hooks`, `agents`, `skills`, `rules`, `sessions`, `file-history`, `session-env`, `tasks` and `shell-snapshots` from every secondary account's root back to the canonical (`~/.claude`) one, repaired on every launch. The repair links from whichever copy is NEWEST anywhere, so a newer secondary copy can REPLACE the canonical one - the losing copy survives as `<file>.pre-relink`. Enabling it also CREATES every secondary account's root directory on the next launch, and each junction it creates gets two `icacls` deny ACEs, so removing one later needs `icacls <path> /L /remove:d "<user>"` before a plain delete will work. Turn it on only once you accept those effects under directories the launcher itself now owns and ACL-locks.
+`sharing: true` (two or more accounts; OFF in `config.example.json` on purpose) hardlinks `settings.json` and `statusline.js`, and junctions `projects`, `plugins`, `hooks`, `agents`, `skills`, `rules`, `sessions`, `file-history`, `session-env`, `tasks` and `shell-snapshots` from every secondary account's root back to the canonical (`~/.claude`) one, repaired on every launch. The repair links from whichever copy is NEWEST anywhere, so a newer secondary copy can REPLACE the canonical one - the losing copy survives as `<file>.pre-relink`, and an earlier one as `<file>.pre-relink.<yyyyMMdd-HHmmss>`, the newest three kept and older ones deleted. Enabling it also CREATES every secondary account's root directory on the next launch, and each junction it creates gets two `icacls` deny ACEs, so removing one later needs `icacls <path> /L /remove:d "<user>"` before a plain delete will work. Turn it on only once you accept those effects under directories the launcher itself now owns and ACL-locks.
 
 The MCP mirror that `sharing` runs copies server definitions verbatim between accounts, so a server
 whose `env` block holds an API token carries that token into the other account's `.claude.json`.
