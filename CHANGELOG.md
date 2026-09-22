@@ -4,6 +4,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-22
+
+### Fixed
+
+- The sharing repair kept its backup **one deep**: `Copy-Item -Force` overwrote the previous
+  `<file>.pre-relink`, so a second drift threw away the first losing copy — the one worth having,
+  since by then the winning copy has replaced that root twice. The existing backup is rotated to
+  `<file>.pre-relink.<yyyyMMdd-HHmmss>` and the newest three are kept.
+- A **preview run writes nothing**. `Get-CachedFileHash` wrote `claude-auto-hash-cache.json` back
+  on every cold entry, so `check-preview` was not the side-effect-free seam it claimed to be, and a
+  first run on a new machine hashed 305 MB of `claude.exe` for a screen nobody looks at. A warm
+  entry is still served, so a recorded preview reference does not move.
+- `claude-auto --launcher-version` reported `0.1.0` on a 0.2.0 clone; the constant is part of the
+  release now.
+- README: the Tests section claimed 17 checks and 13 unit suites and omitted `Tools` (the
+  checkpoint runs 18 and 14), and the sharing section said the losing copy "survives" as
+  `.pre-relink`, which held only for the most recent event.
+
 ### Changed
 
 - The launch screen hides Fable where the account has no Fable, by the account's own weekly
@@ -11,6 +29,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   nothing is hidden, a list without `fable` hides it on the model and advisor rows. Nothing else
   is ever hidden. This replaces 0.2.0's plan-based rule, which could not tell two accounts on one
   Team plan apart and hid Opus everywhere.
+- A secret that is read by **path** rather than exported (a kebab-case name, a `.json` credential)
+  no longer costs a warning line every launch: those names are reported as one summary line beside
+  the loaded ones. A malformed name — a `=`, a space, a leading digit — still gets its own warning.
+- The launcher regression check ignores the `rider MCP` preamble line. With `riderMcp: auto` its
+  presence follows whether Rider happens to be running, so a reference recorded either way made the
+  gate red on the other; what it covered is asserted in `Test-Remote` and `Test-Env`.
 
 ## [0.2.0] — 2026-09-17
 
@@ -113,3 +137,4 @@ First public release.
 - 15-check verification gate (`tests\checkpoint.ps1`).
 
 [0.1.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/tag/v0.1.0
+[0.3.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/tag/v0.3.0

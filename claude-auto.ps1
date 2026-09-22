@@ -9,7 +9,7 @@
 
 # The launcher's own version. Deliberately NOT on --version: that argument is passed through to
 # claude, and the headless regression check depends on it staying that way.
-$script:LauncherVersion = '0.1.0'
+$script:LauncherVersion = '0.3.0'
 if ($args.Count -eq 1 -and $args[0] -eq '--launcher-version') {
     Write-Host "claude-auto $script:LauncherVersion"
     exit 0
