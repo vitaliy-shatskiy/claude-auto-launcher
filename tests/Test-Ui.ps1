@@ -1233,6 +1233,72 @@ Assert-Equal "$([char]27)[32m" (Get-PercentColor -Percent 15) '15% is green'
 $noColor = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Limits @{}
 Assert-Equal 0 (@($noColor | Where-Object { $_ -match "$([char]27)\[" }).Count) 'no escapes unless colour is requested'
 
+# --- resolved defaults: Get-DefaultLabels (Env.ps1) + Get-VisibleRowValues folding (2026-09-22) ---
+# The rows show what 'default' resolves to in the default's place and fold the option it equals,
+# so a profile with effortLevel=high reads "low medium [high] xhigh max" and never "[default (high)]
+# low medium high ...". The tables come per account from settings.json.
+$rowNames = @((Get-LaunchRows) | ForEach-Object Name)
+$effortRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Effort' }
+$permRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Permission' }
+$advisorRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Advisor' }
+$modelRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Model' }
+$labelsHigh = @{ Effort = 'high'; Permission = 'auto'; Advisor = 'opus'; Model = 'Fable 5.1[1M]' }
+Assert-Equal 'low medium default xhigh max ultracode' ((Get-VisibleRowValues -Row $effortRow -DefaultLabels $labelsHigh) -join ' ') 'effort: the default cell takes the slot of the option it resolves to'
+Assert-Equal 'plan default acceptEdits bypass' ((Get-VisibleRowValues -Row $permRow -DefaultLabels $labelsHigh) -join ' ') 'permission: default resolving to auto sits where auto is, auto itself folded away'
+Assert-Equal 'default plan auto acceptEdits bypass' ((Get-VisibleRowValues -Row $permRow -DefaultLabels @{ Permission = 'default' }) -join ' ') 'permission: an unresolved default stays first and every option is offered'
+Assert-Equal 'fable default off' ((Get-VisibleRowValues -Row $advisorRow -DefaultLabels $labelsHigh) -join ' ') 'advisor: a settings advisorModel folds its option'
+Assert-Equal 'default fable opus1m sonnet1m haiku' ((Get-VisibleRowValues -Row $modelRow -DefaultLabels $labelsHigh) -join ' ') 'model: a 1M default with no 1M twin on the row stays first, nothing folded'
+Assert-Equal ($permRow.Values -join ' ') ((Get-VisibleRowValues -Row $permRow) -join ' ') 'no table: the row is untouched'
+Assert-Equal 'high' (Get-RowOptionText -Row $effortRow -Key 'default' -DefaultLabels $labelsHigh) 'option text: the resolved default is the bare value'
+Assert-Equal 'opus' (Get-RowOptionText -Row $advisorRow -Key 'default' -DefaultAdvisorLabel 'default (opus)' -DefaultLabels $labelsHigh) 'option text: the table wins over the wrapped advisor label'
+Assert-Equal 'Fable 5.1[1M]' (Get-RowOptionText -Row $modelRow -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultLabels $labelsHigh) 'option text: the table wins over the wrapped model label'
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRow -Key 'default' -DefaultLabels $labelsHigh -Available @('opus')) 'option text: a resolved default the account lacks is still named honestly'
+Assert-Equal $true (Test-HiddenRowValue -Row $effortRow -Key 'high' -DefaultLabels $labelsHigh) 'the folded twin is reported hidden'
+Assert-Equal $false (Test-HiddenRowValue -Row $effortRow -Key 'max' -DefaultLabels $labelsHigh) 'an unfolded option is not'
+Assert-Equal $false (Test-HiddenRowValue -Row $effortRow -Key 'default' -DefaultLabels $labelsHigh) 'default itself is never hidden'
+$stepState = New-LaunchState; $stepState.Row = [Array]::IndexOf($rowNames, 'Effort')
+$stepState = Step-LaunchValue -State $stepState -Delta -1 -DefaultLabels $labelsHigh
+Assert-Equal 'medium' $stepState.Effort 'left from the resolved default (in the high slot) lands on medium, not on ultracode'
+$stepState.Effort = 'high'   # a pref pinned to the twin
+$stepState = Step-LaunchValue -State $stepState -Delta 1 -DefaultLabels $labelsHigh
+Assert-Equal 'xhigh' $stepState.Effort 'right from a pinned twin steps from the default slot'
+$stepState = Step-LaunchValue -State $stepState -Delta -1 -DefaultLabels $labelsHigh
+Assert-Equal 'default' $stepState.Effort 'and left again lands on the default cell, never on the folded twin'
+$frameOrder = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -DefaultLabels $labelsHigh
+$effortLine = $frameOrder | Where-Object { $_ -match 'effort' } | Select-Object -First 1
+Assert-Equal $true ($effortLine -match 'low .* medium .* \[high\] .* xhigh .* max') 'the effort row renders low medium [high] xhigh max'
+$permLine = $frameOrder | Where-Object { $_ -match 'permission' } | Select-Object -First 1
+Assert-Equal $true ($permLine -match 'plan .* \[auto\] .* acceptEdits .* bypass') 'the permission row renders plan [auto] acceptEdits bypass'
+Assert-Equal 0 @($frameOrder | Where-Object { $_ -match 'default \(' }).Count 'no "default (...)" wrapper anywhere once the tables resolve every row'
+$pinned = New-LaunchState; $pinned.Effort = 'high'
+$pinnedLine = (Get-LaunchFrame -State $pinned -Width 100 -Height 24 -DefaultLabels $labelsHigh) | Where-Object { $_ -match 'effort' } | Select-Object -First 1
+Assert-Equal $true ($pinnedLine -match '\[high\]') 'a pref pinned to the folded twin highlights the default cell'
+$plainFrame = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])'
+Assert-Equal $true ((($plainFrame | Where-Object { $_ -match 'effort' } | Select-Object -First 1) -match '\[default\]')) 'no table: the row still reads [default] as before'
+
+$labelsFixtureDir = Join-Path $env:TEMP ('claude-auto-default-labels-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Path $labelsFixtureDir
+try {
+    $sf = Join-Path $labelsFixtureDir 'settings.json'
+    '{"model":"claude-fable-5-1[1m]","advisorModel":"opus","effortLevel":"high","permissions":{"defaultMode":"auto"}}' | Set-Content -LiteralPath $sf -Encoding utf8
+    $dl = Get-DefaultLabels -Path $sf
+    Assert-Equal 'Fable 5.1[1M]' $dl.Model 'default labels: the model is the bare friendly name, no wrapper'
+    Assert-Equal 'opus' $dl.Advisor 'default labels: advisorModel as written'
+    Assert-Equal 'high' $dl.Effort 'default labels: effortLevel as written'
+    Assert-Equal 'auto' $dl.Permission 'default labels: permissions.defaultMode as written'
+    '{"model":"fable"}' | Set-Content -LiteralPath $sf -Encoding utf8
+    $dl2 = Get-DefaultLabels -Path $sf
+    Assert-Equal 'default' $dl2.Effort 'default labels: a key settings.json does not set stays the literal default'
+    Assert-Equal 'default' $dl2.Advisor 'default labels: no advisorModel stays default, not none'
+    '{"includeCoAuthoredBy": false}' | Set-Content -LiteralPath $sf -Encoding utf8
+    Assert-Equal 'default' (Get-DefaultLabels -Path $sf).Model 'default labels: no model key is a plain default, never "account default"'
+    'not json {{{' | Set-Content -LiteralPath $sf -Encoding utf8
+    Assert-Equal 'default' (Get-DefaultLabels -Path $sf).Permission 'default labels: unparseable settings.json degrades to plain labels'
+    Assert-Equal 'default' (Get-DefaultLabels -Path (Join-Path $labelsFixtureDir 'missing.json')).Effort 'default labels: a missing file degrades to plain labels'
+} finally {
+    Remove-Item -LiteralPath $labelsFixtureDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # --- Get-FriendlyModelName / Get-DefaultModelLabel (Env.ps1) -----------------------------------
 # Direct unit coverage for the label shortener itself - the width/collapse assertions further
 # below exercise Get-LaunchFrame with an already-shortened label passed in directly, so on their
@@ -1247,6 +1313,103 @@ $longUnknown = 'some-unknown-model-id-xyz-12345678'
 $unknownResult = Get-FriendlyModelName -Raw $longUnknown
 Assert-Equal $true ($unknownResult.Length -le 24) 'friendly name: an unrecognised family is truncated, never left to blow up the row width'
 Assert-Equal $true ($longUnknown.StartsWith($unknownResult.TrimEnd([char]0x2026))) 'friendly name: the truncated-unknown fallback is a real prefix of the raw id, not a summary'
+
+# --- model catalog read out of claude.exe (Env.ps1, 2026-09-02) --------------------------------
+# The row's labels used to be hard-coded and went stale the day a newer family member shipped
+# ('fable' launched Fable 5.1 while the screen said Fable 5). The catalog embedded in the binary
+# is the source now; a fixture in the binary's own shape stands in for the 200 MB file.
+$catalogFixture = 'junk{a:1}{id:"claude-fable-5",family:"fable",display_name:"Fable 5",knowledge_cutoff:"x"},' +
+    '{id:"claude-fable-5-1",family:"fable",display_name:"Fable 5.1",knowledge_cutoff:"June 2026"},' +
+    '{id:"claude-opus-4-8",family:"opus",display_name:"Opus 4.8"},{id:"claude-opus-5",family:"opus",display_name:"Opus 5"},' +
+    '{id:"claude-sonnet-5",family:"sonnet",display_name:"Sonnet 5"},{id:"claude-haiku-4-5",family:"haiku",display_name:"Haiku 4.5"}' +
+    'more junk latest_per_family:{fable:"claude-fable-5-1",opus:"claude-opus-5",sonnet:"claude-sonnet-5",haiku:"claude-haiku-4-5"},alias_migration'
+$cat = Read-ModelCatalogFromText -Text $catalogFixture
+Assert-Equal 'claude-fable-5-1' $cat.Latest['fable'] 'catalog parser: latest_per_family maps the fable alias to the newest fable id'
+Assert-Equal 6 $cat.Names.Count 'catalog parser: every {id,family,display_name} record is collected'
+Assert-Equal 'Fable 5.1' $cat.Names['claude-fable-5-1'] 'catalog parser: a record keeps its display name'
+$empty = Read-ModelCatalogFromText -Text 'nothing here'
+Assert-Equal 0 ($empty.Latest.Count + $empty.Names.Count) 'catalog parser: text without records yields empty tables, not null'
+
+$famNew = Get-ModelFamilyLabels -Catalog $cat
+Assert-Equal 'Fable 5.1' $famNew['fable'] 'family labels: fable resolves through latest_per_family to the newest display name'
+Assert-Equal 'Opus 5' $famNew['opus'] 'family labels: opus resolves the same way'
+$famNone = Get-ModelFamilyLabels -Catalog $null
+Assert-Equal 'Fable 5.1' $famNone['fable'] 'family labels: no catalog keeps the static fallback'
+$partial = @{ Latest = @{ fable = 'claude-fable-9' }; Names = @{} }
+Assert-Equal 'Fable 5.1' (Get-ModelFamilyLabels -Catalog $partial)['fable'] 'family labels: a latest id with no display name keeps the static label rather than showing a raw id'
+
+Assert-Equal 'Fable 5.1[1M]' (Get-FriendlyModelName -Raw 'fable[1m]' -Catalog $cat) 'friendly name with catalog: a bare alias reads as what it starts today'
+Assert-Equal 'Fable 5[1M]' (Get-FriendlyModelName -Raw 'claude-fable-5[1m]' -Catalog $cat) 'friendly name with catalog: a pinned older id is NOT shadowed by the newer id that contains it'
+Assert-Equal 'Opus 4.8' (Get-FriendlyModelName -Raw 'us.anthropic.claude-opus-4-8' -Catalog $cat) 'friendly name with catalog: a full id under a provider prefix names its own record'
+Assert-Equal 'Sonnet 5' (Get-FriendlyModelName -Raw 'sonnet' -Catalog $cat) 'friendly name with catalog: an alias with no [1m] gets no suffix'
+
+$modelRowLive = Get-LaunchRows | Where-Object { $_.Name -eq 'Model' }
+$staticLabels = @{} + $modelRowLive.Labels
+try {
+    Set-ModelRowLabels -FamilyLabels $famNew
+    Assert-Equal 'Fable 5.1' (Get-RowOptionText -Row $modelRowLive -Key 'fable') 'model row: the fable option label follows the catalog'
+    Assert-Equal 'Opus 5[1M]' (Get-RowOptionText -Row $modelRowLive -Key 'opus1m') 'model row: 1M keys keep their bracket after the catalog label'
+    Set-ModelRowLabels -FamilyLabels @{ fable = 'Fable 9' }
+    Assert-Equal 'Fable 9' (Get-RowOptionText -Row $modelRowLive -Key 'fable') 'model row: a later table overwrites'
+    Assert-Equal 'Opus 5[1M]' (Get-RowOptionText -Row $modelRowLive -Key 'opus1m') 'model row: a family the table leaves out keeps its current label'
+} finally {
+    foreach ($k in $staticLabels.Keys) { $modelRowLive.Labels[$k] = $staticLabels[$k] }
+}
+Assert-Equal 'Fable 5.1' (Get-RowOptionText -Row $modelRowLive -Key 'fable') 'model row: static labels restored for the assertions below'
+
+# Chunked read and cache against a fake binary: the record is placed so it straddles a chunk
+# boundary (chunk 4096, record starting at 4000), which only the carried-over tail can see.
+$fakeBinDir = Join-Path $env:TEMP ('claude-auto-catalog-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Path $fakeBinDir
+try {
+    $fakeBin = Join-Path $fakeBinDir 'claude.exe'
+    $fakeCache = Join-Path $fakeBinDir 'models.json'
+    $padded = ('x' * 4000) + $catalogFixture + ('y' * 9000)
+    [IO.File]::WriteAllBytes($fakeBin, [Text.Encoding]::Latin1.GetBytes($padded))
+    $chunked = Read-ModelCatalogFromBinary -BinPath $fakeBin -ChunkBytes 4096 -OverlapBytes 1024
+    Assert-Equal 6 $chunked.Names.Count 'chunked read: records straddling a chunk boundary are still found'
+    Assert-Equal 'claude-opus-5' $chunked.Latest['opus'] 'chunked read: latest_per_family found past the first chunk'
+
+    $first = Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache
+    Assert-Equal 'binary' $first.Source 'catalog cache: the first read scans the binary'
+    Assert-Equal $true (Test-Path -LiteralPath $fakeCache) 'catalog cache: the scan result is written next to the prefs'
+    $second = Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache
+    Assert-Equal 'cache' $second.Source 'catalog cache: an unchanged binary is served from the cache'
+    Assert-Equal 'Fable 5.1' $second.Names['claude-fable-5-1'] 'catalog cache: names survive the JSON round trip'
+    Assert-Equal 'claude-fable-5-1' $second.Latest['fable'] 'catalog cache: latest_per_family survives the JSON round trip'
+    [IO.File]::WriteAllBytes($fakeBin, [Text.Encoding]::Latin1.GetBytes($padded.Replace('Fable 5.1', 'Fable 5.2')))
+    $third = Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache
+    Assert-Equal 'binary' $third.Source 'catalog cache: a rewritten binary (claude update) invalidates the cache'
+    Assert-Equal 'Fable 5.2' $third.Names['claude-fable-5-1'] 'catalog cache: the rescan sees the new build'
+    'not json {{{' | Set-Content -LiteralPath $fakeCache -Encoding utf8
+    Assert-Equal 'binary' (Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache).Source 'catalog cache: a corrupt cache is rescanned, never thrown on'
+    Assert-Equal $null (Get-ModelCatalog -BinPath (Join-Path $fakeBinDir 'missing.exe') -CachePath $fakeCache) 'catalog: a missing binary yields null (static labels), not an exception'
+    [IO.File]::WriteAllBytes($fakeBin, [Text.Encoding]::Latin1.GetBytes('no catalog in this build'))
+    Assert-Equal $null (Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache) 'catalog: a build without latest_per_family yields null (static labels)'
+} finally {
+    Remove-Item -LiteralPath $fakeBinDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# A preview run must write nothing: a cold catalog cache stays cold and the static labels stand in.
+$previewBinDir = Join-Path $env:TEMP ('claude-auto-catalog-preview-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Path $previewBinDir
+$hadPreview = $env:CLAUDE_AUTO_PREVIEW
+try {
+    $pBin = Join-Path $previewBinDir 'claude.exe'
+    $pCache = Join-Path $previewBinDir 'models.json'
+    [IO.File]::WriteAllBytes($pBin, [Text.Encoding]::Latin1.GetBytes($catalogFixture))
+    $env:CLAUDE_AUTO_PREVIEW = '1'
+    Assert-Equal $null (Get-ModelCatalog -BinPath $pBin -CachePath $pCache) 'catalog in preview: a cold cache is not scanned (static labels)'
+    Assert-Equal $false (Test-Path -LiteralPath $pCache) 'catalog in preview: nothing is written'
+    Remove-Item Env:CLAUDE_AUTO_PREVIEW -ErrorAction SilentlyContinue
+    $null = Get-ModelCatalog -BinPath $pBin -CachePath $pCache
+    $env:CLAUDE_AUTO_PREVIEW = '1'
+    Assert-Equal 'cache' (Get-ModelCatalog -BinPath $pBin -CachePath $pCache).Source 'catalog in preview: a warm cache is served'
+} finally {
+    if ($null -eq $hadPreview) { Remove-Item Env:CLAUDE_AUTO_PREVIEW -ErrorAction SilentlyContinue } else { $env:CLAUDE_AUTO_PREVIEW = $hadPreview }
+    Remove-Item -LiteralPath $previewBinDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 
 $defaultModelFixture = Join-Path $env:TEMP ('claude-auto-model-label-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
 try {
@@ -5412,7 +5575,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1736
+$script:Expected = 1798
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

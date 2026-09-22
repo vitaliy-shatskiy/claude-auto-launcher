@@ -303,3 +303,83 @@ function Remove-OldClaudeVersions {
     foreach ($d in $doomed) { Remove-Item -LiteralPath $d.FullName -Force -ErrorAction SilentlyContinue }
     return [pscustomobject]@{ Deleted = @($doomed.Name); FreedBytes = [long]$freed; Message = '' }
 }
+
+# ---- release-channel check (2026-09-22) ----
+# "Newest" above means the newest build ALREADY DOWNLOADED - Claude Code fetches updates in the
+# background of a running session, so a release that shipped since the last session is invisible
+# here, and the model row (read out of the installed claude.exe, Env.ps1) keeps naming the previous
+# family member: opus still read "Opus 5" on the day Opus 5.5 shipped because claude.exe was still
+# 2.1.278 (seen 2026-09-22). The fix is to ask the release channel itself before drawing: the same
+# endpoint `claude update` reads, a plain-text version string, ~0.4 s. Cached for a short while so
+# a burst of launches costs one request, and a failed check is remembered briefly so being offline
+# does not add a timeout to every launch.
+
+$script:ReleaseEndpoint = 'https://downloads.claude.ai/claude-code-releases'
+
+function Get-AutoUpdatesChannel {
+    # The channel the profile's settings.json asks Claude Code to follow ('latest' or 'stable');
+    # 'latest' when unset, unreadable or unknown, matching Claude Code's own default.
+    param([string]$SettingsPath = (Join-Path $HOME '.claude\settings.json'))
+    try {
+        $s = Get-Content -LiteralPath $SettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
+        if ($s.autoUpdatesChannel -in @('latest', 'stable')) { return [string]$s.autoUpdatesChannel }
+    } catch { }
+    return 'latest'
+}
+
+function Get-RemoteClaudeVersion {
+    # The version the release channel serves right now, or $null when it cannot be learned. Fetch
+    # is injectable for tests; the default is a 5 s GET that returns the body text. The cache is
+    # keyed by channel: a hit younger than TtlMinutes answers without a request, a remembered
+    # failure younger than FailureTtlMinutes answers $null without retrying.
+    param([string]$Channel = 'latest',
+          [string]$CachePath = (Join-Path $HOME '.claude\claude-auto-update.json'),
+          [int]$TtlMinutes = 30, [int]$FailureTtlMinutes = 5,
+          [scriptblock]$Fetch = $null,
+          [long]$NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+    if (-not $Fetch) {
+        $Fetch = { param($url) [string](Invoke-RestMethod -Uri $url -TimeoutSec 5 -ErrorAction Stop) }
+    }
+    $cached = $null
+    try {
+        if (Test-Path -LiteralPath $CachePath) {
+            $c = Get-Content -LiteralPath $CachePath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
+            if ($c -and $c.Channel -eq $Channel -and $c.CheckedAtMs) {
+                $age = $NowMs - [long]$c.CheckedAtMs
+                if ($c.Version -and $age -ge 0 -and $age -lt ($TtlMinutes * 60000)) { return [string]$c.Version }
+                if (-not $c.Version -and $age -ge 0 -and $age -lt ($FailureTtlMinutes * 60000)) { return $null }
+                $cached = $c
+            }
+        }
+    } catch { }
+    $version = $null
+    try {
+        $body = "$(& $Fetch "$script:ReleaseEndpoint/$Channel")".Trim()
+        if ($body -match '^\s*(\d+\.\d+\.\d+\S*)\s*$') { $version = $Matches[1] }
+    } catch { }
+    try {
+        @{ Channel = $Channel; Version = $version; CheckedAtMs = $NowMs } | ConvertTo-Json -Compress |
+            Set-Content -LiteralPath $CachePath -Encoding utf8
+    } catch { }
+    return $version
+}
+
+function Test-ClaudeUpdateAvailable {
+    # Pure: $true only when both strings parse as versions and Remote is strictly newer. Anything
+    # unparseable ('2.1.280 (Claude Code)', '', $null) is $false: the launcher must never start an
+    # update on a guess.
+    param([string]$Installed, [string]$Remote)
+    $i = $null; $r = $null
+    if (-not [version]::TryParse("$Installed", [ref]$i)) { return $false }
+    if (-not [version]::TryParse("$Remote", [ref]$r)) { return $false }
+    return ($r -gt $i)
+}
+
+function Get-InstalledClaudeVersion {
+    # The bare "2.1.280" out of `claude --version` ("2.1.280 (Claude Code)"); the raw line when it
+    # has no version token, '' when the command fails.
+    $raw = ''
+    try { $raw = "$(& claude --version 2>$null | Select-Object -First 1)" } catch { }
+    if ($raw -match '(\d+\.\d+\.\d+\S*)') { return $Matches[1] }
+    return $raw
+}

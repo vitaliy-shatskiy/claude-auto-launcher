@@ -755,6 +755,26 @@ Assert 'an exact key typed in full resolves like its shorthand' ((Resolve-Accoun
 Assert 'a hidden account''s letter still resolves'      ((Resolve-AccountAnswer -Answer 's' -Prompt $p.Map -Default 'work') -eq 'shared')
 Assert 'mixed-case input resolves the same as lower-case' ((Resolve-AccountAnswer -Answer 'P' -Prompt $p.Map -Default 'work') -eq 'personal')
 
+# Keys that share opening letters (2026-09-22): the prompt advertises the shortest unique prefix
+# and the answer resolves by longest prefix, the full key, or not at all when ambiguous.
+$twoM = @(
+    [pscustomobject]@{ Key = 'main'; Hidden = $false }
+    [pscustomobject]@{ Key = 'mamoru'; Hidden = $false }
+)
+$mm = Get-AccountPrompt -Accounts $twoM -Default 'main'
+Assert 'shared opening letters: prefixes grow until unique' ($mm.Text -eq 'Claude account: [mai]n / [mam]oru, Enter = main : ')
+Assert 'shared opening letters: the map keys on the prefixes' ($mm.Map['mam'] -eq 'mamoru' -and $mm.Map['mai'] -eq 'main')
+Assert 'an ambiguous single letter keeps the default'        ((Resolve-AccountAnswer -Answer 'm' -Prompt $mm.Map -Default 'main') -eq 'main')
+Assert 'a prefix past the ambiguity resolves'                ((Resolve-AccountAnswer -Answer 'mam' -Prompt $mm.Map -Default 'main') -eq 'mamoru')
+Assert 'the full key resolves'                               ((Resolve-AccountAnswer -Answer 'mamoru' -Prompt $mm.Map -Default 'main') -eq 'mamoru')
+$nested = @(
+    [pscustomobject]@{ Key = 'ma'; Hidden = $false }
+    [pscustomobject]@{ Key = 'main'; Hidden = $false }
+)
+$np = Get-AccountKeyPrefixes -Accounts $nested
+Assert 'a key that prefixes another is advertised whole'     ($np['ma'] -eq 'ma' -and $np['main'] -eq 'mai')
+Assert 'the shorter key still resolves exactly'              ((Resolve-AccountAnswer -Answer 'ma' -Prompt (Get-AccountPrompt -Accounts $nested -Default 'ma').Map -Default 'x') -eq 'ma')
+
 # --- Resolve-ClaudeExecutable: PATH resolution must never throw and never silently degrade to
 # exit 0 -------------------------------------------------------------------------------------------
 # deferred review finding: `.Source` on a $null match (no -ErrorAction on the old inline
@@ -835,7 +855,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 170 } else { 166 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 177 } else { 173 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

@@ -47,6 +47,23 @@ $script:Rows = @(
     @{ Name = 'Mode';       Label = 'mode';       Values = @('normal', 'safe') }
 )
 
+function Set-ModelRowLabels {
+    # Pure: rewrites the model row's Labels from a family -> display-name table (the shape
+    # Get-ModelFamilyLabels in Env.ps1 returns, read out of the installed claude.exe). The 1M keys
+    # append their bracket here, so the table stays plain family names. A family the table leaves
+    # empty keeps its current label. The Labels above are the STATIC fallback for when the binary
+    # cannot be read.
+    param([Parameter(Mandatory)]$FamilyLabels)
+    $row = $script:Rows | Where-Object { $_.Name -eq 'Model' }
+    $familyOfKey = @{ fable = 'fable'; opus1m = 'opus'; sonnet1m = 'sonnet'; haiku = 'haiku' }
+    foreach ($key in @($familyOfKey.Keys)) {
+        $label = $FamilyLabels[$familyOfKey[$key]]
+        if (-not $label) { continue }
+        $suffix = if ($key -like '*1m') { '[1M]' } else { '' }
+        $row.Labels[$key] = [string]$label + $suffix
+    }
+}
+
 $script:RemoteRow = @{ Name = 'Remote'; Label = 'remote'; Values = @('on', 'off', 'on+QR', 'stop server') }
 $script:AccountTints = @{ work = 'Green' }
 $script:DefaultAccount = 'work'
@@ -85,12 +102,44 @@ function Get-VisibleRowValues {
     # A row's Values minus the families this account does not have. A row with no family map
     # (Account, Effort, Permission, Mode, Remote) returns its Values untouched, and so does an
     # account with no availability information, so the frame stays byte-identical there.
-    param([Parameter(Mandatory)]$Row, $Available)
+    #
+    # -DefaultLabels (Row.Name -> resolved text, Get-DefaultLabels in Env.ps1) folds away the option
+    # that reads the same as what 'default' resolves to: with settings.json effortLevel=high the
+    # effort row would otherwise show "high" twice, and both do the same thing today. The default
+    # cell TAKES THE TWIN'S SLOT rather than sitting first, so the row keeps its natural order
+    # ("low medium [high] xhigh max", "plan [auto] acceptEdits bypass"); a default that resolves to
+    # nothing on the row (the model row's 'Fable 5.1[1M]', or a profile whose settings.json sets
+    # nothing) stays first. The pinned key still exists (prefs may hold it); Test-HiddenRowValue
+    # says whether a key is a folded twin, so the frame can highlight the default cell for it and
+    # a step can start from that cell instead of from nowhere.
+    param([Parameter(Mandatory)]$Row, $Available, [hashtable]$DefaultLabels = @{})
     $fam = $script:OptionModelFamily[$Row.Name]
     $hidden = @(Get-HiddenFamilies -Available $Available)
-    if (-not $fam -or $hidden.Count -eq 0) { return @($Row.Values) }
-    # $fam[$_] is $null for an option with no family, and $null is in no hidden list, so it stays.
-    @($Row.Values | Where-Object { $fam[$_] -notin $hidden })
+    $values = if (-not $fam -or $hidden.Count -eq 0) { @($Row.Values) }
+              # $fam[$_] is $null for an option with no family, and $null is in no hidden list, so it stays.
+              else { @($Row.Values | Where-Object { $fam[$_] -notin $hidden }) }
+    if (-not $DefaultLabels -or -not $DefaultLabels.ContainsKey($Row.Name) -or 'default' -notin $values) { return @($values) }
+    $defaultText = Get-RowOptionText -Row $Row -Key 'default' -Available $Available -DefaultLabels $DefaultLabels
+    $twins = @($values | Where-Object { $_ -ne 'default' -and (Get-RowOptionText -Row $Row -Key $_ -Available $Available) -ieq $defaultText })
+    if ($twins.Count -eq 0) { return @($values) }
+    $ordered = @()
+    $placed = $false
+    foreach ($v in $values) {
+        if ($v -eq 'default') { continue }
+        if ($v -in $twins) { if (-not $placed) { $ordered += 'default'; $placed = $true }; continue }
+        $ordered += $v
+    }
+    return @($ordered)
+}
+
+function Test-HiddenRowValue {
+    # Whether Key is a twin Get-VisibleRowValues folded into the default cell. 'default' itself is
+    # never hidden; a key hidden by the availability filter is not this function's business either
+    # (Set-LaunchAvailabilitySnap resets those), so only the DefaultLabels fold is consulted.
+    param([Parameter(Mandatory)]$Row, [string]$Key, $Available, [hashtable]$DefaultLabels = @{})
+    if ($Key -eq 'default' -or -not $DefaultLabels -or -not $DefaultLabels.ContainsKey($Row.Name)) { return $false }
+    if ($Key -notin @(Get-VisibleRowValues -Row $Row -Available $Available)) { return $false }
+    return ($Key -notin @(Get-VisibleRowValues -Row $Row -Available $Available -DefaultLabels $DefaultLabels))
 }
 
 function Set-LaunchAvailabilitySnap {
@@ -257,10 +306,14 @@ function Step-LaunchValue {
     # -Available: the current account's availableModels. Left/Right must skip a hidden option, so it
     # steps over the VISIBLE values, never the raw row. Omitted -> $null -> no filtering (every
     # existing caller and every pin that omits it keeps today's behaviour exactly).
-    param($State, [int]$Delta, $Available)
+    # -DefaultLabels: the account's resolved defaults (Get-DefaultLabels); a current value that is a
+    # folded twin sits on the default cell, so the step starts there.
+    param($State, [int]$Delta, $Available, [hashtable]$DefaultLabels = @{})
     $row = $script:Rows[$State.Row]
-    $values = @(Get-VisibleRowValues -Row $row -Available $Available)
-    $State.($row.Name) = Step-Option -Values $values -Current $State.($row.Name) -Delta $Delta
+    $values = @(Get-VisibleRowValues -Row $row -Available $Available -DefaultLabels $DefaultLabels)
+    $current = $State.($row.Name)
+    if (Test-HiddenRowValue -Row $row -Key $current -Available $Available -DefaultLabels $DefaultLabels) { $current = 'default' }
+    $State.($row.Name) = Step-Option -Values $values -Current $current -Delta $Delta
     return $State
 }
 
@@ -291,7 +344,15 @@ function Get-RowOptionText {
     # to its own default - so the label says that instead. Matched on the family WORD inside the
     # rendered label, which is the only thing the caller hands in; both the friendly name
     # ('Fable 5.1[1M]') and a raw id ('claude-fable-5-1[1m]') carry it on word boundaries.
-    param($Row, [string]$Key, [string]$DefaultModelLabel = 'default', [string]$DefaultAdvisorLabel = 'default', $Available)
+    param($Row, [string]$Key, [string]$DefaultModelLabel = 'default', [string]$DefaultAdvisorLabel = 'default', $Available, [hashtable]$DefaultLabels = @{})
+    # -DefaultLabels (Row.Name -> resolved text, Get-DefaultLabels in Env.ps1) wins over the two
+    # labels below: the bare resolved value ('high', 'auto', 'opus', 'Fable 5.1[1M]') in the
+    # default's place, honest the same way for the two model rows.
+    if ($Key -eq 'default' -and $DefaultLabels -and $DefaultLabels.ContainsKey($Row.Name) -and $DefaultLabels[$Row.Name]) {
+        $resolved = [string]$DefaultLabels[$Row.Name]
+        if ($Row.Name -in @('Model', 'Advisor')) { return (Get-HonestDefaultLabel -Label $resolved -Available $Available) }
+        return $resolved
+    }
     if ($Row.Name -eq 'Model' -and $Key -eq 'default') { return (Get-HonestDefaultLabel -Label $DefaultModelLabel -Available $Available) }
     if ($Row.Name -eq 'Advisor' -and $Key -eq 'default') { return (Get-HonestDefaultLabel -Label $DefaultAdvisorLabel -Available $Available) }
     if ($Row.Labels -and $Row.Labels.ContainsKey($Key)) { return $Row.Labels[$Key] }
@@ -814,6 +875,10 @@ function Get-LaunchFrame {
         # Same contract for the advisor row's 'default' - resolved by Get-DefaultAdvisorLabel in
         # Env.ps1, passed in already formatted, for the same purity reason.
         [string]$DefaultAdvisorLabel = 'default',
+        # Row.Name -> what 'default' resolves to for the CURRENT account (Get-DefaultLabels in
+        # Env.ps1). Wins over the two labels above; options that read the same as the resolved
+        # default are not drawn, the default cell takes their slot (Get-VisibleRowValues).
+        [hashtable]$DefaultLabels = @{},
         [switch]$Color,
         [switch]$Ascii,
         # Where each row and each option cell landed, for hit-testing a click. Filled by the code
@@ -912,16 +977,18 @@ function Get-LaunchFrame {
             # uses too: one layout, one set of click cells, no second copy to drift.
             $optionLabels = @{}
             foreach ($v in $row.Values) {
-                $optionLabels[$v] = Get-RowOptionText -Row $row -Key $v -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel -Available $available
+                $optionLabels[$v] = Get-RowOptionText -Row $row -Key $v -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel -Available $available -DefaultLabels $DefaultLabels
             }
+            # A current value that is a folded twin of the default is shown ON the default cell.
+            $shownCurrent = if (Test-HiddenRowValue -Row $row -Key $current -Available $available -DefaultLabels $DefaultLabels) { 'default' } else { $current }
             # The band goes on the hovered VALUE, and only while the pointer is on this row: two rows
             # can offer the same value ('default' is on three of them), and matching on the value
             # alone would light every one of them at once.
             # Values filtered to what the account has (spec 2026-09-17 v3): the SAME visible list is
             # what builds the click cells, so a hidden option gets no cell either. No availability
             # information leaves the list untouched, so the row is byte-identical to before.
-            $rowValues = @(Get-VisibleRowValues -Row $row -Available $available)
-            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values $rowValues -Current $current -Glyphs $g -Labels $optionLabels -MaxWidth $inner `
+            $rowValues = @(Get-VisibleRowValues -Row $row -Available $available -DefaultLabels $DefaultLabels)
+            $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values $rowValues -Current $shownCurrent -Glyphs $g -Labels $optionLabels -MaxWidth $inner `
                                   -Hover $(if ($hoverRow -eq $i) { $hoverValue } else { '' })
             $line = $radio.Text
             $cellHits = @($radio.Cells)
@@ -932,7 +999,8 @@ function Get-LaunchFrame {
         # what this exists to avoid. Collapse to the selected value alone, marked with ‹ › to say
         # more options exist off-screen (the footer already explains left/right cycles them).
         if ((Get-DisplayWidth -Text $line) -gt $inner) {
-            $selText = Get-RowOptionText -Row $row -Key $current -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel -Available $available
+            $selKey = if (Test-HiddenRowValue -Row $row -Key $current -Available $available -DefaultLabels $DefaultLabels) { 'default' } else { $current }
+            $selText = Get-RowOptionText -Row $row -Key $selKey -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel -Available $available -DefaultLabels $DefaultLabels
             $line = $prefix + $labelPart + "$($g.LAngle) $selText $($g.RAngle)"
             # Collapsed: the other options are not on screen, so there is nothing to click. The ROW
             # is still clickable; offering cell hits here would select values the owner cannot see.

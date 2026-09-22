@@ -16,17 +16,17 @@ CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
 ╰────────────────────────────────────────────────────────────────────────────╯
 
  ❯ account     [work]
-   model       ‹ default (Sonnet 5) ›
-   effort      ● [default] ○ low ○ medium ○ high ○ xhigh ○ max ○ ultracode
-   advisor     ● [default (none)] ○ fable ○ opus ○ off
-   permission  ● [default] ○ plan ○ auto ○ acceptEdits ○ bypass
+   model       ‹ Sonnet 5 ›
+   effort      ○ low ○ medium ● [high] ○ xhigh ○ max ○ ultracode
+   advisor     ● [default] ○ fable ○ opus ○ off
+   permission  ○ plan ● [auto] ○ acceptEdits ○ bypass
    mode        ● [normal] ○ safe
 
   ──────────────────────────────────────────────────────────────────────────
   w/s row  ┊  a/d value  ┊   enter  next  ┊   u  maintenance  ┊   esc  quit
 ```
 
-The `default (…)` labels above resolve from the reader's own `~/.claude/settings.json` and differ per machine.
+The bracketed values above are what `default` resolves to in the reader's own `settings.json` (`model`, `effortLevel`, `advisorModel`, `permissions.defaultMode`) and differ per machine; a key that file does not set reads `default`, as the advisor row does here. The model names come out of the installed `claude.exe` itself, so they follow the CLI's releases.
 
 ## Requirements
 
@@ -72,7 +72,7 @@ sharing and remote off. Every validation failure falls back to the default for t
 
 | key | type | default | notes |
 |---|---|---|---|
-| `accounts[]` | `{key, root, label, tint, hidden}` | one `work` account | key 1-8 chars, unique, and unique first letters; root absolute, exactly one must resolve to `~/.claude` (the canonical account); tint one of Green/Magenta/Cyan/Blue/Yellow/Red; hidden omits it from the tab strip and the no-UI prompt's text, though it stays typeable there. Breaking any one of these rules discards the WHOLE roster, not just the offending account - the warning names the culprit and its value, but every account falls back to the single default `work` account |
+| `accounts[]` | `{key, root, label, tint, hidden}` | one `work` account | key 1-8 chars, unique (a shared first letter is fine: the no-UI prompt advertises the shortest unique prefix); root absolute, exactly one must resolve to `~/.claude` (the canonical account); tint one of Green/Magenta/Cyan/Blue/Yellow/Red; hidden omits it from the tab strip and the no-UI prompt's text, though it stays typeable there. Breaking any one of these rules discards the WHOLE roster, not just the offending account - the warning names the culprit and its value, but every account falls back to the single default `work` account |
 | `sharing` | bool | `false` | forced off with fewer than two accounts; see Multi-account sharing below before turning it on |
 | `remote` | bool | `false` | **the companion it needs is not published** — `crc.cmd` on PATH plus a `remote-control-claude-code` checkout (`CLAUDE_REMOTE_ROOT`), neither of which you can obtain, so leave this off unless you have written your own. Adds a Remote row to the launch screen and a second prompt in the no-UI fallback |
 | `riderMcp` | `auto`\|`on`\|`off` | `auto` | `auto` scans for Rider's MCP port only while Rider is running |
@@ -97,7 +97,7 @@ the launch directory.
 
 ## What each screen does
 
-- **Launch screen** - rows for account (a tab strip carrying each account's five-hour usage %), model, effort, advisor, permission and mode (`safe` disables CLAUDE.md, skills, plugins, hooks and MCP for that session). With `remote: true` a Remote row appears too. Arrows move and change, enter moves on to the project screen, `u` opens maintenance, esc quits.
+- **Launch screen** - rows for account (a tab strip carrying each account's five-hour usage %), model, effort, advisor, permission and mode (`safe` disables CLAUDE.md, skills, plugins, hooks and MCP for that session). Each row shows what `default` resolves to for the current account in the default's place and folds the option it equals into that cell (`low medium [high] xhigh max`); the model names are read out of the installed `claude.exe`, and a release the channel serves but the machine has not downloaded yet is installed before the screen draws. With `remote: true` a Remote row appears too. Arrows move and change, enter moves on to the project screen, `u` opens maintenance, esc quits.
 - **Project screen** - which directory the session runs in, and what it does there. Row 0 is the current directory (the cursor opens there); known projects (from `~/.claude/projects`) follow after a blank line; a typed path row, `+ enter a path...`, sits last behind its own blank line. The remembered project (or `-Initial`) still preselects its row, and typing a filter parks the cursor on the first match - Enter launches it. Under the list sits an `action` radio row, `○ new ○ continue ● [resume] ○ worktree` (just the words and brackets below 50 columns): left/right (or `a`/`d`), or a click on a value, step it from any row, and `enter` (the footer calls it `run`) does whatever it says on the highlighted row. The field is an indicator, not a stop - up/down stay in the list - so the whole screen is four arrows and Enter. The hotkeys still fire straight away and set the field with them: `c` continues, `r` resumes (opens the session picker below, scoped to that project), `t` starts it in a new git worktree (`-w`) - each lights its footer button; `new` lights none. `/` filters, `esc` goes back to the launch screen. The field opens at `new` every launch - an action describes one launch, so nothing remembers it.
 - **Maintenance** (`u`) - `u` update, `r` rename swap, `d` doctor, `m` mcp list, `p` prune, plus one hotkey per configured `maintenanceActions[]` entry, `esc` back. **Not covered by `CLAUDE_AUTO_PREVIEW`** - unlike every other screen, its actions run against your real Claude Code install even during a preview run; `tests\preview.ps1` never presses one of these keys.
 - **Session picker** (reached by choosing resume on the project screen) - a list with a last-exchange preview, scoped to the chosen project by default; `/` filters, `enter` opens, `f` forks, `tab` widens to every project and back, `esc` cancels and returns to the launch screen (not the project screen - cancelling a resume is a change of mind about launching at all).
@@ -112,6 +112,7 @@ belongs to the CLI.
 - `CLAUDE_AUTO_CONFIG` - path to the config file, instead of `~/.claude/claude-auto.json`
 - `CLAUDE_AUTO_PREFS` - path to the remembered-choices file, instead of `~/.claude/claude-auto-prefs.json` (the test harness points this at a throwaway file so driving the preview seam never touches the real one)
 - `CLAUDE_AUTO_NO_MOUSE=1` - never arms mouse input
+- `CLAUDE_AUTO_NO_UPDATE=1` - skips the release-channel check and the update it would run before the launch screen
 - `CLAUDE_AUTO_INPUT_TRACE=1` - logs every raw input record to `~/.claude/claude-auto-logs/input-<date>-<pid>.log`
 - `CLAUDE_AUTO_ASCII=1` - forces ASCII box-drawing (otherwise auto-detected from the console code page)
 - `CLAUDE_AUTO_PREVIEW=1` - drives the whole UI and prints the `claude` command it would run, without running it. What the test suite uses. The maintenance screen is the one exception: its actions hit your real install even here
@@ -125,6 +126,8 @@ belongs to the CLI.
 - `~/.claude/claude-auto-prefs.json` - remembered account, model/effort/advisor/permission/remote
 - `~/.claude/launcher-logs/*.jsonl` - one file per day, 14-day retention. Records each launch: the working directory, the launcher's own argument vector, the PowerShell version, which terminal it came out of, and the choices made. **A prompt passed positionally (`claude-auto "fix the build"`) lands there in plain text.** Local only — nothing is sent anywhere
 - `~/.claude/claude-auto-hash-cache.json` - the maintenance screen's version-check cache
+- `~/.claude/claude-auto-models.json` - the model catalog read out of `claude.exe`, keyed on the binary's path, size and mtime
+- `~/.claude/claude-auto-update.json` - the release channel's last answer (30 minutes; a failure 5)
 - `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (one per account root)
 - `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day
 - `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan

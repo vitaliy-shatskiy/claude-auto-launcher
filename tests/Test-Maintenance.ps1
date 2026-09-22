@@ -522,6 +522,53 @@ Assert-Equal $shimText (Get-Content -LiteralPath $shimBin -Raw) 'an npm shim is 
 Assert-Equal $true ($cr.Message -match 'not a native install') 'and the message names why'
 Assert-Equal $false (Test-Path -LiteralPath "$shimBin.old") 'no .old copy of the shim is left behind'
 
+# --- Release-channel check (2026-09-22): the fetch is injected, so nothing here touches the
+# network, and the cache lives under $tmp. ---
+$upd = Join-Path $tmp 'update-cache.json'
+$calls = [System.Collections.ArrayList]::new()
+$fetch = { param($url) [void]$calls.Add($url); "2.1.280`n" }
+$t0 = 1000000000000
+$v = Get-RemoteClaudeVersion -Channel 'latest' -CachePath $upd -Fetch $fetch -NowMs $t0
+Assert-Equal '2.1.280' $v 'remote version: the channel body is trimmed to the bare version'
+Assert-Equal "$script:ReleaseEndpoint/latest" $calls[0] 'remote version: the channel name is the last path segment'
+$v = Get-RemoteClaudeVersion -Channel 'latest' -CachePath $upd -Fetch $fetch -NowMs ($t0 + 10 * 60000)
+Assert-Equal '2.1.280' $v 'remote version: a cache hit inside the TTL answers'
+Assert-Equal 1 $calls.Count 'remote version: a cache hit makes no request'
+$v = Get-RemoteClaudeVersion -Channel 'stable' -CachePath $upd -Fetch $fetch -NowMs ($t0 + 10 * 60000)
+Assert-Equal 2 $calls.Count 'remote version: another channel is a miss'
+Assert-Equal "$script:ReleaseEndpoint/stable" $calls[1] 'remote version: the stable channel is asked by name'
+$v = Get-RemoteClaudeVersion -Channel 'latest' -CachePath $upd -Fetch $fetch -NowMs ($t0 + 60 * 60000)
+Assert-Equal 3 $calls.Count 'remote version: a cache entry past the TTL is refreshed'
+
+$failing = { param($url) throw 'no network' }
+$v = Get-RemoteClaudeVersion -Channel 'latest' -CachePath $upd -Fetch $failing -NowMs ($t0 + 200 * 60000)
+Assert-Equal '' "$v" 'remote version: a failed fetch yields null, never throws'
+$boom = { param($url) throw 'must not be called' }
+$v = Get-RemoteClaudeVersion -Channel 'latest' -CachePath $upd -Fetch $boom -NowMs ($t0 + 202 * 60000)
+Assert-Equal '' "$v" 'remote version: a failure is remembered for a few minutes without retrying'
+$v = Get-RemoteClaudeVersion -Channel 'latest' -CachePath $upd -Fetch $fetch -NowMs ($t0 + 210 * 60000)
+Assert-Equal '2.1.280' $v 'remote version: after the failure TTL the channel is asked again'
+$garbage = { param($url) '<html>maintenance</html>' }
+$v = Get-RemoteClaudeVersion -Channel 'latest' -CachePath $upd -Fetch $garbage -NowMs ($t0 + 300 * 60000)
+Assert-Equal '' "$v" 'remote version: a body that is not a version yields null'
+Set-Content -Path $upd -Value '{not json' -NoNewline
+$v = Get-RemoteClaudeVersion -Channel 'latest' -CachePath $upd -Fetch $fetch -NowMs ($t0 + 400 * 60000)
+Assert-Equal '2.1.280' $v 'remote version: a corrupt cache is ignored and rewritten'
+
+Assert-Equal $true  (Test-ClaudeUpdateAvailable -Installed '2.1.278' -Remote '2.1.280') 'update available: a newer remote'
+Assert-Equal $false (Test-ClaudeUpdateAvailable -Installed '2.1.280' -Remote '2.1.280') 'update available: the same version is not'
+Assert-Equal $false (Test-ClaudeUpdateAvailable -Installed '2.1.281' -Remote '2.1.280') 'update available: an older remote (stable channel) is not'
+Assert-Equal $true  (Test-ClaudeUpdateAvailable -Installed '2.1.9' -Remote '2.1.10') 'update available: numeric, not lexical, comparison'
+Assert-Equal $false (Test-ClaudeUpdateAvailable -Installed '2.1.280 (Claude Code)' -Remote '2.1.281') 'update available: an unparseable installed string never triggers an update'
+Assert-Equal $false (Test-ClaudeUpdateAvailable -Installed '2.1.280' -Remote $null) 'update available: no remote answer never triggers an update'
+
+$chanFile = Join-Path $tmp 'settings.json'
+Set-Content -Path $chanFile -Value '{ "autoUpdatesChannel": "stable" }' -NoNewline
+Assert-Equal 'stable' (Get-AutoUpdatesChannel -SettingsPath $chanFile) 'channel: read from settings.json'
+Set-Content -Path $chanFile -Value '{ "autoUpdatesChannel": "nightly" }' -NoNewline
+Assert-Equal 'latest' (Get-AutoUpdatesChannel -SettingsPath $chanFile) 'channel: an unknown value falls back to latest'
+Assert-Equal 'latest' (Get-AutoUpdatesChannel -SettingsPath (Join-Path $tmp 'missing.json')) 'channel: a missing file falls back to latest'
+
 Remove-Item -Recurse -Force $tmp
 # Invoke-ClaudeCommandText (Ui.ps1) is still not asserted: beyond try/catch its only logic is
 # ConvertTo-StatusText, which Test-Ui.ps1 asserts, and exercising it means shelling out to the real
@@ -818,7 +865,7 @@ $preselectAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.
 Assert-Equal 1 $preselectAssign.Count 'the preselected path is captured in exactly one place'
 Assert-True ($preselectAssign[0].Extent.StartOffset -lt $projScreenCall[0].Extent.StartOffset) 'and BEFORE the project screen runs, or it is just the final pick under another name'
 
-if ($script:Ran -ne 171) { Write-Host "COULD NOT RUN: expected 171 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 192) { Write-Host "COULD NOT RUN: expected 192 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

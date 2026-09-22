@@ -48,8 +48,10 @@ try {
 
     Set-Content (Join-Path $tmp 'bad.json') '{ "accounts": [ {"key":"work","root":"~/.claude","tint":"Green"}, {"key":"web","root":"~/.claude-b","tint":"Pink"} ], "riderMcp": "maybe" }'
     $bad = Read-LauncherConfig -Path (Join-Path $tmp 'bad.json')
-    Assert 'duplicate first letter → default roster' (@($bad.Accounts).Count -eq 1)
-    Assert 'a warning names the collision'        (@($bad.Warnings | Where-Object { $_ -match 'first letter' }).Count -eq 1)
+    # Since 2026-09-22 a shared first letter is fine: the fallback prompt advertises each account's
+    # shortest unique prefix (Get-AccountPrompt), so 'work' and 'web' both stay on the roster.
+    Assert 'shared first letter keeps the roster'  (@($bad.Accounts).Count -eq 2)
+    Assert 'and raises no first-letter warning'    (@($bad.Warnings | Where-Object { $_ -match 'first letter' }).Count -eq 0)
     Assert 'bad riderMcp falls back to auto'      ($bad.RiderMcp -eq 'auto' -and @($bad.Warnings | Where-Object { $_ -match 'riderMcp' }).Count -eq 1)
 
     Set-Content (Join-Path $tmp 'tint.json') '{ "accounts": [ {"key":"work","root":"~/.claude","tint":"Pink"} ] }'
@@ -218,7 +220,7 @@ try {
     Assert 'relative-root warning names the offending account key'   (@($rel2.Warnings | Where-Object { $_ -match "'b'" -and $_ -match 'absolute' }).Count -eq 1)
     Assert 'and the offending raw value'                            (@($rel2.Warnings | Where-Object { $_ -match [regex]::Escape('.claude-relative') }).Count -eq 1)
 
-    Assert 'first-letter collision warning names both colliding keys' (@($bad.Warnings | Where-Object { $_ -match "work" -and $_ -match "web" -and $_ -match 'first letter' }).Count -eq 1)
+    Assert 'no first-letter collision warning exists any more (prefix prompt)' (@($bad.Warnings | Where-Object { $_ -match 'first letter' }).Count -eq 0)
 
     # --- friend-trial finding 4: a Windows path typed straight into JSON ("C:\Users\...") fails
     # ConvertFrom-Json with a raw .NET exception and no hint that a single backslash is the cause. ---

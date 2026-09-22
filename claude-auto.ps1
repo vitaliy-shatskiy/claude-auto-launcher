@@ -177,13 +177,66 @@ if ($UseUi) {
     $limits = Get-RateLimitSummary
     $useColor = Test-ColorSupported
     $ascii = Test-AsciiRequired
+    # Versions first, then the update check, then the model catalog - in that order, because the
+    # catalog is read out of the installed claude.exe and must describe the build that will run.
+    # Only the bare version token of `claude --version` ("2.1.280 (Claude Code)") is kept, so the
+    # header's update arrow compares like with like (Get-InstalledClaudeVersion).
+    $version = @{}
+    $readVersion = {
+        try {
+            $vi = Get-ClaudeInstallInfo
+            @{ Installed = (Get-InstalledClaudeVersion); Newest = $vi.NewestVersion }
+        } catch { @{} }
+    }
+    $version = & $readVersion
+
+    # A release Claude Code has not yet downloaded is invisible to Get-ClaudeInstallInfo, and the
+    # model row would keep naming the previous family member (Opus 5 on the day Opus 5.5 shipped,
+    # 2026-09-22). So ask the release channel (Get-RemoteClaudeVersion, cached 30 min) and install
+    # the newer build now, before the catalog is read - Invoke-ClaudeUpdate runs `claude update`
+    # and finishes by rename when a running session holds the old image. Preview never touches
+    # the network; CLAUDE_AUTO_NO_UPDATE=1 skips the step for a launch that must not wait.
+    if (-not $Preview -and $env:CLAUDE_AUTO_NO_UPDATE -ne '1') {
+        try {
+            $remoteVersion = Get-RemoteClaudeVersion -Channel (Get-AutoUpdatesChannel)
+            if (Test-ClaudeUpdateAvailable -Installed $version.Installed -Remote $remoteVersion) {
+                Write-Host "  Claude Code $remoteVersion is out (installed $($version.Installed)) - updating so the model list is current..." -ForegroundColor DarkGray
+                $upd = Invoke-ClaudeUpdate
+                $version = & $readVersion
+                if ($version.Installed -eq $remoteVersion) {
+                    Write-Host "  updated to $($version.Installed)" -ForegroundColor DarkGray
+                } else {
+                    Write-Host "  update did not finish: $($upd.Message) - press u for maintenance" -ForegroundColor DarkYellow
+                }
+            }
+            # The header's update arrow names the channel's version when nothing newer has been
+            # downloaded yet (offline launch, refused update).
+            if ($remoteVersion -and (-not $version.Newest -or (Test-ClaudeUpdateAvailable -Installed $version.Newest -Remote $remoteVersion))) {
+                $version.Newest = $remoteVersion
+            }
+        } catch {
+            Write-Host "  update check skipped: $($_.Exception.Message)" -ForegroundColor DarkYellow
+        }
+    }
+
+    # Model labels come from the installed claude.exe (Initialize-ModelCatalog, Env.ps1): the
+    # aliases the row passes to --model always mean the newest model of their family, and the
+    # screen must say which one that is today. Cached per binary; a rescan follows an update.
+    $catalog = Initialize-ModelCatalog
+    if ($catalog -and $catalog.Source -eq 'binary') {
+        Write-Host "  model catalog re-read from claude.exe ($($catalog.Names.Count) models)" -ForegroundColor DarkGray
+    }
     $defaultModelLabel = Get-DefaultModelLabel
     $defaultAdvisorLabel = Get-DefaultAdvisorLabel
-    $version = @{}
-    try {
-        $vi = Get-ClaudeInstallInfo
-        $version = @{ Installed = (& claude --version 2>$null | Select-Object -First 1); Newest = $vi.NewestVersion }
-    } catch { }
+    # Per account: the account row switches roots, and with it what the model, advisor, effort and
+    # permission defaults resolve to. The rows show that resolved value in the default's place and
+    # fold the option it equals (Get-DefaultLabels in Env.ps1, Get-VisibleRowValues in Screens.ps1;
+    # owner's 2026-08-15 wording: "low medium [high] xhigh max"). Read once here, picked by the
+    # state's Account at draw and step time.
+    $defaultLabelsByAccount = @{}
+    foreach ($acct in @($Accounts)) {
+        $defaultLabelsByAccount["$($acct.Key)"] = Get-DefaultLabels -Path (Join-Path $acct.Root 'settings.json')
+    }
 
     $alt = Test-AltBufferSupported
     $mouse = $null
@@ -214,7 +267,8 @@ if ($UseUi) {
             # tabs recomputes both. Passing the pre-screen copy would override the frame's default
             # and freeze the marks of whichever tab opened first - every suite green, the live
             # screen wrong from the first account switch.
-            & $paint (Get-LaunchFrame -State $s -Width $w -Height $h -Limits $limits -Version $version -DefaultModelLabel $defaultModelLabel -DefaultAdvisorLabel $defaultAdvisorLabel -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
+            $labels = if ($defaultLabelsByAccount.ContainsKey("$($s.Account)")) { $defaultLabelsByAccount["$($s.Account)"] } else { @{} }
+            & $paint (Get-LaunchFrame -State $s -Width $w -Height $h -Limits $limits -Version $version -DefaultModelLabel $defaultModelLabel -DefaultAdvisorLabel $defaultAdvisorLabel -DefaultLabels $labels -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
             $map
         }
         $wait = { $w, $h = & $size; Wait-KeyOrResize -ReadKey $KeySource -Width $w -Height $h -GetSize $size -KeyAvailable $keyAvailable -MouseState $mouse }
@@ -273,7 +327,7 @@ if ($UseUi) {
         }
 
         while ($true) {
-            $state = Invoke-LaunchScreen -State $state -ReadKey $KeySource -Wait $wait -Draw $draw -Prefs $prefs -Limits $limits -OnKey {
+            $state = Invoke-LaunchScreen -State $state -ReadKey $KeySource -Wait $wait -Draw $draw -Prefs $prefs -Limits $limits -DefaultLabelsByAccount $defaultLabelsByAccount -OnKey {
                 param($k)
                 # 'u' opens maintenance from anywhere on the launch screen and returns here.
                 # Test-ClaudeHotkey: any layout (virtual key, or the Cyrillic letter on that key),

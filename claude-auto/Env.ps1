@@ -171,29 +171,59 @@ function Resolve-ClaudeExecutable {
     return [pscustomobject]@{ Ok = $false; Path = $null; Message = 'claude is not on PATH - install Claude Code first' }
 }
 
+function Get-AccountKeyPrefixes {
+    # Key -> the shortest prefix (lower-case) that names that key and no other on the roster; the
+    # whole key when it is itself a prefix of another key ('ma' beside 'main'). Pure.
+    param([Parameter(Mandatory)][object[]]$Accounts)
+    $keys = @($Accounts | ForEach-Object { "$($_.Key)".ToLowerInvariant() })
+    $out = [ordered]@{}
+    foreach ($a in $Accounts) {
+        $k = "$($a.Key)".ToLowerInvariant()
+        $prefix = $k
+        for ($n = 1; $n -le $k.Length; $n++) {
+            $p = $k.Substring(0, $n)
+            $others = @($keys | Where-Object { $_ -ne $k -and $_.StartsWith($p) })
+            if ($others.Count -eq 0) { $prefix = $p; break }
+        }
+        $out[$a.Key] = $prefix
+    }
+    return $out
+}
+
 function Get-AccountPrompt {
     # The fallback (no-UI) account prompt, generated from the roster. Hidden accounts stay typeable
     # through Map but are not advertised in Text; fewer than two visible accounts means no prompt.
+    # Each account is advertised by its shortest unique prefix (Get-AccountKeyPrefixes): '[w]ork'
+    # when one letter does it, '[mai]n / [mam]oru' when two keys share their opening letters.
+    # Until 2026-09-22 the roster REQUIRED distinct first letters for this prompt's sake.
     param([Parameter(Mandatory)][object[]]$Accounts, [Parameter(Mandatory)][string]$Default)
+    $prefixes = Get-AccountKeyPrefixes -Accounts $Accounts
     $map = @{}
-    foreach ($a in $Accounts) { $map[$a.Key.Substring(0, 1).ToLowerInvariant()] = $a.Key }
+    foreach ($a in $Accounts) { $map[$prefixes[$a.Key]] = $a.Key }
     $visible = @($Accounts | Where-Object { -not $_.Hidden })
     if ($visible.Count -lt 2) { return @{ Text = ''; Map = $map } }
-    # The bracketed letter must match the case Map keys on (lower), or a mixed-case config key
+    # The bracketed prefix must match the case Map keys on (lower), or a mixed-case config key
     # (e.g. "Work") advertises "[W]ork" for a letter the map only accepts as lower-case 'w'.
-    $parts = @($visible | ForEach-Object { "[$($_.Key.Substring(0,1).ToLowerInvariant())]$($_.Key.Substring(1))" })
+    $parts = @($visible | ForEach-Object { $p = $prefixes[$_.Key]; "[$p]$($_.Key.Substring($p.Length))" })
     return @{ Text = "Claude account: $($parts -join ' / '), Enter = $Default : "; Map = $map }
 }
 
 function Resolve-AccountAnswer {
-    # What the no-UI fallback prompt does with a typed answer: trim, lower-case, and look up only
-    # the FIRST character - so typing a key in full ('personal') resolves the same as its one-letter
-    # shorthand ('p'), and a hidden account (typeable but not advertised in Text) resolves the same
-    # way as a visible one, since -Prompt (Get-AccountPrompt's Map) carries every account's letter.
-    # An empty, whitespace-only or unmapped answer returns -Default unchanged - the bare-Enter case.
+    # What the no-UI fallback prompt does with a typed answer: trim, lower-case, then the key typed
+    # in full wins, else the LONGEST advertised prefix the answer starts with - so 'personal' and
+    # 'p' resolve alike, 'mam' reaches 'mamoru' beside 'main', and a hidden account (typeable but
+    # not advertised in Text) resolves like a visible one, since -Prompt (Get-AccountPrompt's Map)
+    # carries every account's prefix. An empty, whitespace-only, ambiguous ('m' with both 'main'
+    # and 'mamoru') or unmapped answer returns -Default unchanged - the bare-Enter case.
     param([string]$Answer, [Parameter(Mandatory)][hashtable]$Prompt, [string]$Default)
     $a = "$Answer".Trim().ToLowerInvariant()
-    if ($a -and $Prompt.ContainsKey($a.Substring(0, 1))) { return $Prompt[$a.Substring(0, 1)] }
+    if (-not $a) { return $Default }
+    foreach ($key in $Prompt.Values) { if ("$key".ToLowerInvariant() -eq $a) { return $key } }
+    $best = $null
+    foreach ($p in $Prompt.Keys) {
+        if ($a.StartsWith("$p") -and ($null -eq $best -or "$p".Length -gt "$best".Length)) { $best = "$p" }
+    }
+    if ($null -ne $best) { return $Prompt[$best] }
     return $Default
 }
 
@@ -679,39 +709,192 @@ function Get-McpConfigPaths {
     } catch { Write-Host "  MCP config skipped: $($_.Exception.Message)" -ForegroundColor DarkYellow }
     return $mcpConfigs
 }
-function Get-FriendlyModelName {
-    # Same family -> friendly-name mapping the model row's own Labels table uses (Screens.ps1),
-    # applied to a raw settings.json 'model' string instead of an internal row key. Kept here
-    # rather than shared with Screens.ps1 because that file must stay free of file I/O and this
-    # one is already the file-reading layer - duplicating four short mappings costs less than
-    # threading a lookup table across files for something this small.
+# ---- model catalog (2026-09-02, ported into the upstream tree 2026-09-22) ----
+# The model row used to carry hard-coded labels ('Fable 5', 'Opus 5[1M]') that went stale the day
+# Claude Code shipped a newer family member: the aliases handed to --model ('fable', 'opus[1m]')
+# already resolve to the newest model, so the launcher was starting Fable 5.1 while the screen
+# still said Fable 5 (seen 2026-09-02). claude.exe embeds its own catalog - one
+# `{id:"claude-fable-5-1",family:"fable",display_name:"Fable 5.1",...}` record per model plus a
+# `latest_per_family:{fable:"claude-fable-5-1",...}` map that is exactly what each alias means -
+# so the labels are read out of the binary that will actually run and can no longer disagree
+# with it. The scan costs a few seconds over a 200 MB file, so its result is cached next to the
+# prefs, keyed on the binary's path, size and mtime: a `claude update` (or the maintenance
+# screen's update, or the launch-time update in claude-auto.ps1 that runs when the release
+# channel is ahead of the installed build) swaps the file and the next read sees the new one.
+# Every failure - no binary, unreadable cache, a build whose catalog moved - degrades to the
+# static table below, never to a broken launch screen.
+
+# The fallback mirrors the Labels table in Screens.ps1: what the row says when the binary cannot be
+# read (npm install, preview with a cold cache). Bump both together when a release lands.
+$script:StaticFamilyLabels = [ordered]@{ fable = 'Fable 5.1'; opus = 'Opus 5.5'; sonnet = 'Sonnet 5'; haiku = 'Haiku 4.5' }
+$script:ModelCatalog = $null   # set by Initialize-ModelCatalog; $null means "static labels only"
+
+function Get-ModelCatalogCachePath { return (Join-Path $HOME '.claude\claude-auto-models.json') }
+
+function Get-ModelCatalogBinPath {
+    # Wherever `claude` resolves - the native claude.exe carries the catalog; an npm shim does not,
+    # and a scan of it simply finds nothing (static labels). The native path is the fallback for a
+    # launch before the first login, when PATH has nothing to say.
+    $cmd = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
+    return (Join-Path $HOME '.local\bin\claude.exe')
+}
+
+function Read-ModelCatalogFromText {
+    # Pure: pulls catalog records out of any text - a binary chunk decoded as Latin-1, or a test
+    # fixture. Returns @{ Latest = @{ family = id }; Names = @{ id = display_name } }, with empty
+    # tables (never $null) when the text carries nothing.
     #
-    # Matches case-insensitively on the family name appearing ANYWHERE in the raw value, so both
-    # the alias form ('fable') and the full id form ('claude-fable-5-1[1m]') resolve the same way.
-    # A raw value with no recognised family renders as itself, truncated - an unknown model id
-    # must never blow up the row width the way the untranslated raw id used to (30 chars for
-    # 'claude-fable-5-1[1m]' alone, before the surrounding 'default (...)').
-    #
-    # The friendly name is the CURRENT release of each family - `fable` is what `/model` writes
-    # and what the CLI resolves to the latest Fable, so the label follows the CLI, not the id.
-    # Bump the label here (and the Labels table in Screens.ps1) when a new release lands.
-    param([string]$Raw)
-    if (-not $Raw) { return $Raw }
-    $families = [ordered]@{
-        fable  = 'Fable 5.1'
-        opus   = 'Opus 5.5'
-        sonnet = 'Sonnet 5'
-        haiku  = 'Haiku 4.5'
+    # The regexes run only on a short window around each rare anchor ('display_name:"' occurs 19
+    # times in the whole binary, 'latest_per_family:{' twice), found with an ordinal IndexOf.
+    # Running the record regex over the raw chunks instead cost 19 s per scan (measured
+    # 2026-09-02): minified JS has millions of '{' for the pattern's first literal to stop at.
+    param([string]$Text)
+    $latest = @{}; $names = @{}
+    if (-not $Text) { return @{ Latest = $latest; Names = $names } }
+    foreach ($window in (Get-AnchorWindows -Text $Text -Anchor 'display_name:"' -Before 160 -After 120)) {
+        foreach ($m in [regex]::Matches($window, '\{id:"(claude-[a-z0-9.-]+)",family:"([a-z]+)",display_name:"([^"\\]+)"')) {
+            $names[$m.Groups[1].Value] = $m.Groups[3].Value
+        }
     }
+    foreach ($window in (Get-AnchorWindows -Text $Text -Anchor 'latest_per_family:{' -Before 0 -After 600)) {
+        foreach ($m in [regex]::Matches($window, 'latest_per_family:\{((?:[a-z]+:"claude-[a-z0-9.-]+",?)+)\}')) {
+            foreach ($pair in [regex]::Matches($m.Groups[1].Value, '([a-z]+):"([^"]+)"')) {
+                $latest[$pair.Groups[1].Value] = $pair.Groups[2].Value
+            }
+        }
+    }
+    return @{ Latest = $latest; Names = $names }
+}
+
+function Get-AnchorWindows {
+    # Every substring [hit - Before, hit + Anchor.Length + After] around an ordinal occurrence of
+    # Anchor, clipped to the text. Pure; used to keep regex work off the bulk of a 200 MB scan.
+    param([string]$Text, [string]$Anchor, [int]$Before, [int]$After)
+    $windows = @()
+    $pos = 0
+    while (($hit = $Text.IndexOf($Anchor, $pos, [StringComparison]::Ordinal)) -ge 0) {
+        $start = [Math]::Max(0, $hit - $Before)
+        $end = [Math]::Min($Text.Length, $hit + $Anchor.Length + $After)
+        $windows += $Text.Substring($start, $end - $start)
+        $pos = $hit + $Anchor.Length
+    }
+    return $windows
+}
+
+function Read-ModelCatalogFromBinary {
+    # Streams the binary in chunks rather than loading 200 MB into one string; the tail of each
+    # chunk is carried into the next so a record straddling a boundary is still seen whole (a
+    # record is well under 1 KB, the overlap is 64 KB). Duplicates from the overlap collapse in the
+    # hashtables. Latin-1 keeps one byte = one char, so offsets never shift on invalid UTF-8.
+    param([Parameter(Mandatory)][string]$BinPath, [int]$ChunkBytes = 8MB, [int]$OverlapBytes = 64KB)
+    $latest = @{}; $names = @{}
+    $fs = [IO.File]::OpenRead($BinPath)
+    try {
+        $buf = New-Object byte[] $ChunkBytes
+        $tail = ''
+        while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
+            $text = $tail + [Text.Encoding]::Latin1.GetString($buf, 0, $n)
+            $part = Read-ModelCatalogFromText -Text $text
+            foreach ($k in $part.Names.Keys) { $names[$k] = $part.Names[$k] }
+            foreach ($k in $part.Latest.Keys) { $latest[$k] = $part.Latest[$k] }
+            $tail = if ($text.Length -gt $OverlapBytes) { $text.Substring($text.Length - $OverlapBytes) } else { $text }
+        }
+    } finally { $fs.Dispose() }
+    return @{ Latest = $latest; Names = $names }
+}
+
+function Get-ModelCatalog {
+    # The catalog for the installed binary, from the cache when the binary has not changed since
+    # the cache was written, from a fresh scan otherwise. $null when there is no binary or the scan
+    # found no latest_per_family map - callers then keep the static labels. Source tells the
+    # launcher whether to mention the (slow) rescan.
+    param([string]$BinPath = (Get-ModelCatalogBinPath),
+          [string]$CachePath = (Get-ModelCatalogCachePath))
+    try {
+        if (-not (Test-Path -LiteralPath $BinPath)) { return $null }
+        $item = Get-Item -LiteralPath $BinPath
+        $key = '{0}|{1}|{2}' -f $item.FullName, $item.Length, $item.LastWriteTimeUtc.Ticks
+        if (Test-Path -LiteralPath $CachePath) {
+            try {
+                $cached = Get-Content -LiteralPath $CachePath -Raw | ConvertFrom-Json -AsHashtable
+                if ($cached.Key -eq $key -and $cached.Latest -and $cached.Latest.Count -gt 0) {
+                    return @{ Latest = $cached.Latest; Names = $cached.Names; Source = 'cache' }
+                }
+            } catch { }
+        }
+        # A preview run answers from the cache and stops there: the scan writes the cache file back,
+        # and preview must write nothing (same rule as Get-CachedFileHash in Maintenance.ps1). A cold
+        # cache costs the preview the live labels, never a failure - the static table stands in.
+        if ($env:CLAUDE_AUTO_PREVIEW -eq '1') { return $null }
+        $catalog = Read-ModelCatalogFromBinary -BinPath $BinPath
+        if ($catalog.Latest.Count -eq 0) { return $null }
+        try {
+            @{ Key = $key; Latest = $catalog.Latest; Names = $catalog.Names } | ConvertTo-Json -Depth 4 |
+                Set-Content -LiteralPath $CachePath -Encoding utf8
+        } catch { }
+        $catalog.Source = 'binary'
+        return $catalog
+    } catch { return $null }
+}
+
+function Get-ModelFamilyLabels {
+    # family -> what the alias for that family starts today ('fable' -> 'Fable 5.1'), the static
+    # table filling any family the catalog does not name. Same four families in the same order as
+    # the static table, so the row layout never depends on what the binary happens to list.
+    param($Catalog = $script:ModelCatalog)
+    $labels = [ordered]@{}
+    foreach ($family in $script:StaticFamilyLabels.Keys) {
+        $label = $script:StaticFamilyLabels[$family]
+        if ($Catalog -and $Catalog.Latest -and $Catalog.Latest[$family] -and $Catalog.Names -and $Catalog.Names[$Catalog.Latest[$family]]) {
+            $label = [string]$Catalog.Names[$Catalog.Latest[$family]]
+        }
+        $labels[$family] = $label
+    }
+    return $labels
+}
+
+function Initialize-ModelCatalog {
+    # Called once per launch: loads the catalog, makes it the default for Get-FriendlyModelName
+    # and pushes the family labels into the model row (Set-ModelRowLabels, Screens.ps1 - looked
+    # up by name so this file still loads when Screens.ps1 is absent).
+    param([string]$BinPath = (Get-ModelCatalogBinPath),
+          [string]$CachePath = (Get-ModelCatalogCachePath))
+    $script:ModelCatalog = Get-ModelCatalog -BinPath $BinPath -CachePath $CachePath
+    $labels = Get-ModelFamilyLabels -Catalog $script:ModelCatalog
+    if (Get-Command Set-ModelRowLabels -ErrorAction SilentlyContinue) { Set-ModelRowLabels -FamilyLabels $labels }
+    return $script:ModelCatalog
+}
+
+function Get-FriendlyModelName {
+    # A raw settings.json 'model' string -> the label the model row would show for it. An exact
+    # catalog id inside the value wins ('claude-opus-4-8' -> 'Opus 4.8', also under a provider
+    # prefix like 'us.anthropic.'); the longest id is taken so 'claude-fable-5' cannot shadow
+    # 'claude-fable-5-1'. A bare alias ('fable', 'opus[1m]') falls through to its family, which
+    # resolves to whatever the catalog says that alias starts today - the same label the row's own
+    # option carries (Get-ModelFamilyLabels), so a default and its pinned twin read identically.
+    # A value with neither renders as itself, truncated: an unknown id must never blow up the row
+    # width the way the untranslated raw id used to (28 chars for 'claude-fable-5[1m]' alone).
+    param([string]$Raw, $Catalog = $script:ModelCatalog)
+    if (-not $Raw) { return $Raw }
+    $has1m = $Raw -imatch '\[1m\]'
+    $base = ($Raw -ireplace '\[1m\]', '').Trim()
     $friendly = $null
-    foreach ($key in $families.Keys) {
-        if ($Raw -imatch [regex]::Escape($key)) { $friendly = $families[$key]; break }
+    if ($Catalog -and $Catalog.Names) {
+        $hit = @($Catalog.Names.Keys | Where-Object { $base -imatch [regex]::Escape($_) } | Sort-Object Length -Descending) | Select-Object -First 1
+        if ($hit) { $friendly = [string]$Catalog.Names[$hit] }
+    }
+    if (-not $friendly) {
+        $families = Get-ModelFamilyLabels -Catalog $Catalog
+        foreach ($key in $families.Keys) {
+            if ($base -imatch [regex]::Escape($key)) { $friendly = $families[$key]; break }
+        }
     }
     if (-not $friendly) {
         if ($Raw.Length -gt 24) { return $Raw.Substring(0, 23) + [string][char]0x2026 }
         return $Raw
     }
-    if ($Raw -imatch '\[1m\]') { $friendly += '[1M]' }
+    if ($has1m) { $friendly += '[1M]' }
     return $friendly
 }
 
@@ -752,6 +935,33 @@ function Get-DefaultAdvisorLabel {
         if ($json.advisorModel) { return "default ($($json.advisorModel))" }
         return 'default (none)'
     } catch { return 'default' }
+}
+
+function Get-DefaultLabels {
+    # Row.Name -> what that row's 'default' key resolves to for the profile whose settings.json is
+    # given, as the BARE value the row's own options use: Model 'Fable 5.1[1M]', Advisor 'opus',
+    # Effort 'high', Permission 'auto'. The 'default (...)' wrapper that Get-DefaultModelLabel and
+    # Get-DefaultAdvisorLabel put around theirs is stripped here, so a resolved default reads
+    # exactly like the option it equals and Get-VisibleRowValues (Screens.ps1) can fold the two
+    # into one cell: "low medium [high] xhigh max" rather than "[default (high)] low ... high".
+    # A key settings.json does not set stays the literal 'default' - for Permission that IS Claude
+    # Code's own mode name, and for Effort and Advisor nothing more exact is knowable from here.
+    # Same degrade rule as the model label: any read failure yields plain labels, never an
+    # exception on the launch screen. Read per account (claude-auto.ps1), since the roots differ.
+    param([string]$Path = (Join-Path $WorkRoot 'settings.json'))
+    $model = Get-DefaultModelLabel -Path $Path
+    if ($model -match '^default \((.+)\)$') { $model = $Matches[1] }
+    if ($model -in @('account default', 'plan default', '')) { $model = 'default' }
+    $labels = @{ Model = $model; Advisor = 'default'; Effort = 'default'; Permission = 'default' }
+    try {
+        if (Test-Path -LiteralPath $Path) {
+            $json = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+            if ($json.advisorModel) { $labels.Advisor = [string]$json.advisorModel }
+            if ($json.effortLevel) { $labels.Effort = [string]$json.effortLevel }
+            if ($json.permissions -and $json.permissions.defaultMode) { $labels.Permission = [string]$json.permissions.defaultMode }
+        }
+    } catch { }
+    return $labels
 }
 
 function Get-FreshestRateLimitRecord {
