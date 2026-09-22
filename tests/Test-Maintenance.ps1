@@ -436,6 +436,24 @@ try {
 $lockCache = Get-Content -LiteralPath $script:HashCachePath -Raw | ConvertFrom-Json
 Assert-Equal $false ([bool]($lockCache.PSObject.Properties.Name -match 'locked-big')) 'a failed hash is never remembered, so the next call retries'
 
+# A preview run writes nothing. This is the seam's whole promise, and it was false: with the real
+# cache file moved aside, one `check-preview` put it back (measured 2026-09-22), and on a machine
+# seeing the launcher for the first time that run pays 305 MB of hashing for a screen nobody looks
+# at. A warm entry is still served, so the recorded preview reference does not move on a machine
+# that has already hashed its build.
+$previewBin = Join-Path $hashDir 'preview.bin'
+[IO.File]::WriteAllBytes($previewBin, [byte[]]::new(2MB))
+Remove-Item -LiteralPath $script:HashCachePath -Force -ErrorAction SilentlyContinue
+$env:CLAUDE_AUTO_PREVIEW = '1'
+try {
+    Assert-True ($null -eq (Get-CachedFileHash -Path $previewBin)) 'a preview run answers null for a large file that is not cached yet'
+    Assert-Equal $false (Test-Path -LiteralPath $script:HashCachePath) 'and writes no cache file at all'
+} finally { Remove-Item -LiteralPath 'Env:CLAUDE_AUTO_PREVIEW' -ErrorAction SilentlyContinue }
+$previewWarm = Get-CachedFileHash -Path $previewBin
+$env:CLAUDE_AUTO_PREVIEW = '1'
+try { Assert-Equal $previewWarm (Get-CachedFileHash -Path $previewBin) 'a warm entry is still served during a preview' }
+finally { Remove-Item -LiteralPath 'Env:CLAUDE_AUTO_PREVIEW' -ErrorAction SilentlyContinue }
+
 # --- Prune and swap safety -------------------------------------------------------------------
 # Four ways the maintenance screen could destroy the user's working CLI, each reachable from one
 # keypress with no confirmation. Assertions are on the FILES, never on a returned message: a report
@@ -800,7 +818,7 @@ $preselectAssign = @($launcherAst.FindAll({ param($n) $n -is [System.Management.
 Assert-Equal 1 $preselectAssign.Count 'the preselected path is captured in exactly one place'
 Assert-True ($preselectAssign[0].Extent.StartOffset -lt $projScreenCall[0].Extent.StartOffset) 'and BEFORE the project screen runs, or it is just the final pick under another name'
 
-if ($script:Ran -ne 168) { Write-Host "COULD NOT RUN: expected 168 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 171) { Write-Host "COULD NOT RUN: expected 171 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

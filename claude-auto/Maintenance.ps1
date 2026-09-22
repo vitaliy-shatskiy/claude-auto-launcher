@@ -62,6 +62,13 @@ function Get-CachedFileHash {
     } catch { $cache = @{} }
     if ($cache.ContainsKey($key)) { return $cache[$key] }
 
+    # A preview run answers from the cache and stops there. Hashing writes the cache file back, and
+    # that is the whole reason `check-preview` was not side-effect-free: with the file moved aside,
+    # one preview run recreated it (measured 2026-09-22), which also means a stranger's first
+    # `check-preview` pays 305 MB of hashing for a screen nobody looks at. Every caller here already
+    # treats $null as "unknown", so a cold cache costs the preview a version line, not a failure.
+    if ($env:CLAUDE_AUTO_PREVIEW -eq '1') { return $null }
+
     # Same as the small-file path above: unreadable answers $null and nothing is cached, so the next
     # call retries instead of remembering a failure.
     try { $hash = (Get-FileHash -LiteralPath $Path -ErrorAction Stop).Hash } catch { return $null }
