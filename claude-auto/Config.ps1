@@ -125,7 +125,6 @@ function ConvertTo-LauncherRoster {
     $fatal = $null
     $badKeyLen = @($accounts | Where-Object { -not $_.Key -or $_.Key.Length -gt 8 })
     $dupKeyGroups = @($accounts | Group-Object Key | Where-Object { $_.Count -gt 1 })
-    $letterGroups = @($accounts | Group-Object { if ($_.Key) { $_.Key.Substring(0, 1).ToLowerInvariant() } else { '' } } | Where-Object { $_.Count -gt 1 })
     $badRoot = @($accounts | Where-Object { -not $_.Rooted })
     if ($accounts.Count -eq 0) { $fatal = 'accounts is empty' }
     elseif ($badKeyLen.Count) {
@@ -134,11 +133,6 @@ function ConvertTo-LauncherRoster {
     }
     elseif ($dupKeyGroups.Count) {
         $fatal = "account key '$($dupKeyGroups[0].Name)' is used $($dupKeyGroups[0].Count) times; account keys must be unique"
-    }
-    elseif ($letterGroups.Count) {
-        $g = $letterGroups[0]
-        $names = ($g.Group | ForEach-Object Key) -join ', '
-        $fatal = "accounts $names share first letter '$($g.Name)'; account keys must start with different first letters (the fallback prompt is one letter per account)"
     }
     elseif ($badRoot.Count) {
         $detail = ($badRoot | ForEach-Object { "'$($_.Key)': '$($_.RawRoot)'" }) -join ', '

@@ -1233,6 +1233,72 @@ Assert-Equal "$([char]27)[32m" (Get-PercentColor -Percent 15) '15% is green'
 $noColor = Get-LaunchFrame -State (New-LaunchState) -Width 84 -Height 24 -Limits @{}
 Assert-Equal 0 (@($noColor | Where-Object { $_ -match "$([char]27)\[" }).Count) 'no escapes unless colour is requested'
 
+# --- resolved defaults: Get-DefaultLabels (Env.ps1) + Get-VisibleRowValues folding (2026-09-22) ---
+# The rows show what 'default' resolves to in the default's place and fold the option it equals,
+# so a profile with effortLevel=high reads "low medium [high] xhigh max" and never "[default (high)]
+# low medium high ...". The tables come per account from settings.json.
+$rowNames = @((Get-LaunchRows) | ForEach-Object Name)
+$effortRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Effort' }
+$permRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Permission' }
+$advisorRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Advisor' }
+$modelRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Model' }
+$labelsHigh = @{ Effort = 'high'; Permission = 'auto'; Advisor = 'opus'; Model = 'Fable 5.1[1M]' }
+Assert-Equal 'low medium default xhigh max ultracode' ((Get-VisibleRowValues -Row $effortRow -DefaultLabels $labelsHigh) -join ' ') 'effort: the default cell takes the slot of the option it resolves to'
+Assert-Equal 'plan default acceptEdits bypass' ((Get-VisibleRowValues -Row $permRow -DefaultLabels $labelsHigh) -join ' ') 'permission: default resolving to auto sits where auto is, auto itself folded away'
+Assert-Equal 'default plan auto acceptEdits bypass' ((Get-VisibleRowValues -Row $permRow -DefaultLabels @{ Permission = 'default' }) -join ' ') 'permission: an unresolved default stays first and every option is offered'
+Assert-Equal 'fable default off' ((Get-VisibleRowValues -Row $advisorRow -DefaultLabels $labelsHigh) -join ' ') 'advisor: a settings advisorModel folds its option'
+Assert-Equal 'default fable opus1m sonnet1m haiku' ((Get-VisibleRowValues -Row $modelRow -DefaultLabels $labelsHigh) -join ' ') 'model: a 1M default with no 1M twin on the row stays first, nothing folded'
+Assert-Equal ($permRow.Values -join ' ') ((Get-VisibleRowValues -Row $permRow) -join ' ') 'no table: the row is untouched'
+Assert-Equal 'high' (Get-RowOptionText -Row $effortRow -Key 'default' -DefaultLabels $labelsHigh) 'option text: the resolved default is the bare value'
+Assert-Equal 'opus' (Get-RowOptionText -Row $advisorRow -Key 'default' -DefaultAdvisorLabel 'default (opus)' -DefaultLabels $labelsHigh) 'option text: the table wins over the wrapped advisor label'
+Assert-Equal 'Fable 5.1[1M]' (Get-RowOptionText -Row $modelRow -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultLabels $labelsHigh) 'option text: the table wins over the wrapped model label'
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRow -Key 'default' -DefaultLabels $labelsHigh -Available @('opus')) 'option text: a resolved default the account lacks is still named honestly'
+Assert-Equal $true (Test-HiddenRowValue -Row $effortRow -Key 'high' -DefaultLabels $labelsHigh) 'the folded twin is reported hidden'
+Assert-Equal $false (Test-HiddenRowValue -Row $effortRow -Key 'max' -DefaultLabels $labelsHigh) 'an unfolded option is not'
+Assert-Equal $false (Test-HiddenRowValue -Row $effortRow -Key 'default' -DefaultLabels $labelsHigh) 'default itself is never hidden'
+$stepState = New-LaunchState; $stepState.Row = [Array]::IndexOf($rowNames, 'Effort')
+$stepState = Step-LaunchValue -State $stepState -Delta -1 -DefaultLabels $labelsHigh
+Assert-Equal 'medium' $stepState.Effort 'left from the resolved default (in the high slot) lands on medium, not on ultracode'
+$stepState.Effort = 'high'   # a pref pinned to the twin
+$stepState = Step-LaunchValue -State $stepState -Delta 1 -DefaultLabels $labelsHigh
+Assert-Equal 'xhigh' $stepState.Effort 'right from a pinned twin steps from the default slot'
+$stepState = Step-LaunchValue -State $stepState -Delta -1 -DefaultLabels $labelsHigh
+Assert-Equal 'default' $stepState.Effort 'and left again lands on the default cell, never on the folded twin'
+$frameOrder = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -DefaultLabels $labelsHigh
+$effortLine = $frameOrder | Where-Object { $_ -match 'effort' } | Select-Object -First 1
+Assert-Equal $true ($effortLine -match 'low .* medium .* \[high\] .* xhigh .* max') 'the effort row renders low medium [high] xhigh max'
+$permLine = $frameOrder | Where-Object { $_ -match 'permission' } | Select-Object -First 1
+Assert-Equal $true ($permLine -match 'plan .* \[auto\] .* acceptEdits .* bypass') 'the permission row renders plan [auto] acceptEdits bypass'
+Assert-Equal 0 @($frameOrder | Where-Object { $_ -match 'default \(' }).Count 'no "default (...)" wrapper anywhere once the tables resolve every row'
+$pinned = New-LaunchState; $pinned.Effort = 'high'
+$pinnedLine = (Get-LaunchFrame -State $pinned -Width 100 -Height 24 -DefaultLabels $labelsHigh) | Where-Object { $_ -match 'effort' } | Select-Object -First 1
+Assert-Equal $true ($pinnedLine -match '\[high\]') 'a pref pinned to the folded twin highlights the default cell'
+$plainFrame = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])'
+Assert-Equal $true ((($plainFrame | Where-Object { $_ -match 'effort' } | Select-Object -First 1) -match '\[default\]')) 'no table: the row still reads [default] as before'
+
+$labelsFixtureDir = Join-Path $env:TEMP ('claude-auto-default-labels-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Path $labelsFixtureDir
+try {
+    $sf = Join-Path $labelsFixtureDir 'settings.json'
+    '{"model":"claude-fable-5-1[1m]","advisorModel":"opus","effortLevel":"high","permissions":{"defaultMode":"auto"}}' | Set-Content -LiteralPath $sf -Encoding utf8
+    $dl = Get-DefaultLabels -Path $sf
+    Assert-Equal 'Fable 5.1[1M]' $dl.Model 'default labels: the model is the bare friendly name, no wrapper'
+    Assert-Equal 'opus' $dl.Advisor 'default labels: advisorModel as written'
+    Assert-Equal 'high' $dl.Effort 'default labels: effortLevel as written'
+    Assert-Equal 'auto' $dl.Permission 'default labels: permissions.defaultMode as written'
+    '{"model":"fable"}' | Set-Content -LiteralPath $sf -Encoding utf8
+    $dl2 = Get-DefaultLabels -Path $sf
+    Assert-Equal 'default' $dl2.Effort 'default labels: a key settings.json does not set stays the literal default'
+    Assert-Equal 'default' $dl2.Advisor 'default labels: no advisorModel stays default, not none'
+    '{"includeCoAuthoredBy": false}' | Set-Content -LiteralPath $sf -Encoding utf8
+    Assert-Equal 'default' (Get-DefaultLabels -Path $sf).Model 'default labels: no model key is a plain default, never "account default"'
+    'not json {{{' | Set-Content -LiteralPath $sf -Encoding utf8
+    Assert-Equal 'default' (Get-DefaultLabels -Path $sf).Permission 'default labels: unparseable settings.json degrades to plain labels'
+    Assert-Equal 'default' (Get-DefaultLabels -Path (Join-Path $labelsFixtureDir 'missing.json')).Effort 'default labels: a missing file degrades to plain labels'
+} finally {
+    Remove-Item -LiteralPath $labelsFixtureDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # --- Get-FriendlyModelName / Get-DefaultModelLabel (Env.ps1) -----------------------------------
 # Direct unit coverage for the label shortener itself - the width/collapse assertions further
 # below exercise Get-LaunchFrame with an already-shortened label passed in directly, so on their
@@ -5509,7 +5575,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1768
+$script:Expected = 1798
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

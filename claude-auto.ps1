@@ -228,6 +228,15 @@ if ($UseUi) {
     }
     $defaultModelLabel = Get-DefaultModelLabel
     $defaultAdvisorLabel = Get-DefaultAdvisorLabel
+    # Per account: the account row switches roots, and with it what the model, advisor, effort and
+    # permission defaults resolve to. The rows show that resolved value in the default's place and
+    # fold the option it equals (Get-DefaultLabels in Env.ps1, Get-VisibleRowValues in Screens.ps1;
+    # owner's 2026-08-15 wording: "low medium [high] xhigh max"). Read once here, picked by the
+    # state's Account at draw and step time.
+    $defaultLabelsByAccount = @{}
+    foreach ($acct in @($Accounts)) {
+        $defaultLabelsByAccount["$($acct.Key)"] = Get-DefaultLabels -Path (Join-Path $acct.Root 'settings.json')
+    }
 
     $alt = Test-AltBufferSupported
     $mouse = $null
@@ -258,7 +267,8 @@ if ($UseUi) {
             # tabs recomputes both. Passing the pre-screen copy would override the frame's default
             # and freeze the marks of whichever tab opened first - every suite green, the live
             # screen wrong from the first account switch.
-            & $paint (Get-LaunchFrame -State $s -Width $w -Height $h -Limits $limits -Version $version -DefaultModelLabel $defaultModelLabel -DefaultAdvisorLabel $defaultAdvisorLabel -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
+            $labels = if ($defaultLabelsByAccount.ContainsKey("$($s.Account)")) { $defaultLabelsByAccount["$($s.Account)"] } else { @{} }
+            & $paint (Get-LaunchFrame -State $s -Width $w -Height $h -Limits $limits -Version $version -DefaultModelLabel $defaultModelLabel -DefaultAdvisorLabel $defaultAdvisorLabel -DefaultLabels $labels -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
             $map
         }
         $wait = { $w, $h = & $size; Wait-KeyOrResize -ReadKey $KeySource -Width $w -Height $h -GetSize $size -KeyAvailable $keyAvailable -MouseState $mouse }
@@ -317,7 +327,7 @@ if ($UseUi) {
         }
 
         while ($true) {
-            $state = Invoke-LaunchScreen -State $state -ReadKey $KeySource -Wait $wait -Draw $draw -Prefs $prefs -Limits $limits -OnKey {
+            $state = Invoke-LaunchScreen -State $state -ReadKey $KeySource -Wait $wait -Draw $draw -Prefs $prefs -Limits $limits -DefaultLabelsByAccount $defaultLabelsByAccount -OnKey {
                 param($k)
                 # 'u' opens maintenance from anywhere on the launch screen and returns here.
                 # Test-ClaudeHotkey: any layout (virtual key, or the Cyrillic letter on that key),

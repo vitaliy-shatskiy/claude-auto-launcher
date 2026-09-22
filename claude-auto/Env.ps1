@@ -171,29 +171,59 @@ function Resolve-ClaudeExecutable {
     return [pscustomobject]@{ Ok = $false; Path = $null; Message = 'claude is not on PATH - install Claude Code first' }
 }
 
+function Get-AccountKeyPrefixes {
+    # Key -> the shortest prefix (lower-case) that names that key and no other on the roster; the
+    # whole key when it is itself a prefix of another key ('ma' beside 'main'). Pure.
+    param([Parameter(Mandatory)][object[]]$Accounts)
+    $keys = @($Accounts | ForEach-Object { "$($_.Key)".ToLowerInvariant() })
+    $out = [ordered]@{}
+    foreach ($a in $Accounts) {
+        $k = "$($a.Key)".ToLowerInvariant()
+        $prefix = $k
+        for ($n = 1; $n -le $k.Length; $n++) {
+            $p = $k.Substring(0, $n)
+            $others = @($keys | Where-Object { $_ -ne $k -and $_.StartsWith($p) })
+            if ($others.Count -eq 0) { $prefix = $p; break }
+        }
+        $out[$a.Key] = $prefix
+    }
+    return $out
+}
+
 function Get-AccountPrompt {
     # The fallback (no-UI) account prompt, generated from the roster. Hidden accounts stay typeable
     # through Map but are not advertised in Text; fewer than two visible accounts means no prompt.
+    # Each account is advertised by its shortest unique prefix (Get-AccountKeyPrefixes): '[w]ork'
+    # when one letter does it, '[mai]n / [mam]oru' when two keys share their opening letters.
+    # Until 2026-09-22 the roster REQUIRED distinct first letters for this prompt's sake.
     param([Parameter(Mandatory)][object[]]$Accounts, [Parameter(Mandatory)][string]$Default)
+    $prefixes = Get-AccountKeyPrefixes -Accounts $Accounts
     $map = @{}
-    foreach ($a in $Accounts) { $map[$a.Key.Substring(0, 1).ToLowerInvariant()] = $a.Key }
+    foreach ($a in $Accounts) { $map[$prefixes[$a.Key]] = $a.Key }
     $visible = @($Accounts | Where-Object { -not $_.Hidden })
     if ($visible.Count -lt 2) { return @{ Text = ''; Map = $map } }
-    # The bracketed letter must match the case Map keys on (lower), or a mixed-case config key
+    # The bracketed prefix must match the case Map keys on (lower), or a mixed-case config key
     # (e.g. "Work") advertises "[W]ork" for a letter the map only accepts as lower-case 'w'.
-    $parts = @($visible | ForEach-Object { "[$($_.Key.Substring(0,1).ToLowerInvariant())]$($_.Key.Substring(1))" })
+    $parts = @($visible | ForEach-Object { $p = $prefixes[$_.Key]; "[$p]$($_.Key.Substring($p.Length))" })
     return @{ Text = "Claude account: $($parts -join ' / '), Enter = $Default : "; Map = $map }
 }
 
 function Resolve-AccountAnswer {
-    # What the no-UI fallback prompt does with a typed answer: trim, lower-case, and look up only
-    # the FIRST character - so typing a key in full ('personal') resolves the same as its one-letter
-    # shorthand ('p'), and a hidden account (typeable but not advertised in Text) resolves the same
-    # way as a visible one, since -Prompt (Get-AccountPrompt's Map) carries every account's letter.
-    # An empty, whitespace-only or unmapped answer returns -Default unchanged - the bare-Enter case.
+    # What the no-UI fallback prompt does with a typed answer: trim, lower-case, then the key typed
+    # in full wins, else the LONGEST advertised prefix the answer starts with - so 'personal' and
+    # 'p' resolve alike, 'mam' reaches 'mamoru' beside 'main', and a hidden account (typeable but
+    # not advertised in Text) resolves like a visible one, since -Prompt (Get-AccountPrompt's Map)
+    # carries every account's prefix. An empty, whitespace-only, ambiguous ('m' with both 'main'
+    # and 'mamoru') or unmapped answer returns -Default unchanged - the bare-Enter case.
     param([string]$Answer, [Parameter(Mandatory)][hashtable]$Prompt, [string]$Default)
     $a = "$Answer".Trim().ToLowerInvariant()
-    if ($a -and $Prompt.ContainsKey($a.Substring(0, 1))) { return $Prompt[$a.Substring(0, 1)] }
+    if (-not $a) { return $Default }
+    foreach ($key in $Prompt.Values) { if ("$key".ToLowerInvariant() -eq $a) { return $key } }
+    $best = $null
+    foreach ($p in $Prompt.Keys) {
+        if ($a.StartsWith("$p") -and ($null -eq $best -or "$p".Length -gt "$best".Length)) { $best = "$p" }
+    }
+    if ($null -ne $best) { return $Prompt[$best] }
     return $Default
 }
 
@@ -905,6 +935,33 @@ function Get-DefaultAdvisorLabel {
         if ($json.advisorModel) { return "default ($($json.advisorModel))" }
         return 'default (none)'
     } catch { return 'default' }
+}
+
+function Get-DefaultLabels {
+    # Row.Name -> what that row's 'default' key resolves to for the profile whose settings.json is
+    # given, as the BARE value the row's own options use: Model 'Fable 5.1[1M]', Advisor 'opus',
+    # Effort 'high', Permission 'auto'. The 'default (...)' wrapper that Get-DefaultModelLabel and
+    # Get-DefaultAdvisorLabel put around theirs is stripped here, so a resolved default reads
+    # exactly like the option it equals and Get-VisibleRowValues (Screens.ps1) can fold the two
+    # into one cell: "low medium [high] xhigh max" rather than "[default (high)] low ... high".
+    # A key settings.json does not set stays the literal 'default' - for Permission that IS Claude
+    # Code's own mode name, and for Effort and Advisor nothing more exact is knowable from here.
+    # Same degrade rule as the model label: any read failure yields plain labels, never an
+    # exception on the launch screen. Read per account (claude-auto.ps1), since the roots differ.
+    param([string]$Path = (Join-Path $WorkRoot 'settings.json'))
+    $model = Get-DefaultModelLabel -Path $Path
+    if ($model -match '^default \((.+)\)$') { $model = $Matches[1] }
+    if ($model -in @('account default', 'plan default', '')) { $model = 'default' }
+    $labels = @{ Model = $model; Advisor = 'default'; Effort = 'default'; Permission = 'default' }
+    try {
+        if (Test-Path -LiteralPath $Path) {
+            $json = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+            if ($json.advisorModel) { $labels.Advisor = [string]$json.advisorModel }
+            if ($json.effortLevel) { $labels.Effort = [string]$json.effortLevel }
+            if ($json.permissions -and $json.permissions.defaultMode) { $labels.Permission = [string]$json.permissions.defaultMode }
+        }
+    } catch { }
+    return $labels
 }
 
 function Get-FreshestRateLimitRecord {
