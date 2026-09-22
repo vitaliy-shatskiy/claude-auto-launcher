@@ -162,6 +162,10 @@ try {
     Set-Content -LiteralPath "$nmRoot\shared\1DIGIT"    -Value 'x' -NoNewline
     Set-Content -LiteralPath "$nmRoot\shared\HAS SPACE" -Value 'x' -NoNewline
     Set-Content -LiteralPath "$nmRoot\shared\GOOD_NAME" -Value 'good' -NoNewline
+    # A secret read by PATH, not exported: the name is kebab-case on purpose because a tool opens it
+    # by filename. It can never be an environment variable, so warning about it every launch is noise
+    # about a store that is correct - it belongs in the one-line summary instead.
+    Set-Content -LiteralPath "$nmRoot\shared\by-path-key.json" -Value 'k' -NoNewline
     foreach ($v in $nmVars) { Remove-Item -LiteralPath "Env:$v" -ErrorAction SilentlyContinue }
 
     # PATH is saved and put back IMMEDIATELY: while the guard is missing this call really does
@@ -180,6 +184,9 @@ try {
     Assert 'the line names the offending file'              (@($nmText | Where-Object { $_ -match "secret 'A=B'" }).Count -eq 1)
     Assert 'a reserved name is refused as reserved'         (@($nmText | Where-Object { $_ -match "secret 'PATH'.*reserved" }).Count -eq 1)
     Assert 'a valid name beside them still loads'           ($env:GOOD_NAME -eq 'good')
+    Assert 'a path-read secret costs no warning line'       (@($nmText | Where-Object { $_ -match "secret 'by-path-key\.json'" }).Count -eq 0)
+    Assert 'and is reported as read by path instead'        (@($nmText | Where-Object { $_ -match 'read by path.*by-path-key\.json' }).Count -eq 1)
+    Assert 'it is not exported as a variable'               (-not (Test-Path -LiteralPath 'Env:by-path-key.json'))
 
     $nmLoaded = @(Import-ProjectSecrets -WorkingDirectory 'C:\test\.names' -Root $nmRoot 6>$null 2>$null)
     $env:PATH = $pathBefore
@@ -225,6 +232,20 @@ try {
     Assert 'a drifted copy under a [bracket] root is re-linked' ($brIds.Count -eq 1 -and $brIds[0])
     Assert 'the newest copy won there too'                      ((Get-Content -LiteralPath "$brSec\settings.json" -Raw) -eq '{"model":"work"}')
     Assert 'and the .pre-relink backup was really written'      (Test-Path -LiteralPath "$brSec\settings.json.pre-relink")
+
+    # The backup used to be ONE deep: `Copy-Item -Force` overwrote it, so a second drift threw away
+    # the first losing copy - and by then the winning copy has already replaced this root twice, so
+    # that first one is the version somebody would actually want back. The previous backup is
+    # rotated aside under its own write time before the new one lands.
+    $firstBackup = Get-Content -LiteralPath "$brSec\settings.json.pre-relink" -Raw
+    Remove-Item -LiteralPath "$brSec\settings.json" -Force
+    Set-Content -LiteralPath "$brSec\settings.json" -Value '{"model":"drifted-again"}' -NoNewline
+    (Get-Item -LiteralPath "$brSec\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-1)
+    Repair-SharedLink -Name 'settings.json' 6>$null
+    $brRot = @(Get-ChildItem -LiteralPath $brSec -File | Where-Object { $_.Name -like 'settings.json.pre-relink.*' })
+    Assert 'a second drift rotates the previous backup aside'   ($brRot.Count -eq 1)
+    Assert 'so the FIRST losing copy is still readable'         ($brRot.Count -eq 1 -and (Get-Content -LiteralPath $brRot[0].FullName -Raw) -eq $firstBackup)
+    Assert 'and .pre-relink now holds the second losing copy'   ((Get-Content -LiteralPath "$brSec\settings.json.pre-relink" -Raw) -eq '{"model":"drifted-again"}')
 
     # Repair-SharedJunction under a bracket root: a real directory where the junction belongs must
     # still be reported. Under the bug every Test-Path in it answered False, so it returned at the
@@ -814,7 +835,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 164 } else { 160 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 170 } else { 166 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

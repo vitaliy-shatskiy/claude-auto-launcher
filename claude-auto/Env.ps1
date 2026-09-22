@@ -235,6 +235,11 @@ function Import-ProjectSecrets {
 
     $winner = [ordered]@{}
     $winnerPath = @{}
+    # Secrets that are read by PATH rather than by environment variable - an API key a tool opens by
+    # filename, a JSON credential. Their names are kebab-case or carry an extension on purpose, so
+    # they can never be environment variables and warning about each one every launch is noise about
+    # a store that is correct. Counted here, reported as one line beside the loaded ones.
+    $byPath = [Collections.Generic.List[string]]::new()
     foreach ($tier in $tiers.Keys) {
         $dir = $tiers[$tier]
         # -LiteralPath, here and below. -Path takes a wildcard PATTERN, so on a real directory named
@@ -252,6 +257,12 @@ function Import-ProjectSecrets {
             # landed in the launch banner. Neither is an attack - both are somebody putting a file
             # in a directory - so each costs one line and the rest of the store still loads.
             if ($f.Name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+                # A file secret is SPELLED like one: it starts with a letter and carries a dash or a
+                # dot - `openrouter-api-key`, `teams-reader-app.json`. That is the convention working
+                # and costs no line. Anything else here is a mistake somebody should see: a '=' in
+                # the name, a space, a leading digit. The dash-or-dot test is the whole difference;
+                # without it `1DIGIT` reads as a file secret, which Test-Env caught.
+                if ($f.Name -match '^[A-Za-z][A-Za-z0-9._-]*$' -and $f.Name -match '[-.]') { $byPath.Add($f.Name); continue }
                 Write-Host "  secret '$($f.Name)' skipped: not a valid environment variable name" -ForegroundColor DarkYellow
                 continue
             }
@@ -297,6 +308,9 @@ function Import-ProjectSecrets {
     $loaded = @($winner.Keys | ForEach-Object { "$_($($winner[$_]))" })
     if ($loaded.Count -gt 0) {
         Write-Host "  secrets loaded: $($loaded -join ', ')" -ForegroundColor DarkGray
+    }
+    if ($byPath.Count -gt 0) {
+        Write-Host "  read by path, not exported: $($byPath -join ', ')" -ForegroundColor DarkGray
     }
     return $loaded
 }
@@ -373,6 +387,26 @@ function Repair-SharedLink {
         # failed - a permission, an antivirus lock - with only a .pre-relink beside it and nothing
         # said. The backup is taken first and put back if the link does not land.
         $backup = "$dst.pre-relink"
+        # The backup used to be one deep: -Force overwrote it, so a second drift threw away the
+        # first losing copy - the one a reader would actually want back, because by then the
+        # newest copy has already won twice. The existing backup is rotated aside under its own
+        # write time, and the rotations are pruned to the newest three so the profile root does
+        # not grow a backup per launch.
+        if (Test-Path -LiteralPath $backup) {
+            try {
+                $stamp = (Get-Item -LiteralPath $backup).LastWriteTimeUtc.ToString('yyyyMMdd-HHmmss')
+                $rotated = "$backup.$stamp"
+                $n = 1
+                while (Test-Path -LiteralPath $rotated) { $rotated = "$backup.$stamp-$n"; $n++ }
+                Move-Item -LiteralPath $backup -Destination $rotated -ErrorAction Stop
+                $keep = @(Get-ChildItem -LiteralPath (Split-Path -Parent $dst) -File -ErrorAction Stop |
+                          Where-Object { $_.Name -like "$(Split-Path -Leaf $backup).*" } |
+                          Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 3)
+                foreach ($o in $keep) { Remove-Item -LiteralPath $o.FullName -Force -ErrorAction SilentlyContinue }
+            } catch {
+                Write-Host "  could not rotate the previous backup of $dst ($($_.Exception.Message)); it is overwritten" -ForegroundColor DarkYellow
+            }
+        }
         try { Copy-Item -LiteralPath $dst -Destination $backup -Force -ErrorAction Stop }
         catch {
             Write-Host "  could not back up $dst before re-linking ($($_.Exception.Message)); left alone" -ForegroundColor DarkYellow
