@@ -1248,6 +1248,103 @@ $unknownResult = Get-FriendlyModelName -Raw $longUnknown
 Assert-Equal $true ($unknownResult.Length -le 24) 'friendly name: an unrecognised family is truncated, never left to blow up the row width'
 Assert-Equal $true ($longUnknown.StartsWith($unknownResult.TrimEnd([char]0x2026))) 'friendly name: the truncated-unknown fallback is a real prefix of the raw id, not a summary'
 
+# --- model catalog read out of claude.exe (Env.ps1, 2026-09-02) --------------------------------
+# The row's labels used to be hard-coded and went stale the day a newer family member shipped
+# ('fable' launched Fable 5.1 while the screen said Fable 5). The catalog embedded in the binary
+# is the source now; a fixture in the binary's own shape stands in for the 200 MB file.
+$catalogFixture = 'junk{a:1}{id:"claude-fable-5",family:"fable",display_name:"Fable 5",knowledge_cutoff:"x"},' +
+    '{id:"claude-fable-5-1",family:"fable",display_name:"Fable 5.1",knowledge_cutoff:"June 2026"},' +
+    '{id:"claude-opus-4-8",family:"opus",display_name:"Opus 4.8"},{id:"claude-opus-5",family:"opus",display_name:"Opus 5"},' +
+    '{id:"claude-sonnet-5",family:"sonnet",display_name:"Sonnet 5"},{id:"claude-haiku-4-5",family:"haiku",display_name:"Haiku 4.5"}' +
+    'more junk latest_per_family:{fable:"claude-fable-5-1",opus:"claude-opus-5",sonnet:"claude-sonnet-5",haiku:"claude-haiku-4-5"},alias_migration'
+$cat = Read-ModelCatalogFromText -Text $catalogFixture
+Assert-Equal 'claude-fable-5-1' $cat.Latest['fable'] 'catalog parser: latest_per_family maps the fable alias to the newest fable id'
+Assert-Equal 6 $cat.Names.Count 'catalog parser: every {id,family,display_name} record is collected'
+Assert-Equal 'Fable 5.1' $cat.Names['claude-fable-5-1'] 'catalog parser: a record keeps its display name'
+$empty = Read-ModelCatalogFromText -Text 'nothing here'
+Assert-Equal 0 ($empty.Latest.Count + $empty.Names.Count) 'catalog parser: text without records yields empty tables, not null'
+
+$famNew = Get-ModelFamilyLabels -Catalog $cat
+Assert-Equal 'Fable 5.1' $famNew['fable'] 'family labels: fable resolves through latest_per_family to the newest display name'
+Assert-Equal 'Opus 5' $famNew['opus'] 'family labels: opus resolves the same way'
+$famNone = Get-ModelFamilyLabels -Catalog $null
+Assert-Equal 'Fable 5.1' $famNone['fable'] 'family labels: no catalog keeps the static fallback'
+$partial = @{ Latest = @{ fable = 'claude-fable-9' }; Names = @{} }
+Assert-Equal 'Fable 5.1' (Get-ModelFamilyLabels -Catalog $partial)['fable'] 'family labels: a latest id with no display name keeps the static label rather than showing a raw id'
+
+Assert-Equal 'Fable 5.1[1M]' (Get-FriendlyModelName -Raw 'fable[1m]' -Catalog $cat) 'friendly name with catalog: a bare alias reads as what it starts today'
+Assert-Equal 'Fable 5[1M]' (Get-FriendlyModelName -Raw 'claude-fable-5[1m]' -Catalog $cat) 'friendly name with catalog: a pinned older id is NOT shadowed by the newer id that contains it'
+Assert-Equal 'Opus 4.8' (Get-FriendlyModelName -Raw 'us.anthropic.claude-opus-4-8' -Catalog $cat) 'friendly name with catalog: a full id under a provider prefix names its own record'
+Assert-Equal 'Sonnet 5' (Get-FriendlyModelName -Raw 'sonnet' -Catalog $cat) 'friendly name with catalog: an alias with no [1m] gets no suffix'
+
+$modelRowLive = Get-LaunchRows | Where-Object { $_.Name -eq 'Model' }
+$staticLabels = @{} + $modelRowLive.Labels
+try {
+    Set-ModelRowLabels -FamilyLabels $famNew
+    Assert-Equal 'Fable 5.1' (Get-RowOptionText -Row $modelRowLive -Key 'fable') 'model row: the fable option label follows the catalog'
+    Assert-Equal 'Opus 5[1M]' (Get-RowOptionText -Row $modelRowLive -Key 'opus1m') 'model row: 1M keys keep their bracket after the catalog label'
+    Set-ModelRowLabels -FamilyLabels @{ fable = 'Fable 9' }
+    Assert-Equal 'Fable 9' (Get-RowOptionText -Row $modelRowLive -Key 'fable') 'model row: a later table overwrites'
+    Assert-Equal 'Opus 5[1M]' (Get-RowOptionText -Row $modelRowLive -Key 'opus1m') 'model row: a family the table leaves out keeps its current label'
+} finally {
+    foreach ($k in $staticLabels.Keys) { $modelRowLive.Labels[$k] = $staticLabels[$k] }
+}
+Assert-Equal 'Fable 5.1' (Get-RowOptionText -Row $modelRowLive -Key 'fable') 'model row: static labels restored for the assertions below'
+
+# Chunked read and cache against a fake binary: the record is placed so it straddles a chunk
+# boundary (chunk 4096, record starting at 4000), which only the carried-over tail can see.
+$fakeBinDir = Join-Path $env:TEMP ('claude-auto-catalog-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Path $fakeBinDir
+try {
+    $fakeBin = Join-Path $fakeBinDir 'claude.exe'
+    $fakeCache = Join-Path $fakeBinDir 'models.json'
+    $padded = ('x' * 4000) + $catalogFixture + ('y' * 9000)
+    [IO.File]::WriteAllBytes($fakeBin, [Text.Encoding]::Latin1.GetBytes($padded))
+    $chunked = Read-ModelCatalogFromBinary -BinPath $fakeBin -ChunkBytes 4096 -OverlapBytes 1024
+    Assert-Equal 6 $chunked.Names.Count 'chunked read: records straddling a chunk boundary are still found'
+    Assert-Equal 'claude-opus-5' $chunked.Latest['opus'] 'chunked read: latest_per_family found past the first chunk'
+
+    $first = Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache
+    Assert-Equal 'binary' $first.Source 'catalog cache: the first read scans the binary'
+    Assert-Equal $true (Test-Path -LiteralPath $fakeCache) 'catalog cache: the scan result is written next to the prefs'
+    $second = Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache
+    Assert-Equal 'cache' $second.Source 'catalog cache: an unchanged binary is served from the cache'
+    Assert-Equal 'Fable 5.1' $second.Names['claude-fable-5-1'] 'catalog cache: names survive the JSON round trip'
+    Assert-Equal 'claude-fable-5-1' $second.Latest['fable'] 'catalog cache: latest_per_family survives the JSON round trip'
+    [IO.File]::WriteAllBytes($fakeBin, [Text.Encoding]::Latin1.GetBytes($padded.Replace('Fable 5.1', 'Fable 5.2')))
+    $third = Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache
+    Assert-Equal 'binary' $third.Source 'catalog cache: a rewritten binary (claude update) invalidates the cache'
+    Assert-Equal 'Fable 5.2' $third.Names['claude-fable-5-1'] 'catalog cache: the rescan sees the new build'
+    'not json {{{' | Set-Content -LiteralPath $fakeCache -Encoding utf8
+    Assert-Equal 'binary' (Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache).Source 'catalog cache: a corrupt cache is rescanned, never thrown on'
+    Assert-Equal $null (Get-ModelCatalog -BinPath (Join-Path $fakeBinDir 'missing.exe') -CachePath $fakeCache) 'catalog: a missing binary yields null (static labels), not an exception'
+    [IO.File]::WriteAllBytes($fakeBin, [Text.Encoding]::Latin1.GetBytes('no catalog in this build'))
+    Assert-Equal $null (Get-ModelCatalog -BinPath $fakeBin -CachePath $fakeCache) 'catalog: a build without latest_per_family yields null (static labels)'
+} finally {
+    Remove-Item -LiteralPath $fakeBinDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# A preview run must write nothing: a cold catalog cache stays cold and the static labels stand in.
+$previewBinDir = Join-Path $env:TEMP ('claude-auto-catalog-preview-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Path $previewBinDir
+$hadPreview = $env:CLAUDE_AUTO_PREVIEW
+try {
+    $pBin = Join-Path $previewBinDir 'claude.exe'
+    $pCache = Join-Path $previewBinDir 'models.json'
+    [IO.File]::WriteAllBytes($pBin, [Text.Encoding]::Latin1.GetBytes($catalogFixture))
+    $env:CLAUDE_AUTO_PREVIEW = '1'
+    Assert-Equal $null (Get-ModelCatalog -BinPath $pBin -CachePath $pCache) 'catalog in preview: a cold cache is not scanned (static labels)'
+    Assert-Equal $false (Test-Path -LiteralPath $pCache) 'catalog in preview: nothing is written'
+    Remove-Item Env:CLAUDE_AUTO_PREVIEW -ErrorAction SilentlyContinue
+    $null = Get-ModelCatalog -BinPath $pBin -CachePath $pCache
+    $env:CLAUDE_AUTO_PREVIEW = '1'
+    Assert-Equal 'cache' (Get-ModelCatalog -BinPath $pBin -CachePath $pCache).Source 'catalog in preview: a warm cache is served'
+} finally {
+    if ($null -eq $hadPreview) { Remove-Item Env:CLAUDE_AUTO_PREVIEW -ErrorAction SilentlyContinue } else { $env:CLAUDE_AUTO_PREVIEW = $hadPreview }
+    Remove-Item -LiteralPath $previewBinDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+
 $defaultModelFixture = Join-Path $env:TEMP ('claude-auto-model-label-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
 try {
     '{"model": "claude-fable-5-1[1m]"}' | Set-Content -LiteralPath $defaultModelFixture -Encoding utf8
@@ -5412,7 +5509,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1736
+$script:Expected = 1768
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

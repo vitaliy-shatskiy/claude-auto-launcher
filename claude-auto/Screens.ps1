@@ -47,6 +47,23 @@ $script:Rows = @(
     @{ Name = 'Mode';       Label = 'mode';       Values = @('normal', 'safe') }
 )
 
+function Set-ModelRowLabels {
+    # Pure: rewrites the model row's Labels from a family -> display-name table (the shape
+    # Get-ModelFamilyLabels in Env.ps1 returns, read out of the installed claude.exe). The 1M keys
+    # append their bracket here, so the table stays plain family names. A family the table leaves
+    # empty keeps its current label. The Labels above are the STATIC fallback for when the binary
+    # cannot be read.
+    param([Parameter(Mandatory)]$FamilyLabels)
+    $row = $script:Rows | Where-Object { $_.Name -eq 'Model' }
+    $familyOfKey = @{ fable = 'fable'; opus1m = 'opus'; sonnet1m = 'sonnet'; haiku = 'haiku' }
+    foreach ($key in @($familyOfKey.Keys)) {
+        $label = $FamilyLabels[$familyOfKey[$key]]
+        if (-not $label) { continue }
+        $suffix = if ($key -like '*1m') { '[1M]' } else { '' }
+        $row.Labels[$key] = [string]$label + $suffix
+    }
+}
+
 $script:RemoteRow = @{ Name = 'Remote'; Label = 'remote'; Values = @('on', 'off', 'on+QR', 'stop server') }
 $script:AccountTints = @{ work = 'Green' }
 $script:DefaultAccount = 'work'
