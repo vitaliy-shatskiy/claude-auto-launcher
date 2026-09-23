@@ -313,7 +313,17 @@ function Step-LaunchValue {
     $values = @(Get-VisibleRowValues -Row $row -Available $Available -DefaultLabels $DefaultLabels)
     $current = $State.($row.Name)
     if (Test-HiddenRowValue -Row $row -Key $current -Available $Available -DefaultLabels $DefaultLabels) { $current = 'default' }
-    $State.($row.Name) = Step-Option -Values $values -Current $current -Delta $Delta
+    $next = Step-Option -Values $values -Current $current -Delta $Delta
+    # Landing on a default cell that folded a twin stores the twin (the first in row order): the
+    # literal 'default' reads as "no choice" to Save-LaunchPrefs, which then kept the profile's
+    # previous value, so the pick came back reverted on the next launch. The frame draws a twin on
+    # the default cell (Test-HiddenRowValue), so the screen does not change; ctrl+r still resets to
+    # the literal 'default' (Reset-LaunchTab), which stays unsaved.
+    if ($next -eq 'default') {
+        $twin = @($row.Values | Where-Object { Test-HiddenRowValue -Row $row -Key $_ -Available $Available -DefaultLabels $DefaultLabels }) | Select-Object -First 1
+        if ($twin) { $next = $twin }
+    }
+    $State.($row.Name) = $next
     return $State
 }
 

@@ -561,7 +561,72 @@ Assert-Equal $ssRem $ss3.Project 'a neutral cwd falls through to rule 2 - the ar
 $script:LaunchStartContext = $null
 Remove-Item -LiteralPath $ssRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 131) { Write-Host "COULD NOT RUN: expected 131 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- a step onto the folded default cell stores the TWIN (0.4.1) ------------------------------
+# 0.4.0 folds the option that reads the same as the resolved settings.json default into the
+# default cell. A step landing there stored the literal 'default', which Save reads as "no choice",
+# so the profile's previous value came back on the next launch (fable / ultracode / bypass after
+# Opus / high / auto was picked). The twin key is stored instead - saved, restored and launched as
+# an explicit flag - while the frame still draws the default cell.
+function Get-NamedRowIndex { param([string]$Name) [Array]::IndexOf(@($rows | ForEach-Object Name), $Name) }
+$foldModelRow = $rows | Where-Object { $_.Name -eq 'Model' }
+$foldLabels = @{ Model = $foldModelRow.Labels['opus1m']; Advisor = 'default'; Effort = 'high'; Permission = 'auto' }
+$foldPath = New-PrefsPath; $paths += $foldPath
+'{"Version":2,"Account":"personal","SavedAtMs":1,"Profiles":{"personal":{"Model":"fable","Effort":"ultracode","Advisor":"fable","Permission":"bypass","SavedAtMs":1}}}' | Set-Content -LiteralPath $foldPath -Encoding utf8
+$foldPrefs = Read-LaunchPrefs -Path $foldPath
+$fold = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs $foldPrefs -Rows $rows -NowMs 2).State
+Assert-Equal 'ultracode' $fold.Effort 'fold fixture: the remembered ultracode is restored before any step'
+$fold.Row = Get-NamedRowIndex 'Effort'
+foreach ($n in 1..3) { $fold = Step-LaunchValue -State $fold -Delta -1 -DefaultLabels $foldLabels }
+Assert-Equal 'high' $fold.Effort 'three lefts from ultracode land on the folded default cell and store its twin, high'
+$fold.Row = Get-NamedRowIndex 'Model'
+$fold = Step-LaunchValue -State $fold -Delta 1 -DefaultLabels $foldLabels
+Assert-Equal 'opus1m' $fold.Model 'right from fable lands on the Opus default cell and stores opus1m'
+$fold.Row = Get-NamedRowIndex 'Permission'
+foreach ($n in 1..2) { $fold = Step-LaunchValue -State $fold -Delta -1 -DefaultLabels $foldLabels }
+Assert-Equal 'auto' $fold.Permission 'two lefts from bypass land on the auto default cell and store auto'
+$null = Save-LaunchPrefs -State $fold -Path $foldPath -NowMs 3
+$foldBack = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs (Read-LaunchPrefs -Path $foldPath) -Rows $rows -NowMs 4).State
+Assert-Equal 'high' $foldBack.Effort 'the next launch restores high, not the previous ultracode'
+Assert-Equal 'opus1m' $foldBack.Model 'the next launch restores opus1m, not the previous fable'
+Assert-Equal 'auto' $foldBack.Permission 'the next launch restores auto, not the previous bypass'
+Assert-Equal '--model opus[1m] --effort high --advisor fable --permission-mode auto' ((Get-LaunchArgs -State $foldBack) -join ' ') 'and launches each as an explicit flag'
+# Control: with no resolved defaults nothing folds, and the same three lefts reach the real high cell.
+$foldPlain = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs $foldPrefs -Rows $rows -NowMs 2).State
+$foldPlain.Row = Get-NamedRowIndex 'Effort'
+foreach ($n in 1..3) { $foldPlain = Step-LaunchValue -State $foldPlain -Delta -1 -DefaultLabels @{} }
+Assert-Equal 'high' $foldPlain.Effort 'control: no table, the same three lefts land on the plain high option'
+
+# The per-tab stash carries the twin: leaving the tab and coming back must not turn it into 'default'.
+$foldTab = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs $foldPrefs -Rows $rows -NowMs 2).State
+$foldTab.Row = Get-NamedRowIndex 'Effort'
+foreach ($n in 1..3) { $foldTab = Step-LaunchValue -State $foldTab -Delta -1 -DefaultLabels $foldLabels }
+$foldTab = Switch-LaunchAccount -State $foldTab -To 'work' -Prefs $foldPrefs -Rows $rows -NowMs 5
+$foldTab = Switch-LaunchAccount -State $foldTab -To 'personal' -Prefs $foldPrefs -Rows $rows -NowMs 5
+Assert-Equal 'high' $foldTab.Effort 'the tab stash carries the twin across an account switch and back'
+
+# ctrl+r is still a reset for this launch only: it puts the literal 'default' back, and Save still
+# keeps the remembered value for it (the 2026-08-23 rule) - the twin rule is the stepper's, not Save's.
+$foldResetPath = New-PrefsPath; $paths += $foldResetPath
+'{"Version":2,"Account":"personal","SavedAtMs":1,"Profiles":{"personal":{"Effort":"ultracode","SavedAtMs":1}}}' | Set-Content -LiteralPath $foldResetPath -Encoding utf8
+$foldReset = (Merge-LaunchPrefs -State (New-LaunchState) -Prefs (Read-LaunchPrefs -Path $foldResetPath) -Rows $rows -NowMs 2).State
+$foldReset.Row = Get-NamedRowIndex 'Effort'
+foreach ($n in 1..3) { $foldReset = Step-LaunchValue -State $foldReset -Delta -1 -DefaultLabels $foldLabels }
+$foldReset = Reset-LaunchTab -State $foldReset
+Assert-Equal 'default' $foldReset.Effort 'ctrl+r after landing on the twin puts the literal default back, not the twin'
+$null = Save-LaunchPrefs -State $foldReset -Path $foldResetPath -NowMs 6
+Assert-Equal 'ultracode' (Read-LaunchPrefs -Path $foldResetPath).Profiles['personal'].Effort 'and a reset is still never saved - the remembered ultracode stands'
+
+# Two options reading the same as the default: the FIRST in the row's own order is the one stored.
+$foldSonnetLabel = $foldModelRow.Labels['sonnet1m']
+try {
+    $foldModelRow.Labels['sonnet1m'] = $foldModelRow.Labels['opus1m']
+    $foldTwo = New-LaunchState; $foldTwo.Model = 'fable'; $foldTwo.Row = Get-NamedRowIndex 'Model'
+    $foldTwo = Step-LaunchValue -State $foldTwo -Delta 1 -DefaultLabels $foldLabels
+    Assert-Equal 'opus1m' $foldTwo.Model 'two folded twins: the first in row order (opus1m) is stored, never sonnet1m'
+} finally { $foldModelRow.Labels['sonnet1m'] = $foldSonnetLabel }
+foreach ($f in @($foldPath, $foldResetPath)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+
+if ($script:Ran -ne 144) { Write-Host "COULD NOT RUN: expected 144 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

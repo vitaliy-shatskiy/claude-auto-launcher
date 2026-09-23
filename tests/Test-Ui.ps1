@@ -1337,7 +1337,9 @@ $stepState.Effort = 'high'   # a pref pinned to the twin
 $stepState = Step-LaunchValue -State $stepState -Delta 1 -DefaultLabels $labelsHigh
 Assert-Equal 'xhigh' $stepState.Effort 'right from a pinned twin steps from the default slot'
 $stepState = Step-LaunchValue -State $stepState -Delta -1 -DefaultLabels $labelsHigh
-Assert-Equal 'default' $stepState.Effort 'and left again lands on the default cell, never on the folded twin'
+# 0.4.1: landing on the default cell stores its twin, so the choice is saved and launched as a flag.
+# 0.4.0 stored the literal 'default' here, which Save reads as "no choice" and so kept the old value.
+Assert-Equal 'high' $stepState.Effort 'and left again lands on the default cell, storing its folded twin'
 $frameOrder = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -DefaultLabels $labelsHigh
 $effortLine = $frameOrder | Where-Object { $_ -match 'effort' } | Select-Object -First 1
 Assert-Equal $true ($effortLine -match 'low .* medium .* \[high\] .* xhigh .* max') 'the effort row renders low medium [high] xhigh max'
@@ -1347,6 +1349,9 @@ Assert-Equal 0 @($frameOrder | Where-Object { $_ -match 'default \(' }).Count 'n
 $pinned = New-LaunchState; $pinned.Effort = 'high'
 $pinnedLine = (Get-LaunchFrame -State $pinned -Width 100 -Height 24 -DefaultLabels $labelsHigh) | Where-Object { $_ -match 'effort' } | Select-Object -First 1
 Assert-Equal $true ($pinnedLine -match '\[high\]') 'a pref pinned to the folded twin highlights the default cell'
+$pinnedDefault = New-LaunchState; $pinnedDefault.Row = [Array]::IndexOf($rowNames, 'Effort')
+$pinnedTwin = New-LaunchState; $pinnedTwin.Row = $pinnedDefault.Row; $pinnedTwin.Effort = 'high'
+Assert-Equal ((Get-LaunchFrame -State $pinnedDefault -Width 100 -Height 24 -DefaultLabels $labelsHigh) -join "`n") ((Get-LaunchFrame -State $pinnedTwin -Width 100 -Height 24 -DefaultLabels $labelsHigh) -join "`n") 'the stored twin draws the identical frame the default cell does'
 $plainFrame = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])'
 Assert-Equal $true ((($plainFrame | Where-Object { $_ -match 'effort' } | Select-Object -First 1) -match '\[default\]')) 'no table: the row still reads [default] as before'
 
@@ -2304,6 +2309,27 @@ $w = New-EventReader @((New-MouseEvent -Y $accountRowMap.Y -X $lowCell.Start -Le
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $cdraw -Wait $w -GetWindowTop { 0 } -Prefs $tabPrefs
 Assert-Equal 'low' $out.Account 'a click on a tab selects that account'
 Assert-Equal 'haiku' $out.Model 'and brings its remembered profile with it, exactly as arrowing there does'
+
+# The folded default cell (0.4.1). A click walks the same stepper as the arrows, so a click on the
+# default cell stores its twin too; the stash across a tab switch keeps it; untouched rows stay flagless.
+$foldUi = @{ Effort = 'high'; Permission = 'auto' }
+$foldStart = New-LaunchState; $foldStart.Effort = 'max'
+$fmap = $null
+$null = Get-LaunchFrame -State $foldStart -Width 100 -Height 30 -DefaultLabels $foldUi -RowMap ([ref]$fmap)
+$fdraw = { param($s) $fmap }.GetNewClosure()
+$foldEffortMap = @($fmap.Rows | Where-Object { $_.Name -eq 'Effort' })[0]
+$foldDefaultCell = @($foldEffortMap.Cells | Where-Object { $_.Value -eq 'default' })[0]
+Assert-True ($null -ne $foldDefaultCell) 'the folded effort row exposes the default cell in the high slot'
+$w = New-EventReader @((New-MouseEvent -Y $foldEffortMap.Y -X $foldDefaultCell.Start -Left), $enterKey)
+$out = Invoke-LaunchScreen -State $foldStart -ReadKey $w -Draw $fdraw -Wait $w -GetWindowTop { 0 } -DefaultLabelsByAccount @{ work = $foldUi }
+Assert-Equal 'high' $out.Effort 'a click on the folded default cell stores its twin'
+Assert-Equal '--effort high' ((Get-LaunchArgs -State $out) -join ' ') 'and the click launches it as an explicit flag'
+$foldKeys = @('DownArrow') * (Get-RowIndex -Name 'Effort') + @('LeftArrow', 'LeftArrow') + @('UpArrow') * (Get-RowIndex -Name 'Effort') + @('RightArrow', 'LeftArrow', 'Enter')
+$foldTabStart = New-LaunchState; $foldTabStart.Effort = 'max'
+$out = Invoke-LaunchScreen -State $foldTabStart -ReadKey (New-ScriptedKeyReader -Keys $foldKeys) -Draw {} -DefaultLabelsByAccount @{ work = $foldUi; personal = $foldUi }
+Assert-Equal 'high' $out.Effort 'arrowing onto the default cell, then to another tab and back, keeps the twin'
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * (Get-RowIndex -Name 'Permission') + @('Enter'))) -Draw {} -DefaultLabelsByAccount @{ work = $foldUi }
+Assert-Equal '' ((Get-LaunchArgs -State $out) -join ' ') 'an untouched default launches with no flags, fold or not'
 
 # Picker footer: every action reachable by click, and each producing the SAME result as its key.
 $pmap = $null
@@ -5836,7 +5862,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1929
+$script:Expected = 1935
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
