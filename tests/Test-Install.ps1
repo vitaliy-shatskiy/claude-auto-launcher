@@ -14,6 +14,11 @@ try {
     Assert 'PATH add keeps an unexpanded %VAR% entry intact' ((Add-PathEntry -Current '%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;X:\a' -Entry 'X:\b') -eq '%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;X:\a;X:\b')
     Assert 'requirements report names pwsh and claude' ((Get-InstallRequirements).Keys -contains 'pwsh' -and (Get-InstallRequirements).Keys -contains 'claude')
 } finally { Remove-Item $tmp -Recurse -Force }
-if ($script:Ran -ne 7) { Write-Host "COULD NOT RUN: expected 7 assertions, ran $($script:Ran)"; exit 2 }
+# The version constant is part of the release: a CHANGELOG release heading without it ships a launcher
+# that reports the previous version.
+$topRelease = @(Select-String -LiteralPath (Join-Path $PSScriptRoot '..\CHANGELOG.md') -Pattern '^## \[(\d+\.\d+\.\d+)\]' | Select-Object -First 1 | ForEach-Object { $_.Matches[0].Groups[1].Value })
+$reported = (& pwsh -NoProfile -File (Join-Path $PSScriptRoot '..\claude-auto.ps1') --launcher-version 2>&1) -join ' '
+Assert "--launcher-version reports the newest CHANGELOG release [$topRelease] (got: $reported)" ($topRelease.Count -eq 1 -and $reported -eq "claude-auto $($topRelease[0])")
+if ($script:Ran -ne 8) { Write-Host "COULD NOT RUN: expected 8 assertions, ran $($script:Ran)"; exit 2 }
 if ($script:Failed) { Write-Host "$($script:Failed) failed"; exit 1 }
 Write-Host "Test-Install green ($($script:Ran) assertions)"; exit 0
