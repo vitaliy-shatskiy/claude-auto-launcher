@@ -38,6 +38,7 @@ function Get-ProjectRegistry {
     # DERIVED data - slug, resolved path, activity - so a lost or corrupt write costs one recompute
     # and never correctness. Atomic temp+move, last writer wins: up to four launchers run at once and
     # a mutex here would buy nothing a rebuild does not already give.
+    [CmdletBinding()]
     param(
         # CLAUDE_AUTO_PROJECTS_ROOT overrides, same shape as Get-LaunchPrefsPath's CLAUDE_AUTO_PREFS
         # (Prefs.ps1): a test (or check-preview.ps1's fixture) points this at a throwaway tree so

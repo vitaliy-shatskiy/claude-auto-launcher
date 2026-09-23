@@ -1009,7 +1009,18 @@ foreach ($case in $hdCases.Keys) {
 Assert-True ($null -eq (Get-ContinueSessionHolder -SessionsDir $hdDir -ProjectsRoot $hdProj -ProjectSlug @('C--f-bg'))) 'a session only a background process holds is not the one continue attaches to - no warning'
 Remove-Item -LiteralPath $hdDir -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 195) { Write-Host "COULD NOT RUN: expected 195 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# A misspelled parameter is a binding error, never a run on defaults: without [CmdletBinding()] it
+# lands in $args and the call reads - and rewrites the cache of - the real projects root. The root
+# given here does not exist, so the pre-fix run returns early and touches nothing.
+$bindRoot = Join-Path $env:TEMP "claude-auto-bind-$PID-absent"
+foreach ($bindCmd in 'Get-ClaudeSessions', 'Get-ClaudeSessionFile') {
+    $bindErr = $false
+    try { $null = & $bindCmd -ProjectsRoot $bindRoot -NoSuchParameter 1 }
+    catch { $bindErr = $_.Exception -is [System.Management.Automation.ParameterBindingException] }
+    Assert-True $bindErr "$bindCmd rejects an unknown parameter instead of running on defaults"
+}
+
+if ($script:Ran -ne 197) { Write-Host "COULD NOT RUN: expected 197 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

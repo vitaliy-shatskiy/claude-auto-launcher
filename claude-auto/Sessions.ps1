@@ -575,6 +575,7 @@ function Get-ClaudeSessionFile {
     # and page 2 shifts the whole window down by one - the duplicate is caught by the picker's dedup,
     # but the GAP is not, and the session that fell through it is unreachable for the rest of the run
     # (adversarial review 2026-09-16, C4). Metadata only: no transcript is opened here.
+    [CmdletBinding()]
     param(
         [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
         # A LIST, because one real directory can own several slug folders and the picker is scoped to
@@ -606,6 +607,7 @@ function Get-ClaudeSessions {
     # whole cache FILE is overwritten on every call (see the Set-Content at the end) - a launcher
     # with sharing off and several accounts thrashed one shared cache file on every account switch
     # instead of keeping one per root.
+    [CmdletBinding()]
     param(
         [string]$ProjectsRoot = (Join-Path $HOME '.claude\projects'),
         [int]$Limit = 40,

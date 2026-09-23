@@ -351,7 +351,14 @@ $pvLeft = @(Get-ChildItem -LiteralPath $pvRun -File | Where-Object { $_.Name -li
 Assert-Equal 'claude-auto-projects-preview-222.json' ($pvLeft -join ',') 'a preview run removes its own projects cache, prunes the day-old one and keeps the fresh one'
 Remove-Item -LiteralPath $pvRun -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 57) { Write-Host "COULD NOT RUN: expected 57 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# A misspelled parameter is a binding error, never a run on defaults (the real projects root and
+# its cache). The root given here does not exist, so the pre-fix run returns early.
+$bindErr = $false
+try { $null = Get-ProjectRegistry -ProjectsRoot (Join-Path $env:TEMP "claude-auto-bind-$PID-absent") -NoSuchParameter 1 }
+catch { $bindErr = $_.Exception -is [System.Management.Automation.ParameterBindingException] }
+Assert-True $bindErr 'Get-ProjectRegistry rejects an unknown parameter instead of running on defaults'
+
+if ($script:Ran -ne 58) { Write-Host "COULD NOT RUN: expected 58 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

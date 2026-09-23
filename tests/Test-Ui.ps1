@@ -4239,8 +4239,8 @@ catch [System.ArgumentException] { $n2Arg = $true }
 catch { }
 Assert-True $n2Arg 'a MISWIRED fetcher (ArgumentException) propagates instead of reading as the end of the list'
 # A binding failure, raised without touching the filesystem: handing a [int] parameter a word.
-# NOT `Get-ClaudeSessions -NoSuchParameter` - that function has no [CmdletBinding()], so an unknown
-# parameter lands in $args and the call RUNS, against the real projects root and its shared cache.
+# NOT `Get-ClaudeSessions -NoSuchParameter`: that binding error depends on its [CmdletBinding()],
+# and without it the call RUNS against the real projects root and its shared cache.
 $n2Bind = $false
 try { $null = Expand-SessionPage -Sessions @($n2Row) -FetchMore { param($h, $s) & { param([int]$X) $X } -X 'not-an-int' } -Fetched 1 }
 catch { $n2Bind = ($_.Exception -is [System.Management.Automation.ParameterBindingException]) }
