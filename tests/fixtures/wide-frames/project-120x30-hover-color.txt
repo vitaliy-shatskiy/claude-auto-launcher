@@ -1,0 +1,13 @@
+╭─ project ─ 4 known ─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   current directory                                                                            [2mC:\Users\sample\here[0m │
+│                                                                                                                     │
+│[48;5;238m   alpha                                                                 [2mC:\Users\sample\Desktop\Projects\alpha[0m[48;5;238m[2m 4 min[0m[48;5;238m[0m│
+│ [93m❯[0m beta-service                                           [2mC:\Users\sample\Desktop\Projects\workspace\beta-service[0m[2m 8 h[0m│
+│   [33m⌂[0m gamma                                               [2mC:\Users\sample\Desktop\Projects\gamma.worktrees\feature[0m[2m 3 d[0m│
+│   delta                                                                                            [2mD:\src\delta[0m[2m 23 d[0m│
+│                                                                                                                     │
+│   [35m+[0m enter a path...                                                                                                 │
+│   action  ○ new ● [continue] [48;5;238m○ resume[0m ○ worktree                                                                    │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[2m  [0m[2mw/s[0m[2m move  ┊  [0m[2ma/d[0m[2m action  ┊  [0m[48;5;209m[38;5;232m enter [0m[1m run[0m[2m  ┊  [0m[48;5;209m[38;5;232m c [0m[1m continue[0m[2m  ┊  [0m[48;5;238m[38;5;250m r [0m[2m resume[0m[2m  ┊  [0m[48;5;238m[38;5;250m t [0m[2m worktree[0m[2m  ┊  [0m[48;5;238m[38;5;250m / [0m[2m filter[0m
+[2m  [0m[48;5;238m[38;5;250m esc [0m[2m back[0m

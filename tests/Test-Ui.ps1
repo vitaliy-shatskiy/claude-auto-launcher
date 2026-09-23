@@ -147,6 +147,81 @@ Assert-True ($pathRowA -ne $pathRowB) 'two sibling deep paths render DIFFERENT r
 Assert-Equal $plainRowA $plainRowB 'without -PathTail the same two paths are byte-identical - the right cut is what D4 replaces'
 Assert-True (-not $plainRowA.Contains('\alpha')) 'and a right cut drops the leaf entirely'
 
+# --- wide tier: every frame at >= TwoPaneWidth columns is byte-identical to v0.4.0 --------------
+# The narrow (phone) tier below 100 columns reworked the launch, project and picker frames; nothing
+# at or above the breakpoint may move. The goldens in fixtures\wide-frames\ were rendered by v0.4.0
+# from the fixture data below. Regenerate them ONLY for a deliberate wide-layout change: run this
+# file once with CLAUDE_AUTO_UPDATE_GOLDEN=1, then review the diff of that directory.
+# Invariant culture ('dd MMM', '{0:N0}') and a pinned ellipsis, so a golden holds on any machine.
+$goldenDir = Join-Path $PSScriptRoot 'fixtures\wide-frames'
+$goldenNow = [datetime]::new(2026, 9, 16, 12, 0, 0)
+$goldenLimits = @{
+    work     = [pscustomobject]@{ FiveHour = 41; SevenDay = 63; AgeText = '12 min ago'; Model = 15;    ModelLabel = 'FABLE' }
+    personal = [pscustomobject]@{ FiveHour = 17; SevenDay = 14; AgeText = '1 h ago';    Model = $null; ModelLabel = $null }
+    low      = [pscustomobject]@{ FiveHour = 43; SevenDay = 22; AgeText = 'just now';   Model = $null; ModelLabel = $null }
+}
+$goldenLongBucket = @{ work = [pscustomobject]@{ FiveHour = 88; SevenDay = 5; AgeText = '3 d ago'; Model = 61; ModelLabel = ('BUCKET-' * 9) } }
+$goldenLabels = @{ Model = 'Opus 5.5[1M]'; Effort = 'high'; Permission = 'auto'; Advisor = 'default' }
+$goldenVersion = @{ Installed = '2.1.226'; Newest = '2.1.230' }
+$goldenReal = New-LaunchState
+$goldenReal.Model = 'opus1m'; $goldenReal.Effort = 'xhigh'; $goldenReal.Advisor = 'fable'; $goldenReal.Permission = 'bypass'
+$goldenReal.Restored = @('Model', 'Effort', 'Advisor', 'Permission'); $goldenReal.RestoredAge = '2 min'
+$goldenHover = New-LaunchState
+$goldenHover.Row = 3; $goldenHover.Hover = 1; $goldenHover.HoverRow = 3; $goldenHover.HoverValue = 'max'
+$goldenProjects = @(
+    [pscustomobject]@{ Name = 'alpha'; Path = 'C:\Users\sample\Desktop\Projects\alpha'; Worktree = $false; LastActivity = $goldenNow.AddMinutes(-4) }
+    [pscustomobject]@{ Name = 'beta-service'; Path = 'C:\Users\sample\Desktop\Projects\workspace\beta-service'; Worktree = $false; LastActivity = $goldenNow.AddHours(-8) }
+    [pscustomobject]@{ Name = 'gamma'; Path = 'C:\Users\sample\Desktop\Projects\gamma.worktrees\feature'; Worktree = $true; LastActivity = $goldenNow.AddDays(-3) }
+    [pscustomobject]@{ Name = 'delta'; Path = 'D:\src\delta'; Worktree = $false; LastActivity = $goldenNow.AddDays(-23) }
+)
+$goldenSessions = @(1..5 | ForEach-Object {
+    [pscustomobject]@{ SessionId = "g$_"; Project = "project-$_"; Worktree = $(if ($_ -eq 3) { 'feature' } else { '' })
+        Title = "question $_"; LastUser = "snippet $_ about the thing that was asked"; LastAssistant = ('reply words ' * (4 * $_))
+        Modified = $goldenNow.AddMinutes(-7 * $_); PromptCount = 3 * $_; SizeBytes = 2048 * $_ }
+})
+$goldenCases = [ordered]@{
+    'launch-100x30'             = { Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 }
+    'launch-100x30-real'        = { Get-LaunchFrame -State $goldenReal -Width 100 -Height 30 -Limits $goldenLimits -Version $goldenVersion -DefaultLabels $goldenLabels }
+    'launch-100x30-real-color'  = { Get-LaunchFrame -State $goldenReal -Width 100 -Height 30 -Limits $goldenLimits -Version $goldenVersion -DefaultLabels $goldenLabels -Color }
+    'launch-120x30-real-ascii'  = { Get-LaunchFrame -State $goldenReal -Width 120 -Height 30 -Limits $goldenLimits -Version $goldenVersion -DefaultLabels $goldenLabels -Ascii }
+    'launch-120x30-hover-color' = { Get-LaunchFrame -State $goldenHover -Width 120 -Height 30 -Limits $goldenLimits -DefaultModelLabel 'default (Fable 5.1[1M])' -Color }
+    'launch-100x30-stacked'     = { Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $goldenLongBucket }
+    'project-100x30'            = { Get-ProjectFrame -Projects $goldenProjects -Index 1 -Cwd 'C:\Users\sample\here' -Width 100 -Height 30 -Now $goldenNow }
+    'project-120x30-hover-color' = { Get-ProjectFrame -Projects $goldenProjects -Index 2 -Cwd 'C:\Users\sample\here' -Width 120 -Height 30 -Now $goldenNow -Action 'continue' -HoverRow 1 -HoverValue 'resume' -Hover 0 -Color }
+    'picker-100x30'             = { Get-PickerFrame -Sessions $goldenSessions -Index 1 -Width 100 -Height 30 -Now $goldenNow }
+    'picker-100x24'             = { Get-PickerFrame -Sessions $goldenSessions -Index 0 -Width 100 -Height 24 -Now $goldenNow }
+    'picker-120x30-project-color' = { Get-PickerFrame -Sessions $goldenSessions -Index 2 -Scope 'project' -ProjectName 'alpha' -Width 120 -Height 30 -Now $goldenNow -HoverRow 1 -Hover 1 -Color }
+}
+$goldenCulture = [cultureinfo]::CurrentCulture
+$goldenEllipsis = $script:Ellipsis
+try {
+    [cultureinfo]::CurrentCulture = [cultureinfo]::InvariantCulture
+    $script:Ellipsis = [string][char]0x2026
+    foreach ($name in $goldenCases.Keys) {
+        $actual = (@(& $goldenCases[$name]) -join "`n")
+        $path = Join-Path $goldenDir "$name.txt"
+        if ($env:CLAUDE_AUTO_UPDATE_GOLDEN -eq '1') {
+            $null = New-Item -ItemType Directory -Force -Path $goldenDir
+            [IO.File]::WriteAllText($path, $actual, [Text.UTF8Encoding]::new($false))
+        }
+        # Split on \r?\n: a checkout with autocrlf hands the file back with CRLF, and no frame line
+        # carries a CR of its own (every builder strips C0).
+        $expected = if (Test-Path -LiteralPath $path) { ([IO.File]::ReadAllText($path) -split "\r?\n") -join "`n" } else { "<missing $path>" }
+        $why = ''
+        if (-not [string]::Equals($expected, $actual, [StringComparison]::Ordinal)) {
+            $e = $expected -split "`n"; $a = $actual -split "`n"
+            $at = 0; while ($at -lt [Math]::Min($e.Count, $a.Count) -and [string]::Equals($e[$at], $a[$at], [StringComparison]::Ordinal)) { $at++ }
+            $why = " - first difference at line $at of $($a.Count) (golden has $($e.Count))"
+        }
+        Assert-True ($why -eq '') "wide tier: $name is byte-identical to its v0.4.0 golden$why"
+    }
+} finally {
+    [cultureinfo]::CurrentCulture = $goldenCulture
+    $script:Ellipsis = $goldenEllipsis
+}
+# A regeneration run compared the goldens with themselves: it proves nothing and must never read green.
+if ($env:CLAUDE_AUTO_UPDATE_GOLDEN -eq '1') { Write-Host "COULD NOT RUN: goldens regenerated in $goldenDir - review that diff, then run again without CLAUDE_AUTO_UPDATE_GOLDEN"; exit 2 }
+
 # --- screen 1 -----------------------------------------------------------------------------
 
 # Enter alone must reproduce today's launcher exactly: work account, remote on, new session.
@@ -352,7 +427,7 @@ Assert-Equal 1 (@($nf | Where-Object { $_ -match "5h $barCells" }).Count) 'while
 # percentage either - so a mutation that skipped the drop step passed by falling into the collapse.
 $sep = " $($tabGlyphs.HintSep) "
 function New-ExpectedTabLine {
-    param([switch]$WithPercent, [hashtable]$Limits, [string]$Sep, $Glyphs)
+    param([switch]$WithPercent, [hashtable]$Limits, [string]$Sep, $Glyphs, [int]$LabelWidth = 12)
     $cells = @('work', 'personal', 'low') | ForEach-Object {
         $l = $Limits[$_]
         $t = if ($WithPercent -and $l -and $null -ne $l.FiveHour) { "$_ $($l.FiveHour)%" } else { "$_" }
@@ -360,36 +435,34 @@ function New-ExpectedTabLine {
     }
     # The cursor sits on row 0 (account) in a fresh state, so the prefix is the cursor glyph, not
     # three blanks - both are three columns wide, which is what keeps the cell spans stable.
-    return (" $($Glyphs.Cursor) " + 'account     ' + ($cells -join $Sep))
+    return (" $($Glyphs.Cursor) " + 'account'.PadRight($LabelWidth) + ($cells -join $Sep))
 }
 foreach ($w in @(50, 60, 78, 100, 120)) {
     # Task 7: drawing works off Width - 1 (Get-FrameWidth), never the raw terminal width.
     $inner = [Math]::Min(($w - 1), 100) - 4
-    $withPct   = New-ExpectedTabLine -WithPercent -Limits $tabLimits -Sep $sep -Glyphs $tabGlyphs
-    $namesOnly = New-ExpectedTabLine              -Limits $tabLimits -Sep $sep -Glyphs $tabGlyphs
+    # The label column: 12 cells in the wide tier, 13 in the narrow one ('permission*' plus two).
+    $tabLabelWidth = if ($w -ge $script:TwoPaneWidth) { 12 } else { 13 }
+    $withPct   = New-ExpectedTabLine -WithPercent -Limits $tabLimits -Sep $sep -Glyphs $tabGlyphs -LabelWidth $tabLabelWidth
+    $namesOnly = New-ExpectedTabLine              -Limits $tabLimits -Sep $sep -Glyphs $tabGlyphs -LabelWidth $tabLabelWidth
     # Percentages first, then names alone, then the collapsed form - each step taken only because
     # the one before it did not fit.
     $expected =
         if ($withPct.Length -le $inner) { $withPct }
         elseif ($namesOnly.Length -le $inner) { $namesOnly }
-        else { " $($tabGlyphs.Cursor) " + 'account     ' + "$($tabGlyphs.LAngle) work $($tabGlyphs.RAngle)" }
+        else { " $($tabGlyphs.Cursor) " + 'account'.PadRight($tabLabelWidth) + "$($tabGlyphs.LAngle) work $($tabGlyphs.RAngle)" }
     $f = @(Get-LaunchFrame -State (New-LaunchState) -Width $w -Height 30 -Limits $tabLimits)
     $line = @($f | Where-Object { $_ -match '\baccount\b' })[0]
     Assert-Equal $expected $line "width ${w}: the account row is exactly what fits ($($withPct.Length) with percentages, $($namesOnly.Length) without, $inner available)"
     Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "width ${w}: no line reaches the last console column with three tabs and three bars"
 }
 
-# Narrow: one bar per line, the age on the last of them - squeezing three onto one line would
-# truncate the numbers themselves.
+# Narrow tier: the three limits share ONE line - a thin bar for the five-hour window, the other two
+# as numbers - and the age that no longer fits at 50 columns is dropped whole, never cut.
 $narrow = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height 40 -Limits $tabLimits)
-$narrowBars = @($narrow | Where-Object { $_ -match "(5h|7d|fable)\s+$barCells" })
-Assert-Equal 3 $narrowBars.Count 'at 50 columns each bar gets its own line'
-Assert-Equal $true ($narrowBars[2] -match '3 min ago') 'the age sits on the last of them'
-Assert-Equal 0 (@($narrowBars | Where-Object { $_ -match "5h\s+$barCells.*7d\s+$barCells" }).Count) 'and no line carries two bars'
-# Stacked bars line up: the labels are padded to the widest ('fable'), so the three bar runs start
-# in one column instead of stepping right with the label's length (owner, 2026-09-04).
-$barStarts = @($narrowBars | ForEach-Object { [regex]::Match($_, $barCells).Index } | Select-Object -Unique)
-Assert-Equal 1 $barStarts.Count 'at 50 columns the three bars start in the same column'
+$narrowBars = @($narrow | Where-Object { $_ -match '^\s+(5h|7d|fable)\b' })
+Assert-Equal 1 $narrowBars.Count 'at 50 columns the three limits share one line'
+Assert-Equal ("     5h $(New-Bar -Percent 40 -Width 8 -Line) 40%  7d 48%  fable 15%") $narrowBars[0] 'a thin five-hour bar, then 7d and the model bucket as bare percentages'
+Assert-Equal 0 (@($narrow | Where-Object { $_ -match $barCells -or $_.Contains('3 min') }).Count) 'no shade-block bar anywhere, and no piece of the age that did not fit'
 
 # The tabs are click cells: each one carries its own account key, so a click walks the same stepper
 # the arrow keys do. Without this the strip would be a picture of a menu.
@@ -1128,7 +1201,8 @@ Assert-True (($clampedFrame -join "`n") -match 'FirstProj') 'and the clamped fra
 # 120x24, since both branches carry their own `Start = $vp.Start` assignment. Re-measured after fix
 # round 1 (the default scope's footer lost the always-dead tab hint, changing $bodyRows at 78x24)
 # and again after Task 9 fix round 1, MINOR 2 (the minimum dropped 21 -> 20 with the Action row
-# gone) - $script:MinHeight throughout, never a literal, so this re-measures itself.
+# gone) - $script:MinHeight throughout, never a literal, so this re-measures itself. Re-measured in
+# the narrow tier: under 30 rows the preview is two lines, so 78x24 shows four more rows.
 $scrollSessions = 1..30 | ForEach-Object {
     [pscustomobject]@{
         SessionId = 'scr{0:00}' -f $_; Project = "ScrollProject$_"; Worktree = $null
@@ -1139,8 +1213,8 @@ $scrollSessions = 1..30 | ForEach-Object {
 $mapWide78 = $null
 $fWide78 = @(Get-PickerFrame -Sessions $scrollSessions -Index 29 -Width 78 -Height 24 -Now $now -RowMap ([ref]$mapWide78))
 Assert-Equal 1 $mapWide78.FirstRowY 'measured at 78x24, index 29 of 30 (narrow branch): FirstRowY'
-Assert-Equal 14 $mapWide78.RowCount 'measured at 78x24, index 29 of 30 (narrow branch): RowCount'
-Assert-Equal 16 $mapWide78.Start 'measured at 78x24, index 29 of 30 (narrow branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
+Assert-Equal 18 $mapWide78.RowCount 'measured at 78x24, index 29 of 30 (narrow branch): RowCount'
+Assert-Equal 12 $mapWide78.Start 'measured at 78x24, index 29 of 30 (narrow branch): the scrolled Start is the actual first visible index, not the degenerate 0 a mutant would substitute'
 Assert-Equal $true ($fWide78.Count -le 24) 'the 78x24 scrolled frame still fits the terminal'
 
 $mapMin50 = $null
@@ -2558,8 +2632,8 @@ $narrowSessions = @(1..6 | ForEach-Object { [pscustomobject]@{ SessionId = "n$_"
 # renders at the minimum supported width, so a real $HOME would make the margin depend on how long
 # this machine's user name happens to be - unrelated to the code under test.
 $narrowInfo = [pscustomobject]@{ Matches = $false; NewestVersion = '2.1.240'; InstalledHash = ('a' * 64); NewestHash = ('b' * 64); VersionCount = 3; VersionsBytes = 900000000; BinPath = 'C:\Users\sample-user\.local\bin\claude.exe' }
-# With the model bucket: three bars is what the minimum height is measured against, so the block
-# that asserts the minimum has to render the case that produced it.
+# With the model bucket: the fullest limits record is what the minimum height is measured against,
+# so the block that asserts the minimum has to render the case that produced it.
 $narrowLimits = @{ work = [pscustomobject]@{ FiveHour = 41; SevenDay = 63; AgeText = '12 min ago'; Model = 15; ModelLabel = 'FABLE' } }
 $longStatus = (1..40 | ForEach-Object { "status line $_ with some words in it" }) -join "`n"
 
@@ -2568,9 +2642,8 @@ $longStatus = (1..40 | ForEach-Object { "status line $_ with some words in it" }
 # refuse (200), its lines are counted, and the constant must be that count plus the headroom row
 # Write-Frame needs. Written this way the number re-measures itself on every run - a literal would
 # go stale the first time a row or a bar is added, which is exactly how the old 16 survived being
-# one short. Measured 2026-09-04: 20 lines (3 box + blank + 8 rows + 3 bars + blank + separator +
-# restored + 2 wrapped footer lines) -> 21. RE-MEASURED 2026-09-15 (Task 9) when the Action row left
-# this screen: 19 lines (one fewer row) -> 20.
+# one short. Measured in the narrow tier: 15 lines (1 header + blank + 7 rows + 1 limits line +
+# blank + separator + restored + 2 wrapped footer lines) -> 16.
 #
 # The picker and project screens do NOT feed this measurement, and never have since (fix round 1,
 # Task 10 review, IMPORTANT 1): a version of this block briefly rendered them at Height 200 too and
@@ -2588,7 +2661,7 @@ $longStatus = (1..40 | ForEach-Object { "status line $_ with some words in it" }
 # before ever moving this constant.
 $worstCase = @(Get-LaunchFrame -State (New-LaunchState) -Width 50 -Height 200 -Limits $narrowLimits `
     -Restored @('Model') -RestoredAge '12 min' -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultAdvisorLabel 'default (fable)')
-Assert-Equal 19 $worstCase.Count 'the worst 50-column launch frame is 19 lines'
+Assert-Equal 15 $worstCase.Count 'the worst 50-column launch frame is 15 lines'
 Assert-Equal ($worstCase.Count + 1) $script:MinHeight 'MinHeight is that count plus the headroom row'
 
 # Picker: a 40-session fixture, far past what any viewport shows, must still FIT at MinHeight, and
@@ -2974,9 +3047,10 @@ $null = @(Get-ProjectFrame -Projects $scroll30 -Index 29 -Cwd 'C:\somewhere' -Wi
 Assert-Equal 1 $mapScroll.FirstRowY 'the scrolled row map still sits just under the box top border'
 # 16 and 16, not 19 and 13, since the action field joined the box (2026-09-16) and the two separators
 # joined it in Task 9: all three come out of the LIST's viewport, which is the whole point of putting
-# them inside the box - the frame still fits the same terminal, with fewer list rows on it.
-Assert-Equal 16 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
-Assert-Equal 16 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
+# them inside the box - the frame still fits the same terminal, with fewer list rows on it. 15 and
+# 17 since the narrow tier's detail line joined them.
+Assert-Equal 15 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
+Assert-Equal 17 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
 Assert-True ($f6Text -match 'continue') 'the footer advertises continue'
 # Plain (no -Color) hints are bracketed like every other screen's footer - '[t] worktree',
 # never ' t worktree' - see the picker's '[f] fork' etc. at 50 columns. The brief's own sample
@@ -3049,12 +3123,11 @@ $longNameProjs6 = @([pscustomobject]@{ Slug = 'N'; Path = 'C:\p'; Name = ('n' * 
 $lnFrame6 = @(Get-ProjectFrame -Projects $longNameProjs6 -Index 0 -Cwd 'C:\x' -Width 50 -Height 24)
 Assert-True ((($lnFrame6 -join "`n")).Contains('5 min')) 'a long project name is clamped so the age survives at 50 columns'
 
-# A1 (spec D4), at the FRAME: two projects under one deep root must not render the same path column
-# at 50 columns. Cut from the right - what New-ListRow did before -PathTail - both rows read
-# 'C:\Users\sample\Desktop\Projects...' and the column that is supposed to say WHICH project is a
-# picture of one. Both fixtures carry the SAME name on purpose, so the path column is the only
-# thing that can tell the two rows apart - a differing name would let this pass with both paths
-# still rendered identically.
+# A1 (spec D4), at the FRAME: two projects under one deep root must not render the same path at 50
+# columns. Cut from the right - what New-ListRow did before -PathTail - both read
+# 'C:\Users\sample\Desktop\Projects...' and the path that is supposed to say WHICH project is a
+# picture of one. Both fixtures carry the SAME name on purpose, so the path is the only thing that
+# can tell the two apart. The narrow tier draws it on the detail line of the highlighted row.
 $d4Now = Get-Date
 $d4Projs = @(
     [pscustomobject]@{ Slug = 'd4a'; Name = 'alpha'; Worktree = $null; LastActivity = $d4Now.AddMinutes(-5)
@@ -3062,12 +3135,13 @@ $d4Projs = @(
     [pscustomobject]@{ Slug = 'd4b'; Name = 'alpha'; Worktree = $null; LastActivity = $d4Now.AddMinutes(-5)
                        Path = 'C:\Users\sample\Desktop\Projects\workspace\services\beta' }
 )
-$d4Map = $null
-$d4Frame = @(Get-ProjectFrame -Projects $d4Projs -Index 0 -Cwd 'C:\x' -Width 50 -Height 20 -Now $d4Now -RowMap ([ref]$d4Map))
 # Rows 1 and 2 are the two projects - row 0 is the pinned current-directory row.
-$d4RowA = Remove-AnsiColor $d4Frame[$d4Map.RowYs[1]]
-$d4RowB = Remove-AnsiColor $d4Frame[$d4Map.RowYs[2]]
-Assert-True ($d4RowA -ne $d4RowB) 'two projects under the same deep root render DIFFERENT rows at 50 columns'
+$d4Map = $null
+$d4Frame = @(Get-ProjectFrame -Projects $d4Projs -Index 1 -Cwd 'C:\x' -Width 50 -Height 20 -Now $d4Now -RowMap ([ref]$d4Map))
+$d4RowA = Remove-AnsiColor $d4Frame[$d4Map.Action.Y - 1]
+$d4Frame = @(Get-ProjectFrame -Projects $d4Projs -Index 2 -Cwd 'C:\x' -Width 50 -Height 20 -Now $d4Now -RowMap ([ref]$d4Map))
+$d4RowB = Remove-AnsiColor $d4Frame[$d4Map.Action.Y - 1]
+Assert-True ($d4RowA -ne $d4RowB -and $d4RowA.Contains([string](Get-Ellipsis))) 'two projects under the same deep root get DIFFERENT middle-cut detail lines at 50 columns'
 Assert-True ($d4RowA.Contains('\alpha') -and $d4RowB.Contains('\beta')) 'because each path keeps its own leaf'
 Assert-True ($d4RowA.Contains('C:\') -and $d4RowB.Contains('C:\')) 'and both still start at the drive'
 
@@ -3788,16 +3862,19 @@ try {
     # The separators are LINES, not rows: a cursor stop on one, or one counted into RowCount, would
     # be a row the owner can select and nothing happens on.
     Assert-Equal $m9.RowYs.Count $m9.RowCount 'and the blank lines are not rows - RowCount still counts cursor rows only'
-    Assert-Equal $m9.RowYs[-1] ($m9.Action.Y - 1) 'the action row sits right under the free-path row when both gaps are drawn (the whole registry fits)'
+    Assert-Equal $m9.RowYs[-1] ($m9.Action.Y - 2) 'the action row sits under the free-path row and the narrow tier''s detail line when both gaps are drawn (the whole registry fits)'
+    Assert-True ($body9[$m9.Action.Y - 1].Contains('C:\Users\sample\here')) 'and that detail line names the highlighted row''s path'
     Assert-True ($body9[$m9.Action.Y].Contains('action')) 'and the line that Y names is the one the field was drawn on'
 
-    # The path column is DIM - painted from a zero-width marker the builder wrapped it in, so the
-    # layout still measures cells. $projs6's paths are short enough to survive the tail clamp whole,
-    # which is what lets this assert the WHOLE path is inside the dim span.
+    # The path is DIM - painted from a zero-width marker the builder wrapped it in, so the layout
+    # still measures cells. $projs6's paths are short enough to survive the clamp whole, which is
+    # what lets this assert the WHOLE path is inside the dim span. At 80 columns (narrow tier) it
+    # sits on the detail line above the action row; the wide tier's path column is pinned by the
+    # colour goldens near the top of this file.
     $m9c = $null
     $colored9 = @(Get-ProjectFrame -Projects $projs6 -Index 1 -Cwd 'C:\x' -Width 80 -Height 24 -Color -RowMap ([ref]$m9c))
-    Assert-True ($colored9[$m9c.RowYs[1]].Contains($script:C.Dim + $projs6[0].Path)) 'a project''s path is painted dim'
-    Assert-True (-not $colored9[$m9c.RowYs[1]].Contains([string]$script:DimOpen)) 'and no marker survives painting'
+    Assert-True ($colored9[$m9c.Action.Y - 1].Contains($script:C.Dim + $projs6[0].Path)) 'a project''s path is painted dim'
+    Assert-True (-not $colored9[$m9c.Action.Y - 1].Contains([string]$script:DimOpen)) 'and no marker survives painting'
     $m9p = $null
     $plain9 = @(Get-ProjectFrame -Projects $projs6 -Index 1 -Cwd 'C:\x' -Width 80 -Height 24 -RowMap ([ref]$m9p))
     Assert-Equal 0 @($plain9 | Where-Object { $_.Contains([string]$script:DimOpen) -or $_.Contains([string]$script:DimClose) }).Count 'nor the plain render - a check-preview reference captures plain text, markers and all if any leaked'
@@ -3834,6 +3911,11 @@ try {
     $w9 = New-EventReader @((New-MouseEvent -X 4 -Y $script:m9click.RowYs[2] -Left), $enterKey, $esc)
     $p9click = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w9 -Draw $click9Draw -Wait $w9 -GetWindowTop { 0 } -ReadPath { 'C:\this-click-must-never-reach-the-path-row-9f3a' }
     Assert-Equal $tmpBeta $p9click.Path 'a click on the row after a blank line picks THAT row - the gap is not hit-testable'
+    # The narrow tier's detail line is not a row either: a click on it selects nothing, and the Enter
+    # behind it still runs the highlighted row (the current directory).
+    $w9d = New-EventReader @((New-MouseEvent -X 4 -Y ($script:m9click.Action.Y - 1) -Left), $enterKey, $esc)
+    $p9d = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey $w9d -Draw $click9Draw -Wait $w9d -GetWindowTop { 0 } -ReadPath { 'C:\this-click-must-never-reach-the-path-row-9f3a' }
+    Assert-Equal $tmpCwd $p9d.Path 'a click on the detail line is inert - Enter still runs the highlighted row'
 
     # D7: the two separators come out of the LIST's own budget, never out of the frame's height. At
     # 50x20 a 40-project registry SCROLLS, so at most one gap is drawn at a time - the fit has to
@@ -3853,10 +3935,11 @@ try {
     Assert-Equal $tall9.Count $tall9m.Count 'the frame keeps ONE height while scrolling: mid-scroll matches the top of the list'
     Assert-Equal $tall9.Count $tall9b.Count 'and the bottom of the list matches it too'
     # The both-gaps case, which only a registry that fits whole can produce: counted, not bounded -
-    # every row, the two blank lines, the action row, two box borders and the footer.
+    # every row, the two blank lines, the narrow tier's detail line, the action row, two box borders
+    # and the footer.
     $m9s = $null
     $short9 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -RowMap ([ref]$m9s))
-    Assert-Equal (@($m9s.RowYs).Count + 2 + 1 + 2 + $m9s.FooterLines) $short9.Count 'pins the LINE ACCOUNTING when a registry that fits whole draws both gaps: every row, two blank lines, the action row, two borders and the footer'
+    Assert-Equal (@($m9s.RowYs).Count + 2 + 1 + 1 + 2 + $m9s.FooterLines) $short9.Count 'pins the LINE ACCOUNTING when a registry that fits whole draws both gaps: every row, two blank lines, the detail line, the action row, two borders and the footer'
 
     # R17: with nothing matching the filter the two pinned rows are neighbours, and only ONE
     # separator may fire between them - both rules firing puts two blank lines in the box.
@@ -5498,14 +5581,16 @@ try {
                                              Worktree = $null; LastActivity = $now.AddHours(-9) } } }
     )
     $projMissWrong = @()
-    foreach ($c in $projMissCases) {
+    # $missCase, never $c: this runs at script scope, where $c IS $script:C - the palette - and a loop
+    # variable of that name leaves every -Color frame after it painted with nothing.
+    foreach ($missCase in $projMissCases) {
         $script:FrameMemo = @{}
         $null = Get-ProjectFrame @projBase
         $projArgs = $projBase.Clone()
-        foreach ($k in $c.O.Keys) { $projArgs[$k] = $c.O[$k] }
+        foreach ($k in $missCase.O.Keys) { $projArgs[$k] = $missCase.O[$k] }
         $script:memoBoxCalls = 0
         $null = Get-ProjectFrame @projArgs
-        if ($script:memoBoxCalls -ne 1) { $projMissWrong += "$($c.N)=$script:memoBoxCalls" }
+        if ($script:memoBoxCalls -ne 1) { $projMissWrong += "$($missCase.N)=$script:memoBoxCalls" }
     }
     Assert-Equal '' ($projMissWrong -join ',') 'every non-hover input of the project screen misses the memo and rebuilds exactly once'
     Assert-Equal 12 $projMissCases.Count 'and all twelve of those inputs were actually exercised'
@@ -5551,6 +5636,182 @@ $memoHitPlain = @(Get-PickerFrame -Sessions $memoSessions -Index 1 -Width 120 -H
 Assert-Equal ($memoHitPlain[0..($memoHitMapPlain.FooterY - 1)] -join "`n") ($memoStripped[0..($memoHitMap.FooterY - 1)] -join "`n") 'stripping the colour off a memo-hit frame returns the plain frame, body line for body line'
 Assert-Equal "$($memoHitMapPlain.FirstRowY)|$($memoHitMapPlain.RowCount)|$($memoHitMapPlain.Start)|$(@($memoHitMapPlain.Footer).Count)" "$($memoHitMap.FirstRowY)|$($memoHitMap.RowCount)|$($memoHitMap.Start)|$(@($memoHitMap.Footer).Count)" 'a memo hit hands back the same row map a cold build did - the hit test cannot drift from the picture'
 
+# --- narrow (phone) tier: below TwoPaneWidth the three screens are laid out for a phone terminal ---
+# One header line, one limits line with a thin bar, one markerless option style, a two-space label
+# gap; project rows without the path column (the highlighted path gets a detail line); a two-line
+# picker preview under 30 rows. The wide tier is pinned byte-identical by the goldens near the top.
+Set-LaunchRoster -Accounts (Read-LauncherConfig).Accounts -Remote
+$ng = Get-Glyphs
+$ntLimits = @{
+    work     = [pscustomobject]@{ FiveHour = 93; SevenDay = 26; AgeText = '12 min ago'; Model = 49;    ModelLabel = 'FABLE' }
+    personal = [pscustomobject]@{ FiveHour = 17; SevenDay = 14; AgeText = '1 h ago';    Model = $null; ModelLabel = $null }
+}
+$ntLabels = @{ Model = 'Opus 5.5[1M]'; Effort = 'high'; Permission = 'auto'; Advisor = 'default' }
+$ntVersion = @{ Installed = '2.1.226'; Newest = '2.1.230' }
+$ntState = New-LaunchState
+$ntState.Model = 'opus1m'; $ntState.Effort = 'xhigh'; $ntState.Advisor = 'fable'; $ntState.Permission = 'bypass'
+$ntState.Restored = @('Model', 'Effort', 'Advisor', 'Permission'); $ntState.RestoredAge = '2 min'
+# The line a launch row is drawn on: three prefix cells (cursor or blank), then its label.
+function Get-NarrowRowLine { param([string[]]$Frame, [string]$Label) @($Frame | Where-Object { $_.Length -gt 3 -and $_.Substring(3) -match "^$([regex]::Escape($Label))[\*\s]" })[0] }
+$ntBar = "[$([regex]::Escape([string]$ng.BarLineFull))$([regex]::Escape([string]$ng.BarLineEmpty))]{8}"
+
+foreach ($w in @(50, 60, 80, 99)) {
+    $f = @(Get-LaunchFrame -State $ntState -Width $w -Height 26 -Limits $ntLimits -Version $ntVersion -DefaultLabels $ntLabels)
+    Assert-True ($f[0].Contains('claude-auto') -and $f[0].TrimEnd().EndsWith('2.1.230')) "narrow ${w}: the header is ONE line - brand left, version right"
+    Assert-Equal 0 @($f | Where-Object { $_.Contains([string]$ng.TL) -or $_.Contains([string]$ng.BL) }).Count "narrow ${w}: and no header box around it"
+    Assert-True ($f[1] -eq '' -and $f[2].Contains('account')) "narrow ${w}: one blank line, then the rows"
+    $lim = @($f | Where-Object { $_ -match '^\s+5h ' })
+    Assert-Equal 1 $lim.Count "narrow ${w}: the limits are one line"
+    Assert-True ($lim[0] -match "^     5h $ntBar 93%  7d 26%  fable 49%") "narrow ${w}: a thin bar for 5h only, then 7d and the model bucket as numbers"
+    Assert-Equal 0 @($f | Where-Object { $_ -match "[$($ng.BarFull)$($ng.BarEmpty)]" }).Count "narrow ${w}: no block-shade bar glyph anywhere"
+    Assert-Equal 0 @($f | Where-Object { $_.Contains([string]$ng.On) -or $_.Contains([string]$ng.Off) }).Count "narrow ${w}: no row carries a radio glyph - every option row is markerless"
+    foreach ($row in (Get-LaunchRows)) {
+        $gap = [regex]::Match((Get-NarrowRowLine -Frame $f -Label $row.Label).Substring(3), '^\S+( +)').Groups[1].Value.Length
+        Assert-True ($gap -ge 2) "narrow ${w}: the '$($row.Label)' label is followed by at least two spaces (got $gap)"
+    }
+}
+# The age closes the line where it fits and is dropped WHOLE where it does not; a token that does not
+# fit takes everything right of it along, and nothing is ever cut mid-token.
+$nf60 = @(Get-LaunchFrame -State $ntState -Width 60 -Height 26 -Limits $ntLimits -Version $ntVersion -DefaultLabels $ntLabels)
+$nf50 = @(Get-LaunchFrame -State $ntState -Width 50 -Height 26 -Limits $ntLimits -Version $ntVersion -DefaultLabels $ntLabels)
+Assert-True (@($nf60 | Where-Object { $_ -match '^\s+5h ' })[0].EndsWith('fable 49%   12 min ago')) 'narrow 60: the age fits and closes the limits line'
+Assert-True (@($nf50 | Where-Object { $_ -match '^\s+5h ' })[0].EndsWith('fable 49%')) 'narrow 50: the age does not fit and is dropped whole'
+$ntLongBucket = @{ work = [pscustomobject]@{ FiveHour = 88; SevenDay = 5; AgeText = '3 d ago'; Model = 61; ModelLabel = ('BUCKET-' * 9) } }
+$nfLong = @(Get-LaunchFrame -State (New-LaunchState) -Width 60 -Height 26 -Limits $ntLongBucket)
+Assert-True (@($nfLong | Where-Object { $_ -match '^\s+5h ' })[0] -match "^     5h $ntBar 88%  7d 5%$") 'narrow: a bucket too long to fit is dropped whole, and the age right of it with it'
+$nfAscii = @(Get-LaunchFrame -State $ntState -Width 60 -Height 26 -Limits $ntLimits -DefaultLabels $ntLabels -Ascii)
+Assert-True (@($nfAscii | Where-Object { $_ -match '^\s+5h ' })[0] -match '^     5h [=\-]{8} 93%') 'narrow ascii: the thin bar degrades to = and -'
+# Every row at 60 columns, as drawn: one markerless style, a 13-cell label column ('permission*' + 2).
+$ntExpected = [ordered]@{
+    account    = "[work 93%] $($ng.HintSep) personal 17% $($ng.HintSep) low"
+    remote     = "$($ng.LAngle) on $($ng.RAngle)"
+    model      = "$($ng.LAngle) Opus 5.5[1M] $($ng.RAngle)"
+    effort     = 'low medium high [xhigh] max ultracode'
+    advisor    = 'default [fable] opus off'
+    permission = 'plan auto acceptEdits [bypass]'
+    mode       = '[normal] safe'
+}
+foreach ($k in $ntExpected.Keys) {
+    $prefix = if ($k -eq 'account') { " $($ng.Cursor) " } else { '   ' }
+    $mark = if ($k -in @('model', 'effort', 'advisor', 'permission')) { '*' } else { '' }
+    Assert-Equal ($prefix + ($k + $mark).PadRight(13) + $ntExpected[$k]) (Get-NarrowRowLine -Frame $nf60 -Label $k) "narrow 60: the $k row reads '$($ntExpected[$k])'"
+}
+# The selected value keeps its highlight in the compact form - bold and tinted, as '● [x]' is - and
+# keeps it under the hover band too.
+$nf60c = @(Get-LaunchFrame -State $ntState -Width 60 -Height 26 -Limits $ntLimits -DefaultLabels $ntLabels -Color)
+$ntEffC = @($nf60c | Where-Object { $_.Contains('xhigh') })[0]
+Assert-True ($ntEffC.Contains($script:C.Bold + $script:C.Green + '[xhigh]' + $script:C.Reset)) 'narrow: the selected compact value is bold and tinted like the full form''s selected cell'
+Assert-Equal 1 ([regex]::Matches($ntEffC, [regex]::Escape($script:C.Bold)).Count) 'and it is the only emphasised value on its row'
+Assert-True (@($nf60c | Where-Object { $_.Contains($script:C.Bold + $script:C.Yellow + '[bypass]') -or $_.Contains($script:C.Bold + $script:C.Green + '[bypass]') }).Count -eq 1) 'every compact row highlights its own selected value (permission too)'
+$ntHovered = New-LaunchState
+$ntHovered.Effort = 'xhigh'; $ntHovered.Row = 3; $ntHovered.HoverRow = 3; $ntHovered.HoverValue = 'xhigh'
+$ntEffH = @(@(Get-LaunchFrame -State $ntHovered -Width 60 -Height 26 -DefaultLabels $ntLabels -Color) | Where-Object { $_.Contains('xhigh') })[0]
+Assert-True ($ntEffH.Contains($script:C.Bold + $script:C.Green + '[xhigh]') -and $ntEffH.Contains($script:C.ButtonBg)) 'and a hovered selected compact value keeps its highlight under the band'
+# The wide tier keeps the full radio form on every option row.
+$nfWide = @(Get-LaunchFrame -State $ntState -Width 100 -Height 30 -Limits $ntLimits -DefaultLabels $ntLabels)
+foreach ($row in @((Get-LaunchRows) | Where-Object { $_.Name -ne 'Account' })) {
+    Assert-True ((Get-NarrowRowLine -Frame $nfWide -Label $row.Label).Contains([string]$ng.On)) "wide 100: the $($row.Label) row keeps its radio glyphs"
+}
+
+# Hit maps in the narrow tier: every row points at its own line, every cell covers its own value as
+# drawn, and a click on a compact cell or a footer button does what the drawing says.
+$nmap60 = $null
+$nf60m = @(Get-LaunchFrame -State $ntState -Width 60 -Height 26 -Limits $ntLimits -DefaultLabels $ntLabels -RowMap ([ref]$nmap60))
+foreach ($rm in @($nmap60.Rows)) {
+    $row = (Get-LaunchRows)[$rm.Index]
+    $line = $nf60m[$rm.Y]
+    $cellsOk = @($rm.Cells | Where-Object {
+        $drawn = $line.Substring($_.Start, $_.End - $_.Start + 1)
+        $want = if ($row.Name -eq 'Account') { "$($_.Value)" } else { Get-RowOptionText -Row $row -Key $_.Value -DefaultLabels $ntLabels }
+        $bare = if ($drawn.StartsWith('[') -and $drawn.EndsWith(']')) { $drawn.Substring(1, $drawn.Length - 2) } else { $drawn }
+        -not ($bare -eq $want -or ($row.Name -eq 'Account' -and $bare.Split(' ')[0] -eq $want))
+    }).Count -eq 0
+    Assert-True ($line.Substring(3).StartsWith($row.Label) -and $cellsOk) "narrow 60 map: the $($row.Name) row points at its own line and each of its $(@($rm.Cells).Count) cells covers its own value"
+}
+Assert-Equal 'Account,Effort,Advisor,Permission,Mode' ((@($nmap60.Rows | Where-Object { @($_.Cells).Count -gt 0 }) | ForEach-Object { $_.Name }) -join ',') 'narrow 60 map: the collapsed rows (remote, model) offer no cells; every other row does'
+$ntEffortMap = @($nmap60.Rows | Where-Object { $_.Name -eq 'Effort' })[0]
+$ntMaxCell = @($ntEffortMap.Cells | Where-Object { $_.Value -eq 'max' })[0]
+$ntDraw = { param($s) $nmap60 }.GetNewClosure()
+$ntEnter = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::Enter, $false, $false, $false)
+$w = New-EventReader @((New-MouseEvent -Y $ntEffortMap.Y -X $ntMaxCell.End -Left), $ntEnter)
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ntDraw -Wait $w -GetWindowTop { 0 }
+Assert-Equal 'max' $out.Effort 'narrow 60: a click on the last column of a compact cell selects that value'
+$ntEscSpan = @($nmap60.Footer | Where-Object { $_.Key -eq 'Escape' })[0]
+Assert-True ($nf60m[$nmap60.FooterY + $ntEscSpan.Line].Substring($ntEscSpan.Start).StartsWith('[esc] quit')) 'narrow 60 map: the esc footer span points at the drawn [esc] quit button'
+$w = New-EventReader @((New-MouseEvent -Y ($nmap60.FooterY + $ntEscSpan.Line) -X $ntEscSpan.Start -Left), $ntEnter)
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ntDraw -Wait $w -GetWindowTop { 0 }
+Assert-Equal '' "$out" 'narrow 60: a click on that button quits'
+
+# Project screen: name left, age one space before the border, the highlighted path on a detail line
+# directly above the action row (middle-truncated, leaf kept).
+$npMap = $null
+$npf = @(Get-ProjectFrame -Projects $goldenProjects -Index 2 -Cwd 'C:\Users\sample\here' -Width 60 -Height 26 -Now $goldenNow -RowMap ([ref]$npMap))
+Assert-Equal 1 @($npf | Where-Object { $_.Contains('C:\Users\sample') }).Count 'narrow project: no path column - only the detail line names a path'
+$npRows = @(0..($npMap.RowCount - 1) | ForEach-Object { $npf[$npMap.RowYs[$_]] })
+foreach ($p in $goldenProjects) {
+    $pl = @($npRows | Where-Object { $_.Contains(" $($p.Name) ") })[0]
+    Assert-True ($pl.EndsWith(" $(Format-RelativeAge -From $p.LastActivity -Now $goldenNow) $($ng.V)")) "narrow project: the $($p.Name) row ends with its age and exactly one space before the border"
+}
+$npLong = @([pscustomobject]@{ Name = ('n' * 60); Path = 'C:\p'; Worktree = $false; LastActivity = $goldenNow.AddMinutes(-5) })
+$npLongMap = $null
+$npLongF = @(Get-ProjectFrame -Projects $npLong -Index 1 -Cwd 'C:\x' -Width 50 -Height 24 -Now $goldenNow -RowMap ([ref]$npLongMap))
+Assert-True ($npLongF[$npLongMap.RowYs[1]].EndsWith(" 5 min $($ng.V)") -and $npLongF[$npLongMap.RowYs[1]].Contains([string](Get-Ellipsis))) 'narrow project: a name too long for the row is clamped, and the age still keeps its space before the border'
+$npDetail = $npf[$npMap.Action.Y - 1]
+Assert-True ($npDetail.Contains('C:\Users') -and $npDetail.Contains([string](Get-Ellipsis)) -and $npDetail.TrimEnd([string]$ng.V).TrimEnd().EndsWith('\beta-service')) 'narrow project: the detail line above the action row middle-truncates the highlighted path and keeps its leaf'
+Assert-True ($npf[$npMap.Action.Y].Contains('action')) 'and the action row is the line right under it'
+$npMap1 = $null
+$npf1 = @(Get-ProjectFrame -Projects $goldenProjects -Index 1 -Cwd 'C:\Users\sample\here' -Width 60 -Height 26 -Now $goldenNow -RowMap ([ref]$npMap1))
+Assert-True ($npf1[$npMap1.Action.Y - 1].Contains('C:\Users\sample\Desktop\Projects\alpha')) 'narrow project: a path that fits is shown whole'
+$npMap0 = $null
+$npf0 = @(Get-ProjectFrame -Projects $goldenProjects -Index 0 -Cwd 'C:\Users\sample\here' -Width 60 -Height 26 -Now $goldenNow -RowMap ([ref]$npMap0))
+Assert-True (-not $npf0[$npMap0.RowYs[0]].Contains('C:\') -and $npf0[$npMap0.RowYs[0]].Contains('current directory')) 'narrow project: the current-directory row carries its name only'
+Assert-True ($npf0[$npMap0.Action.Y - 1].Contains('C:\Users\sample\here')) 'and the detail line names the directory while it is highlighted'
+$npMap5 = $null
+$npf5 = @(Get-ProjectFrame -Projects $goldenProjects -Index 5 -Cwd 'C:\Users\sample\here' -Width 60 -Height 26 -Now $goldenNow -RowMap ([ref]$npMap5))
+Assert-Equal '' ($npf5[$npMap5.Action.Y - 1].Trim([string]$ng.V).Trim()) 'narrow project: the free-path row has no path, and its detail line stays blank'
+Assert-Equal $npf1.Count $npf5.Count 'and the line stays RESERVED - the frame does not jump when the cursor reaches it'
+Assert-True ($npDetail.EndsWith("beta-service $($ng.V)")) 'and a truncated detail line keeps one space before the border, like the rows'
+# Hovered rows band the full inner width (the gutter goes INSIDE the band), so the memo's repaint of
+# a hover equals a cold build of the same frame.
+$script:FrameMemo = @{}
+$npCold = @(Get-ProjectFrame -Projects $goldenProjects -Index 2 -Cwd 'C:\Users\sample\here' -Width 60 -Height 26 -Now $goldenNow -HoverRow 3 -Color) -join "`n"
+$script:FrameMemo = @{}
+$null = Get-ProjectFrame -Projects $goldenProjects -Index 2 -Cwd 'C:\Users\sample\here' -Width 60 -Height 26 -Now $goldenNow -HoverRow -1 -Color
+$npMemo = @(Get-ProjectFrame -Projects $goldenProjects -Index 2 -Cwd 'C:\Users\sample\here' -Width 60 -Height 26 -Now $goldenNow -HoverRow 3 -Color) -join "`n"
+Assert-True ([string]::Equals($npCold, $npMemo, [StringComparison]::Ordinal)) 'narrow project: a memo-served hover is byte-identical to a cold build of it'
+$npRowsNamed = @(for ($k = 0; $k -lt $npMap.RowCount; $k++) { $npf[$npMap.RowYs[$k]] }) -join "`n"
+Assert-True ($npRowsNamed.Contains('current directory') -and $npRowsNamed.Contains('alpha') -and $npRowsNamed.Contains('delta') -and $npRowsNamed.Contains('enter a path')) 'narrow project map: every RowYs entry points at a drawn row'
+$npActOk = @($npMap.Action.Cells | Where-Object { -not $npf[$npMap.Action.Y].Substring($_.Start, $_.End - $_.Start + 1).TrimEnd(']').EndsWith($_.Value) }).Count -eq 0
+Assert-True ($npActOk -and @($npMap.Action.Cells).Count -eq 4) 'narrow project map: the four action cells cover their own values'
+
+# Session picker: under 30 rows the preview is the header plus the first line of text.
+$npkSessions = @(1..40 | ForEach-Object { [pscustomobject]@{ SessionId = "k$_"; Project = "project-$_"; Worktree = ''; Title = "q $_"; LastUser = ('word ' * 30); LastAssistant = ('reply ' * 30); Modified = $goldenNow.AddMinutes(-$_); PromptCount = $_; SizeBytes = 2048 } })
+foreach ($h in @(26, 29, 30, 50)) {
+    $pkMap = $null
+    $pk = @(Get-PickerFrame -Sessions $npkSessions -Index 1 -Width 60 -Height $h -Now $goldenNow -RowMap ([ref]$pkMap))
+    $bottom = [Array]::FindIndex([string[]]$pk, [Predicate[string]]{ param($l) $l.StartsWith([string]$ng.BL) })
+    $preview = @($pk[($pkMap.FirstRowY + $pkMap.RowCount)..($bottom - 1)])
+    if ($h -lt 30) {
+        Assert-Equal 2 $preview.Count "narrow picker 60x${h}: the preview is two lines"
+        Assert-True ($preview[0].Contains('msgs') -and ($preview[1].Contains("claude $($ng.RAngle)") -or $preview[1].Contains("you $($ng.RAngle)"))) "narrow picker 60x${h}: the header line, then the first line of text"
+        Assert-Equal ($h - 3 - $pkMap.FooterLines - 2) $pkMap.RowCount "narrow picker 60x${h}: the list takes every row the preview gave up"
+    } else {
+        Assert-Equal 6 $preview.Count "narrow picker 60x${h}: at 30 rows and up the preview keeps its six lines"
+        Assert-True ($preview[1].Contains(([string]$ng.H) * 10)) "narrow picker 60x${h}: rule line included"
+        Assert-True ($pk.Count -le ($h - 1)) "narrow picker 60x${h}: the frame leaves the headroom row"
+    }
+}
+
+# The terminal title: the launcher names itself while its screens run (a phone tab otherwise shows
+# the host's own process path). Written as OSC 0 on the way into the alternate buffer and never
+# restored - Claude Code sets its own title once it starts.
+$titleOut = [IO.StringWriter]::new()
+$titlePrev = [Console]::Out
+try { [Console]::SetOut($titleOut); Enter-AltBuffer; $titleEnter = $titleOut.ToString(); Exit-AltBuffer } finally { [Console]::SetOut($titlePrev) }
+$titleExit = $titleOut.ToString().Substring($titleEnter.Length)
+Assert-True ($titleEnter.Contains("$([char]27)]0;claude-auto$([char]7)")) 'entering the screens sets the terminal title to claude-auto (OSC 0)'
+Assert-True (-not $titleExit.Contains("$([char]27)]")) 'and leaving them writes no title back'
+
 # Get-DisplayWidth memoises the code points it had to look up. The lookup is a ~50-range scan, it
 # runs for every box glyph of every line, and the answers never change.
 $memoOrigCp = ${function:Get-CodePointWidth}
@@ -5575,7 +5836,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1798
+$script:Expected = 1929
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

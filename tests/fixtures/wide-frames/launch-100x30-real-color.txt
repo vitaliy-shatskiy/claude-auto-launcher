@@ -1,0 +1,16 @@
+╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [38;5;209m✻[0m claude-auto                                                              v2.1.226  ↑ 2.1.230  │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ [93m❯[0m [2maccount[0m     [1m[32m[work [32m41%[0m][0m ┊ personal [32m17%[0m ┊ low [32m43%[0m
+     5h ▓▓▓░░░░░  [32m41%[0m  7d ▓▓▓▓▓░░░  [33m63%[0m  fable ▓░░░░░░░  [32m15%[0m   [2m12 min ago[0m
+   [2mremote[0m      ● [1m[32m[on][0m ○ off ○ on+QR ○ stop server
+   [2mmodel[0m*      ○ Fable 5.1 ● [1m[32m[Opus 5.5[1M]][0m ○ Sonnet 5[1M] ○ Haiku 4.5
+   [2meffort[0m*     ○ low ○ medium ○ high ● [1m[32m[xhigh][0m ○ max ○ ultracode
+   [2madvisor[0m*    ○ default ● [1m[32m[fable][0m ○ opus ○ off
+   [2mpermission[0m* ○ plan ○ auto ○ acceptEdits ● [1m[32m[bypass][0m
+   [2mmode[0m        ● [1m[32m[normal][0m ○ safe
+
+  ───────────────────────────────────────────────────────────────────────────────────────────────
+  * restored ([2m2 min ago[0m), ctrl+r resets
+[2m  [0m[2mw/s[0m[2m row  ┊  [0m[2ma/d[0m[2m value  ┊  [0m[48;5;238m[38;5;250m enter [0m[2m next[0m[2m  ┊  [0m[48;5;238m[38;5;250m u [0m[2m maintenance[0m[2m  ┊  [0m[48;5;238m[38;5;250m esc [0m[2m quit[0m

@@ -1,0 +1,17 @@
+╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✻ claude-auto                                                                                   │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ❯ account     [work 88%] ┊ personal ┊ low
+     5h                                                              ▓▓▓▓▓▓▓░  88%
+     7d                                                              ░░░░░░░░   5%
+     bucket-bucket-bucket-bucket-bucket-bucket-bucket-bucket-bucket- ▓▓▓▓▓░░░  61%   3 d ago
+   remote      ● [on] ○ off ○ on+QR ○ stop server
+   model       ● [default] ○ Fable 5.1 ○ Opus 5.5[1M] ○ Sonnet 5[1M] ○ Haiku 4.5
+   effort      ● [default] ○ low ○ medium ○ high ○ xhigh ○ max ○ ultracode
+   advisor     ● [default] ○ fable ○ opus ○ off
+   permission  ● [default] ○ plan ○ auto ○ acceptEdits ○ bypass
+   mode        ● [normal] ○ safe
+
+  ───────────────────────────────────────────────────────────────────────────────────────────────
+  w/s row  ┊  a/d value  ┊  [enter] next  ┊  [u] maintenance  ┊  [esc] quit

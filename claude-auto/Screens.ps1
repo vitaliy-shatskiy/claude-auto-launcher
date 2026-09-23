@@ -196,11 +196,9 @@ function Set-LaunchRoster {
 # 50 columns since 2026-09-02: the owner launches over RDP from a phone, where 50x50 is what the
 # screen gives. Every frame must survive it - footers wrap (New-HintFooter -Width), option rows
 # collapse to the selected value, the maintenance verdicts fit 34 characters.
-# Height 20, RE-MEASURED 2026-09-15 when the Action row left the launch screen (Task 9: the project
-# screen decides new/continue/resume/worktree now) and the footer's 'enter' hint became 'next': at
-# 50 columns the worst launch frame is 19 lines - 3 box + 1 blank + 7 rows + 3 bars (five hour,
-# seven day, model bucket) + 1 blank + 1 separator + 1 restored + 2 wrapped footer lines - plus the
-# headroom row Write-Frame needs. It was 20+1 with the Action row still on this screen.
+# Height 16: at 50 columns the worst launch frame (narrow tier) is 15 lines - 1 header + 1 blank +
+# 7 rows + 1 limits line + 1 blank + 1 separator + 1 restored + 2 wrapped footer lines - plus the
+# headroom row Write-Frame needs.
 # Never guess this number: Test-Ui renders that exact LAUNCH frame at an unrefusable height, counts
 # it and asserts this constant is the count plus one, so it re-measures itself on every run.
 # The "7 rows" above assumes the Remote row is present (remote: true in the config): with
@@ -215,8 +213,10 @@ function Set-LaunchRoster {
 # neither can ever push this constant higher than the launch screen's own worst case. Re-measure the
 # LAUNCH screen, never the other two, before ever moving this constant again.
 $script:MinWidth = 50
-$script:MinHeight = 20
+$script:MinHeight = 16
 $script:TwoPaneWidth = 100
+# Below this height the single-column picker's preview shrinks to two lines (Get-PickerFrame).
+$script:ShortPickerHeight = 30
 
 function Get-FrameWidth {
     # The last console column is never written: a line that fills it exactly wraps on some
@@ -456,7 +456,11 @@ function Add-LaunchColor {
     # bracket-matching pass running after that point would be matching against colour codes
     # instead of label text - the exact way the '2m' leak in the comment above happens.
     $onGlyph = [regex]::Escape("$($Glyphs.On)")
-    $out = [regex]::Replace($out, "(?<=$onGlyph )\[((?:[^\[\]]|\[[^\[\]]*\])*)\]", {
+    # The COMPACT form (every option row in the narrow tier) has no On glyph to anchor on: its
+    # selected cell is the first bracket after the row label and bracket-free words, optionally
+    # opened by the hover band's marker. The account row is left to its own pass below.
+    $compact = "^.{3}(?!account)[a-z]+\*? +(?:[^\s\[\]]+ )*$([regex]::Escape([string]$script:HoverOpen))?"
+    $out = [regex]::Replace($out, "(?<=$onGlyph |$compact)\[((?:[^\[\]]|\[[^\[\]]*\])*)\]", {
         param($m)
         $value = $m.Groups[1].Value
         $tint =
@@ -859,6 +863,43 @@ function Complete-PickerFrame {
     return @($painted)
 }
 
+function Get-LimitItems {
+    # The active account's limit record as label/percent pairs in drawing order - five hour, seven
+    # day, model bucket - for both tiers' limit lines. The model bucket exists only when the record
+    # carries one: statusline.js writes none, and a 0% instead would claim a measurement nobody took.
+    param([Parameter(Mandatory)]$Limit)
+    $items = @()
+    if ($null -ne $Limit.FiveHour) { $items += [pscustomobject]@{ Label = '5h'; Percent = $Limit.FiveHour } }
+    if ($null -ne $Limit.SevenDay) { $items += [pscustomobject]@{ Label = '7d'; Percent = $Limit.SevenDay } }
+    if ($null -ne $Limit.Model) {
+        $label = if ($Limit.ModelLabel) { "$($Limit.ModelLabel)".ToLower() } else { 'model' }
+        $items += [pscustomobject]@{ Label = $label; Percent = $Limit.Model }
+    }
+    return $items
+}
+
+function New-LimitLine {
+    # The narrow tier's limits: ONE line - a thin bar for the five-hour window alone, the others as
+    # bare percentages, then the age of the record. Packed left to right in cells; the first piece
+    # that does not fit ends the line, so nothing is cut mid-token and nothing right of a dropped
+    # piece is drawn. $null when not even the first piece fits.
+    param([Parameter(Mandatory)]$Limit, [int]$Max, [switch]$Ascii)
+    $pieces = @(Get-LimitItems -Limit $Limit | ForEach-Object {
+        $bar = if ($_.Label -eq '5h') { ' ' + (New-Bar -Percent $_.Percent -Width 8 -Ascii:$Ascii -Line) } else { '' }
+        "$($_.Label)$bar $($_.Percent)%"
+    })
+    if ($Limit.AgeText) { $pieces += "$($Limit.AgeText)" }
+    $line = ''
+    for ($i = 0; $i -lt $pieces.Count; $i++) {
+        $sep = if ($i -eq 0) { '     ' } elseif ($Limit.AgeText -and $i -eq $pieces.Count - 1) { '   ' } else { '  ' }
+        $next = $line + $sep + $pieces[$i]
+        if ((Get-DisplayWidth -Text $next) -gt $Max) { break }
+        $line = $next
+    }
+    if (-not $line) { return $null }
+    return $line
+}
+
 function Get-LaunchFrame {
     param(
         [Parameter(Mandatory)]$State,
@@ -904,6 +945,10 @@ function Get-LaunchFrame {
     $inner = $boxWidth - 4
     # Layout breakpoint about the TERMINAL width, not the drawing budget - stays on $Width by design.
     $wide = $Width -ge $script:TwoPaneWidth
+    # Below it the NARROW (phone) tier: a one-line header, one limits line, every option row in the
+    # markerless compact form, and a label column two cells wider than the longest label with its
+    # restore mark. The wide tier keeps its 12-cell column and every byte it had.
+    $labelWidth = if ($wide) { 12 } else { (@($script:Rows | ForEach-Object { $_.Label.Length }) | Measure-Object -Maximum).Maximum + 3 }
 
     # Header: brand on the left, versions on the right, with the update marker only when they differ.
     $left = " $($g.Sparkle) claude-auto"
@@ -941,7 +986,10 @@ function Get-LaunchFrame {
         # A restored value the owner cannot see is one they cannot be surprised by only until it
         # costs them something. Mark it, and say how old it is.
         $mark = if ($row.Name -in $Restored) { '*' } else { ' ' }
-        $labelPart = ($row.Label + $mark).PadRight(12)
+        $labelPart = ($row.Label + $mark).PadRight($labelWidth)
+        # Narrow tier: a row with no readable compact form collapses below like an overflowing one,
+        # or it would bring the radio glyphs back into a frame drawn markerless.
+        $unreadable = $false
 
         if ($row.Name -eq 'Account') {
             # A TAB STRIP since 2026-09-04, not an option row: '[work 40%] : personal 17% : low 43%'.
@@ -989,16 +1037,17 @@ function Get-LaunchFrame {
             # information leaves the list untouched, so the row is byte-identical to before.
             $rowValues = @(Get-VisibleRowValues -Row $row -Available $available -DefaultLabels $DefaultLabels)
             $radio = New-RadioRow -Prefix $prefix -Label ($row.Label + $mark) -Values $rowValues -Current $shownCurrent -Glyphs $g -Labels $optionLabels -MaxWidth $inner `
-                                  -Hover $(if ($hoverRow -eq $i) { $hoverValue } else { '' })
+                                  -LabelWidth $labelWidth -Compact:(-not $wide) -Hover $(if ($hoverRow -eq $i) { $hoverValue } else { '' })
             $line = $radio.Text
             $cellHits = @($radio.Cells)
+            $unreadable = -not $wide -and -not $radio.Compact
         }
 
         # The model row's human-readable labels ('Sonnet 5[1M]', a resolved 'default (...)') can
         # outgrow the box even in New-RadioRow's compact form - and a mid-word cut there is exactly
         # what this exists to avoid. Collapse to the selected value alone, marked with ‹ › to say
         # more options exist off-screen (the footer already explains left/right cycles them).
-        if ((Get-DisplayWidth -Text $line) -gt $inner) {
+        if ($unreadable -or (Get-DisplayWidth -Text $line) -gt $inner) {
             $selKey = if (Test-HiddenRowValue -Row $row -Key $current -Available $available -DefaultLabels $DefaultLabels) { 'default' } else { $current }
             $selText = Get-RowOptionText -Row $row -Key $selKey -DefaultModelLabel $DefaultModelLabel -DefaultAdvisorLabel $DefaultAdvisorLabel -Available $available -DefaultLabels $DefaultLabels
             $line = $prefix + $labelPart + "$($g.LAngle) $selText $($g.RAngle)"
@@ -1013,32 +1062,29 @@ function Get-LaunchFrame {
         # carries every account's five-hour number, and a bar for one account beside the names of
         # three read as if it described all of them. The age travels with the last bar - these are
         # last-known numbers from whichever writer saw them last (Env.ps1), and a three-day-old
-        # percentage that reads as current is the failure this line exists to prevent.
-        if ($row.Name -eq 'Account' -and $limit) {
+        # percentage that reads as current is the failure this line exists to prevent. The narrow
+        # tier draws them as one line (New-LimitLine); the wide tier as bars.
+        if ($row.Name -eq 'Account' -and $limit -and -not $wide) {
+            $limitLine = New-LimitLine -Limit $limit -Max $inner -Ascii:$Ascii
+            if ($limitLine) { $body += $limitLine }
+        } elseif ($row.Name -eq 'Account' -and $limit) {
             # Label and bar kept apart: the one-line form joins them with a single space, the
             # stacked form pads every label to the widest so the three bar runs share a column.
-            $bars = @()
-            if ($null -ne $limit.FiveHour) { $bars += @{ Label = '5h'; Bar = "$(New-Bar -Percent $limit.FiveHour -Width 8 -Ascii:$Ascii) $('{0,3}' -f $limit.FiveHour)%" } }
-            if ($null -ne $limit.SevenDay) { $bars += @{ Label = '7d'; Bar = "$(New-Bar -Percent $limit.SevenDay -Width 8 -Ascii:$Ascii) $('{0,3}' -f $limit.SevenDay)%" } }
-            # The third bar exists only when the record carries a model bucket - statusline.js writes
-            # none, so a record of its origin has nothing to show here. Drawing a 0% bar instead
-            # would claim a measurement nobody took.
-            if ($null -ne $limit.Model) {
-                $modelLabel = if ($limit.ModelLabel) { "$($limit.ModelLabel)".ToLower() } else { 'model' }
-                $bars += @{ Label = $modelLabel; Bar = "$(New-Bar -Percent $limit.Model -Width 8 -Ascii:$Ascii) $('{0,3}' -f $limit.Model)%" }
-            }
+            $bars = @(Get-LimitItems -Limit $limit | ForEach-Object {
+                @{ Label = $_.Label; Bar = "$(New-Bar -Percent $_.Percent -Width 8 -Ascii:$Ascii) $('{0,3}' -f $_.Percent)%" }
+            })
             if ($bars.Count -gt 0) {
                 $oneLine = '     ' + (@($bars | ForEach-Object { "$($_.Label) $($_.Bar)" }) -join '  ') + '   ' + $limit.AgeText
                 # One line when it fits, one bar per line when it does not - measured, not assumed
                 # from the width breakpoint alone, because the model label's length is the record's
                 # and not ours.
-                if ($wide -and $oneLine.Length -le $inner) {
+                if ($oneLine.Length -le $inner) {
                     $body += $oneLine
                 } else {
-                    $labelWidth = (@($bars | ForEach-Object { $_.Label.Length }) | Measure-Object -Maximum).Maximum
+                    $barLabelWidth = (@($bars | ForEach-Object { $_.Label.Length }) | Measure-Object -Maximum).Maximum
                     for ($b = 0; $b -lt $bars.Count; $b++) {
                         $tail = if ($b -eq $bars.Count - 1) { '   ' + $limit.AgeText } else { '' }
-                        $body += '     ' + $bars[$b].Label.PadRight($labelWidth) + ' ' + $bars[$b].Bar + $tail
+                        $body += '     ' + $bars[$b].Label.PadRight($barLabelWidth) + ' ' + $bars[$b].Bar + $tail
                     }
                 }
             }
@@ -1046,13 +1092,15 @@ function Get-LaunchFrame {
     }
 
     $lines = @()
-    $boxLines = @(New-Box -Lines $header -Width $boxWidth -Ascii:$Ascii)
-    $lines += $boxLines
+    # The narrow tier draws the header as one line, brand and version in the columns the box would
+    # have put them in; the box costs a phone two rows it does not have.
+    $headLines = if ($wide) { @(New-Box -Lines $header -Width $boxWidth -Ascii:$Ascii) } else { @(' ' + $header[0]) }
+    $lines += $headLines
     $lines += ''
-    # Frame coordinates at last: the header box plus the blank line sit above the body, and the row
+    # Frame coordinates at last: the header plus the blank line sit above the body, and the row
     # positions were recorded relative to the body while it was being built.
     if ($RowMap) {
-        $offset = $boxLines.Count + 1
+        $offset = $headLines.Count + 1
         $RowMap.Value = [pscustomobject]@{
             Rows = @($rowHits | ForEach-Object {
                 [pscustomobject]@{ Index = $_.Index; Name = $_.Name; Y = $offset + $_.BodyY; Cells = $_.Cells }
@@ -1107,8 +1155,10 @@ function New-ListRow {
     # included - carries the band. Wrapped after the arithmetic like the dim markers below, and
     # before the mark rather than after it, which is what keeps the free-path row's bullet anchor
     # in Add-PickerColor able to find the mark column at all.
+    # -AgeGutter: one cell of right gutter even when there IS an age (the narrow project rows: the age
+    # ends one space before the border). Without it only the age-less row keeps that cell.
     param([string]$Mark = '   ', [string]$Label = '', [string]$Tail = '', [string]$Age = '', [int]$Width, [switch]$Ascii, [switch]$TrailingSpace,
-          [switch]$DimTail, [switch]$DimAge, [switch]$PathTail, [switch]$Hover)
+          [switch]$DimTail, [switch]$DimAge, [switch]$PathTail, [switch]$Hover, [switch]$AgeGutter)
     # The three text columns are stripped of C0 FIRST, before any width is measured: the markers this
     # row adds below are C0 themselves, so a data field carrying one would be read as a marker by the
     # painters and by the memo's repaint (Theme.ps1, $script:CtlStrip, carries the whole argument).
@@ -1127,9 +1177,11 @@ function New-ListRow {
     # width, same as the old inline code (`$inner - $mark.Length - $age.Length - 2`) - using
     # $ageCol's width instead double-counts the separator $ageCol already carries and clamps the
     # label one cell too early (an "…" that used to fit no longer does).
-    $label = Limit-Line -Text $Label -Max ([Math]::Max(1, $Width - $markW - $ageW - 2)) -Ascii:$Ascii
+    # $extra: the cell -AgeGutter reserves on top of that arithmetic, for the label and the tail alike.
+    $extra = if ($AgeGutter -and $Age) { 1 } else { 0 }
+    $label = Limit-Line -Text $Label -Max ([Math]::Max(1, $Width - $markW - $ageW - 2 - $extra)) -Ascii:$Ascii
     $labelW = Get-DisplayWidth -Text $label
-    $room = $Width - $markW - $labelW - $ageColW - 3
+    $room = $Width - $markW - $labelW - $ageColW - 3 - $extra
     $tail =
         if (-not $Tail -or $room -le 8) { '' }
         elseif ($PathTail) { Limit-Path -Text $Tail -Max $room -Ascii:$Ascii }
@@ -1137,8 +1189,8 @@ function New-ListRow {
     # Review fix round 1 (Important): with no -Age (the cwd row) the old inline code filled only
     # $inner - 1 cells, leaving one cell of right gutter before the box border. An age column
     # spends that cell on the separator already folded into $ageCol; without one, nothing does -
-    # so only the no-age case reserves it here.
-    $gutter = if ($Age) { 0 } else { 1 }
+    # so only the no-age case reserves it here, unless -AgeGutter asks for it with an age too.
+    $gutter = if ($Age -and -not $AgeGutter) { 0 } else { 1 }
     $pad = [Math]::Max(1, $Width - $markW - $labelW - (Get-DisplayWidth -Text $tail) - $ageColW - $gutter)
     # Marked AFTER the arithmetic above, never before it: every width here is measured on the plain
     # column, so a marked row and an unmarked one are laid out by the identical numbers.
@@ -1188,9 +1240,12 @@ function New-RadioRow {
     # band - a row is a menu of several options and banding all of it would say the whole row is
     # under the mouse. The spans below are measured on the marked pieces, which is safe because the
     # markers are zero cells (Theme.ps1): the click cells land exactly where they land unhovered.
+    # -Compact: the compact form whenever it is readable, whatever the width (the launch screen's
+    # narrow tier draws every row in one style). The result's Compact says which form came back, so
+    # a caller can collapse a row that has no readable compact form.
     param([string]$Prefix = '   ', [string]$Label, [Parameter(Mandatory)][string[]]$Values, [string]$Current,
           [Parameter(Mandatory)][hashtable]$Glyphs, [hashtable]$Labels = @{}, [int]$LabelWidth = 12, [int]$MaxWidth = 0,
-          [string]$Hover = '')
+          [string]$Hover = '', [switch]$Compact)
     # Stripped of C0 before it is padded, and the same for every value's drawn text below: this row
     # wraps a hovered value in the band's own C0 markers, so a label carrying one would be read as a
     # marker by the painters and by the memo's repaint (Theme.ps1, $script:CtlStrip).
@@ -1227,8 +1282,11 @@ function New-RadioRow {
         # piece it lands in, and re-finding it in the finished string would match the wrong one the
         # first time two values share a prefix.
         $cells = @(Measure-CellSpans -Pieces $pieces -Joiner ' ' -Values $Values -StartX (Get-DisplayWidth -Text ($Prefix + $labelPart)))
-        [pscustomobject]@{ Text = ($Prefix + $labelPart + ($pieces -join ' ')); Cells = $cells; Chars = @($chars) }
+        [pscustomobject]@{ Text = ($Prefix + $labelPart + ($pieces -join ' ')); Cells = $cells; Chars = @($chars); Compact = $Compact }
     }
+    # Readable in the compact form: no value's drawn label carries a space (ruling R4, below).
+    $readable = @($Values | Where-Object { (& $labelOf $_) -match ' ' }).Count -eq 0
+    if ($Compact -and $readable) { return (& $build $true) }
     $full = & $build $false
     if ($MaxWidth -le 0 -or (Get-DisplayWidth -Text $full.Text) -le $MaxWidth) { return $full }
     # The compact form separates values with ONE space and nothing else, so a value whose own label
@@ -1241,9 +1299,7 @@ function New-RadioRow {
     # Keys on a literal space in the RENDERED label (labelOf's output - a Labels[] override when one
     # exists, the raw value otherwise), never in $v itself: the value 'sonnet1m' has none, but the
     # label it draws as, 'Sonnet 5[1M]', does.
-    foreach ($v in $Values) {
-        if ((& $labelOf $v) -match ' ') { return $full }
-    }
+    if (-not $readable) { return $full }
     return (& $build $true)
 }
 
@@ -1338,6 +1394,11 @@ function Get-ProjectFrame {
         @{ Token = 'esc';   Label = 'back';     Clickable = $true; Key = 'Escape'; Char = '' }
     )
     $hov = Get-FooterHover -Footer $footer -Hover $Hover
+    # Layout breakpoint about the TERMINAL width, like the other screens. Below it the NARROW tier
+    # drops the path column - the name and the age get the row, and the highlighted row's path gets
+    # a detail line of its own above the action field.
+    $wide = $Width -ge $script:TwoPaneWidth
+    $detailRows = if ($wide) { 0 } else { 1 }
 
     # Box top + box bottom + headroom + the footer's own lines, exactly like Get-PickerFrame, MINUS
     # the action field's own row. The field is drawn inside the box under the list, so the row it
@@ -1347,8 +1408,8 @@ function Get-ProjectFrame {
     # MINUS the two separator lines as well (spec D6): the blank line under the cwd row and the one
     # above the free-path row are body lines the box has to hold, so they come out of the LIST's own
     # budget - never out of the frame's height, which must still fit $script:MinHeight with a
-    # registry of any size.
-    $bodyRows = [Math]::Max(3, $Height - 4 - 2 - @($footer.Lines).Count)
+    # registry of any size. The narrow tier's detail line comes out of the same budget.
+    $bodyRows = [Math]::Max(3, $Height - 4 - 2 - $detailRows - @($footer.Lines).Count)
     if ($Index -ge $rows.Count) { $Index = [Math]::Max(0, $rows.Count - 1) }
     $vp = Get-Viewport -Count $rows.Count -Index $Index -Visible $bodyRows
     $inner = $frameWidth - 2
@@ -1374,13 +1435,17 @@ function Get-ProjectFrame {
             $age = Format-RelativeAge -From $r.Item.LastActivity -Now $Now
             $name = $r.Item.Name
             if ($r.Item.Worktree) { $name = "$($g.Worktree) $name" }
-            $rowText = New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail -Hover:($i -eq $HoverRow)
+            $rowText =
+                if ($wide) { New-ListRow -Mark $mark -Label $name -Tail $r.Item.Path -Age $age -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail -Hover:($i -eq $HoverRow) }
+                else { New-ListRow -Mark $mark -Label $name -Age $age -Width $inner -Ascii:$Ascii -DimAge -AgeGutter -Hover:($i -eq $HoverRow) }
             $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $rowText -PaneWidth $inner) }
             $body.Add($rowText)
         } elseif ($r.Kind -eq 'cwd') {
             # The reader must see which directory the row means - rendered like a project row's
-            # name+path columns, minus the age no pinned row has a real LastActivity for.
-            $rowText = New-ListRow -Mark $mark -Label $r.Item.Name -Tail $r.Item.Path -Width $inner -Ascii:$Ascii -DimTail -PathTail -Hover:($i -eq $HoverRow)
+            # name+path columns, minus the age no pinned row has a real LastActivity for. The narrow
+            # tier names it on the detail line instead, like every other row's path.
+            $cwdTail = if ($wide) { $r.Item.Path } else { '' }
+            $rowText = New-ListRow -Mark $mark -Label $r.Item.Name -Tail $cwdTail -Width $inner -Ascii:$Ascii -DimTail -PathTail -Hover:($i -eq $HoverRow)
             $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $rowText -PaneWidth $inner) }
             $body.Add($rowText)
             # And the blank line UNDER it: the current directory is a group of its own, so the eye
@@ -1412,6 +1477,14 @@ function Get-ProjectFrame {
     # the list scrolls past a separator. Padding to a height that does not depend on $Index is what
     # keeps the frame still while the list moves inside it.
     while ($body.Count -lt ($vp.Visible + 2)) { $body.Add('') }
+
+    # The narrow tier's detail line: the highlighted row's full path, middle-cut to keep its leaf,
+    # dim like the path column it replaces, one cell short of the border like the rows. Drawn blank
+    # for the free-path row rather than left out, so the frame stays still while the cursor moves.
+    if (-not $wide) {
+        $detailPath = $script:CtlStrip.Replace("$($rows[$Index].Item.Path)", '')
+        $body.Add($(if ($detailPath) { '   ' + [string]$script:DimOpen + (Limit-Path -Text $detailPath -Max ($inner - 4) -Ascii:$Ascii) + [string]$script:DimClose } else { '' }))
+    }
 
     # The action field: one launch-screen-style RADIO row under the list, drawn by the same
     # New-RadioRow every launch row goes through, so the whole screen is driveable with the arrows
@@ -1826,8 +1899,9 @@ function Get-PickerFrame {
     if (-not $wide) {
         # 6 rows reserved for the preview, BEFORE the viewport is sized: one header (project,
         # worktree, message count, date - the columns the narrow list has no room for), one
-        # separator, two for the question, two for the answer.
-        $previewRows = 6
+        # separator, two for the question, two for the answer. Under $script:ShortPickerHeight rows
+        # (a phone with its keyboard open) only 2: the header and the first line of text, no rule.
+        $previewRows = if ($Height -lt $script:ShortPickerHeight) { 2 } else { 6 }
         $listRows = [Math]::Max(1, $bodyRows - $previewRows)
         $vp = Get-Viewport -Count $items.Count -Index $Index -Visible $listRows
 
@@ -1849,12 +1923,12 @@ function Get-PickerFrame {
         if ($s.Worktree) { $head += "  $($g.Worktree) " + $script:CtlStrip.Replace("$($s.Worktree)", '') }
         $head += "  $($g.H)  $(Format-PromptCount -Session $s) msgs  $($g.H)  $($s.Modified.ToString('dd MMM HH:mm'))"
         $body = @($list)
+        $previewStart = $body.Count
         $body += '  ' + (Limit-Line -Text $head -Max ($frameWidth - 4))
-        $body += '  ' + ([string]$g.H * ($frameWidth - 6))
-        # $previewRows (6, fixed above) minus the two header lines just added is what is left for
-        # the exchange itself - same total budget as before this change, now spent on as many
-        # attributed messages as fit rather than a hardcoded one question, one answer.
-        $exchangeBudget = [Math]::Max(1, $previewRows - 2)
+        if ($previewRows -gt 2) { $body += '  ' + ([string]$g.H * ($frameWidth - 6)) }
+        # $previewRows minus the header lines just added is what is left for the exchange itself,
+        # spent on as many attributed messages as fit rather than a hardcoded question and answer.
+        $exchangeBudget = [Math]::Max(1, $previewRows - ($body.Count - $previewStart))
         foreach ($l in (Get-ExchangeLines -Messages (Get-SessionExchange -Session $s) -Width ($frameWidth - 4) -MaxLines $exchangeBudget -Glyphs $g)) {
             $body += '  ' + $l
         }

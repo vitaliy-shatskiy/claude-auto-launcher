@@ -1,0 +1,13 @@
+╭─ project ─ 4 known ─────────────────────────────────────────────────────────────────────────────╮
+│   current directory                                                        C:\Users\sample\here │
+│                                                                                                 │
+│ ❯ alpha                                             C:\Users\sample\Desktop\Projects\alpha 4 min│
+│   beta-service                       C:\Users\sample\Desktop\Projects\workspace\beta-service 8 h│
+│   ⌂ gamma                           C:\Users\sample\Desktop\Projects\gamma.worktrees\feature 3 d│
+│   delta                                                                        D:\src\delta 23 d│
+│                                                                                                 │
+│   + enter a path...                                                                             │
+│   action  ● [new] ○ continue ○ resume ○ worktree                                                │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+  w/s move  ┊  a/d action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
+  [/] filter  ┊  [esc] back

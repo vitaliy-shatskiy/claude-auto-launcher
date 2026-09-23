@@ -1,0 +1,10 @@
+╭─ resume ─ 5 sessions ─ alpha ───────────────────────────────────────────────────────────────────────────────────────╮
+│   snippet 1 about the thing that was a… 7 min │ project-3  [33m⌂[0m feature                                                │
+│[48;5;238m   snippet 2 about the thing that was … 14 min [0m│ 16 Sep 11:39  ─  [2m9 msgs[0m  ─  6 KB                                    │
+│ [93m❯[0m [33m⌂[0m feature  snippet 3 about the thin… 21 min │ ─────────────────────────────────────────────────────────────────── │
+│   snippet 4 about the thing that was … 28 min │ [96myou › [0msnippet 3 about the thing that was asked                      │
+│   snippet 5 about the thing that was … 35 min │ [38;5;209mclaude › [0mreply words reply words reply words reply words reply      │
+│                                               │          words reply words reply words reply words reply words      │
+│                                               │          reply words reply words reply words                        │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[2m  [0m[2mw/s[0m[2m move  ┊  [0m[48;5;238m[38;5;250m / [0m[2m filter[0m[2m  ┊  [0m[48;5;209m[38;5;232m enter [0m[1m open[0m[2m  ┊  [0m[48;5;238m[38;5;250m f [0m[2m fork[0m[2m  ┊  [0m[48;5;238m[38;5;250m tab [0m[2m all projects[0m[2m  ┊  [0m[48;5;238m[38;5;250m esc [0m[2m back[0m

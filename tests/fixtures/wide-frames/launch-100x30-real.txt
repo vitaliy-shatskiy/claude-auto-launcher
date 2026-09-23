@@ -1,0 +1,16 @@
+╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✻ claude-auto                                                              v2.1.226  ↑ 2.1.230  │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ❯ account     [work 41%] ┊ personal 17% ┊ low 43%
+     5h ▓▓▓░░░░░  41%  7d ▓▓▓▓▓░░░  63%  fable ▓░░░░░░░  15%   12 min ago
+   remote      ● [on] ○ off ○ on+QR ○ stop server
+   model*      ○ Fable 5.1 ● [Opus 5.5[1M]] ○ Sonnet 5[1M] ○ Haiku 4.5
+   effort*     ○ low ○ medium ○ high ● [xhigh] ○ max ○ ultracode
+   advisor*    ○ default ● [fable] ○ opus ○ off
+   permission* ○ plan ○ auto ○ acceptEdits ● [bypass]
+   mode        ● [normal] ○ safe
+
+  ───────────────────────────────────────────────────────────────────────────────────────────────
+  * restored (2 min ago), ctrl+r resets
+  w/s row  ┊  a/d value  ┊  [enter] next  ┊  [u] maintenance  ┊  [esc] quit

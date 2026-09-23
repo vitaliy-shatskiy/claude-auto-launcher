@@ -34,7 +34,9 @@ function Test-AltBufferSupported {
 function Enter-AltBuffer {
     # ?1049h switches to the alternate screen buffer (what vim and htop use), ?25l hides the cursor.
     # The point is that the menu leaves NO trace in the scrollback once Claude starts.
-    [Console]::Write("$([char]27)[?1049h$([char]27)[?25l")
+    # OSC 0 names the terminal tab 'claude-auto' while the screens run; otherwise a web terminal's tab
+    # shows the host process path. Never restored: Claude Code sets its own title once it starts.
+    [Console]::Write("$([char]27)[?1049h$([char]27)[?25l$([char]27)]0;claude-auto$([char]7)")
     # Ctrl+C is read as a normal key instead of tearing the process down, so it can be treated as
     # Escape while the alternate buffer is up - the alternative is the process dying before the
     # `finally` that restores the buffer ever runs, leaving the terminal on the wrong screen with no

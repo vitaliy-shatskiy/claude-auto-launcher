@@ -68,6 +68,8 @@ Assert-Equal 0 (Count-Glyph (New-Bar -Percent 0 -Width 8) $fullGlyph) '0% is zer
 Assert-Equal 8 (Count-Glyph (New-Bar -Percent 0 -Width 8) $emptyGlyph) 'and eight empty glyphs'
 Assert-Equal 4 (Count-Glyph (New-Bar -Percent 50 -Width 8) $fullGlyph) '50% of an 8-wide bar is exactly four full glyphs'
 Assert-Equal 4 (Count-Glyph (New-Bar -Percent 50 -Width 8) $emptyGlyph) 'and exactly four empty ones - the split, not just the total'
+# -Line: the narrow tier's thin bar, the same split in the box-drawing pair.
+Assert-Equal (([string]$barGlyphs.BarLineFull * 6) + ([string]$barGlyphs.BarLineEmpty * 2)) (New-Bar -Percent 75 -Width 8 -Line) '-Line draws the same split with the thin full and empty glyphs'
 
 # Both glyph sets must exist and cover the same keys, or a screen renders $null somewhere.
 $uni = Get-Glyphs
@@ -157,7 +159,7 @@ Assert-Equal -1 ($unmarked.IndexOf([char]4)) 'while the [char] overload is ordin
 $themeSource = [IO.File]::ReadAllText("$PSScriptRoot\..\claude-auto\Theme.ps1")
 Assert-True ($themeSource -match '\$Line\.IndexOf\(\$script:HoverOpen\) -lt 0 -and \$Line\.IndexOf\(\$script:HoverClose\) -lt 0') 'and the band painter''s early-out tests the [char] markers themselves, never the [string] copies it paints with'
 
-if ($script:Ran -ne 82) { Write-Host "COULD NOT RUN: expected 82 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 87) { Write-Host "COULD NOT RUN: expected 87 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

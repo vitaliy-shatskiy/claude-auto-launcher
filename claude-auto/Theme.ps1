@@ -173,7 +173,7 @@ function Get-Glyphs {
     if ($Ascii) {
         return @{
             Cursor = '>'; On = '*'; Off = '-'; Bullet = '+'; Sparkle = '*'; Worktree = '@'
-            Up = '^'; BarFull = '#'; BarEmpty = '.'; Prompt = '>'
+            Up = '^'; BarFull = '#'; BarEmpty = '.'; BarLineFull = '='; BarLineEmpty = '-'; Prompt = '>'
             TL = '+'; TR = '+'; BL = '+'; BR = '+'; H = '-'; V = '|'
             LAngle = '<'; RAngle = '>'
             # Deliberately NOT V: a test counts three V glyphs on a line to prove the two-pane
@@ -185,6 +185,9 @@ function Get-Glyphs {
         Cursor = [char]0x276F; On = [char]0x25CF; Off = [char]0x25CB; Bullet = '+'
         Sparkle = [char]0x273B; Worktree = [char]0x2302; Up = [char]0x2191
         BarFull = [char]0x2593; BarEmpty = [char]0x2591; Prompt = [char]0x276F
+        # The narrow tier's thin bar: box-drawing weights render evenly in phone fonts, where the
+        # shade blocks above draw as textures of different heights.
+        BarLineFull = [char]0x2501; BarLineEmpty = [char]0x2500
         TL = [char]0x256D; TR = [char]0x256E; BL = [char]0x2570; BR = [char]0x256F
         H = [char]0x2500; V = [char]0x2502
         LAngle = [char]0x2039; RAngle = [char]0x203A
@@ -194,11 +197,13 @@ function Get-Glyphs {
 }
 
 function New-Bar {
-    # Plain text of exactly $Width characters. Colour is someone else's job.
-    param([int]$Percent, [int]$Width, [switch]$Ascii)
+    # Plain text of exactly $Width characters. Colour is someone else's job. -Line draws the thin
+    # box-drawing bar (BarLineFull/BarLineEmpty) instead of the shade blocks.
+    param([int]$Percent, [int]$Width, [switch]$Ascii, [switch]$Line)
     $g = Get-Glyphs -Ascii:$Ascii
     if ($Width -le 0) { return '' }
     $p = [Math]::Min(100, [Math]::Max(0, $Percent))
     $filled = [int][Math]::Round($Width * $p / 100.0)
-    return ([string]$g.BarFull * $filled) + ([string]$g.BarEmpty * ($Width - $filled))
+    $full, $empty = if ($Line) { $g.BarLineFull, $g.BarLineEmpty } else { $g.BarFull, $g.BarEmpty }
+    return ([string]$full * $filled) + ([string]$empty * ($Width - $filled))
 }
