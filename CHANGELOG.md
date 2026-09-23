@@ -4,6 +4,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-23
+
+### Added
+
+- A phone layout below 100 columns: a one-line header, the three limit bars as one line drawn with
+  box-drawing glyphs, every option row in its compact form, a detail line in place of the project
+  list's path column, a two-line picker preview under 30 rows, and `claude-auto` as the terminal
+  title. The minimum height drops from 20 to 16 rows. At 100 columns and wider every frame is
+  byte-identical to 0.4.0.
+
+### Fixed
+
+- A pick that landed on a **folded default cell was not remembered**. Since 0.4.0's resolved
+  defaults, the option that reads the same as the `settings.json` default (`Opus 5.5[1M]`, `high`,
+  `auto`) is drawn as the default cell, and stepping or clicking onto it stored `default` - which
+  the saved preferences read as "no choice", so the next launch came back with the previous value
+  (`fable` / `ultracode` / `bypass`). The cell now stores the option it stands for: remembered, and
+  passed as an explicit `--model` / `--effort` / `--permission-mode`. The screen is unchanged, an
+  untouched default still adds no flag, and ctrl+r is still not saved.
+- A tab whose remembered profile carries no timestamp of its own read `* restored ( ago)` after a
+  switch; it now takes the file's timestamp, as the opening tab already did.
+- Every preview run left `%TEMP%\claude-auto-projects-preview-<pid>.json` behind. A run now removes
+  its own, and a preview sweeps the ones older than a day that killed runs left.
+
 ## [0.4.0] — 2026-09-22
 
 ### Added
