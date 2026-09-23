@@ -20,6 +20,19 @@ function Get-ProjectPathFromTranscript {
     return $null
 }
 
+function Remove-StalePreviewProjectsCache {
+    # A preview run keeps its projects cache in a per-PID file under TEMP (claude-auto.ps1) and removes
+    # it in its finally; this sweeps what a killed run left behind. Older than a day only, so a preview
+    # running right now keeps its file, and only the exact name the launcher writes (a pid between
+    # the prefix and .json) - anything else matching the wildcard is not ours to delete.
+    param([string]$Directory = $env:TEMP, [datetime]$Now = (Get-Date), [TimeSpan]$MaxAge = [TimeSpan]::FromDays(1))
+    $cutoff = $Now - $MaxAge
+    foreach ($f in @(Get-ChildItem -LiteralPath $Directory -Filter 'claude-auto-projects-preview-*.json' -File -ErrorAction SilentlyContinue)) {
+        if ($f.Name -notmatch '^claude-auto-projects-preview-\d+\.json$' -or $f.LastWriteTime -ge $cutoff) { continue }
+        Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-ProjectRegistry {
     # Every project slug directory, resolved and ordered by last activity. The cache holds only
     # DERIVED data - slug, resolved path, activity - so a lost or corrupt write costs one recompute

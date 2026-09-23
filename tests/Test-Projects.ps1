@@ -299,7 +299,59 @@ Assert-Equal 0 @($nulOut | Where-Object { $_ -is [System.Management.Automation.E
 Assert-Equal 0 @($nulOut | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }).Count 'and the row it could never have entered is dropped'
 Remove-Item -LiteralPath $nulRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 50) { Write-Host "COULD NOT RUN: expected 50 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- the preview's per-PID projects cache is cleaned up (0.4.1) -------------------------------
+# Every preview run wrote %TEMP%\claude-auto-projects-preview-<pid>.json and nothing removed it.
+# Stale ones (older than a day) are pruned at preview start; nothing else in the directory is touched.
+$pvDir = Join-Path ([IO.Path]::GetTempPath()) ('claude-auto-pvprune-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $pvDir | Out-Null
+$pvNow = Get-Date
+$pvFiles = @{
+    stale = 'claude-auto-projects-preview-111.json'; fresh = 'claude-auto-projects-preview-222.json'
+    other = 'claude-auto-projects.json'; bak = 'claude-auto-projects-preview-333.json.bak'
+    named = 'claude-auto-projects-preview-notes.json'
+}
+foreach ($k in $pvFiles.Keys) {
+    $p = Join-Path $pvDir $pvFiles[$k]
+    Set-Content -LiteralPath $p -Value '{}' -Encoding utf8
+    if ($k -ne 'fresh') { (Get-Item -LiteralPath $p).LastWriteTime = $pvNow.AddDays(-2) }
+}
+Remove-StalePreviewProjectsCache -Directory $pvDir -Now $pvNow
+Assert-Equal $false (Test-Path -LiteralPath (Join-Path $pvDir $pvFiles.stale)) 'a preview projects cache older than a day is pruned'
+Assert-Equal $true (Test-Path -LiteralPath (Join-Path $pvDir $pvFiles.fresh)) 'a fresh one is kept - another preview may be running now'
+Assert-Equal $true (Test-Path -LiteralPath (Join-Path $pvDir $pvFiles.other)) 'an old file of another name is never touched'
+Assert-Equal $true (Test-Path -LiteralPath (Join-Path $pvDir $pvFiles.bak)) 'nor one that merely starts like the pattern'
+Assert-Equal $true (Test-Path -LiteralPath (Join-Path $pvDir $pvFiles.named)) 'nor one the wildcard matches with no pid in it - the launcher never writes that name'
+Remove-Item -LiteralPath $pvDir -Recurse -Force -ErrorAction SilentlyContinue
+
+# End to end: a preview run through the real launcher leaves no cache of its own behind. TEMP points
+# at a scratch directory for the child alone, holding one day-old cache (must go) and a fresh one of
+# another pid (must stay). Escape leaves through the `exit` inside the UI try, the harder path for a
+# finally. Compared as a set of names, never as paths, so an 8.3 TEMP spelling cannot matter.
+$pvRun = Join-Path ([IO.Path]::GetTempPath()) ('claude-auto-pvrun-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path (Join-Path $pvRun 'projects') | Out-Null
+$pvStale = Join-Path $pvRun 'claude-auto-projects-preview-111.json'
+Set-Content -LiteralPath $pvStale -Value '{}' -Encoding utf8
+(Get-Item -LiteralPath $pvStale).LastWriteTime = (Get-Date).AddDays(-2)
+Set-Content -LiteralPath (Join-Path $pvRun 'claude-auto-projects-preview-222.json') -Value '{}' -Encoding utf8
+$pvEnvNames = 'CLAUDE_AUTO_PREVIEW', 'CLAUDE_AUTO_PREVIEW_KEYS', 'CLAUDE_NO_ROAM', 'CLAUDE_AUTO_PREFS', 'CLAUDE_AUTO_CONFIG', 'CLAUDE_AUTO_PROJECTS_ROOT', 'TEMP', 'TMP'
+$pvSaved = @{}; foreach ($n in $pvEnvNames) { $pvSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
+try {
+    $env:CLAUDE_AUTO_PREVIEW = '1'; $env:CLAUDE_AUTO_PREVIEW_KEYS = 'Escape'; $env:CLAUDE_NO_ROAM = '1'
+    $env:CLAUDE_AUTO_PREFS = Join-Path $pvRun 'prefs.json'
+    $env:CLAUDE_AUTO_CONFIG = Join-Path $PSScriptRoot 'fixtures\config-preview.json'
+    $env:CLAUDE_AUTO_PROJECTS_ROOT = Join-Path $pvRun 'projects'
+    $env:TEMP = $pvRun; $env:TMP = $pvRun
+    $null = & pwsh -NoProfile -File (Join-Path $PSScriptRoot '..\claude-auto.ps1') 2>&1
+    $pvCode = $LASTEXITCODE
+} finally {
+    foreach ($n in $pvEnvNames) { [Environment]::SetEnvironmentVariable($n, $pvSaved[$n]) }
+}
+Assert-Equal 0 $pvCode 'the preview run left through Escape cleanly'
+$pvLeft = @(Get-ChildItem -LiteralPath $pvRun -File | Where-Object { $_.Name -like 'claude-auto-projects-preview-*' } | ForEach-Object Name | Sort-Object)
+Assert-Equal 'claude-auto-projects-preview-222.json' ($pvLeft -join ',') 'a preview run removes its own projects cache, prunes the day-old one and keeps the fresh one'
+Remove-Item -LiteralPath $pvRun -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 57) { Write-Host "COULD NOT RUN: expected 57 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

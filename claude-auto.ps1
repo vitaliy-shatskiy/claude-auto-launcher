@@ -240,6 +240,8 @@ if ($UseUi) {
 
     $alt = Test-AltBufferSupported
     $mouse = $null
+    # Preview's own projects cache (below), removed in the finally so no run leaves one behind.
+    $previewProjectsCache = $null
     try {
         if ($alt) { Enter-AltBuffer }
         # Arm the console for mouse input. $null when there is no console, when the interop will not
@@ -295,7 +297,13 @@ if ($UseUi) {
         # the real ~/.claude/projects directory itself is unavoidable (the screen has nothing to
         # list otherwise) and mirrors Get-RateLimitSummary's own unguarded read a few lines up.
         $LaunchCwd = $PWD.Path
-        $projectsCacheArgs = if ($Preview) { @{ CachePath = (Join-Path $env:TEMP "claude-auto-projects-preview-$PID.json") } } else { @{} }
+        # The per-PID file goes in this run's finally; what a killed run left is swept here.
+        $projectsCacheArgs = @{}
+        if ($Preview) {
+            Remove-StalePreviewProjectsCache -Directory $env:TEMP
+            $previewProjectsCache = Join-Path $env:TEMP "claude-auto-projects-preview-$PID.json"
+            $projectsCacheArgs = @{ CachePath = $previewProjectsCache }
+        }
         $projects = @(Get-ProjectRegistry @projectsCacheArgs)
         # cwd when it is a known project or holds a .git; otherwise what this account launched last;
         # otherwise nothing, and the project screen opens with the cursor at the top.
@@ -507,6 +515,7 @@ if ($UseUi) {
     } finally {
         $null = Close-ClaudeConsoleInput -State $mouse
         if ($alt) { Exit-AltBuffer }
+        if ($previewProjectsCache) { Remove-Item -LiteralPath $previewProjectsCache -Force -ErrorAction SilentlyContinue }
     }
 
     # Captured, not discarded: the prefs file is untracked by git and every launch overwrites it, so
