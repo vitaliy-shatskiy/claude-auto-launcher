@@ -626,7 +626,16 @@ try {
 } finally { $foldModelRow.Labels['sonnet1m'] = $foldSonnetLabel }
 foreach ($f in @($foldPath, $foldResetPath)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 
-if ($script:Ran -ne 144) { Write-Host "COULD NOT RUN: expected 144 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- a file profile with no SavedAtMs of its own takes the file's, on a tab switch too ---------
+# Merge-LaunchPrefs already falls back to the top-level SavedAtMs; Switch-LaunchAccount did not, so
+# arriving at such a tab drew "* restored ( ago)".
+$ageFile = @{ Version = 2; Account = 'work'; SavedAtMs = 1000; Profiles = @{ low = @{ Effort = 'max' } } }
+$ageTab = Switch-LaunchAccount -State (New-LaunchState) -To 'low' -Prefs $ageFile -Rows $rows -NowMs (1000 + 86400000)
+Assert-Equal 'max' $ageTab.Effort 'age fixture: the timestamp-less profile is restored'
+Assert-Equal '1 d' $ageTab.RestoredAge 'its age falls back to the file''s SavedAtMs, exactly as Merge-LaunchPrefs does'
+Assert-Equal 0 @(Get-LaunchFrame -State $ageTab -Width 100 -Height 30 | Where-Object { $_ -match '\( ago\)' }).Count 'the frame never reads "restored ( ago)"'
+
+if ($script:Ran -ne 147) { Write-Host "COULD NOT RUN: expected 147 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

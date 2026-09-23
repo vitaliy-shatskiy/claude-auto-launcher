@@ -361,6 +361,9 @@ function Switch-LaunchAccount {
         }
         $State.Restored = @($restored)
         $State.RestoredAge = Get-PrefsAgeText -SavedAtMs $entry['SavedAtMs'] -NowMs $NowMs
+        # The file's own timestamp when the profile has none, as Merge-LaunchPrefs does - without
+        # it the tab drew "* restored ( ago)".
+        if (-not $State.RestoredAge) { $State.RestoredAge = Get-PrefsAgeText -SavedAtMs $Prefs['SavedAtMs'] -NowMs $NowMs }
         $rp = "$($entry['Project'])"
         if ($rp -and (Test-Path -LiteralPath $rp -PathType Container)) {
             $State.Project = $rp
