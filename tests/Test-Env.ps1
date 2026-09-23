@@ -223,14 +223,14 @@ try {
     # bug the whole function returned at `Test-Path $_` before looking at anything.
     $brWork = Join-Path $brRoot 'work'; $brSec = Join-Path $brRoot 'personal'
     New-Item -ItemType Directory -Force $brWork, $brSec | Out-Null
-    Set-Content -LiteralPath "$brWork\settings.json" -Value '{"model":"work"}' -NoNewline
-    Set-Content -LiteralPath "$brSec\settings.json"  -Value '{"model":"drifted"}' -NoNewline
+    Set-Content -LiteralPath "$brWork\settings.json" -Value '{"theme":"work"}' -NoNewline
+    Set-Content -LiteralPath "$brSec\settings.json"  -Value '{"theme":"drifted"}' -NoNewline
     (Get-Item -LiteralPath "$brSec\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
     $WorkRoot = $brWork; $SecondaryRoots = @($brSec)
     Repair-SharedLink -Name 'settings.json' 6>$null
     $brIds = @(@($brWork, $brSec) | ForEach-Object { Get-SharedFileId -Path (Join-Path $_ 'settings.json') } | Sort-Object -Unique)
     Assert 'a drifted copy under a [bracket] root is re-linked' ($brIds.Count -eq 1 -and $brIds[0])
-    Assert 'the newest copy won there too'                      ((Get-Content -LiteralPath "$brSec\settings.json" -Raw) -eq '{"model":"work"}')
+    Assert 'the newest copy won there too'                      ((Get-Content -LiteralPath "$brSec\settings.json" -Raw) -eq '{"theme":"work"}')
     Assert 'and the .pre-relink backup was really written'      (Test-Path -LiteralPath "$brSec\settings.json.pre-relink")
 
     # The backup used to be ONE deep: `Copy-Item -Force` overwrote it, so a second drift threw away
@@ -239,13 +239,13 @@ try {
     # rotated aside under its own write time before the new one lands.
     $firstBackup = Get-Content -LiteralPath "$brSec\settings.json.pre-relink" -Raw
     Remove-Item -LiteralPath "$brSec\settings.json" -Force
-    Set-Content -LiteralPath "$brSec\settings.json" -Value '{"model":"drifted-again"}' -NoNewline
+    Set-Content -LiteralPath "$brSec\settings.json" -Value '{"theme":"drifted-again"}' -NoNewline
     (Get-Item -LiteralPath "$brSec\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-1)
     Repair-SharedLink -Name 'settings.json' 6>$null
     $brRot = @(Get-ChildItem -LiteralPath $brSec -File | Where-Object { $_.Name -like 'settings.json.pre-relink.*' })
     Assert 'a second drift rotates the previous backup aside'   ($brRot.Count -eq 1)
     Assert 'so the FIRST losing copy is still readable'         ($brRot.Count -eq 1 -and (Get-Content -LiteralPath $brRot[0].FullName -Raw) -eq $firstBackup)
-    Assert 'and .pre-relink now holds the second losing copy'   ((Get-Content -LiteralPath "$brSec\settings.json.pre-relink" -Raw) -eq '{"model":"drifted-again"}')
+    Assert 'and .pre-relink now holds the second losing copy'   ((Get-Content -LiteralPath "$brSec\settings.json.pre-relink" -Raw) -eq '{"theme":"drifted-again"}')
 
     # Repair-SharedJunction under a bracket root: a real directory where the junction belongs must
     # still be reported. Under the bug every Test-Path in it answered False, so it returned at the
@@ -274,13 +274,13 @@ try {
     # as it was, because a re-link with no backup has nothing to restore from.
     $fbWorkA = Join-Path $fbBase 'a\work'
     New-Item -ItemType Directory -Force $fbWorkA, $fbSecA | Out-Null
-    Set-Content -LiteralPath "$fbWorkA\settings.json" -Value '{"model":"work"}' -NoNewline
-    Set-Content -LiteralPath "$fbSecA\settings.json"  -Value '{"model":"drifted"}' -NoNewline
+    Set-Content -LiteralPath "$fbWorkA\settings.json" -Value '{"theme":"work"}' -NoNewline
+    Set-Content -LiteralPath "$fbSecA\settings.json"  -Value '{"theme":"drifted"}' -NoNewline
     (Get-Item -LiteralPath "$fbSecA\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
     & icacls.exe $fbSecA '/deny' "${who}:(WD)" *>$null
     $WorkRoot = $fbWorkA; $SecondaryRoots = @($fbSecA)
     $fbA = @(Repair-SharedLink -Name 'settings.json' 6>&1 | ForEach-Object { "$_" })
-    Assert 'a re-link that cannot be backed up leaves the file alone' ((Get-Content -LiteralPath "$fbSecA\settings.json" -Raw) -eq '{"model":"drifted"}')
+    Assert 'a re-link that cannot be backed up leaves the file alone' ((Get-Content -LiteralPath "$fbSecA\settings.json" -Raw) -eq '{"theme":"drifted"}')
     Assert 'and says so in one line'                                  (@($fbA | Where-Object { $_ -match 'could not back up' }).Count -eq 1)
 
     # (b) the DELETE is refused (no delete on the file, no delete-child on the directory - exactly
@@ -293,15 +293,15 @@ try {
     if ($script:IsElevatedSession) {
         $fbWorkB = Join-Path $fbBase 'b\work'
         New-Item -ItemType Directory -Force $fbWorkB, $fbSecB | Out-Null
-        Set-Content -LiteralPath "$fbWorkB\settings.json" -Value '{"model":"work"}' -NoNewline
-        Set-Content -LiteralPath "$fbSecB\settings.json"  -Value '{"model":"drifted"}' -NoNewline
+        Set-Content -LiteralPath "$fbWorkB\settings.json" -Value '{"theme":"work"}' -NoNewline
+        Set-Content -LiteralPath "$fbSecB\settings.json"  -Value '{"theme":"drifted"}' -NoNewline
         (Get-Item -LiteralPath "$fbSecB\settings.json").LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
         & icacls.exe "$fbSecB\settings.json" '/deny' "${who}:(DE)" *>$null
         & icacls.exe $fbSecB '/deny' "${who}:(DC)" *>$null
         $WorkRoot = $fbWorkB; $SecondaryRoots = @($fbSecB)
         $fbB = @(Repair-SharedLink -Name 'settings.json' 6>&1 | ForEach-Object { "$_" })
         Assert 'a re-link refused mid-way leaves the file in place' (Test-Path -LiteralPath "$fbSecB\settings.json")
-        Assert 'its content is untouched'                           ((Get-Content -LiteralPath "$fbSecB\settings.json" -Raw) -eq '{"model":"drifted"}')
+        Assert 'its content is untouched'                           ((Get-Content -LiteralPath "$fbSecB\settings.json" -Raw) -eq '{"theme":"drifted"}')
         Assert 'the failure costs one line'                         (@($fbB | Where-Object { $_ -match 'could not re-link' }).Count -eq 1)
         Assert 'and nothing claims it was re-linked'                (@($fbB | Where-Object { $_ -match 're-linked settings\.json' }).Count -eq 0)
     } else {
@@ -391,7 +391,7 @@ try {
     $SharedFiles = @('settings.json')
     New-Item -ItemType Directory -Force $WorkRoot | Out-Null
     $workFile = Join-Path $WorkRoot 'settings.json'
-    Set-Content -LiteralPath $workFile -Value '{"model":"work"}' -NoNewline
+    Set-Content -LiteralPath $workFile -Value '{"theme":"work"}' -NoNewline
 
     Assert 'the roster names four accounts'         (@($ProfileRoots.Keys).Count -eq 4)
     # $origWorkRoot, not $WorkRoot: this block has already swapped $WorkRoot for the fake root above.
@@ -443,24 +443,47 @@ try {
     # write. The old hardlink-count check saw 2 names and returned "shared".
     $sharedFile = Join-Path $rootB 'settings.json'
     Remove-Item -LiteralPath $sharedFile -Force
-    Set-Content -LiteralPath $sharedFile -Value '{"model":"drifted"}' -NoNewline
+    Set-Content -LiteralPath $sharedFile -Value '{"theme":"drifted"}' -NoNewline
     (Get-Item -LiteralPath $sharedFile).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
     Assert 'the pairwise count still reads as shared' (@(fsutil hardlink list $workFile 2>$null).Count -ge 2)
 
     Repair-SharedLink -Name 'settings.json' 6>$null
     $ids = @(@($WorkRoot, $rootA, $rootB) | ForEach-Object { Get-SharedFileId -Path (Join-Path $_ 'settings.json') } | Sort-Object -Unique)
     Assert 'a drifted third copy is re-linked'      ($ids.Count -eq 1)
-    Assert 'the newest copy won'                    ((Get-Content -LiteralPath $sharedFile -Raw) -eq '{"model":"work"}')
+    Assert 'the newest copy won'                    ((Get-Content -LiteralPath $sharedFile -Raw) -eq '{"theme":"work"}')
     Assert 'the discarded copy is kept beside it'   (Test-Path -LiteralPath "$sharedFile.pre-relink")
 
     # And the other direction: when the divergent copy is the NEWEST, its content wins everywhere -
     # one winner for the whole set, not a pairwise repair that undoes itself.
     Remove-Item -LiteralPath $sharedFile -Force
-    Set-Content -LiteralPath $sharedFile -Value '{"model":"newest"}' -NoNewline
+    Set-Content -LiteralPath $sharedFile -Value '{"theme":"newest"}' -NoNewline
     (Get-Item -LiteralPath $sharedFile).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(2)
     Repair-SharedLink -Name 'settings.json' 6>$null
     $ids = @(@($WorkRoot, $rootA, $rootB) | ForEach-Object { Get-SharedFileId -Path (Join-Path $_ 'settings.json') } | Sort-Object -Unique)
-    Assert 'the newest copy wins across every root' ($ids.Count -eq 1 -and (Get-Content -LiteralPath $workFile -Raw) -eq '{"model":"newest"}')
+    Assert 'the newest copy wins across every root' ($ids.Count -eq 1 -and (Get-Content -LiteralPath $workFile -Raw) -eq '{"theme":"newest"}')
+
+    # MODEL-ONLY: each account keeps its own /model choice, and `/model` rewrites that root's copy
+    # atomically. A copy differing only in model / effortLevel is allowed, never relinked - in either
+    # direction, or one account's model is pushed onto all.
+    $modelOnly = '{"effortLevel":"xhigh","model":"own","theme":"newest"}'
+    Remove-Item -LiteralPath $sharedFile -Force
+    Set-Content -LiteralPath $sharedFile -Value $modelOnly -NoNewline
+    (Get-Item -LiteralPath $sharedFile).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(3)
+    Repair-SharedLink -Name 'settings.json' 6>$null
+    $ids = @(@($WorkRoot, $rootA, $rootB) | ForEach-Object { Get-SharedFileId -Path (Join-Path $_ 'settings.json') } | Sort-Object -Unique)
+    Assert 'a NEWEST model-only copy is not pushed onto the others' ($ids.Count -eq 2 -and (Get-Content -LiteralPath $workFile -Raw) -eq '{"theme":"newest"}')
+    Assert 'and it keeps its own model'             ((Get-Content -LiteralPath $sharedFile -Raw) -eq $modelOnly)
+    (Get-Item -LiteralPath $sharedFile).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-3)
+    Repair-SharedLink -Name 'settings.json' 6>$null
+    Assert 'an OLDER model-only copy is not relinked' ((Get-Content -LiteralPath $sharedFile -Raw) -eq $modelOnly -and (Get-SharedFileId -Path $sharedFile) -ne (Get-SharedFileId -Path $workFile))
+
+    # Any other differing key is a real drift, model or not: relinked as before.
+    Remove-Item -LiteralPath $sharedFile -Force
+    Set-Content -LiteralPath $sharedFile -Value '{"model":"own","theme":"dark"}' -NoNewline
+    (Get-Item -LiteralPath $sharedFile).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-3)
+    Repair-SharedLink -Name 'settings.json' 6>$null
+    $ids = @(@($WorkRoot, $rootA, $rootB) | ForEach-Object { Get-SharedFileId -Path (Join-Path $_ 'settings.json') } | Sort-Object -Unique)
+    Assert 'a model change plus another key is still relinked' ($ids.Count -eq 1 -and (Get-Content -LiteralPath $sharedFile -Raw) -eq '{"theme":"newest"}')
 
     # A root that does not exist yet is not a broken share: it must be skipped silently, or every
     # launch would warn about an account nobody has created.
@@ -489,9 +512,9 @@ try {
     $SharedDirs = @('projects')
     New-Item -ItemType Directory -Force $WorkRoot, $rootP | Out-Null
     New-Item -ItemType Directory -Force (Join-Path $WorkRoot 'projects') | Out-Null
-    Set-Content -LiteralPath (Join-Path $WorkRoot 'settings.json') -Value '{"model":"work"}' -NoNewline
+    Set-Content -LiteralPath (Join-Path $WorkRoot 'settings.json') -Value '{"theme":"work"}' -NoNewline
     # A drifted, unlinked copy in the secondary root - a real repair would relink it to $WorkRoot's.
-    Set-Content -LiteralPath (Join-Path $rootP 'settings.json') -Value '{"model":"drifted"}' -NoNewline
+    Set-Content -LiteralPath (Join-Path $rootP 'settings.json') -Value '{"theme":"drifted"}' -NoNewline
     (Get-Item -LiteralPath (Join-Path $rootP 'settings.json')).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
 
     $beforeContent = Get-Content -LiteralPath (Join-Path $rootP 'settings.json') -Raw
@@ -509,7 +532,7 @@ try {
     $script:PhysicalPathMemo = @{ 'sentinel' = 'stale' }
 Repair-SharedProfiles 6>$null
 Assert 'Repair-SharedProfiles forgets the resolved-path memo before it re-points any junction' (-not $script:PhysicalPathMemo.ContainsKey('sentinel'))
-    Assert 'not preview: the drifted copy is relinked to the newest'     ((Get-Content -LiteralPath (Join-Path $rootP 'settings.json') -Raw) -eq '{"model":"work"}')
+    Assert 'not preview: the drifted copy is relinked to the newest'     ((Get-Content -LiteralPath (Join-Path $rootP 'settings.json') -Raw) -eq '{"theme":"work"}')
     Assert 'not preview: the missing junction is created'                (Test-Path -LiteralPath (Join-Path $rootP 'projects'))
 } finally {
     $WorkRoot = $origWorkRoot2; $SecondaryRoots = $origSecondary2; $SharedFiles = $origSharedFiles2; $SharedDirs = $origSharedDirs2
@@ -855,7 +878,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 177 } else { 173 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 181 } else { 177 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

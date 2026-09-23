@@ -23,6 +23,9 @@ foreach ($a in $Accounts) { $ProfileRoots[$a.Key] = $a.Root; $ProfileLabels[$a.K
 # when CLAUDE_CONFIG_DIR points elsewhere, so a personal copy made every personal
 # session load the same ~4.6k tokens twice (found 2026-07-31). Single copy in ~/.claude.
 $SharedFiles = @('settings.json', 'statusline.js')
+# Keys each account may hold on its own: `/model` rewrites one root's settings.json atomically, and a
+# copy differing ONLY in these is allowed - Repair-SharedLink leaves it a separate file.
+$SharedVolatileKeys = @{ 'settings.json' = @('model', 'effortLevel') }
 $SharedDirs = @('projects', 'plugins', 'hooks', 'agents', 'skills', 'output-styles', 'rules', 'sessions', 'file-history', 'session-env', 'tasks', 'shell-snapshots')
 
 # One JSONL file per day under ~/.claude/launcher-logs. Deliberately NOT under either profile's
@@ -381,6 +384,40 @@ function Get-SharedFileId {
     return $m.Value
 }
 
+function ConvertTo-SortedJson($Node) {
+    # Key order must not decide equality: keys sorted at every level, array order kept.
+    if ($null -eq $Node) { return 'null' }
+    if ($Node -is [System.Management.Automation.PSCustomObject]) {
+        $parts = foreach ($p in ($Node.PSObject.Properties | Sort-Object Name)) {
+            '{0}:{1}' -f (ConvertTo-Json $p.Name -Compress), (ConvertTo-SortedJson $p.Value)
+        }
+        return '{' + (@($parts) -join ',') + '}'
+    }
+    if ($Node -is [System.Collections.IEnumerable] -and $Node -isnot [string]) {
+        return '[' + (@(foreach ($i in $Node) { ConvertTo-SortedJson $i }) -join ',') + ']'
+    }
+    return (ConvertTo-Json $Node -Compress)
+}
+
+function Test-VolatileOnlyDifference {
+    # True when two copies of $Name differ in at least one volatile key and in nothing else.
+    # Unparseable content, or any other difference, is not volatile-only.
+    param([string]$Name, [string]$PathA, [string]$PathB)
+    $keys = @($SharedVolatileKeys[$Name])
+    if ($keys.Count -eq 0 -or [IO.Path]::GetExtension($Name) -ne '.json') { return $false }
+    try {
+        $a = Get-Content -LiteralPath $PathA -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $b = Get-Content -LiteralPath $PathB -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch { return $false }
+    if ($a -isnot [System.Management.Automation.PSCustomObject] -or $b -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+    $differs = $false
+    foreach ($k in $keys) {
+        if ((ConvertTo-SortedJson $a.$k) -ne (ConvertTo-SortedJson $b.$k)) { $differs = $true }
+        $a.PSObject.Properties.Remove($k); $b.PSObject.Properties.Remove($k)
+    }
+    return ($differs -and (ConvertTo-SortedJson $a) -eq (ConvertTo-SortedJson $b))
+}
+
 function Repair-SharedLink {
     # Same file in every profile, or the profiles have started to drift silently; re-link the
     # divergent copies from whichever one is NEWEST.
@@ -413,6 +450,9 @@ function Repair-SharedLink {
     $relinked = @()
     foreach ($dst in $paths) {
         if ($ids[$dst] -eq $srcId) { continue }
+        # An account's own model choice is allowed: relinking would push the newest copy's model
+        # onto it (or, when it is the newest, its model onto every other account).
+        if (Test-VolatileOnlyDifference -Name $Name -PathA $src -PathB $dst) { continue }
         # Delete-then-link with no guard left the reader's settings.json GONE whenever the link
         # failed - a permission, an antivirus lock - with only a .pre-relink beside it and nothing
         # said. The backup is taken first and put back if the link does not land.
