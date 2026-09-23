@@ -17,9 +17,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Fixed
 
-- An account's `settings.json` that differs from the newest copy only in `model` / `effortLevel`
-  is no longer relinked: each account keeps its own `/model` choice. Any other difference is still
-  relinked.
+- An account's `settings.json` that differs from the newest copy only in `model` / `effortLevel` /
+  `advisorModel` is no longer relinked: each account keeps its own `/model` and advisor choice. Any
+  other difference is still relinked.
 - The session and project readers (`Get-ClaudeSessions`, `Get-ClaudeSessionFile`,
   `Get-ProjectRegistry`) reject a misspelled parameter instead of running against the real
   projects root and rewriting its cache.

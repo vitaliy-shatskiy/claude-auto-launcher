@@ -25,7 +25,7 @@ foreach ($a in $Accounts) { $ProfileRoots[$a.Key] = $a.Root; $ProfileLabels[$a.K
 $SharedFiles = @('settings.json', 'statusline.js')
 # Keys each account may hold on its own: `/model` rewrites one root's settings.json atomically, and a
 # copy differing ONLY in these is allowed - Repair-SharedLink leaves it a separate file.
-$SharedVolatileKeys = @{ 'settings.json' = @('model', 'effortLevel') }
+$SharedVolatileKeys = @{ 'settings.json' = @('model', 'effortLevel', 'advisorModel') }
 $SharedDirs = @('projects', 'plugins', 'hooks', 'agents', 'skills', 'output-styles', 'rules', 'sessions', 'file-history', 'session-env', 'tasks', 'shell-snapshots')
 
 # One JSONL file per day under ~/.claude/launcher-logs. Deliberately NOT under either profile's

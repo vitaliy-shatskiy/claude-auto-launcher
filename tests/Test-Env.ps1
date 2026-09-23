@@ -476,6 +476,13 @@ try {
     (Get-Item -LiteralPath $sharedFile).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-3)
     Repair-SharedLink -Name 'settings.json' 6>$null
     Assert 'an OLDER model-only copy is not relinked' ((Get-Content -LiteralPath $sharedFile -Raw) -eq $modelOnly -and (Get-SharedFileId -Path $sharedFile) -ne (Get-SharedFileId -Path $workFile))
+    # advisorModel is per-account too (shared\profile-volatile-keys.json): an advisor-only copy stays.
+    $advisorOnly = '{"advisorModel":"own","theme":"newest"}'
+    Remove-Item -LiteralPath $sharedFile -Force
+    Set-Content -LiteralPath $sharedFile -Value $advisorOnly -NoNewline
+    (Get-Item -LiteralPath $sharedFile).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-3)
+    Repair-SharedLink -Name 'settings.json' 6>$null
+    Assert 'an advisorModel-only copy is not relinked' ((Get-Content -LiteralPath $sharedFile -Raw) -eq $advisorOnly -and (Get-SharedFileId -Path $sharedFile) -ne (Get-SharedFileId -Path $workFile))
 
     # Any other differing key is a real drift, model or not: relinked as before.
     Remove-Item -LiteralPath $sharedFile -Force
@@ -878,7 +885,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = if ($script:IsElevatedSession) { 181 } else { 177 }
+$script:ExpectedRan = if ($script:IsElevatedSession) { 182 } else { 178 }
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
