@@ -17,11 +17,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 ### Fixed
 
 - A pick that landed on a **folded default cell was not remembered**. Since 0.4.0's resolved
-  defaults, the option that reads the same as the `settings.json` default (`Opus 5.5[1M]`, `high`,
-  `auto`) is drawn as the default cell, and stepping or clicking onto it stored `default` - which
-  the saved preferences read as "no choice", so the next launch came back with the previous value
-  (`fable` / `ultracode` / `bypass`). The cell now stores the option it stands for: remembered, and
-  passed as an explicit `--model` / `--effort` / `--permission-mode`, a click on the cell after
+  defaults, the option that reads the same as the `settings.json` default (for example
+  `Opus 5.5[1M]`, `high`, `auto`) is drawn as the default cell, and stepping or clicking onto it
+  stored `default` - which the saved preferences read as "no choice", so the next launch came back
+  with the previous value (for example `fable` / `ultracode` / `bypass`). The cell now stores the
+  option it stands for: remembered, and passed as an explicit `--model` / `--effort` / `--advisor`
+  / `--permission-mode`, a click on the cell after
   ctrl+r or on a fresh tab included. The screen is unchanged, an untouched default still adds no
   flag, and ctrl+r alone is still not saved.
 - A tab whose remembered profile carries no timestamp of its own read `* restored ( ago)` after a
