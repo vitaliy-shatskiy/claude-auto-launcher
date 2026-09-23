@@ -700,6 +700,12 @@ function Invoke-LaunchScreen {
             if ($from -ge 0 -and $to -ge 0 -and $from -ne $to) {
                 $dir = if ($to -lt $from) { -1 } else { 1 }
                 $steps = [Math]::Abs($to - $from)
+            } elseif ($from -ge 0 -and $from -eq $to -and $hit.Value -eq 'default' -and $s.State.($hit.Row.Name) -eq 'default') {
+                # Already on the literal 'default' (a fresh tab, ctrl+r): a click on that cell is
+                # still a pick, so one zero-length step lets Step-LaunchValue store the folded twin,
+                # as it does for the arrows. No twin (nothing folded) keeps 'default'.
+                $dir = 0
+                $steps = 1
             }
             $null = & $walkRow $s $dir $steps
         }

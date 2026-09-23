@@ -2330,6 +2330,31 @@ $out = Invoke-LaunchScreen -State $foldTabStart -ReadKey (New-ScriptedKeyReader 
 Assert-Equal 'high' $out.Effort 'arrowing onto the default cell, then to another tab and back, keeps the twin'
 $out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey (New-ScriptedKeyReader -Keys (@('DownArrow') * (Get-RowIndex -Name 'Permission') + @('Enter'))) -Draw {} -DefaultLabelsByAccount @{ work = $foldUi }
 Assert-Equal '' ((Get-LaunchArgs -State $out) -join ' ') 'an untouched default launches with no flags, fold or not'
+# A click on the default cell while the state already IS the literal 'default' (a fresh tab, ctrl+r)
+# walks zero cells, yet it is the same explicit pick the arrows make: it stores the twin too, or the
+# remembered value comes back on the next launch.
+$w = New-EventReader @((New-MouseEvent -Y $foldEffortMap.Y -X $foldDefaultCell.Start -Left), $enterKey)
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $fdraw -Wait $w -GetWindowTop { 0 } -DefaultLabelsByAccount @{ work = $foldUi }
+Assert-Equal 'high' $out.Effort 'a click on the default cell from a fresh default state stores its twin'
+$foldClickPath = Join-Path $env:TEMP ('claude-auto-fold-click-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
+try {
+    '{"Version":2,"Account":"work","SavedAtMs":1,"Profiles":{"work":{"Effort":"ultracode","SavedAtMs":1}}}' | Set-Content -LiteralPath $foldClickPath -Encoding utf8
+    $foldClickStart = New-LaunchState; $foldClickStart.Effort = 'max'
+    $w = New-EventReader @($CtrlR, (New-MouseEvent -Y $foldEffortMap.Y -X $foldDefaultCell.Start -Left), $enterKey)
+    $out = Invoke-LaunchScreen -State $foldClickStart -ReadKey $w -Draw $fdraw -Wait $w -GetWindowTop { 0 } -DefaultLabelsByAccount @{ work = $foldUi }
+    Assert-Equal '--effort high' ((Get-LaunchArgs -State $out) -join ' ') 'ctrl+r, then a click on the default cell: the twin is stored and launched as a flag'
+    $null = Save-LaunchPrefs -State $out -Path $foldClickPath -NowMs 3
+    Assert-Equal 'high' (Read-LaunchPrefs -Path $foldClickPath).Profiles['work'].Effort 'and saved, so the next launch shows high, not the remembered ultracode'
+} finally { Remove-Item -LiteralPath $foldClickPath -Force -ErrorAction SilentlyContinue }
+# Control: with no resolved defaults the default cell has no twin, so the same click keeps 'default'.
+$nmap = $null
+$null = Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -RowMap ([ref]$nmap)
+$ndraw = { param($s) $nmap }.GetNewClosure()
+$plainEffortMap = @($nmap.Rows | Where-Object { $_.Name -eq 'Effort' })[0]
+$plainDefaultCell = @($plainEffortMap.Cells | Where-Object { $_.Value -eq 'default' })[0]
+$w = New-EventReader @((New-MouseEvent -Y $plainEffortMap.Y -X $plainDefaultCell.Start -Left), $enterKey)
+$out = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $w -Draw $ndraw -Wait $w -GetWindowTop { 0 }
+Assert-Equal 'default' $out.Effort 'control: no fold, a click on the default cell keeps default and adds no flag'
 
 # Picker footer: every action reachable by click, and each producing the SAME result as its key.
 $pmap = $null
@@ -5862,7 +5887,7 @@ try {
 }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1935
+$script:Expected = 1939
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
