@@ -23,6 +23,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - The session and project readers (`Get-ClaudeSessions`, `Get-ClaudeSessionFile`,
   `Get-ProjectRegistry`) reject a misspelled parameter instead of running against the real
   projects root and rewriting its cache.
+
 ## [0.4.1] — 2026-09-23
 
 ### Added
