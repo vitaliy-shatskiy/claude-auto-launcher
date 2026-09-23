@@ -422,6 +422,29 @@ function Get-TooSmallFrame {
     return $lines
 }
 
+function Get-HeldSessionFrame {
+    # The one question before continuing or resuming a session another claude.exe holds. A warning,
+    # never a block: Enter goes on, Esc goes back. Wrapped rather than cut, so a phone-width terminal
+    # still shows the whole sentence; one line wherever it fits. The key hint is placed FIRST and the
+    # warning gets what is left: on a short terminal a warning with no way out of it is the worse cut.
+    param([Parameter(Mandatory)][string]$Warning, [int]$Width, [int]$Height)
+    $frameWidth = Get-FrameWidth -Width $Width
+    # The widest hint that fits: one line, two lines, then the shortest words.
+    $hintSets = @(, @('  enter continue anyway   esc back')) + @(, @('  enter continue anyway', '  esc back')) + @(, @('enter = go on', 'esc = back'))
+    $hint = $hintSets[-1]
+    foreach ($set in $hintSets) {
+        if (@($set | Where-Object { (Get-DisplayWidth -Text $_) -gt $frameWidth }).Count -eq 0) { $hint = $set; break }
+    }
+    $hint = @($hint | ForEach-Object { Limit-Line -Text $_ -Max $frameWidth })
+    $warn = @(Split-TextLines -Text $Warning -Width ([Math]::Max(1, $frameWidth - 2)) | ForEach-Object { "  $_" })
+    $budget = [Math]::Max(1, $Height)
+    $full = @('') + $warn + @('') + $hint
+    if ($full.Count -le $budget) { return $full }
+    $room = $budget - $hint.Count
+    if ($room -le 0) { return @($hint[0..($budget - 1)]) }
+    return @($warn[0..([Math]::Min($room, $warn.Count) - 1)]) + $hint
+}
+
 function Get-AccountTint {
     # ONE table for the two painters below - the option-cell pass and the tab-strip pass. Written
     # twice they drift, and a drift here means an account painted like another one, which is exactly

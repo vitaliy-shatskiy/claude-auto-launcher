@@ -5886,8 +5886,35 @@ try {
     $script:CpWidth = @{}
 }
 
+# Held-session warning: a session another claude.exe holds is WARNED about, never blocked. Enter goes on,
+# Esc goes back; every other key is ignored, and only a resize repaints.
+$hsWarn = 'Session held-e1 is open in another Claude process (pid 4242, busy, since 09:30). Continuing here forks its transcript.'
+$hsWide = @(try { Get-HeldSessionFrame -Warning $hsWarn -Width 160 -Height 30 } catch { "THREW: $($_.Exception.Message)" })
+Assert-True (@($hsWide | Where-Object { $_ -eq "  $hsWarn" }).Count -eq 1) 'held-session frame: the warning is ONE line at a wide terminal'
+Assert-True (@($hsWide | Where-Object { $_ -match 'enter.*continue anyway.*esc.*back' }).Count -eq 1) 'held-session frame: the hint names Enter = continue anyway and Esc = back'
+$hsNarrow = @(try { Get-HeldSessionFrame -Warning $hsWarn -Width 60 -Height 30 } catch { "THREW: $($_.Exception.Message)" })
+Assert-True (@($hsNarrow | Where-Object { (Get-DisplayWidth -Text $_) -gt 59 }).Count -eq 0) 'held-session frame: no line reaches the last column of a phone-width terminal'
+Assert-True ((($hsNarrow | ForEach-Object { $_.Trim() }) -join ' ') -match 'Continuing here forks its transcript\.') 'held-session frame: a narrow terminal wraps the warning rather than cutting it'
+foreach ($hsSize in @(@(40, 4), @(20, 6))) {
+    $hsShort = @(try { Get-HeldSessionFrame -Warning $hsWarn -Width $hsSize[0] -Height $hsSize[1] } catch { "THREW: $($_.Exception.Message)" })
+    $hsTag = "$($hsSize[0])x$($hsSize[1])"
+    Assert-True ($hsShort.Count -le $hsSize[1] -and @($hsShort | Where-Object { (Get-DisplayWidth -Text $_) -gt ($hsSize[0] - 1) }).Count -eq 0) "held-session frame at ${hsTag}: fits the terminal"
+    Assert-True (($hsShort -join ' ') -match '\benter\b' -and ($hsShort -join ' ') -match '\besc\b') "held-session frame at ${hsTag}: both keys are still on screen - the hint is reserved before the warning"
+    Assert-True ($hsShort[0] -match 'Session') "held-session frame at ${hsTag}: what is left above the hint is the warning itself"
+}
+$hsDraws = 0
+$hsRun ={ param([string[]]$Keys) try { Confirm-HeldSession -ReadKey (New-ScriptedKeyReader -Keys $Keys) -Draw { $script:hsDraws++ } } catch { "THREW: $($_.Exception.Message)" } }
+Assert-Equal $true (& $hsRun @('x', 'DownArrow', 'Enter')) 'confirm: Enter continues anyway, other keys are ignored'
+Assert-Equal 1 $script:hsDraws 'confirm: ignored keys do not repaint'
+Assert-Equal $false (& $hsRun @('Escape')) 'confirm: Esc goes back'
+$hsQueue = [System.Collections.Queue]::new(@('resize', [System.ConsoleKeyInfo]::new([char]13, [System.ConsoleKey]::Enter, $false, $false, $false)))
+$script:hsDraws = 0
+$hsResult = try { Confirm-HeldSession -ReadKey { throw 'unused' } -Wait { $hsQueue.Dequeue() } -Draw { $script:hsDraws++ } } catch { "THREW: $($_.Exception.Message)" }
+Assert-Equal $true $hsResult 'confirm: a resize does not answer the question'
+Assert-Equal 2 $script:hsDraws 'confirm: a resize repaints'
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1939
+$script:Expected = 1954
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

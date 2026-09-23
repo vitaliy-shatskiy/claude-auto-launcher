@@ -164,6 +164,7 @@ $stopServer = $false
 $resumeId = $null
 $forkSession = $false
 $previewPickerCancelled = $false
+$previewHeldBack = $false   # Esc on the held-session warning; preview reports it by name
 
 # The screen draws only for a bare interactive launch. Redirected stdin means something is driving
 # this unattended - a scheduled task feeding it `< NUL` to take the defaults; arguments mean the
@@ -334,6 +335,21 @@ if ($UseUi) {
             return $result.Line
         }
 
+        # Held-session warning: Claude Code takes no lock on a session, so continue/resume onto one another
+        # claude.exe holds forks its transcript. Warned, never blocked: $true = go on (nothing holds
+        # it, or Enter), $false = Esc, back to the launch screen. Every profile root's sessions\ is
+        # read (one folder read twice where they are junctioned); any failure goes on unwarned.
+        $heldSessionsDirs = @($ProfileRoots.Values | ForEach-Object { Join-Path $_ 'sessions' })
+        $confirmHeld = {
+            param($heldHolder)
+            if (-not $heldHolder) { return $true }
+            $heldWarning = Format-HeldSessionWarning -Holder $heldHolder
+            return (Confirm-HeldSession -ReadKey $KeySource -Wait $wait -Draw {
+                $w, $h = & $size
+                & $paint (Get-HeldSessionFrame -Warning $heldWarning -Width $w -Height $h)
+            })
+        }
+
         while ($true) {
             $state = Invoke-LaunchScreen -State $state -ReadKey $KeySource -Wait $wait -Draw $draw -Prefs $prefs -Limits $limits -DefaultLabelsByAccount $defaultLabelsByAccount -OnKey {
                 param($k)
@@ -398,6 +414,18 @@ if ($UseUi) {
             # And nowhere else: the chosen action is NOT remembered (review W1). Prefs.ps1's header
             # states the rule - an action describes one launch, not a habit - and a remembered
             # 'worktree' would make the next launch's reflexive Enter create a git worktree.
+            if ($state.Action -eq 'continue') {
+                # The session `claude -c` would attach to: the newest transcript of this project.
+                $continueHolder = try {
+                    $continueSlugs = @($state.ProjectSlugs | Where-Object { $_ })
+                    if ($continueSlugs.Count -eq 0 -and $state.ProjectSlug) { $continueSlugs = @("$($state.ProjectSlug)") }
+                    Get-ContinueSessionHolder -SessionsDir $heldSessionsDirs -ProjectSlug $continueSlugs `
+                        -ProjectsRoot (Get-SessionsRootForAccount -Account $state.Account -ProfileRoots $ProfileRoots)
+                } catch { $null }
+                if (& $confirmHeld $continueHolder) { break }
+                if ($Preview) { $previewHeldBack = $true; break }
+                continue
+            }
             if ($state.Action -ne 'resume') { break }
 
             $projectName = Split-Path -Path $state.Project -Leaf
@@ -481,7 +509,17 @@ if ($UseUi) {
             $picked = Invoke-SessionPicker -Sessions @(& $fetchNextPage 0 $pickerSlugs) `
                       -FetchMore $fetchNextPage `
                       -ProjectSlug $pickerSlugs -ProjectName $projectName -ReadKey $KeySource -Wait $wait -Draw $pdraw
-            if ($picked) { $resumeId = $picked.Session.SessionId; $forkSession = [bool]$picked.Fork; break }
+            if ($picked) {
+                $resumeId = $picked.Session.SessionId; $forkSession = [bool]$picked.Fork
+                # A fork gets an id of its own, so only a plain resume can land on a held transcript.
+                $resumeHolder = if ($forkSession) { $null } else {
+                    try { Get-ClaudeSessionHolder -SessionsDir $heldSessionsDirs -SessionId $resumeId } catch { $null }
+                }
+                if (& $confirmHeld $resumeHolder) { break }
+                $resumeId = $null; $forkSession = $false
+                if ($Preview) { $previewHeldBack = $true; break }
+                continue
+            }
             # Escape at the picker returns $null (cancel) and, in a real session, this loop goes back
             # to the launch screen. Preview cannot loop - the scripted key list is finite - so it must
             # break here too, but breaking silently would fall through to the ordinary preview summary
@@ -681,6 +719,12 @@ if ($selectsSession -and $remote) {
 }
 
 if ($Preview) {
+    if ($previewHeldBack) {
+        Write-Host ""
+        Write-Host "--- preview: held-session warning: back ---" -ForegroundColor Cyan
+        Write-Host "in an interactive session this returns to the launch screen; preview cannot loop because the scripted key list is finite"
+        exit 0
+    }
     if ($previewPickerCancelled) {
         Write-Host ""
         Write-Host "--- preview: picker cancelled ---" -ForegroundColor Cyan

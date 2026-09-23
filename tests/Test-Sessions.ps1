@@ -922,7 +922,94 @@ $pfEsc = Join-Path $pfDir 'eeee3333.jsonl'
 Assert-Equal 'escaped key prompt' (Get-ClaudeSessionSummary -Path $pfEsc -ProjectPath 'C:\src\pf').Title 'a \u-escaped type key is decoded by the parser, so the pre-filter must not skip the line on a literal miss'
 Remove-Item -LiteralPath $pfRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 172) { Write-Host "COULD NOT RUN: expected 172 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# A session another claude.exe holds. Claude Code writes one record per live process
+# to ~/.claude/sessions/<pid>.json; a record is LIVE only when that pid runs AND started at procStart
+# (a reused pid does not), whatever `status` says. Unreadable input answers "not held", never throws.
+$hdDir = Join-Path $env:TEMP "claude-auto-held-$PID"
+Remove-Item -LiteralPath $hdDir -Recurse -Force -ErrorAction SilentlyContinue
+$hdBroken = Join-Path $hdDir 'broken-only'
+$null = New-Item -ItemType Directory -Path $hdBroken -Force
+$hdMe = Get-Process -Id $PID
+$hdStart = [string]$hdMe.StartTime.ToFileTimeUtc()
+$hdWrite = { param([string]$Path, [string]$Text) [IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false))) }
+$hdRecord = {
+    param([long]$ProcId, [string]$Sid, [string]$Start, [string]$Cwd, [string]$Name = '', [string]$Kind = 'interactive')
+    [ordered]@{ pid = $ProcId; sessionId = $Sid; cwd = $Cwd; procStart = $Start; status = 'busy'; name = $Name; kind = $Kind } | ConvertTo-Json -Compress
+}
+& $hdWrite (Join-Path $hdDir "$PID.json") (& $hdRecord $PID 'aaaa1111-live' $hdStart 'C:\src\Held' 'held-e1')
+& $hdWrite (Join-Path $hdDir '99999996.json') (& $hdRecord 99999996 'bbbb2222-dead' $hdStart 'C:\src\Held')
+& $hdWrite (Join-Path $hdDir 'reused.json') (& $hdRecord $PID 'cccc3333-reused' ([string]([long]$hdStart + 1)) 'C:\src\Held')
+& $hdWrite (Join-Path $hdDir 'bg.json') (& $hdRecord $PID 'eeee5555-bg' $hdStart 'C:\src\Held' 'bg-1' 'bg')
+# Named to sort BEFORE "$PID.json": records are read in name order, so the live one is only reached
+# past a malformed one - a parse error that escaped would stop the search there.
+& $hdWrite (Join-Path $hdDir '0000-broken.json') '{"pid": 12, "sessionId": '
+& $hdWrite (Join-Path $hdBroken 'a.json') '{"pid": 12, "sessionId": '
+& $hdWrite (Join-Path $hdBroken 'b.json') '[1, 2]'
+& $hdWrite (Join-Path $hdBroken 'c.json') '"text"'
+# An ARRAY around a live record is not a record: member enumeration would read its sessionId and pid.
+& $hdWrite (Join-Path $hdBroken 'd.json') ('[' + (& $hdRecord $PID 'aaaa1111-live' $hdStart 'C:\src\Held' 'held-e1') + ']')
+$hdFind = { param([hashtable]$A) try { Get-ClaudeSessionHolder @A } catch { "THREW: $($_.Exception.Message)" } }
+
+$h = & $hdFind @{ SessionsDir = $hdDir; SessionId = 'aaaa1111-live' }
+Assert-Equal $PID $h.Pid '(a) a record whose pid runs with the same start time holds its session, found past a malformed record read before it'
+Assert-Equal 'held-e1' $h.Name '(a) the holder carries the name the warning shows'
+Assert-True ($null -eq (& $hdFind @{ SessionsDir = $hdDir; SessionId = 'bbbb2222-dead' })) '(b) a dead pid holds nothing, whatever its status says'
+Assert-True ($null -eq (& $hdFind @{ SessionsDir = $hdDir; SessionId = 'cccc3333-reused' })) '(c) a running pid with a different start time is a reused pid and holds nothing'
+Assert-True ($null -eq (& $hdFind @{ SessionsDir = $hdBroken; SessionId = 'aaaa1111-live' })) '(d) malformed, array-wrapped and scalar records are ignored without throwing'
+Assert-True ($null -eq (& $hdFind @{ SessionsDir = (Join-Path $hdDir 'missing'); SessionId = 'aaaa1111-live' })) 'a missing sessions folder answers not-held, never throws'
+Assert-True ($null -eq (& $hdFind @{ SessionsDir = $hdDir; SessionId = '' })) 'no session id matches nothing - never "any live record"'
+Assert-Equal $PID (& $hdFind @{ SessionsDir = @((Join-Path $hdDir 'missing'), $hdDir, $hdDir); SessionId = 'aaaa1111-live' }).Pid 'several folders (one per profile root) are all read; a missing one is skipped'
+
+$hdSince = $hdMe.StartTime.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+Assert-Equal "Session held-e1 is open in another Claude process (pid $PID, busy, since $hdSince). Continuing here forks its transcript." (Format-HeldSessionWarning -Holder $h) 'the warning names the session, the pid, the status and the local start time'
+$hdAnon = [pscustomobject]@{ Pid = 7; SessionId = 'dddd4444-5555-6666'; Name = ''; Status = ''; Since = [datetime]'2026-09-23 08:05' }
+Assert-Equal 'Session dddd4444 is open in another Claude process (pid 7, since 08:05). Continuing here forks its transcript.' (Format-HeldSessionWarning -Holder $hdAnon) 'no name falls back to the short id; no status is left out'
+
+# The session `claude -c` would pick: the newest transcript of the project's own slug folders.
+$hdProj = Join-Path $hdDir 'projects'
+$null = New-Item -ItemType Directory -Path (Join-Path $hdProj 'C--src-Held'), (Join-Path $hdProj 'C--src-Other') -Force
+foreach ($f in @(@('C--src-Held\old1111.jsonl', -30), @('C--src-Held\new2222.jsonl', -10), @('C--src-Other\foreign3.jsonl', -1))) {
+    $p = Join-Path $hdProj $f[0]; & $hdWrite $p '{}'; (Get-Item -LiteralPath $p).LastWriteTime = (Get-Date).AddMinutes($f[1])
+}
+Assert-Equal 'new2222' (Get-ContinueSessionId -ProjectsRoot $hdProj -ProjectSlug @('C--src-Held')) 'continue picks the newest transcript of the project, never a newer foreign one'
+Assert-Equal '' (Get-ContinueSessionId -ProjectsRoot $hdProj -ProjectSlug @()) 'no slug is no candidate - never the newest session of the whole account'
+Assert-Equal '' (Get-ContinueSessionId -ProjectsRoot (Join-Path $hdDir 'nope') -ProjectSlug @('C--src-Held')) 'a missing projects root is no candidate'
+# Continue matches on the candidate's id ALONE: the live record says C:\src\Held, the project is another folder.
+$null = New-Item -ItemType Directory -Path (Join-Path $hdProj 'C--src-Elsewhere') -Force
+& $hdWrite (Join-Path $hdProj 'C--src-Elsewhere\aaaa1111-live.jsonl') '{}'
+$h = try { Get-ContinueSessionHolder -SessionsDir $hdDir -ProjectsRoot $hdProj -ProjectSlug @('C--src-Elsewhere') } catch { "THREW: $($_.Exception.Message)" }
+Assert-Equal $PID $h.Pid 'continue warns when a live record holds the candidate id, whatever cwd that record carries'
+Assert-True ($null -eq (Get-ContinueSessionHolder -SessionsDir $hdDir -ProjectsRoot $hdProj -ProjectSlug @('C--src-Held'))) 'continue does not warn when nothing holds the candidate'
+$hdEsc = [pscustomobject]@{ Pid = 7; SessionId = 'ffff'; Name = "x$([char]27)[2Jy"; Status = "busy$([char]7)"; Since = $null }
+Assert-True (-not ((Format-HeldSessionWarning -Holder $hdEsc) -match '[\p{Cc}\p{Cf}]')) 'record name and status reach the screen with control characters removed'
+
+# `claude -c` (2.1.280) passes over a transcript that is a sidechain, a team member, a daemon, or was
+# written by an SDK entrypoint (head first, else the tail), and over a session a live NON-interactive
+# process holds - it attaches to the next newest. One slug per rule: the newest file breaks that rule
+# alone, the older one is ordinary.
+$hdPad = '{"type":"progress","data":"' + ('p' * 1000) + '"}'
+$hdCases = [ordered]@{
+    'sdkhead' = @('sdkhead-x', ('{"type":"user","entrypoint":"sdk-cli","message":{"content":"x"}}'))
+    'sdktail' = @('sdktail-x', ('{"type":"user","message":{"content":"x"}}' + "`n" + (($hdPad + "`n") * 80) + '{"type":"last-prompt","entrypoint":"sdk-py"}'))
+    'side'    = @('side-x', '{"type":"user","isSidechain":true,"message":{"content":"x"}}')
+    'team'    = @('team-x', '{"type":"user","teamName":"alpha","message":{"content":"x"}}')
+    'daemon'  = @('daemon-x', ('{"type":"file-history-snapshot"}' + "`n" + '{"parentUuid":null,"type":"user","sessionKind":"daemon","message":{"content":"x"}}'))
+    'bg'      = @('eeee5555-bg', '{"type":"user","entrypoint":"cli","message":{"content":"x"}}')
+}
+foreach ($case in $hdCases.Keys) {
+    $slugDir = Join-Path $hdProj "C--f-$case"
+    $null = New-Item -ItemType Directory -Path $slugDir -Force
+    $bad = Join-Path $slugDir "$($hdCases[$case][0]).jsonl"; & $hdWrite $bad $hdCases[$case][1]
+    $ok = Join-Path $slugDir "ok-$case.jsonl"; & $hdWrite $ok '{"type":"user","entrypoint":"cli","message":{"content":"ok"}}'
+    (Get-Item -LiteralPath $bad).LastWriteTime = (Get-Date).AddMinutes(-1)
+    (Get-Item -LiteralPath $ok).LastWriteTime = (Get-Date).AddMinutes(-20)
+    $got = try { Get-ContinueSessionId -ProjectsRoot $hdProj -ProjectSlug @("C--f-$case") -SessionsDir $hdDir } catch { "THREW: $($_.Exception.Message)" }
+    Assert-Equal "ok-$case" $got "continue skips the newest transcript when it is '$case', as claude -c does"
+}
+Assert-True ($null -eq (Get-ContinueSessionHolder -SessionsDir $hdDir -ProjectsRoot $hdProj -ProjectSlug @('C--f-bg'))) 'a session only a background process holds is not the one continue attaches to - no warning'
+Remove-Item -LiteralPath $hdDir -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 195) { Write-Host "COULD NOT RUN: expected 195 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

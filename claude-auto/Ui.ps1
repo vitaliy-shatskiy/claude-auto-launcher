@@ -159,6 +159,23 @@ function Wait-KeyOrResize {
     }
 }
 
+function Confirm-HeldSession {
+    # Enter = continue anyway ($true), Esc or Ctrl+C = back ($false). Every other key and every mouse
+    # event is ignored; only a resize repaints. Draw paints Get-HeldSessionFrame at the current size.
+    param([Parameter(Mandatory)][scriptblock]$ReadKey, [Parameter(Mandatory)][scriptblock]$Draw,
+          [scriptblock]$Wait = { & $ReadKey })
+    $dirty = $true
+    while ($true) {
+        if ($dirty) { & $Draw; $dirty = $false }
+        $k = & $Wait
+        if ($k -is [string]) { if ($k -eq 'resize') { $dirty = $true }; continue }
+        if ($k -isnot [System.ConsoleKeyInfo]) { continue }
+        if ($k.Key -eq [System.ConsoleKey]::Enter) { return $true }
+        if ($k.Key -eq [System.ConsoleKey]::Escape) { return $false }
+        if ($k.Key -eq [System.ConsoleKey]::C -and ($k.Modifiers -band [System.ConsoleModifiers]::Control)) { return $false }
+    }
+}
+
 function New-ScriptedKeyReader {
     # Turns key names into the ConsoleKeyInfo values [Console]::ReadKey would return, so a test
     # drives exactly the same loop a terminal does. A one-character entry is treated as a typed

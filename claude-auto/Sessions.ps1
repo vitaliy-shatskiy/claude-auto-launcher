@@ -923,3 +923,139 @@ function Format-RelativeAge {
     if ($age.TotalHours -lt 24) { return '{0:N0} h' -f $age.TotalHours }
     return '{0:N0} d' -f $age.TotalDays
 }
+
+function Test-ContinueCandidate {
+    # Whether `claude -c` would consider this transcript at all. Mirrors what claude.exe 2.1.280 reads
+    # from a transcript's head and tail before /resume and -c list it (bHe/aXt in its bundle): it
+    # passes over a sidechain ("isSidechain":true in the head), a team member (teamName), a daemon
+    # (sessionKind daemon|daemon-worker on the first record carrying parentUuid), and a session an SDK
+    # wrote (entrypoint sdk-cli|sdk-ts|sdk-py - the head's first, else the tail's last). Its /loop and
+    # superseded/bookkeeping tests are NOT mirrored: they rest on markers no transcript here carries.
+    # The 64 KB windows are this launcher's choice. Unreadable = not a candidate.
+    param([Parameter(Mandatory)][string]$Path, [int]$WindowBytes = 65536)
+    $readAt = {
+        param($fs, [long]$Offset, [int]$Count)
+        $buf = New-Object byte[] $Count
+        $fs.Position = $Offset
+        $got = 0
+        while ($got -lt $Count) { $n = $fs.Read($buf, $got, $Count - $got); if ($n -le 0) { break }; $got += $n }
+        [Text.Encoding]::UTF8.GetString($buf, 0, $got)
+    }
+    try {
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try {
+            $len = $fs.Length
+            $head = & $readAt $fs 0 ([int][Math]::Min([long]$WindowBytes, $len))
+            $tail = if ($len -gt $WindowBytes) { & $readAt $fs ($len - $WindowBytes) $WindowBytes } else { $head }
+        } finally { $fs.Dispose() }
+    } catch { return $false }
+    if ($head -match '"isSidechain":\s?true') { return $false }
+    $team = [regex]::Match($head, '"teamName":\s?"([^"]*)"')
+    if ($team.Success -and $team.Groups[1].Value) { return $false }
+    $parentLine = @($head -split "`n" | Where-Object { $_.Contains('"parentUuid":') } | Select-Object -First 1)
+    $kindText = if ($parentLine.Count -gt 0) { $parentLine[0] } else { $head }
+    $kind = [regex]::Match($kindText, '"sessionKind":\s?"([^"]*)"')
+    if ($kind.Success -and $kind.Groups[1].Value -in @('daemon', 'daemon-worker')) { return $false }
+    $entry = [regex]::Match($head, '"entrypoint":\s?"([^"]*)"')
+    $entrypoint = if ($entry.Success) { $entry.Groups[1].Value } else {
+        $inTail = [regex]::Matches($tail, '"entrypoint":\s?"([^"]*)"')
+        if ($inTail.Count -gt 0) { $inTail[$inTail.Count - 1].Groups[1].Value } else { '' }
+    }
+    if ($entrypoint -in @('sdk-cli', 'sdk-ts', 'sdk-py')) { return $false }
+    return $true
+}
+
+function Get-ContinueSessionId {
+    # The session `claude -c` attaches to in a project: the newest transcript of the project's own
+    # slug folders that Test-ContinueCandidate accepts and that no live NON-interactive process holds
+    # (-SessionsDir; claude -c passes over a session a background process owns). No slug is no
+    # candidate - Get-ClaudeSessionFile with no slug lists the whole account.
+    param([string]$ProjectsRoot, [string[]]$ProjectSlug = @(), [string[]]$SessionsDir = @())
+    $slugs = @($ProjectSlug | Where-Object { $_ })
+    if (-not $ProjectsRoot -or $slugs.Count -eq 0) { return '' }
+    $dirs = @($SessionsDir | Where-Object { $_ })
+    try {
+        foreach ($file in @(Get-ClaudeSessionFile -ProjectsRoot $ProjectsRoot -ProjectSlug $slugs)) {
+            if (-not (Test-ContinueCandidate -Path $file)) { continue }
+            $id = [IO.Path]::GetFileNameWithoutExtension($file)
+            if ($dirs.Count -gt 0) {
+                $holder = Get-ClaudeSessionHolder -SessionsDir $dirs -SessionId $id
+                if ($holder -and $holder.Kind -and $holder.Kind -ne 'interactive') { continue }
+            }
+            return $id
+        }
+    } catch { }
+    return ''
+}
+
+function Get-ClaudeSessionHolder {
+    # Another live claude.exe on a session, or $null. Claude Code takes no lock on a session: two
+    # processes on one id write one transcript from two memories. It does keep one record per live
+    # process, <root>\sessions\<pid>.json {pid, sessionId, cwd, procStart, status, name, ...}, and a
+    # record outlives a crashed process - so it is LIVE only when the pid runs AND that process
+    # started at procStart (FILETIME, compared as the integer's digits). A reused pid fails the
+    # second test; `status` is never trusted on its own.
+    # Fail open: a missing folder, an unreadable or malformed record answers "not held" and never
+    # throws - this feeds a warning, and a warning must never cost a launch.
+    # -SessionsDir takes one folder per profile root; where they are one junctioned folder the same
+    # record is simply read twice. Records are read in name order, so the result never depends on
+    # how the filesystem happens to enumerate them.
+    param([string[]]$SessionsDir = @(), [string]$SessionId = '')
+    if (-not $SessionId) { return $null }
+    foreach ($dir in @($SessionsDir | Where-Object { $_ })) {
+        $files = [string[]]@(try { [IO.Directory]::GetFiles($dir, '*.json') } catch { })
+        [Array]::Sort($files, [StringComparer]::OrdinalIgnoreCase)
+        foreach ($file in $files) {
+            try {
+                # Shared read AND delete: the owning claude.exe rewrites its record while it runs.
+                $fs = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                                      [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+                $sr = $null
+                try { $sr = [IO.StreamReader]::new($fs); $text = $sr.ReadToEnd() }
+                finally { if ($sr) { $sr.Dispose() } else { $fs.Dispose() } }
+                # -NoEnumerate: a one-element array would otherwise unwrap into the record it holds.
+                # The TYPE, not `-is [pscustomobject]`: that accelerator is PSObject, and any
+                # PSObject-wrapped array or string passes it.
+                $r = ConvertFrom-Json -InputObject $text -NoEnumerate -ErrorAction Stop
+                if ($null -eq $r -or $r.GetType() -ne [System.Management.Automation.PSCustomObject]) { continue }
+                if ("$($r.sessionId)" -ne $SessionId) { continue }
+                $procId = 0
+                if (-not [int]::TryParse("$($r.pid)", [ref]$procId) -or $procId -le 0) { continue }
+                $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+                if (-not $proc) { continue }
+                $started = $proc.StartTime
+                if (-not $started -or "$($started.ToFileTimeUtc())" -ne "$($r.procStart)") { continue }
+                return [pscustomobject]@{ Pid = $procId; SessionId = "$($r.sessionId)"; Name = "$($r.name)"
+                                          Status = "$($r.status)"; Kind = "$($r.kind)"; Cwd = "$($r.cwd)"; Since = $started }
+            } catch { }
+        }
+    }
+    return $null
+}
+
+function Get-ContinueSessionHolder {
+    # Who holds the session `claude -c` would attach to, or $null. Matched on the session id ALONE:
+    # the candidate already comes from the project's own folders, so a holder that resumed it from
+    # another folder is still caught.
+    # A background (non-interactive) holder never gets here: Get-ContinueSessionId passes over its
+    # session, as claude -c does.
+    param([string[]]$SessionsDir = @(), [string]$ProjectsRoot, [string[]]$ProjectSlug = @())
+    $id = Get-ContinueSessionId -ProjectsRoot $ProjectsRoot -ProjectSlug $ProjectSlug -SessionsDir $SessionsDir
+    if (-not $id) { return $null }
+    return (Get-ClaudeSessionHolder -SessionsDir $SessionsDir -SessionId $id)
+}
+
+function Format-HeldSessionWarning {
+    # One line for the held-session screen. The name Claude Code gave the session when it has one,
+    # else the id's first block; the start time is the machine's local clock. The record is written
+    # by another process, so name and status are untrusted text: Get-CleanTranscriptText strips the
+    # control characters that would otherwise drive the terminal.
+    param([Parameter(Mandatory)]$Holder)
+    $label = Get-CleanTranscriptText "$($Holder.Name)"
+    if (-not $label) { $label = Get-CleanTranscriptText ("$($Holder.SessionId)" -split '-')[0] }
+    $facts = @("pid $($Holder.Pid)")
+    $status = Get-CleanTranscriptText "$($Holder.Status)"
+    if ($status) { $facts += $status }
+    if ($Holder.Since) { $facts += 'since ' + ([datetime]$Holder.Since).ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
+    return "Session $label is open in another Claude process ($($facts -join ', ')). Continuing here forks its transcript."
+}

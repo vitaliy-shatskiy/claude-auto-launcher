@@ -74,6 +74,12 @@ $script:Runs = [ordered]@{
     # and the snapshot reaches it through a VARIABLE, which cannot unroll). Those casts are pinned
     # in source by Test-Maintenance instead, which is the only guard that can fail for them.
     'unknown-project'   = 'RightArrow,Enter,r,Escape'
+    # Held-session warning: fixture-a is held by a live record whose pid is THIS check's process
+    # (Initialize-ProjectSlugFixture, <fixture root>\sessions). 'c' on fixture-slug-a continues
+    # fixture-a and 'r' + Enter resumes it, so both must stop on the held-session warning and Esc must
+    # go back. Without the warning the same keys launch `-c` / `--resume fixture-a` instead.
+    'held-continue'     = 'RightArrow,Enter,s,c,Escape'
+    'held-resume'       = 'RightArrow,Enter,s,r,Enter,Escape'
 }
 
 # Per-run working directory. Only the unknown-project run needs one (it is selected BY the cwd), and it
@@ -152,6 +158,17 @@ function Initialize-ProjectSlugFixture {
     New-Item -ItemType Directory -Force -Path $repoEmpty | Out-Null
     $script:RunCwd['unknown-project'] = $repoEmpty
 
+    # The live-process record the held-session warning reads. The launcher reads the
+    # sessions\ folder of EVERY profile root, and this fixture root is the fixture 'second' account's
+    # root - so the record lands where a real launch looks, never in the owner's ~/.claude/sessions.
+    # Its pid is THIS process and its procStart this process's start time: live while the check runs.
+    $sessionsDir = Join-Path $Root 'sessions'
+    if (Test-Path -LiteralPath $sessionsDir) { Remove-Item -LiteralPath $sessionsDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $sessionsDir | Out-Null
+    $held = [ordered]@{ pid = $PID; sessionId = 'fixture-a'; cwd = $repoA; kind = 'interactive'; status = 'busy'; name = 'fixture-held'
+                        procStart = [string](Get-Process -Id $PID).StartTime.ToFileTimeUtc() } | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText((Join-Path $sessionsDir "$PID.json"), $held, (New-Object System.Text.UTF8Encoding($false)))
+
     return $projectsRoot
 }
 # NOT called here at script load: the wipe/rebuild it does (Remove-Item -Recurse -Force outside the
@@ -171,7 +188,7 @@ function Initialize-ProjectSlugFixture {
 # identically whether the list was empty (correct, for a fixture account with no projects
 # directory) or full of the CANONICAL account's real sessions (the regression) - the session COUNT
 # printed in the frame's own title is what tells the two apart without completing a pick.
-$script:WantedPattern = 'launch args\s*:|command\s*:|remote\s*:|account\s*:|CLAUDE_CONFIG_DIR\s*:|argv count\s*:|picker cancelled|remote off for this session|crc |sessions|no sessions found'
+$script:WantedPattern = 'launch args\s*:|command\s*:|remote\s*:|account\s*:|CLAUDE_CONFIG_DIR\s*:|argv count\s*:|picker cancelled|remote off for this session|crc |sessions|no sessions found|continue anyway|held-session warning'
 
 # The launcher is NOT started by its own path in real life. Everything that starts Claude Code -
 # Rider's plugin, claude-auto.cmd, PATH, the nightly audit - points at ~\bin\claude-auto.ps1, a
