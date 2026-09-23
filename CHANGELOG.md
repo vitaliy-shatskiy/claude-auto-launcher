@@ -21,8 +21,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   `auto`) is drawn as the default cell, and stepping or clicking onto it stored `default` - which
   the saved preferences read as "no choice", so the next launch came back with the previous value
   (`fable` / `ultracode` / `bypass`). The cell now stores the option it stands for: remembered, and
-  passed as an explicit `--model` / `--effort` / `--permission-mode`. The screen is unchanged, an
-  untouched default still adds no flag, and ctrl+r is still not saved.
+  passed as an explicit `--model` / `--effort` / `--permission-mode`, a click on the cell after
+  ctrl+r or on a fresh tab included. The screen is unchanged, an untouched default still adds no
+  flag, and ctrl+r alone is still not saved.
 - A tab whose remembered profile carries no timestamp of its own read `* restored ( ago)` after a
   switch; it now takes the file's timestamp, as the opening tab already did.
 - Every preview run left `%TEMP%\claude-auto-projects-preview-<pid>.json` behind. A run now removes
