@@ -4,6 +4,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-09-23
+
+### Added
+
+- A warning before `continue` or `resume` attaches to a session another `claude` process holds:
+  Claude Code takes no lock, so two processes on one session fork its transcript. The warning
+  names the session, the pid, its status and start time; Enter continues anyway, Esc goes back to
+  the launch screen. A process counts as holding a session only while its pid runs with the same
+  start time, the `sessions\` folder of every profile root is read, `continue` checks the session
+  `claude -c` would pick, and a fork never warns. It wraps rather than cuts at phone width.
+
+### Fixed
+
+- An account's `settings.json` that differs from the newest copy only in `model` / `effortLevel`
+  is no longer relinked: each account keeps its own `/model` choice. Any other difference is still
+  relinked.
+- The session and project readers (`Get-ClaudeSessions`, `Get-ClaudeSessionFile`,
+  `Get-ProjectRegistry`) reject a misspelled parameter instead of running against the real
+  projects root and rewriting its cache.
 ## [0.4.1] — 2026-09-23
 
 ### Added
