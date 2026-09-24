@@ -4,7 +4,6 @@
 # invisible characters to .Length, so colouring first makes truncation cut in the wrong place and
 # every width assertion measure the wrong thing.
 
-$script:E = [char]27
 $script:Palette = @{
     Reset        = "$([char]27)[0m"
     Bold         = "$([char]27)[1m"

@@ -162,9 +162,9 @@ Assert-True ($themeSource -match '\$Line\.IndexOf\(\$script:HoverOpen\) -lt 0 -a
 # --- palette name pin. The palette was the one-letter `C` at script scope, and PowerShell names are
 # case-insensitive: any `$c = ...` at SCRIPT scope in a script that dot-sources Theme.ps1 replaced
 # it, and every later frame rendered plain with no error. It is `$script:Palette` now. The pin reads
-# every .ps1 in the repository: the old name is gone for good, `$c.<palette key>` is never read as
-# the palette, and nothing outside Theme.ps1 assigns a variable named Palette (the same shadowing,
-# under the new name).
+# every tracked .ps1: no one-letter `$script:`/`$global:` name (the old palette among them),
+# `$c.<palette key>` is never read as the palette, and nothing outside Theme.ps1 assigns Palette at
+# script scope (the same shadowing, under the new name; a function-local cannot shadow it).
 function Find-PaletteShadow {
     param([Parameter(Mandatory)][Management.Automation.Language.Ast]$Ast, [string[]]$Keys = @(), [switch]$IsTheme)
     $hits = [Collections.Generic.List[string]]::new()
@@ -172,17 +172,23 @@ function Find-PaletteShadow {
     foreach ($v in $vars) {
         $path = $v.VariablePath.UserPath
         $name = $path -replace '^(?i)(script|global|local|private):', ''
+        $qualified = $path -imatch '^(script|global):'
         $where = "line $($v.Extent.StartLineNumber): $($v.Extent.Text)"
         if ($path -imatch '^(script|global):C$') { $hits.Add("$where - the old palette name"); continue }
+        if ($path -imatch '^(script|global):[a-z]$') { $hits.Add("$where - a one-letter script-scope name, shadowed by any same-letter variable of a dot-sourcing script"); continue }
         $p = $v.Parent
-        if ($name -ieq 'c' -and $p -is [Management.Automation.Language.MemberExpressionAst] -and [object]::ReferenceEquals($p.Expression, $v) -and
-            $p.Member -is [Management.Automation.Language.StringConstantExpressionAst] -and $Keys -icontains $p.Member.Value) {
+        if ($name -ieq 'c' -and $p -is [Management.Automation.Language.MemberExpressionAst] -and $p -isnot [Management.Automation.Language.InvokeMemberExpressionAst] -and
+            [object]::ReferenceEquals($p.Expression, $v) -and $p.Member -is [Management.Automation.Language.StringConstantExpressionAst] -and $Keys -icontains $p.Member.Value) {
             $hits.Add("$where.$($p.Member.Value) - reads `$c as the palette"); continue
         }
         if ($name -ieq 'Palette' -and -not $IsTheme) {
             $target = if ($p -is [Management.Automation.Language.ConvertExpressionAst]) { $p } else { $v }
             $a = $target.Parent
-            if ($a -is [Management.Automation.Language.AssignmentStatementAst] -and [object]::ReferenceEquals($a.Left, $target)) { $hits.Add("$where - assigns Palette outside Theme.ps1") }
+            if ($a -is [Management.Automation.Language.AssignmentStatementAst] -and [object]::ReferenceEquals($a.Left, $target)) {
+                $inFunction = $false
+                for ($up = $a.Parent; $up; $up = $up.Parent) { if ($up -is [Management.Automation.Language.FunctionDefinitionAst]) { $inFunction = $true; break } }
+                if ($qualified -or -not $inFunction) { $hits.Add("$where - assigns Palette at script scope outside Theme.ps1") }
+            }
         }
     }
     return , $hits
@@ -190,26 +196,34 @@ function Find-PaletteShadow {
 $paletteKeys = @(if ($script:Palette -is [hashtable]) { $script:Palette.Keys })
 Assert-True (($script:Palette -is [hashtable]) -and $script:Palette.ContainsKey('Reset') -and $script:Palette.ContainsKey('AccentBg')) 'the palette is $script:Palette, a hashtable holding Reset and AccentBg'
 $ctl = { param([string]$Code, [switch]$IsTheme) (Find-PaletteShadow -Ast ([Management.Automation.Language.Parser]::ParseInput($Code, [ref]$null, [ref]$null)) -Keys $paletteKeys -IsTheme:$IsTheme).Count }
-$ctlCounts = @(
+$ctlBad = @(
     (& $ctl '$Script:c = @{}'), (& $ctl '$x = $SCRIPT:c.Dim'), (& $ctl '$c.Reset'), (& $ctl '$Palette = 1'), (& $ctl '[hashtable]$script:palette = @{}'),
-    (& $ctl '$c.X; $c.Length'), (& $ctl '$Palette = 1' -IsTheme), (& $ctl '$pal = $script:Palette; $pal.Dim')
+    (& $ctl '$script:e = [char]27'), (& $ctl 'function f { $script:Palette = 1 }')
 )
-Assert-Equal '1 1 1 1 1 0 0 0' ($ctlCounts -join ' ')'positive controls: the pin names the old palette name, $c read as the palette and a Palette assignment outside Theme.ps1; a non-palette $c and the theme itself pass'
+Assert-Equal '1 1 1 1 1 1 1' ($ctlBad -join ' ') 'bad controls: the pin names the old palette name, a one-letter script-scope name, $c read as the palette and a script-scope Palette assignment outside Theme.ps1'
+$ctlGood = @(
+    (& $ctl '$c.X; $c.Length'), (& $ctl '$Palette = 1' -IsTheme), (& $ctl '$pal = $script:Palette; $pal.Dim'),
+    (& $ctl '$c.Reset()'), (& $ctl 'function f { $palette = 1 }'), (& $ctl 'function f { [hashtable]$Palette = @{} }')
+)
+Assert-Equal '0 0 0 0 0 0' ($ctlGood -join ' ') 'good controls: a non-palette $c member, a method call on $c, a function-local Palette and the theme itself pass'
 $repoRoot = (Resolve-Path "$PSScriptRoot\..").Path
+# Tracked files only: an untracked scratch script in a working checkout must not turn this red.
+$tracked = @(& git -C $repoRoot ls-files -- '*.ps1' '*.psm1' 2>$null)
+if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) { Write-Host "COULD NOT RUN: git ls-files returned nothing under $repoRoot"; exit 2 }
 $offenders = [Collections.Generic.List[string]]::new()
-$scripts = @(Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Force -Include '*.ps1', '*.psm1' | Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' })
-foreach ($f in $scripts) {
+$scripts = @($tracked | ForEach-Object { Join-Path $repoRoot $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+foreach ($full in $scripts) {
     $parseErrors = $null
-    $ast = [Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$parseErrors)
-    $rel = $f.FullName.Substring($repoRoot.Length + 1)
+    $ast = [Management.Automation.Language.Parser]::ParseFile($full, [ref]$null, [ref]$parseErrors)
+    $rel = $full.Substring($repoRoot.Length + 1) -replace '/', '\'
     if ($parseErrors) { $offenders.Add("$rel - does not parse: $($parseErrors[0].Message)"); continue }
     $isTheme = $rel -ieq 'claude-auto\Theme.ps1'
     foreach ($h in (Find-PaletteShadow -Ast $ast -Keys $paletteKeys -IsTheme:$isTheme)) { $offenders.Add("$rel $h") }
 }
 foreach ($o in $offenders) { Write-Host "      $o" }
-Assert-True (($scripts.Count -gt 20) -and ($offenders.Count -eq 0)) "no script in the repository uses the old palette name, reads `$c as the palette or assigns Palette outside Theme.ps1 ($($scripts.Count) scripts read, $($offenders.Count) offenders)"
+Assert-True (($scripts.Count -gt 20) -and ($offenders.Count -eq 0)) "no tracked script uses a one-letter script-scope name, reads `$c as the palette or assigns Palette at script scope outside Theme.ps1 ($($scripts.Count) scripts read, $($offenders.Count) offenders)"
 
-if ($script:Ran -ne 90) { Write-Host "COULD NOT RUN: expected 90 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 91) { Write-Host "COULD NOT RUN: expected 91 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
