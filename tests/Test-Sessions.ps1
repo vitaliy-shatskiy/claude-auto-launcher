@@ -64,6 +64,13 @@ $p = ConvertFrom-ClaudeProjectSlug -Slug 'subagents'
 Assert-Equal 'subagents' $p.Project 'a single-segment slug yields the whole segment, not its last character'
 $p = ConvertFrom-ClaudeProjectSlug -Slug 'C--Users-someone-Desktop-Scratch'
 Assert-Equal 'Scratch' $p.Project 'a slug outside Projects- still yields the folder name'
+# The slug markers are found ORDINALLY. The culture-sensitive IndexOf(String) skips
+# zero-weight characters such as the soft hyphen U+00AD, "finds" a marker the slug does not hold and
+# then cuts at the marker's own length - one character short.
+$p = ConvertFrom-ClaudeProjectSlug -Slug ('C--Users-someone-Desktop-Pro' + [char]0xAD + 'jects-Demo')
+Assert-Equal 'Demo' $p.Project 'Projects- is matched ordinally: a soft hyphen inside it is no match, never a cut one character short'
+$w = ConvertFrom-ClaudeProjectSlug -Slug ('C--Users-someone-Desktop-Projects-Demo-' + [char]0xAD + '-claude-worktrees-feature')
+Assert-Equal '' "$($w.Worktree)" 'the worktree marker is matched ordinally too'
 
 # 7. Subagent transcripts live in <slug>/<session>/subagents/ and are not sessions.
 $root = "$fx\tree"
@@ -1020,7 +1027,7 @@ foreach ($bindCmd in 'Get-ClaudeSessions', 'Get-ClaudeSessionFile') {
     Assert-True $bindErr "$bindCmd rejects an unknown parameter instead of running on defaults"
 }
 
-if ($script:Ran -ne 197) { Write-Host "COULD NOT RUN: expected 197 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 199) { Write-Host "COULD NOT RUN: expected 199 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

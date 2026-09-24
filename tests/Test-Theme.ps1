@@ -35,16 +35,16 @@ Assert-Equal "$E[33m" (Get-PercentColor -Percent 72) '72% is yellow'
 Assert-Equal "$E[32m" (Get-PercentColor -Percent 15) '15% is green'
 
 # Stripping must remove every form of escape this file emits, including the 256-colour accent.
-Assert-Equal 'plain' (Remove-AnsiColor -Text ($script:C.Accent + 'plain' + $script:C.Reset)) 'accent escapes strip cleanly'
+Assert-Equal 'plain' (Remove-AnsiColor -Text ($script:Palette.Accent + 'plain' + $script:Palette.Reset)) 'accent escapes strip cleanly'
 Assert-Equal 'ab' (Remove-AnsiColor -Text ("a$E[38;5;209mb")) 'partial 256-colour escape strips cleanly'
 
 # Footer-button palette (Task 6, spec D1), pinned by the LITERAL escape rather than through
-# $script:C.* - the Test-Ui suite only ever compares $script:C.ButtonBg to itself, so a typo in
+# $script:Palette.* - the Test-Ui suite only ever compares $script:Palette.ButtonBg to itself, so a typo in
 # one digit here (e.g. 48;5;208m) would still be self-consistent and stay green there.
-Assert-Equal "$E[48;5;238m" $script:C.ButtonBg 'ButtonBg is the dim inverse background'
-Assert-Equal "$E[38;5;250m" $script:C.ButtonFg 'ButtonFg is the dim inverse foreground'
-Assert-Equal "$E[48;5;209m" $script:C.AccentBg 'AccentBg is the warm accent background'
-Assert-Equal "$E[38;5;232m" $script:C.AccentFg 'AccentFg is the warm accent foreground'
+Assert-Equal "$E[48;5;238m" $script:Palette.ButtonBg 'ButtonBg is the dim inverse background'
+Assert-Equal "$E[38;5;250m" $script:Palette.ButtonFg 'ButtonFg is the dim inverse foreground'
+Assert-Equal "$E[48;5;209m" $script:Palette.AccentBg 'AccentBg is the warm accent background'
+Assert-Equal "$E[38;5;232m" $script:Palette.AccentFg 'AccentFg is the warm accent foreground'
 
 # Bars are plain text of exactly the requested width - they are laid out before colour exists.
 $bar = New-Bar -Percent 50 -Width 8
@@ -129,7 +129,7 @@ Assert-True (-not ([string](Get-Glyphs).Bullet).Contains([char]0x23FA)) 'the fre
 # strips them) only after the line is laid out.
 Assert-Equal 1 ([int][char]$script:DimOpen) 'the dim-span open marker is U+0001'
 Assert-Equal 2 ([int][char]$script:DimClose) 'and its close marker is U+0002'
-Assert-Equal ($script:C.Dim + 'x' + $script:C.Reset) (Add-DimSpanColor -Line ([string]$script:DimOpen + 'x' + [string]$script:DimClose) -Enabled) 'with colour on, a span becomes Dim ... Reset'
+Assert-Equal ($script:Palette.Dim + 'x' + $script:Palette.Reset) (Add-DimSpanColor -Line ([string]$script:DimOpen + 'x' + [string]$script:DimClose) -Enabled) 'with colour on, a span becomes Dim ... Reset'
 Assert-Equal 'x' (Add-DimSpanColor -Line ([string]$script:DimOpen + 'x' + [string]$script:DimClose)) 'and with colour off it is stripped to the bare text'
 
 # Hover-band markers (spec D10). Same C0 contract as the dim pair above - zero cells, wrapped on
@@ -140,11 +140,11 @@ Assert-Equal 'x' (Add-DimSpanColor -Line ([string]$script:DimOpen + 'x' + [strin
 Assert-Equal 4 ([int][char]$script:HoverOpen) 'the hover-band open marker is U+0004'
 Assert-Equal 5 ([int][char]$script:HoverClose) 'and its close marker is U+0005'
 Assert-Equal 0 (Get-DisplayWidth -Text ([string]$script:HoverOpen + [string]$script:HoverClose)) 'both cost zero cells, so a banded row lays out by the same numbers as a plain one'
-$band = Add-HoverSpanColor -Line ("ab" + (Add-HoverSpan -Text ("cd" + $script:C.Dim + "ee" + $script:C.Reset + "f")) + "g") -Enabled
-Assert-Equal ("ab" + $script:C.ButtonBg + "cd" + $script:C.Dim + "ee" + $script:C.Reset + $script:C.ButtonBg + "f" + $script:C.Reset + "g") $band 'the band re-asserts its background after every inner Reset'
+$band = Add-HoverSpanColor -Line ("ab" + (Add-HoverSpan -Text ("cd" + $script:Palette.Dim + "ee" + $script:Palette.Reset + "f")) + "g") -Enabled
+Assert-Equal ("ab" + $script:Palette.ButtonBg + "cd" + $script:Palette.Dim + "ee" + $script:Palette.Reset + $script:Palette.ButtonBg + "f" + $script:Palette.Reset + "g") $band 'the band re-asserts its background after every inner Reset'
 Assert-Equal 'abcdeefg' (Remove-AnsiColor -Text $band) 'painting never changes the text'
 Assert-Equal 'abcdf' (Add-HoverSpanColor -Line ("ab" + (Add-HoverSpan -Text 'cd') + "f")) 'colour off strips the markers'
-Assert-Equal ($script:C.ButtonBg + 'xy' + $script:C.Reset) (Add-HoverSpanColor -Line ([string]$script:HoverOpen + 'xy') -Enabled) 'an unpaired open marker is closed at the end of the line'
+Assert-Equal ($script:Palette.ButtonBg + 'xy' + $script:Palette.Reset) (Add-HoverSpanColor -Line ([string]$script:HoverOpen + 'xy') -Enabled) 'an unpaired open marker is closed at the end of the line'
 
 # The early-out has NO observable of its own: the regex behind it matches nothing on an unmarked line
 # and [regex]::Replace hands back the very instance it was given, so the bytes AND the reference are
@@ -159,7 +159,57 @@ Assert-Equal -1 ($unmarked.IndexOf([char]4)) 'while the [char] overload is ordin
 $themeSource = [IO.File]::ReadAllText("$PSScriptRoot\..\claude-auto\Theme.ps1")
 Assert-True ($themeSource -match '\$Line\.IndexOf\(\$script:HoverOpen\) -lt 0 -and \$Line\.IndexOf\(\$script:HoverClose\) -lt 0') 'and the band painter''s early-out tests the [char] markers themselves, never the [string] copies it paints with'
 
-if ($script:Ran -ne 87) { Write-Host "COULD NOT RUN: expected 87 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- palette name pin. The palette was the one-letter `C` at script scope, and PowerShell names are
+# case-insensitive: any `$c = ...` at SCRIPT scope in a script that dot-sources Theme.ps1 replaced
+# it, and every later frame rendered plain with no error. It is `$script:Palette` now. The pin reads
+# every .ps1 in the repository: the old name is gone for good, `$c.<palette key>` is never read as
+# the palette, and nothing outside Theme.ps1 assigns a variable named Palette (the same shadowing,
+# under the new name).
+function Find-PaletteShadow {
+    param([Parameter(Mandatory)][Management.Automation.Language.Ast]$Ast, [string[]]$Keys = @(), [switch]$IsTheme)
+    $hits = [Collections.Generic.List[string]]::new()
+    $vars = $Ast.FindAll({ param($n) $n -is [Management.Automation.Language.VariableExpressionAst] }, $true)
+    foreach ($v in $vars) {
+        $path = $v.VariablePath.UserPath
+        $name = $path -replace '^(?i)(script|global|local|private):', ''
+        $where = "line $($v.Extent.StartLineNumber): $($v.Extent.Text)"
+        if ($path -imatch '^(script|global):C$') { $hits.Add("$where - the old palette name"); continue }
+        $p = $v.Parent
+        if ($name -ieq 'c' -and $p -is [Management.Automation.Language.MemberExpressionAst] -and [object]::ReferenceEquals($p.Expression, $v) -and
+            $p.Member -is [Management.Automation.Language.StringConstantExpressionAst] -and $Keys -icontains $p.Member.Value) {
+            $hits.Add("$where.$($p.Member.Value) - reads `$c as the palette"); continue
+        }
+        if ($name -ieq 'Palette' -and -not $IsTheme) {
+            $target = if ($p -is [Management.Automation.Language.ConvertExpressionAst]) { $p } else { $v }
+            $a = $target.Parent
+            if ($a -is [Management.Automation.Language.AssignmentStatementAst] -and [object]::ReferenceEquals($a.Left, $target)) { $hits.Add("$where - assigns Palette outside Theme.ps1") }
+        }
+    }
+    return , $hits
+}
+$paletteKeys = @(if ($script:Palette -is [hashtable]) { $script:Palette.Keys })
+Assert-True (($script:Palette -is [hashtable]) -and $script:Palette.ContainsKey('Reset') -and $script:Palette.ContainsKey('AccentBg')) 'the palette is $script:Palette, a hashtable holding Reset and AccentBg'
+$ctl = { param([string]$Code, [switch]$IsTheme) (Find-PaletteShadow -Ast ([Management.Automation.Language.Parser]::ParseInput($Code, [ref]$null, [ref]$null)) -Keys $paletteKeys -IsTheme:$IsTheme).Count }
+$ctlCounts = @(
+    (& $ctl '$Script:c = @{}'), (& $ctl '$x = $SCRIPT:c.Dim'), (& $ctl '$c.Reset'), (& $ctl '$Palette = 1'), (& $ctl '[hashtable]$script:palette = @{}'),
+    (& $ctl '$c.X; $c.Length'), (& $ctl '$Palette = 1' -IsTheme), (& $ctl '$pal = $script:Palette; $pal.Dim')
+)
+Assert-Equal '1 1 1 1 1 0 0 0' ($ctlCounts -join ' ')'positive controls: the pin names the old palette name, $c read as the palette and a Palette assignment outside Theme.ps1; a non-palette $c and the theme itself pass'
+$repoRoot = (Resolve-Path "$PSScriptRoot\..").Path
+$offenders = [Collections.Generic.List[string]]::new()
+$scripts = @(Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Force -Include '*.ps1', '*.psm1' | Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' })
+foreach ($f in $scripts) {
+    $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$parseErrors)
+    $rel = $f.FullName.Substring($repoRoot.Length + 1)
+    if ($parseErrors) { $offenders.Add("$rel - does not parse: $($parseErrors[0].Message)"); continue }
+    $isTheme = $rel -ieq 'claude-auto\Theme.ps1'
+    foreach ($h in (Find-PaletteShadow -Ast $ast -Keys $paletteKeys -IsTheme:$isTheme)) { $offenders.Add("$rel $h") }
+}
+foreach ($o in $offenders) { Write-Host "      $o" }
+Assert-True (($scripts.Count -gt 20) -and ($offenders.Count -eq 0)) "no script in the repository uses the old palette name, reads `$c as the palette or assigns Palette outside Theme.ps1 ($($scripts.Count) scripts read, $($offenders.Count) offenders)"
+
+if ($script:Ran -ne 90) { Write-Host "COULD NOT RUN: expected 90 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
