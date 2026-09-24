@@ -119,7 +119,7 @@ belongs to the CLI.
 - `CLAUDE_AUTO_PREVIEW_KEYS` - a key script fed to a preview run, so the seam can be driven headlessly
 - `CLAUDE_NO_ROAM=1` - never routes a session through the companion server, even with `remote: true`
 - `CLAUDE_REMOTE_ROOT` - path to the (unpublished) `remote-control-claude-code` checkout
-- `CLAUDE_AUTO_MIRROR_EXCLUDE` / `CLAUDE_AUTO_MIRROR_SECRETS=1` - the MCP mirror's exclude list and credential opt-in (see Multi-account sharing)
+- `CLAUDE_AUTO_MIRROR_EXCLUDE` / `CLAUDE_AUTO_MIRROR_SECRETS=0` - the MCP mirror's exclude list and credential opt-out (see Multi-account sharing)
 - `NO_COLOR` / `TERM=dumb` - disable colour output
 
 ## Files it writes
@@ -179,10 +179,12 @@ pwsh -File tests\check-preview.ps1 -Record
 `sharing: true` (two or more accounts; OFF in `config.example.json` on purpose) hardlinks `settings.json` and `statusline.js`, and junctions `projects`, `plugins`, `hooks`, `agents`, `skills`, `rules`, `sessions`, `file-history`, `session-env`, `tasks` and `shell-snapshots` from every secondary account's root back to the canonical (`~/.claude`) one, repaired on every launch. The repair links from whichever copy is NEWEST anywhere, so a newer secondary copy can REPLACE the canonical one - the losing copy survives as `<file>.pre-relink`, and an earlier one as `<file>.pre-relink.<yyyyMMdd-HHmmss>`, the newest three kept and older ones deleted. Enabling it also CREATES every secondary account's root directory on the next launch, and each junction it creates gets two `icacls` deny ACEs, so removing one later needs `icacls <path> /L /remove:d "<user>"` before a plain delete will work. Turn it on only once you accept those effects under directories the launcher itself now owns and ACL-locks.
 
 The MCP mirror that `sharing` runs copies project-scoped server definitions from the canonical
-account into the others WITHOUT their `env` and `headers` fields, where a server keeps its token -
-give the other account its own. `CLAUDE_AUTO_MIRROR_SECRETS=1` copies them verbatim;
-`CLAUDE_AUTO_MIRROR_EXCLUDE=name1,name2` never copies those servers. The mirror only adds, so a
-server the target already has is not updated by either switch.
+account into the others verbatim, secrets included: a server's `env` and `headers` fields, where it
+keeps its token, land in every account's `.claude.json`. That is the default because the accounts
+are one person's on one machine and should not differ. `CLAUDE_AUTO_MIRROR_SECRETS=0` opts out and
+copies servers without those two fields; `CLAUDE_AUTO_MIRROR_EXCLUDE=name1,name2` never copies
+those servers. The mirror only adds, so a server the target already has is not updated by either
+switch.
 
 ## Troubleshooting
 
