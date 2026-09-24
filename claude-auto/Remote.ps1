@@ -76,6 +76,13 @@ function Stop-CompanionServer {
     }
 }
 
+function Get-CompanionLogPath {
+    # One log per launcher instance: two launchers redirecting a started server into one fixed file
+    # collide. The .err and .build files share this base name.
+    param([int]$ProcessId = $PID)
+    return (Join-Path $env:TEMP "claude-remote-server-$ProcessId.log")
+}
+
 function Start-CompanionServer {
     param([string]$Root)
     $serverDir = Join-Path $Root 'server'
@@ -84,7 +91,7 @@ function Start-CompanionServer {
     if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
         return "already listening on $port"
     }
-    $log = Join-Path $env:TEMP 'claude-remote-server.log'
+    $log = Get-CompanionLogPath
 
     # Production build first: `npm run build` emits dist/, node runs it without tsx. Rebuild only
     # when a source/config file is newer than dist/index.js. A checkout without the build script

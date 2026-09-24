@@ -140,8 +140,9 @@ function ConvertFrom-ClaudeProjectSlug {
         $main = $Slug.Substring(0, $i)
         $worktree = $Slug.Substring($i + $marker.Length)
     }
-    # Folder names contain dashes of their own and the slug flattens them, so recover the tail
-    # after the last known path segment instead of guessing where the name starts.
+    # FALLBACK only: callers name a project from the transcript's cwd and reach this slug guess
+    # only when no cwd is recorded. Folder names contain dashes of their own and the slug flattens
+    # them, so take the tail after a 'Projects-' segment; with none, the last dash-separated token.
     $project = $main
     $known = 'Projects-'
     $j = $main.IndexOf($known, [StringComparison]::Ordinal)
