@@ -163,7 +163,7 @@ function writeJson(file, obj) {
   writeJson(path.join(target, '.claude.json'), { projects: {} });
 
   const result = spawnSync(process.execPath, [mirrorScript, target], {
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_AUTO_MIRROR_EXCLUDE: '', CLAUDE_AUTO_MIRROR_SECRETS: '' },
     encoding: 'utf8',
   });
   assertEqual(0, result.status, 'the real CLI entry point exits 0 on a clean additive merge');
@@ -172,8 +172,61 @@ function writeJson(file, obj) {
   assertEqual(true, !!merged.projects?.['/repo/four']?.mcpServers?.delta, 'the target file on disk carries the merged server');
 }
 
-if (Ran !== 20) {
-  console.log(`COULD NOT RUN: expected 20 assertions, ran ${Ran} - an assertion was skipped`);
+// ---------------------------------------------------------------- credentials stay behind
+
+{
+  // A server's env block (stdio) and headers (http/sse) are where its token lives. The default
+  // copies the definition without them; the other account supplies its own.
+  const home = freshDir('secrets-home');
+  const target = freshDir('secrets-target');
+  const workFile = path.join(home, '.claude.json');
+  const personalFile = path.join(target, '.claude.json');
+  writeJson(workFile, {
+    projects: {
+      '/repo/five': {
+        mcpServers: {
+          stdio: { command: 'stdio-cmd', args: ['--x'], env: { API_TOKEN: 'fixture-token' } },
+          web: { type: 'http', url: 'https://mcp.example.invalid', headers: { Authorization: 'Bearer fixture-token' } },
+          skipped: { command: 'skipped-cmd' },
+        },
+      },
+    },
+  });
+  writeJson(personalFile, { projects: {} });
+
+  const logs = [];
+  const code = runMirror({ workFile, personalFile, log: (m) => logs.push(m), exclude: ['skipped'] });
+  assertEqual(0, code, 'a merge that drops credentials still exits 0');
+  const after = JSON.parse(fs.readFileSync(personalFile, 'utf8'));
+  const servers = after.projects?.['/repo/five']?.mcpServers ?? {};
+  assertEqual('stdio-cmd --x', `${servers.stdio?.command} ${servers.stdio?.args?.join(' ')}`, 'the server definition itself is copied');
+  assertEqual(false, 'env' in (servers.stdio ?? {}), 'a stdio server is copied WITHOUT its env block by default');
+  assertEqual(false, 'headers' in (servers.web ?? {}), 'an http server is copied WITHOUT its headers by default');
+  assertEqual('https://mcp.example.invalid', servers.web?.url, 'the http server keeps everything else');
+  assertEqual(false, 'skipped' in servers, 'a server named in exclude is never copied');
+  assertEqual(true, logs.length === 1 && /env/.test(logs[0]) && /headers/.test(logs[0]), 'the log line says what was left behind');
+
+  const target2 = freshDir('secrets-optin-target');
+  const personalFile2 = path.join(target2, '.claude.json');
+  writeJson(personalFile2, { projects: {} });
+  runMirror({ workFile, personalFile: personalFile2, log: () => {}, copySecrets: true });
+  const after2 = JSON.parse(fs.readFileSync(personalFile2, 'utf8'));
+  assertEqual('fixture-token', after2.projects?.['/repo/five']?.mcpServers?.stdio?.env?.API_TOKEN, 'copySecrets opts back in to the verbatim copy');
+
+  // The CLI reads both switches from the environment.
+  const target3 = freshDir('secrets-cli-target');
+  writeJson(path.join(target3, '.claude.json'), { projects: {} });
+  const cli = spawnSync(process.execPath, [mirrorScript, target3], {
+    env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_AUTO_MIRROR_EXCLUDE: 'skipped, web', CLAUDE_AUTO_MIRROR_SECRETS: '1' },
+    encoding: 'utf8',
+  });
+  const after3 = JSON.parse(fs.readFileSync(path.join(target3, '.claude.json'), 'utf8'));
+  const s3 = after3.projects?.['/repo/five']?.mcpServers ?? {};
+  assertEqual('0|stdio|fixture-token', `${cli.status}|${Object.keys(s3).join(',')}|${s3.stdio?.env?.API_TOKEN}`, 'the CLI takes the exclude list and the opt-in from CLAUDE_AUTO_MIRROR_EXCLUDE / CLAUDE_AUTO_MIRROR_SECRETS');
+}
+
+if (Ran !== 29) {
+  console.log(`COULD NOT RUN: expected 29 assertions, ran ${Ran} - an assertion was skipped`);
   process.exit(2);
 }
 if (Failed) {

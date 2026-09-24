@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Fixed
 
+- The MCP mirror that `sharing` runs no longer copies a server's `env` and `headers` into another
+  account's `.claude.json`: `CLAUDE_AUTO_MIRROR_SECRETS=1` opts back in, and
+  `CLAUDE_AUTO_MIRROR_EXCLUDE` names servers never to copy.
+- Each launcher instance writes the companion server's log to its own
+  `%TEMP%\claude-remote-server-<pid>.log`, so two instances no longer share one file.
 - The session picker's title shows a typed or pasted filter cleaned of control characters, as the
   project screen already did: an escape sequence in the filter is displayed, never sent to the
   terminal.

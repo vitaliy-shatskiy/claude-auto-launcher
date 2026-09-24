@@ -17,6 +17,12 @@
 // profile has and work does not is left alone. The DECISION of what to change is
 // scoped to projects[*].mcpServers and projects[*].disabledMcpServers only.
 //
+// Credentials stay behind: a copied server loses its `env` and `headers` fields, where a stdio
+// or http server keeps its token, so one account's secret never lands in another account's file.
+// CLAUDE_AUTO_MIRROR_SECRETS=1 copies them verbatim; CLAUDE_AUTO_MIRROR_EXCLUDE (comma-separated
+// server names) is never copied at all. Additive means a server already in the target is not
+// updated, so either switch affects only servers not mirrored yet.
+//
 // NOT format-preserving, though: every write here re-serialises the WHOLE target file
 // (JSON.parse then JSON.stringify(obj, null, 2)), because a JSON document cannot be edited in
 // place - there is no way to touch one path in it without reparsing and rewriting everything
@@ -82,8 +88,11 @@ function sameStat(a, b) {
   return !!a && !!b && a.mtimeMs === b.mtimeMs && a.size === b.size;
 }
 
+// The fields that carry a server's credentials: `env` (stdio) and `headers` (http/sse).
+const SECRET_FIELDS = ['env', 'headers'];
+
 // Pure: mutates `personal` in place, returns the list of human-readable additions.
-function mergeProjects(work, personal) {
+function mergeProjects(work, personal, { exclude = [], copySecrets = false } = {}) {
   const added = [];
   for (const [dir, wp] of Object.entries(work.projects ?? {})) {
     const servers = wp?.mcpServers;
@@ -92,9 +101,17 @@ function mergeProjects(work, personal) {
       personal.projects[dir] ??= {};
       const target = (personal.projects[dir].mcpServers ??= {});
       for (const [name, cfg] of Object.entries(servers)) {
-        if (name in target) continue;
-        target[name] = cfg;
-        added.push(`${name} @ ${path.basename(dir)}`);
+        if (name in target || exclude.includes(name)) continue;
+        const dropped = [];
+        let copy = cfg;
+        if (!copySecrets && cfg && typeof cfg === 'object') {
+          copy = { ...cfg };
+          for (const field of SECRET_FIELDS) {
+            if (field in copy) { delete copy[field]; dropped.push(field); }
+          }
+        }
+        target[name] = copy;
+        added.push(`${name} @ ${path.basename(dir)}${dropped.length ? ` (${dropped.join(', ')} not copied)` : ''}`);
       }
     }
 
@@ -119,7 +136,7 @@ function mergeProjects(work, personal) {
 
 // The whole run, as a function so a test can inject fsImpl/log and explicit file paths instead
 // of touching a real profile. Returns a process exit code; never throws.
-export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.log } = {}) {
+export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.log, exclude = [], copySecrets = false } = {}) {
   if (!fsImpl.existsSync(workFile) || !fsImpl.existsSync(personalFile)) return 0;
 
   let work;
@@ -132,7 +149,7 @@ export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.l
   function loadTargetAndMerge() {
     const baseline = statOf(fsImpl, personalFile);
     const personal = readJsonFile(fsImpl, personalFile, 'target file');
-    const added = mergeProjects(work, personal);
+    const added = mergeProjects(work, personal, { exclude, copySecrets });
     return { baseline, personal, added };
   }
 
@@ -182,5 +199,7 @@ if (isMain) {
   const workFile = path.join(os.homedir(), '.claude.json');
   const targetRoot = process.argv[2] || path.join(os.homedir(), '.claude-acct2');
   const personalFile = path.join(targetRoot, '.claude.json');
-  process.exit(runMirror({ workFile, personalFile }));
+  const exclude = (process.env.CLAUDE_AUTO_MIRROR_EXCLUDE ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  const copySecrets = process.env.CLAUDE_AUTO_MIRROR_SECRETS === '1';
+  process.exit(runMirror({ workFile, personalFile, exclude, copySecrets }));
 }

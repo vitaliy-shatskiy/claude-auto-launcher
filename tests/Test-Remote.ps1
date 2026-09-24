@@ -105,7 +105,20 @@ try {
     else { $env:CLAUDE_REMOTE_ROOT = $savedRoot }
 }
 
-if ($script:Ran -ne 18) { Write-Host "COULD NOT RUN: expected 18 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- Log path per instance ----------------------------------------------------------------------
+# One fixed %TEMP% log meant two launcher instances redirected into the same file. Each instance
+# gets its own, keyed by its process id; .err and .build follow the same base name.
+Assert-Equal $true ($null -ne (Get-Command Get-CompanionLogPath -ErrorAction SilentlyContinue)) 'the companion log path comes from one function'
+$logA = try { Get-CompanionLogPath -ProcessId 101 } catch { 'threw' }
+$logB = try { Get-CompanionLogPath -ProcessId 202 } catch { 'threw' }
+Assert-Equal $true ($logA -ne 'threw' -and $logA -ne $logB) 'two launcher instances get two different log paths'
+Assert-Equal $true ((Split-Path -Path "$logA" -Leaf) -match '101') 'the log name carries the instance id'
+$logDir = try { [IO.Path]::GetFullPath((Split-Path -Path "$logA" -Parent)).TrimEnd('\') } catch { 'threw' }
+Assert-Equal ([IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')) $logDir 'the log still lives in TEMP'
+$startBody = (Get-Command Start-CompanionServer).ScriptBlock.ToString()
+Assert-Equal $true ($startBody -match 'Get-CompanionLogPath' -and $startBody -notmatch "claude-remote-server\.log'") 'Start-CompanionServer uses the per-instance path, not the shared literal'
+
+if ($script:Ran -ne 23) { Write-Host "COULD NOT RUN: expected 23 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
