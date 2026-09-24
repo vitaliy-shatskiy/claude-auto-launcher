@@ -4,6 +4,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Fixed
+
+- The session picker's title shows a typed or pasted filter cleaned of control characters, as the
+  project screen already did: an escape sequence in the filter is displayed, never sent to the
+  terminal.
+
 ## [0.4.2] — 2026-09-23
 
 ### Added

@@ -9,7 +9,7 @@
 # here is arbitrary conversation content. See the design doc for the full argument.
 #
 # The palette, plain-text layout helpers and the launch-screen frame builders moved out:
-# $script:Rows, $script:E, $script:C, Test-ColorSupported, Remove-AnsiColor, Get-PercentColor and
+# $script:Rows, $script:Palette, Test-ColorSupported, Remove-AnsiColor, Get-PercentColor and
 # Limit-Line now live in Theme.ps1 or Layout.ps1; Add-LaunchColor, New-LaunchState, Get-LaunchFrame
 # and Step-LaunchValue now live in Screens.ps1. This file keeps the input loops and the session
 # picker screen.

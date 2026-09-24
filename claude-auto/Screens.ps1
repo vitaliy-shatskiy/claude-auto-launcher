@@ -450,12 +450,12 @@ function Get-AccountTint {
     # twice they drift, and a drift here means an account painted like another one, which is exactly
     # how a session gets spent against the wrong limit.
     #
-    # The table is filled by Set-LaunchRoster from the config (key -> colour NAME in $script:C);
+    # The table is filled by Set-LaunchRoster from the config (key -> colour NAME in $script:Palette);
     # an unknown key or an unknown colour falls back to Green.
     param([string]$Account)
     $name = $script:AccountTints[$Account]
-    if ($name -and $script:C.ContainsKey($name)) { return $script:C[$name] }
-    return $script:C.Green
+    if ($name -and $script:Palette.ContainsKey($name)) { return $script:Palette[$name] }
+    return $script:Palette.Green
 }
 
 function Add-LaunchColor {
@@ -478,7 +478,7 @@ function Add-LaunchColor {
     # what counts as one.
     param([string]$Line, [switch]$Enabled, [hashtable]$Glyphs)
     if (-not $Enabled -or -not $Line) { return $Line }
-    $c = $script:C
+    $pal = $script:Palette
     $out = $Line
     # Measured on the ORIGINAL line, before any pass below weaves escapes into it: every ANSI code
     # is ESC + '[', so a prefix test run later would be reading colour codes instead of text.
@@ -497,9 +497,9 @@ function Add-LaunchColor {
         param($m)
         $value = $m.Groups[1].Value
         $tint =
-            if ($value -in @('off', 'stop server', 'safe')) { $script:C.Yellow }
+            if ($value -in @('off', 'stop server', 'safe')) { $script:Palette.Yellow }
             else { Get-AccountTint -Account $value }
-        $script:C.Bold + $tint + $m.Value + $script:C.Reset
+        $script:Palette.Bold + $tint + $m.Value + $script:Palette.Reset
     })
 
     # The account row is a tab strip: no On glyph, so the pass above cannot see it. Anchored on the
@@ -512,18 +512,18 @@ function Add-LaunchColor {
             param($m)
             $value = ($m.Groups[1].Value -split ' ')[0]
             $tint = Get-AccountTint -Account $value
-            $script:C.Bold + $tint + $m.Value + $script:C.Reset
+            $script:Palette.Bold + $tint + $m.Value + $script:Palette.Reset
         })
     }
 
     $out = [regex]::Replace($out, '(\d+)%', {
         param($m)
-        (Get-PercentColor -Percent ([int]$m.Groups[1].Value)) + $m.Value + $script:C.Reset
+        (Get-PercentColor -Percent ([int]$m.Groups[1].Value)) + $m.Value + $script:Palette.Reset
     })
-    $out = $out -replace '\b(account|model|effort|advisor|permission|remote|mode)\b', ($c.Dim + '$1' + $c.Reset)
-    $out = $out -replace "([$($Glyphs.Cursor)])", ($c.BrightYellow + '$1' + $c.Reset)
-    $out = $out -replace "([$($Glyphs.Sparkle)])", ($c.Accent + '$1' + $c.Reset)
-    $out = $out -replace '(\d+ (?:min|h|d) ago|just now)', ($c.Dim + '$1' + $c.Reset)
+    $out = $out -replace '\b(account|model|effort|advisor|permission|remote|mode)\b', ($pal.Dim + '$1' + $pal.Reset)
+    $out = $out -replace "([$($Glyphs.Cursor)])", ($pal.BrightYellow + '$1' + $pal.Reset)
+    $out = $out -replace "([$($Glyphs.Sparkle)])", ($pal.Accent + '$1' + $pal.Reset)
+    $out = $out -replace '(\d+ (?:min|h|d) ago|just now)', ($pal.Dim + '$1' + $pal.Reset)
     return $out
 }
 
@@ -610,28 +610,28 @@ function Add-HintColor {
     # video - a footer full of white blocks read as one undifferentiated wall of buttons.
     param([string]$Line, [array]$Spans, [switch]$Enabled, [switch]$HasHover, [string]$HoverKey = '', [string]$HoverChar = '', [array]$Selected = @())
     if (-not $Enabled -or -not $Line -or -not $Spans) { return $Line }
-    $c = $script:C
+    $pal = $script:Palette
     $out = ''
     $cursor = 0
     foreach ($s in ($Spans | Sort-Object KeyStart)) {
         if ($s.KeyStart -lt $cursor -or $s.KeyEnd -ge $Line.Length) { continue }
-        $out += $c.Dim + $Line.Substring($cursor, $s.KeyStart - $cursor) + $c.Reset
+        $out += $pal.Dim + $Line.Substring($cursor, $s.KeyStart - $cursor) + $pal.Reset
         $isHovered  = $HasHover -and $s.Start -ge 0 -and $s.Key -eq $HoverKey -and $s.Char -eq $HoverChar
         $isSelected = $s.Start -ge 0 -and @($Selected | Where-Object { $_.Key -eq $s.Key -and $_.Char -eq $s.Char }).Count -gt 0
-        $capTint   = if ($isHovered -or $isSelected) { $c.AccentBg + $c.AccentFg } elseif ($s.Start -ge 0) { $c.ButtonBg + $c.ButtonFg } else { $c.Dim }
-        $labelTint = if ($isHovered -or $isSelected) { $c.Bold } else { $c.Dim }
-        $out += $capTint + $Line.Substring($s.KeyStart, $s.KeyEnd - $s.KeyStart + 1) + $c.Reset
+        $capTint   = if ($isHovered -or $isSelected) { $pal.AccentBg + $pal.AccentFg } elseif ($s.Start -ge 0) { $pal.ButtonBg + $pal.ButtonFg } else { $pal.Dim }
+        $labelTint = if ($isHovered -or $isSelected) { $pal.Bold } else { $pal.Dim }
+        $out += $capTint + $Line.Substring($s.KeyStart, $s.KeyEnd - $s.KeyStart + 1) + $pal.Reset
         $cursor = $s.KeyEnd + 1
         # Clamped to the (possibly Limit-Line-truncated) line: Complete-PickerFrame paints against
         # the UNFILTERED span list (only its own row-map bookkeeping filters End -lt Length), so a
         # span measured on the full text can outrun a footer cut short at low width.
         if ($s.End -ge $cursor -and $cursor -lt $Line.Length) {
             $labelEnd = [Math]::Min($s.End, $Line.Length - 1)
-            $out += $labelTint + $Line.Substring($cursor, $labelEnd - $cursor + 1) + $c.Reset
+            $out += $labelTint + $Line.Substring($cursor, $labelEnd - $cursor + 1) + $pal.Reset
             $cursor = $labelEnd + 1
         }
     }
-    if ($cursor -lt $Line.Length) { $out += $c.Dim + $Line.Substring($cursor) + $c.Reset }
+    if ($cursor -lt $Line.Length) { $out += $pal.Dim + $Line.Substring($cursor) + $pal.Reset }
     return $out
 }
 
@@ -1738,9 +1738,9 @@ function Get-PickerPatterns {
 function Add-PickerColor {
     param([string]$Line, [switch]$Enabled, [hashtable]$Glyphs)
     if (-not $Enabled -or -not $Line) { return $Line }
-    $c = $script:C
+    $pal = $script:Palette
     $rx = Get-PickerPatterns -Glyphs $Glyphs
-    if ($rx.Nothing.IsMatch($Line)) { return $c.Dim + $Line + $c.Reset }
+    if ($rx.Nothing.IsMatch($Line)) { return $pal.Dim + $Line + $pal.Reset }
     $out = $Line
 
     # Speaker attribution gets a colour so a wall of preview text reads as a back-and-forth at a
@@ -1771,17 +1771,17 @@ function Add-PickerColor {
     # free-path row keep its bullet: the band wraps the whole row, so its open marker sits in front
     # of the 3-cell mark (spec D10 puts it there for exactly this lookbehind) and an anchor that
     # could not step over it would leave the bullet unpainted on the one row the mouse is on.
-    $out = $rx.Bullet.Replace($out, ($c.Magenta + '$1' + $c.Reset))
-    $out = $rx.Cursor.Replace($out, ($c.BrightYellow + '$1' + $c.Reset))
-    $out = $rx.Worktree.Replace($out, ($c.Yellow + '$1' + $c.Reset))
-    $out = $rx.Age.Replace($out, ($c.Dim + '$1' + $c.Reset))
-    $out = $rx.Msgs.Replace($out, ($c.Dim + '$1' + $c.Reset))
+    $out = $rx.Bullet.Replace($out, ($pal.Magenta + '$1' + $pal.Reset))
+    $out = $rx.Cursor.Replace($out, ($pal.BrightYellow + '$1' + $pal.Reset))
+    $out = $rx.Worktree.Replace($out, ($pal.Yellow + '$1' + $pal.Reset))
+    $out = $rx.Age.Replace($out, ($pal.Dim + '$1' + $pal.Reset))
+    $out = $rx.Msgs.Replace($out, ($pal.Dim + '$1' + $pal.Reset))
 
     # Restore the parked attributions. BrightCyan for the owner, the warm Accent for Claude - the
     # same accent the launcher uses elsewhere for Claude's own colour, so the pane reads as one
     # palette rather than two arbitrary hues.
-    $out = $out.Replace($markUser, $c.BrightCyan + 'you ' + $Glyphs.RAngle + ' ' + $c.Reset)
-    $out = $out.Replace($markClaude, $c.Accent + 'claude ' + $Glyphs.RAngle + ' ' + $c.Reset)
+    $out = $out.Replace($markUser, $pal.BrightCyan + 'you ' + $Glyphs.RAngle + ' ' + $pal.Reset)
+    $out = $out.Replace($markClaude, $pal.Accent + 'claude ' + $Glyphs.RAngle + ' ' + $pal.Reset)
     return $out
 }
 
@@ -1855,7 +1855,7 @@ function Get-PickerFrame {
     # phrase only when the caller knows a slug but never learned a display name for it.
     if ($Scope -eq 'project') { $title += " $($g.H) " + $(if ($ProjectName) { $ProjectName } else { 'this project' }) }
     if ($hiddenCount -gt 0) { $title += " $($g.H) $hiddenCount empty hidden" }
-    if ($Filter) { $title += " $($g.H) filter: $Filter" }
+    if ($Filter) { $title += " $($g.H) filter: $(Get-CleanTranscriptText -Text $Filter)" }
     # Same rule as the launch screen: the arrow hint names two directions and cannot be clicked
     # into one of them; every single action can. w/s, not up/down (2026-09-09) - see Get-LaunchFrame.
     # The tab hint's label names the scope a press LANDS ON, not the one showing now - the same

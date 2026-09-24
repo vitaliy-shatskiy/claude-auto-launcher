@@ -135,7 +135,7 @@ function ConvertFrom-ClaudeProjectSlug {
     $worktree = $null
     $main = $Slug
     $marker = '--claude-worktrees-'
-    $i = $Slug.IndexOf($marker)
+    $i = $Slug.IndexOf($marker, [StringComparison]::Ordinal)
     if ($i -ge 0) {
         $main = $Slug.Substring(0, $i)
         $worktree = $Slug.Substring($i + $marker.Length)
@@ -144,7 +144,7 @@ function ConvertFrom-ClaudeProjectSlug {
     # after the last known path segment instead of guessing where the name starts.
     $project = $main
     $known = 'Projects-'
-    $j = $main.IndexOf($known)
+    $j = $main.IndexOf($known, [StringComparison]::Ordinal)
     if ($j -ge 0) { $project = $main.Substring($j + $known.Length) }
     # @() is load-bearing: a single-element pipeline is a STRING here, and [-1] on a string indexes
     # its last CHARACTER. That is how the slug 'subagents' rendered as the project 's'.

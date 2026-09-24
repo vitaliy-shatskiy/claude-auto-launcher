@@ -4,8 +4,7 @@
 # invisible characters to .Length, so colouring first makes truncation cut in the wrong place and
 # every width assertion measure the wrong thing.
 
-$script:E = [char]27
-$script:C = @{
+$script:Palette = @{
     Reset        = "$([char]27)[0m"
     Bold         = "$([char]27)[1m"
     Dim          = "$([char]27)[2m"
@@ -53,9 +52,9 @@ function Add-DimSpanColor {
     $open = [string]$script:DimOpen
     $close = [string]$script:DimClose
     if (-not $Enabled) { return ($Line -replace "[$open$close]", '') }
-    $out = $Line -replace "$open([^$open$close]*)$close", ($script:C.Dim + '$1' + $script:C.Reset)
-    if ($out.Contains($open)) { $out = ($out -replace $open, $script:C.Dim) + $script:C.Reset }
-    return ($out -replace $close, $script:C.Reset)
+    $out = $Line -replace "$open([^$open$close]*)$close", ($script:Palette.Dim + '$1' + $script:Palette.Reset)
+    if ($out.Contains($open)) { $out = ($out -replace $open, $script:Palette.Dim) + $script:Palette.Reset }
+    return ($out -replace $close, $script:Palette.Reset)
 }
 
 # Hover-band markers (spec D10). Same contract as the dim-span pair above: zero cells, wrapped by a
@@ -122,7 +121,7 @@ function Add-HoverSpanColor {
     if (-not $Enabled) { return ($Line -replace "[$open$close]", '') }
     # A MatchEvaluator rather than a replacement string: the band has to rewrite what it wraps (every
     # inner Reset becomes Reset + background again), which no '$1' replacement can express. It reads
-    # $script:C rather than a local for CONSISTENCY with Add-LaunchColor's own evaluators, not out of
+    # $script:Palette rather than a local for CONSISTENCY with Add-LaunchColor's own evaluators, not out of
     # necessity: a plain scriptblock handed to [regex]::Replace still resolves its free names against
     # the scope that calls it, so the enclosing locals are in reach either way.
     # .Replace, not -replace, for SPEED - an ordinal string swap over an already-matched group, where
@@ -131,8 +130,8 @@ function Add-HoverSpanColor {
     # no '$' in it to be read as a group reference.
     $paint = {
         param($m)
-        $bg = $script:C.ButtonBg
-        $rs = $script:C.Reset
+        $bg = $script:Palette.ButtonBg
+        $rs = $script:Palette.Reset
         return ($bg + $m.Groups[1].Value.Replace($rs, $rs + $bg) + $rs)
     }
     $out = [regex]::Replace($Line, "$open([^$open$close]*)$close", $paint)
@@ -155,9 +154,9 @@ function Remove-AnsiColor {
 
 function Get-PercentColor {
     param([int]$Percent)
-    if ($Percent -ge 85) { return $script:C.Red }
-    if ($Percent -ge 60) { return $script:C.Yellow }
-    return $script:C.Green
+    if ($Percent -ge 85) { return $script:Palette.Red }
+    if ($Percent -ge 60) { return $script:Palette.Yellow }
+    return $script:Palette.Green
 }
 
 function Test-AsciiRequired {

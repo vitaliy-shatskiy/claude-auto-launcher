@@ -754,6 +754,10 @@ Assert-Equal $true ((@($wideF | Where-Object { (([regex]::Matches($_, [regex]::E
 $narrowF = Get-PickerFrame -Sessions $fake -Index 0 -Filter '' -Width 78 -Height 24 -Now $now
 Assert-Equal 0 (@($narrowF | Where-Object { (([regex]::Matches($_, [regex]::Escape($vChar))).Count) -ge 3 }).Count) 'a narrow terminal draws no inner divider'
 Assert-Equal 1 (@($narrowF | Where-Object { $_ -match '25 msgs' }).Count) 'the narrow layout header shows the selected session''s message count'
+# The filter reaches the title through Get-CleanTranscriptText, as in Get-ProjectFrame -
+# a pasted ESC [ 2 J must be displayed, never sent to the terminal.
+$ctlFilterF = (Get-PickerFrame -Sessions $fake -Index 0 -Filter ('a' + [char]27 + '[2Jb') -Width 120 -Height 24 -Now $now) -join "`n"
+Assert-True ((-not $ctlFilterF.Contains([string][char]27)) -and $ctlFilterF.Contains('filter: a [2Jb')) 'a control character in the picker filter renders cleaned in the title'
 
 # 25 sessions with long messages, so the viewport and wrap paths are actually exercised rather than
 # a fixture that happens to be short enough to hide an overflow.
@@ -1551,15 +1555,15 @@ $nestedModelColored = @($nestedColored | Where-Object { $_ -match 'model' })[0]
 Assert-Equal $nestedModelPlain (Remove-AnsiColor -Text $nestedModelColored) 'nested-bracket model row: stripping colour returns the plain row exactly'
 
 # Property 2: the highlight covers EXACTLY the selected label, brackets included, and nothing else.
-$expectedHighlight = $script:C.Bold + $script:C.Green + '[Opus 5.5[1M]]' + $script:C.Reset
+$expectedHighlight = $script:Palette.Bold + $script:Palette.Green + '[Opus 5.5[1M]]' + $script:Palette.Reset
 Assert-Equal $true ($nestedModelColored.Contains($expectedHighlight)) 'nested-bracket model row: the highlight wraps the whole selected label, brackets included'
 
 # The specific old-bug shape: only the inner '[1M]' of the selected cell gets its own wrapper.
-$innerOnlyHighlight = $script:C.Bold + $script:C.Green + '[1M]' + $script:C.Reset
+$innerOnlyHighlight = $script:Palette.Bold + $script:Palette.Green + '[1M]' + $script:Palette.Reset
 Assert-Equal $false ($nestedModelColored.Contains($innerOnlyHighlight)) 'nested-bracket model row: the inner [1M] alone is not separately highlighted'
 
 # The other old-bug shape: an unselected cell's own literal bracket text painted as if selected.
-$oldBugArtifact = 'Sonnet 5' + $script:C.Bold + $script:C.Green + '[1M]' + $script:C.Reset
+$oldBugArtifact = 'Sonnet 5' + $script:Palette.Bold + $script:Palette.Green + '[1M]' + $script:Palette.Reset
 Assert-Equal $false ($nestedModelColored.Contains($oldBugArtifact)) 'nested-bracket model row: the unselected Sonnet 5[1M] cell is not painted as if it were selected'
 
 # Property 3: the specific failure named in review - a bracket-matching character class that
@@ -1843,8 +1847,8 @@ $pkHoverOut = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $wPkHover -
 Assert-True ($null -eq $pkHoverOut) 'the picker footer-hover sweep still ends with Escape'
 Assert-Equal 3 $script:pkHoverFrames.Count 'three picker frames were drawn: initial, hover-/, hover-f'
 Assert-Equal 3 (@($script:pkHoverFrames | Select-Object -Unique).Count) 'and all three are DISTINCT - before -Hover reached Get-PickerFrame the three were byte-identical'
-Assert-True ($script:pkHoverFrames[1].Contains($script:C.AccentBg)) 'the hovered picker button gets the accent cap'
-Assert-True (-not $script:pkHoverFrames[0].Contains($script:C.AccentBg)) 'and nothing is accent-tinted before the mouse arrives'
+Assert-True ($script:pkHoverFrames[1].Contains($script:Palette.AccentBg)) 'the hovered picker button gets the accent cap'
+Assert-True (-not $script:pkHoverFrames[0].Contains($script:Palette.AccentBg)) 'and nothing is accent-tinted before the mouse arrives'
 
 # --- Mouse on the launch screen. Same seams, and the assertion that matters most is that a click
 # on an option CELL selects that value - the difference between a menu and a picture of one. ---
@@ -2232,12 +2236,12 @@ Assert-Equal 3 $script:launchFrames.Count 'three moves cost two frames past the 
 $hPlain = @($script:launchFrames[0] -split "`n")[$hmapProbe.FooterY + $hSpanEnter.Line]
 $hOnEnter = @($script:launchFrames[1] -split "`n")[$hmapProbe.FooterY + $hSpanEnter.Line]
 $hOnU = @($script:launchFrames[2] -split "`n")[$hmapProbe.FooterY + $hSpanU.Line]
-# Task 6 correction: hover moved off the plain-text $C.Accent tint onto the AccentBg/AccentFg
+# Task 6 correction: hover moved off the plain-text $script:Palette.Accent tint onto the AccentBg/AccentFg
 # cap fill (spec D1), so these fingerprint the new escape rather than the old one.
-Assert-True (-not $hPlain.Contains($script:C.AccentBg)) 'no footer button is accent-tinted before the mouse moves'
-Assert-True ($hOnEnter.Contains($script:C.AccentBg)) 'hovering "enter next" paints its cap with the accent colour'
+Assert-True (-not $hPlain.Contains($script:Palette.AccentBg)) 'no footer button is accent-tinted before the mouse moves'
+Assert-True ($hOnEnter.Contains($script:Palette.AccentBg)) 'hovering "enter next" paints its cap with the accent colour'
 Assert-Equal (Remove-AnsiColor $hPlain) (Remove-AnsiColor $hOnEnter) 'and repaints the same plain text - only the colour moved'
-Assert-True ($hOnU.Contains($script:C.AccentBg)) 'moving on to "u maintenance" tints that one instead'
+Assert-True ($hOnU.Contains($script:Palette.AccentBg)) 'moving on to "u maintenance" tints that one instead'
 Assert-True ($script:launchFrames[1] -ne $script:launchFrames[2]) 'so the two hovered frames differ - the accent follows the hovered button, not a fixed spot'
 
 # --- switching tabs carries the rows with it (owner ask 2026-09-04) ---------------------------
@@ -2395,7 +2399,7 @@ $plainFooter = (New-HintFooter -Glyphs (Get-Glyphs) -Hints @(
 $paintedFooter = Add-HintColor -Line $plainFooter.Text -Spans $plainFooter.Spans -Enabled
 Assert-Equal $plainFooter.Text ($paintedFooter -replace "$([char]27)\[[0-9;]*m", '') 'stripping the colour off the footer returns it unchanged'
 # Task 6 correction: idle caps are the dim button background now, never bare reverse video (spec
-# D1) - the literal escape, not $script:C.ButtonBg, so a Theme entry that went missing (Contains
+# D1) - the literal escape, not $script:Palette.ButtonBg, so a Theme entry that went missing (Contains
 # $null -> False) would still be caught rather than passing vacuously.
 Assert-Equal $true ($paintedFooter.Contains("$([char]27)[48;5;238m")) 'the key caps are painted with the dim button background'
 Assert-Equal $plainFooter.Text (Add-HintColor -Line $plainFooter.Text -Spans $plainFooter.Spans) 'colour disabled leaves the footer exactly as it was'
@@ -2420,16 +2424,16 @@ $plain4 = New-HintFooter -Glyphs $g4 -Plain -Hints @(
 Assert-True ($plain4.Text -match '\[enter\] start') 'without colour the cap is bracketed'
 
 $painted4 = Add-HintColor -Line $f4.Text -Spans $f4.Spans -Enabled
-# Not [regex]::Escape($script:C.ButtonBg) -match ... : Escape($null) silently returns '', and an
+# Not [regex]::Escape($script:Palette.ButtonBg) -match ... : Escape($null) silently returns '', and an
 # empty pattern matches ANY string - a missing ButtonBg code would pass this check by accident.
-Assert-True ((-not [string]::IsNullOrEmpty($script:C.ButtonBg)) -and $painted4.Contains($script:C.ButtonBg)) 'the idle cap is painted with the dim button background'
+Assert-True ((-not [string]::IsNullOrEmpty($script:Palette.ButtonBg)) -and $painted4.Contains($script:Palette.ButtonBg)) 'the idle cap is painted with the dim button background'
 Assert-Equal $f4.Text (Remove-AnsiColor $painted4) 'painting stays reversible'
 # Task 6 correction 4: nothing above pins WHERE the button-cap escape lands - moving the tint
 # (Add-HintColor, Screens.ps1) off the key cap onto the preceding gap text survives every assertion
 # above (both still find the escape and both still strip back to plain text). Pin it directly: the
 # ButtonBg+ButtonFg escape must be followed immediately by the cap text itself (' enter '), not the
 # gap - and idle stays dim, never bare reverse video (spec D1).
-Assert-True ($painted4.Contains($script:C.ButtonBg + $script:C.ButtonFg + ' enter ' + $script:C.Reset)) 'the button-cap escape paints the key cap itself, not the gap before it'
+Assert-True ($painted4.Contains($script:Palette.ButtonBg + $script:Palette.ButtonFg + ' enter ' + $script:Palette.Reset)) 'the button-cap escape paints the key cap itself, not the gap before it'
 
 # The width fact the padded and bracketed forms share (1 + token + 1, either way): they cannot
 # wrap to a different number of lines, so $script:MinHeight cannot diverge between colour and
@@ -2524,8 +2528,8 @@ $wMtHover = New-EventReader @(
 Invoke-MaintenanceScreen -ReadKey $wMtHover -Draw $mtHoverDraw -Wait $wMtHover -GetWindowTop { 0 } -Actions $cfgActions
 Assert-Equal 3 $script:mtHoverFrames.Count 'three maintenance frames were drawn: initial, hover-d, hover-p'
 Assert-Equal 3 (@($script:mtHoverFrames | Select-Object -Unique).Count) 'and all three are DISTINCT - before -Hover reached Get-MaintenanceFrame the three were byte-identical'
-Assert-True ($script:mtHoverFrames[1].Contains($script:C.AccentBg)) 'the hovered maintenance button gets the accent cap'
-Assert-True (-not $script:mtHoverFrames[0].Contains($script:C.AccentBg)) 'and nothing is accent-tinted before the mouse arrives'
+Assert-True ($script:mtHoverFrames[1].Contains($script:Palette.AccentBg)) 'the hovered maintenance button gets the accent cap'
+Assert-True (-not $script:mtHoverFrames[0].Contains($script:Palette.AccentBg)) 'and nothing is accent-tinted before the mouse arrives'
 
 # A click one column past a span must NOT leave - proving the hit test is what decided it, not the
 # mere arrival of a mouse event. 'esc' no longer works for this: it is now ALONE on the wrapped
@@ -2988,8 +2992,8 @@ Assert-Equal $true ((Get-LaunchRows | ForEach-Object Name) -contains 'Remote') '
 Set-LaunchRoster -Accounts @([pscustomobject]@{ Key = 'me'; Root = 'C:\x'; Label = 'me'; Tint = 'Yellow'; Hidden = $false; Canonical = $true })
 Assert-Equal $false ((Get-LaunchRows | ForEach-Object Name) -contains 'Remote') 'remote off: no row'
 Assert-Equal 'me' (New-LaunchState).Account 'the default account is the first visible key'
-Assert-Equal $script:C.Yellow (Get-AccountTint -Account 'me') 'tint comes from the roster'
-Assert-Equal $script:C.Green (Get-AccountTint -Account 'nobody') 'unknown account falls back to Green'
+Assert-Equal $script:Palette.Yellow (Get-AccountTint -Account 'me') 'tint comes from the roster'
+Assert-Equal $script:Palette.Green (Get-AccountTint -Account 'nobody') 'unknown account falls back to Green'
 $frame = Get-LaunchFrame -State (New-LaunchState) -Width 78 -Height 24
 Assert-Equal 0 (@($frame | Where-Object { (Remove-AnsiColor $_) -match '^\s*.\s*remote' }).Count) 'no remote line is rendered when the row is off'
 # One definition of the default account: the canonical key when it is visible, whatever its
@@ -3419,11 +3423,11 @@ try {
     $footerLineHoverC = $frameHoverC[$hoverMapC.FooterY]
     $footerLineHoverR = $frameHoverR[$hoverMapR.FooterY]
     Assert-Equal (Remove-AnsiColor $footerLineNoHover) (Remove-AnsiColor $footerLineHoverC) 'hovering repaints the footer line without changing its plain text'
-    Assert-True ($footerLineHoverC.Contains($script:C.AccentBg)) 'hovering the c footer button paints its cap with the accent colour'
-    # Task 6 correction (R12): the footer never emits bare $C.Accent any more (only the AccentBg
+    Assert-True ($footerLineHoverC.Contains($script:Palette.AccentBg)) 'hovering the c footer button paints its cap with the accent colour'
+    # Task 6 correction (R12): the footer never emits bare $script:Palette.Accent any more (only the AccentBg
     # fill) - checking for Accent here could never fail. Fingerprint the escape the footer really
     # emits, like the launch twin at line ~1539.
-    Assert-True (-not $footerLineNoHover.Contains($script:C.AccentBg)) 'no button is accent-tinted when nothing is hovered'
+    Assert-True (-not $footerLineNoHover.Contains($script:Palette.AccentBg)) 'no button is accent-tinted when nothing is hovered'
     Assert-True ($footerLineHoverC -ne $footerLineHoverR) 'hovering a different button paints a different frame - the accent follows the hover index, not a fixed spot'
     $typingFrame = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Filter 'al' -Typing -Cwd $tmpCwd -Width 100 -Height 24)
     Assert-True (($typingFrame -join "`n").Contains('filter: al_')) 'typing shows the filter text with a trailing cursor'
@@ -3802,20 +3806,20 @@ try {
     $g6 = Get-Glyphs
     $f6 = New-HintFooter -Glyphs $g6 -Hints @(@{ Token = 'c'; Label = 'continue'; Clickable = $true; Key = ''; Char = 'c' }; @{ Token = 'r'; Label = 'resume'; Clickable = $true; Key = ''; Char = 'r' })
     $plain6 = Add-HintColor -Line $f6.Text -Spans $f6.Spans -Enabled
-    Assert-True ($plain6.Contains($script:C.ButtonBg)) 'an idle button cap is painted with the dim button background'
-    Assert-True (-not $plain6.Contains($script:C.Reverse)) 'and never with bare reverse video (white)'
+    Assert-True ($plain6.Contains($script:Palette.ButtonBg)) 'an idle button cap is painted with the dim button background'
+    Assert-True (-not $plain6.Contains($script:Palette.Reverse)) 'and never with bare reverse video (white)'
     $sel6 = Add-HintColor -Line $f6.Text -Spans $f6.Spans -Enabled -Selected @(@{ Key = ''; Char = 'r' })
-    Assert-True ($sel6.Contains($script:C.AccentBg + $script:C.AccentFg + ' r ')) "the selected action's cap is accent"
-    Assert-True ($sel6.Contains($script:C.ButtonBg + $script:C.ButtonFg + ' c ')) 'while the other stays dim'
+    Assert-True ($sel6.Contains($script:Palette.AccentBg + $script:Palette.AccentFg + ' r ')) "the selected action's cap is accent"
+    Assert-True ($sel6.Contains($script:Palette.ButtonBg + $script:Palette.ButtonFg + ' c ')) 'while the other stays dim'
     $hov6 = Add-HintColor -Line $f6.Text -Spans $f6.Spans -Enabled -HasHover -HoverKey '' -HoverChar 'c'
-    Assert-True ($hov6.Contains($script:C.AccentBg + $script:C.AccentFg + ' c ')) 'and a hovered button is accent too'
+    Assert-True ($hov6.Contains($script:Palette.AccentBg + $script:Palette.AccentFg + ' c ')) 'and a hovered button is accent too'
     Assert-Equal $f6.Text (Remove-AnsiColor $sel6) 'painting never changes the text'
     $map6 = $null
     $lines6 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'resume' -Color -RowMap ([ref]$map6))
-    Assert-True (($lines6 -join "`n").Contains($script:C.AccentBg + $script:C.AccentFg + ' r ')) 'the project footer marks the button of the action the field names'
+    Assert-True (($lines6 -join "`n").Contains($script:Palette.AccentBg + $script:Palette.AccentFg + ' r ')) 'the project footer marks the button of the action the field names'
     $mapNew6 = $null
     $linesNew6 = @(Get-ProjectFrame -Projects $pProjs -Index 0 -Cwd $tmpCwd -Width 80 -Height 24 -Action 'new' -Color -RowMap ([ref]$mapNew6))
-    Assert-True (-not (($linesNew6 -join "`n").Contains($script:C.AccentBg + $script:C.AccentFg))) "-Action 'new' lights no button"
+    Assert-True (-not (($linesNew6 -join "`n").Contains($script:Palette.AccentBg + $script:Palette.AccentFg))) "-Action 'new' lights no button"
 
     # --- Task 6 fix round 1: Add-HintColor must not throw when painted against a TRUNCATED line
     # carrying the FULL (untruncated) span list. Complete-PickerFrame paints exactly this shape: it
@@ -3828,7 +3832,7 @@ try {
     $thrown7 = $false
     try { $painted7 = Add-HintColor -Line $cut7 -Spans $f7.Spans -Enabled } catch { $thrown7 = $true }
     Assert-Equal $false $thrown7 'painting a truncated line against the full (untruncated) span list does not throw'
-    Assert-True ($painted7.Contains($script:C.ButtonBg)) 'the cap still paints even though its label was cut short'
+    Assert-True ($painted7.Contains($script:Palette.ButtonBg)) 'the cap still paints even though its label was cut short'
     Assert-Equal $cut7 (Remove-AnsiColor $painted7) 'and the truncated text comes back unchanged'
 
     # The extra row is absorbed by the list viewport, never by MinHeight (which is measured off the
@@ -3924,7 +3928,7 @@ try {
     # colour goldens near the top of this file.
     $m9c = $null
     $colored9 = @(Get-ProjectFrame -Projects $projs6 -Index 1 -Cwd 'C:\x' -Width 80 -Height 24 -Color -RowMap ([ref]$m9c))
-    Assert-True ($colored9[$m9c.Action.Y - 1].Contains($script:C.Dim + $projs6[0].Path)) 'a project''s path is painted dim'
+    Assert-True ($colored9[$m9c.Action.Y - 1].Contains($script:Palette.Dim + $projs6[0].Path)) 'a project''s path is painted dim'
     Assert-True (-not $colored9[$m9c.Action.Y - 1].Contains([string]$script:DimOpen)) 'and no marker survives painting'
     $m9p = $null
     $plain9 = @(Get-ProjectFrame -Projects $projs6 -Index 1 -Cwd 'C:\x' -Width 80 -Height 24 -RowMap ([ref]$m9p))
@@ -3935,7 +3939,7 @@ try {
     Assert-Equal 0 (Get-DisplayWidth -Text ([string]$script:DimOpen + [string]$script:DimClose)) 'the dim-span markers measure zero cells, so a marked row lays out exactly like an unmarked one'
     Assert-Equal 'alpha beta' (Get-CleanTranscriptText -Text ("alpha$([string]$script:DimOpen)beta$([string]$script:DimClose)")) 'the transcript sanitiser strips them, so untrusted text cannot open a dim span'
     Assert-Equal 'abc' (Add-DimSpanColor -Line ([string]$script:DimOpen + 'abc' + [string]$script:DimClose)) 'with colour off the markers are simply stripped'
-    Assert-True ((Add-DimSpanColor -Line (Limit-Line -Text ([string]$script:DimOpen + 'abcdefgh' + [string]$script:DimClose) -Max 4) -Enabled).EndsWith($script:C.Reset)) 'and a span whose close was cut off by truncation is still closed, never left bleeding'
+    Assert-True ((Add-DimSpanColor -Line (Limit-Line -Text ([string]$script:DimOpen + 'abcdefgh' + [string]$script:DimClose) -Max 4) -Enabled).EndsWith($script:Palette.Reset)) 'and a span whose close was cut off by truncation is still closed, never left bleeding'
 
     # R13: in ASCII mode the bullet glyph IS the corner glyph ('+'), so the bullet rule has to be
     # anchored to the row shape - a border painted magenta is the failure this pins.
@@ -3944,8 +3948,8 @@ try {
     $ascii9 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\x' -Width 80 -Height 24 -Color -Ascii -RowMap ([ref]$m9a))
     Assert-True (-not $ascii9[0].Contains([string][char]27)) 'in ASCII mode the top border carries no colour at all - the bullet rule cannot reach a corner'
     Assert-True (-not $ascii9[$m9a.FooterY - 1].Contains([string][char]27)) 'nor the bottom border'
-    Assert-True ($ascii9[$m9a.RowYs[-1]].Contains($script:C.Magenta + [string]$gA9.Bullet)) 'while the free-path bullet is still painted in ASCII'
-    Assert-True ($colored9[$m9c.RowYs[-1]].Contains($script:C.Magenta + [string]$gg.Bullet)) 'and in the default glyph set too'
+    Assert-True ($ascii9[$m9a.RowYs[-1]].Contains($script:Palette.Magenta + [string]$gA9.Bullet)) 'while the free-path bullet is still painted in ASCII'
+    Assert-True ($colored9[$m9c.RowYs[-1]].Contains($script:Palette.Magenta + [string]$gg.Bullet)) 'and in the default glyph set too'
 
     # The loop agrees with the frame: Enter on the opening frame runs in the CURRENT DIRECTORY.
     $r9 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw { $null }
@@ -4006,14 +4010,14 @@ try {
         $m9x = $null
         $plus9 = @(Get-ProjectFrame -Projects $plus9Projs -Index 0 -Cwd 'C:\x' -Width 80 -Height 24 -Color -Ascii:$ascii9 -RowMap ([ref]$m9x))
         $g9x = Get-Glyphs -Ascii:$ascii9
-        Assert-True (-not $plus9[$m9x.RowYs[1]].Contains($script:C.Magenta)) "a project whose name starts with the bullet character is not painted as a bullet (ascii=$ascii9)"
-        Assert-True ($plus9[$m9x.RowYs[-1]].Contains($script:C.Magenta + [string]$g9x.Bullet)) "while the free-path row's own bullet still is (ascii=$ascii9)"
+        Assert-True (-not $plus9[$m9x.RowYs[1]].Contains($script:Palette.Magenta)) "a project whose name starts with the bullet character is not painted as a bullet (ascii=$ascii9)"
+        Assert-True ($plus9[$m9x.RowYs[-1]].Contains($script:Palette.Magenta + [string]$g9x.Bullet)) "while the free-path row's own bullet still is (ascii=$ascii9)"
     }
 
     # The speaker-attribution parking mark is a control character too, and it must not be one of the
     # dim-span markers: the two rules only ever meet on a picker line, but they meet.
     $spk9 = Add-PickerColor -Line ('   you ' + [string]$gg.RAngle + ' hello') -Enabled -Glyphs $gg
-    Assert-True ($spk9.Contains($script:C.BrightCyan + 'you ' + [string]$gg.RAngle)) 'the speaker attribution is parked and restored'
+    Assert-True ($spk9.Contains($script:Palette.BrightCyan + 'you ' + [string]$gg.RAngle)) 'the speaker attribution is parked and restored'
     Assert-Equal 0 @($spk9.ToCharArray() | Where-Object { [int]$_ -lt 0x20 -and [int]$_ -ne 27 }).Count 'and no parking mark survives the paint - nor is it a marker the dim spans use'
 
     # R16: a filter is a SEARCH. Once it narrows to at least one project the cursor sits on the first
@@ -5143,7 +5147,7 @@ Assert-Equal 1 $acts 'and then activates it - once'
 # --- Task 2 (spec D10): the hover band, one marker pair through all four frames ---------------
 # Read off the REAL frames, at the coordinates their own row maps give - the band is only useful if
 # it lands on the row the mouse is over, and a fixture map would prove nothing about that.
-$hb = $script:C.ButtonBg
+$hb = $script:Palette.ButtonBg
 $uniCursor = [string](Get-Glyphs).Cursor
 
 $hm = $null
@@ -5171,7 +5175,7 @@ Assert-Equal $false ($hpf[$hpm.RowYs[2]].Contains($hb)) 'its neighbours do not'
 Assert-Equal $true ($hpf[$hpm.RowYs[0]].Contains($uniCursor) -and -not $hpf[$hpm.RowYs[0]].Contains($hb)) 'and the cursor stays on the selected row, unbanded'
 $hpf2 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 120 -Height 24 -Color -HoverRow 3 -RowMap ([ref]$hpm))
 Assert-Equal $true ($hpf2[$hpm.RowYs[3]].Contains($hb)) 'the hovered free-path row carries the band'
-Assert-Equal $true ($hpf2[$hpm.RowYs[3]].Contains($script:C.Magenta)) 'and keeps its magenta bullet under it - the anchor steps over the open marker'
+Assert-Equal $true ($hpf2[$hpm.RowYs[3]].Contains($script:Palette.Magenta)) 'and keeps its magenta bullet under it - the anchor steps over the open marker'
 # P10: every hovered row on the screen bands the SAME inner width. The three shapes reached it
 # differently - a project row carries an age column, the cwd row does not (its right gutter cell sat
 # OUTSIDE the band), and the free-path row is the one row not built by New-ListRow and was only as
@@ -5186,7 +5190,7 @@ function Get-HoverBandCells {
     param([string]$Line)
     $at = $Line.IndexOf($hb, [StringComparison]::Ordinal)
     if ($at -lt 0) { return -1 }
-    $end = $Line.LastIndexOf($script:C.Reset, [StringComparison]::Ordinal)
+    $end = $Line.LastIndexOf($script:Palette.Reset, [StringComparison]::Ordinal)
     if ($end -lt $at) { return -2 }
     return (Get-DisplayWidth -Text (Remove-AnsiColor $Line.Substring($at, $end - $at)))
 }
@@ -5200,7 +5204,7 @@ Assert-Equal '77,77,77' ($hbCells -join ',') 'the cwd row, a project row and the
 # escape and the first Reset after it is what the band covers.
 $hpf3 = @(Get-ProjectFrame -Projects $projs6 -Index 0 -Cwd 'C:\somewhere' -Width 120 -Height 24 -Color -HoverValue 'resume' -RowMap ([ref]$hpm))
 $hActionLine = $hpf3[$hpm.Action.Y]
-$hBandText = if ($hActionLine -match ([regex]::Escape($hb) + '(.*?)' + [regex]::Escape($script:C.Reset))) { $Matches[1] } else { '' }
+$hBandText = if ($hActionLine -match ([regex]::Escape($hb) + '(.*?)' + [regex]::Escape($script:Palette.Reset))) { $Matches[1] } else { '' }
 Assert-Equal $true ($hBandText -match 'resume') 'the hovered action value carries the band'
 Assert-Equal $false ($hBandText -match 'new') 'and the value the field actually reads does not'
 Assert-Equal $true ((Remove-AnsiColor $hActionLine) -match '\[new\]') 'hovering a value never changes the one the field reads - the brackets stay on it (D8)'
@@ -5387,7 +5391,7 @@ foreach ($w in 50, 100, 101, 198) {
       # every frame there is, so a whole-frame Contains is a check that cannot fail (measured - it
       # stayed green with the launch band deleted outright).
       if ($wColor) {
-          Assert-Equal $true ($hoverSet.launchAcct[$hsAcct.Y].Contains($script:C.ButtonBg)) "the hovered account tab is banded on its own row at $w columns (ascii=$wAscii) - this is what makes the sweep bite where the model row publishes no cells"
+          Assert-Equal $true ($hoverSet.launchAcct[$hsAcct.Y].Contains($script:Palette.ButtonBg)) "the hovered account tab is banded on its own row at $w columns (ascii=$wAscii) - this is what makes the sweep bite where the model row publishes no cells"
       }
       foreach ($k in $hoverSet.Keys) {
           $over = @($hoverSet[$k] | Where-Object { (Get-DisplayWidth -Text (Remove-AnsiColor $_)) -gt ($w - 1) })
@@ -5632,8 +5636,8 @@ try {
                                              Worktree = $null; LastActivity = $now.AddHours(-9) } } }
     )
     $projMissWrong = @()
-    # $missCase, never $c: this runs at script scope, where $c IS $script:C - the palette - and a loop
-    # variable of that name leaves every -Color frame after it painted with nothing.
+    # $missCase, not $c: when the palette was the one-letter C at script scope, a loop variable of that
+    # name here left every -Color frame after it painted with nothing (it is $script:Palette now).
     foreach ($missCase in $projMissCases) {
         $script:FrameMemo = @{}
         $null = Get-ProjectFrame @projBase
@@ -5751,13 +5755,13 @@ foreach ($k in $ntExpected.Keys) {
 # keeps it under the hover band too.
 $nf60c = @(Get-LaunchFrame -State $ntState -Width 60 -Height 26 -Limits $ntLimits -DefaultLabels $ntLabels -Color)
 $ntEffC = @($nf60c | Where-Object { $_.Contains('xhigh') })[0]
-Assert-True ($ntEffC.Contains($script:C.Bold + $script:C.Green + '[xhigh]' + $script:C.Reset)) 'narrow: the selected compact value is bold and tinted like the full form''s selected cell'
-Assert-Equal 1 ([regex]::Matches($ntEffC, [regex]::Escape($script:C.Bold)).Count) 'and it is the only emphasised value on its row'
-Assert-True (@($nf60c | Where-Object { $_.Contains($script:C.Bold + $script:C.Yellow + '[bypass]') -or $_.Contains($script:C.Bold + $script:C.Green + '[bypass]') }).Count -eq 1) 'every compact row highlights its own selected value (permission too)'
+Assert-True ($ntEffC.Contains($script:Palette.Bold + $script:Palette.Green + '[xhigh]' + $script:Palette.Reset)) 'narrow: the selected compact value is bold and tinted like the full form''s selected cell'
+Assert-Equal 1 ([regex]::Matches($ntEffC, [regex]::Escape($script:Palette.Bold)).Count) 'and it is the only emphasised value on its row'
+Assert-True (@($nf60c | Where-Object { $_.Contains($script:Palette.Bold + $script:Palette.Yellow + '[bypass]') -or $_.Contains($script:Palette.Bold + $script:Palette.Green + '[bypass]') }).Count -eq 1) 'every compact row highlights its own selected value (permission too)'
 $ntHovered = New-LaunchState
 $ntHovered.Effort = 'xhigh'; $ntHovered.Row = 3; $ntHovered.HoverRow = 3; $ntHovered.HoverValue = 'xhigh'
 $ntEffH = @(@(Get-LaunchFrame -State $ntHovered -Width 60 -Height 26 -DefaultLabels $ntLabels -Color) | Where-Object { $_.Contains('xhigh') })[0]
-Assert-True ($ntEffH.Contains($script:C.Bold + $script:C.Green + '[xhigh]') -and $ntEffH.Contains($script:C.ButtonBg)) 'and a hovered selected compact value keeps its highlight under the band'
+Assert-True ($ntEffH.Contains($script:Palette.Bold + $script:Palette.Green + '[xhigh]') -and $ntEffH.Contains($script:Palette.ButtonBg)) 'and a hovered selected compact value keeps its highlight under the band'
 # The wide tier keeps the full radio form on every option row.
 $nfWide = @(Get-LaunchFrame -State $ntState -Width 100 -Height 30 -Limits $ntLimits -DefaultLabels $ntLabels)
 foreach ($row in @((Get-LaunchRows) | Where-Object { $_.Name -ne 'Account' })) {
@@ -5914,7 +5918,7 @@ Assert-Equal $true $hsResult 'confirm: a resize does not answer the question'
 Assert-Equal 2 $script:hsDraws 'confirm: a resize repaints'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1954
+$script:Expected = 1955
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
