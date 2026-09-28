@@ -523,10 +523,10 @@ try {
 # not depend on what the live file currently says) makes the overflow behaviour deterministic.
 $longDefaultLabel = 'default (claude-fable-5-1[1m])'
 foreach ($w in @(60, 80, 100, 120)) {
-    $sel = New-LaunchState; $sel.Model = 'sonnet1m'   # 'Sonnet 5[1M]' is the longest static label
+    $sel = New-LaunchState; $sel.Model = 'opus1m'   # 'Opus 5.5[1M]' is the longest static label
     $f = Get-LaunchFrame -State $sel -Width $w -Height 24 -DefaultModelLabel $longDefaultLabel
-    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "no line reaches column $w with Sonnet 5[1M] selected"
-    Assert-Equal 1 (@($f | Where-Object { $_ -match [regex]::Escape('Sonnet 5[1M]') }).Count) "width ${w}: the selected model label renders complete, not truncated"
+    Assert-Equal 0 (@($f | Where-Object { $_.Length -gt ($w - 1) }).Count) "no line reaches column $w with Opus 5.5[1M] selected"
+    Assert-Equal 1 (@($f | Where-Object { $_ -match [regex]::Escape('Opus 5.5[1M]') }).Count) "width ${w}: the selected model label renders complete, not truncated"
 }
 foreach ($w in @(60, 80, 100, 120)) {
     $f = Get-LaunchFrame -State (New-LaunchState) -Width $w -Height 24 -DefaultModelLabel $longDefaultLabel
@@ -543,9 +543,9 @@ Assert-Equal 1 (@($f | Where-Object { $_ -match [regex]::Escape('Haiku 4.5') }).
 # width 60 the effort row's six values overflow the same way and would otherwise double-count.
 foreach ($ascii in @($true, $false)) {
     $glyphs = Get-Glyphs -Ascii:$ascii
-    $sel = New-LaunchState; $sel.Model = 'sonnet1m'
+    $sel = New-LaunchState; $sel.Model = 'opus1m'
     $f = Get-LaunchFrame -State $sel -Width 60 -Height 24 -DefaultModelLabel $longDefaultLabel -Ascii:$ascii
-    $modelLine = @($f | Where-Object { $_ -match [regex]::Escape('Sonnet 5[1M]') })
+    $modelLine = @($f | Where-Object { $_ -match [regex]::Escape('Opus 5.5[1M]') })
     Assert-Equal 1 $modelLine.Count "width 60 (ascii=${ascii}): the selected model label appears on exactly one line"
     $isCompact = $modelLine.Count -eq 1 -and ($modelLine[0] -match [regex]::Escape($glyphs.LAngle)) -and ($modelLine[0] -match [regex]::Escape($glyphs.RAngle))
     Assert-Equal $true $isCompact "width 60 (ascii=${ascii}): the overflowing model row collapses to the compact ‹ › form, not a silent truncation"
@@ -1390,7 +1390,7 @@ try {
 Assert-Equal 'Fable 5.1[1M]' (Get-FriendlyModelName -Raw 'claude-fable-5-1[1m]') 'friendly name: alias-in-full-id form, case-insensitive, plus the [1M] suffix'
 Assert-Equal 'Fable 5.1' (Get-FriendlyModelName -Raw 'fable') 'friendly name: the bare fable alias (what /model writes) is the current Fable release'
 Assert-Equal 'Opus 5.5[1M]' (Get-FriendlyModelName -Raw 'opus[1m]') 'friendly name: bare alias form also resolves'
-Assert-Equal 'Sonnet 5' (Get-FriendlyModelName -Raw 'claude-sonnet-4-6') 'friendly name: a non-1M full id has no [1M] suffix appended'
+Assert-Equal 'Sonnet 5.5' (Get-FriendlyModelName -Raw 'claude-sonnet-4-6') 'friendly name: a non-1M full id has no [1M] suffix appended'
 Assert-Equal 'Haiku 4.5' (Get-FriendlyModelName -Raw 'haiku') 'friendly name: haiku maps too'
 $longUnknown = 'some-unknown-model-id-xyz-12345678'
 $unknownResult = Get-FriendlyModelName -Raw $longUnknown
@@ -1432,6 +1432,7 @@ try {
     Set-ModelRowLabels -FamilyLabels $famNew
     Assert-Equal 'Fable 5.1' (Get-RowOptionText -Row $modelRowLive -Key 'fable') 'model row: the fable option label follows the catalog'
     Assert-Equal 'Opus 5[1M]' (Get-RowOptionText -Row $modelRowLive -Key 'opus1m') 'model row: 1M keys keep their bracket after the catalog label'
+    Assert-Equal 'Sonnet 5' (Get-RowOptionText -Row $modelRowLive -Key 'sonnet1m') 'model row: sonnet1m gets no [1M] bracket (Sonnet 5.5 is 1M natively; keeps the full row inside the 96-column box)'
     Set-ModelRowLabels -FamilyLabels @{ fable = 'Fable 9' }
     Assert-Equal 'Fable 9' (Get-RowOptionText -Row $modelRowLive -Key 'fable') 'model row: a later table overwrites'
     Assert-Equal 'Opus 5[1M]' (Get-RowOptionText -Row $modelRowLive -Key 'opus1m') 'model row: a family the table leaves out keeps its current label'
@@ -1523,7 +1524,7 @@ foreach ($w in @(102, 120)) {
     $frame = Get-LaunchFrame -State $widthState -Width $w -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])'
     $line = @($frame | Where-Object { $_ -match 'model' })[0]
     $hasAllFive = ($line -match [regex]::Escape('default (Fable 5.1[1M])')) -and ($line -match [regex]::Escape(' Fable 5.1 ')) -and
-                  ($line -match [regex]::Escape('Opus 5.5[1M]')) -and ($line -match [regex]::Escape('Sonnet 5[1M]')) -and
+                  ($line -match [regex]::Escape('Opus 5.5[1M]')) -and ($line -match [regex]::Escape('Sonnet 5.5')) -and
                   ($line -match [regex]::Escape('Haiku 4.5')) -and ($line -notmatch [regex]::Escape($glyphs.LAngle))
     Assert-Equal $true $hasAllFive "at width $w the model row shows all five options in full form, not collapsed"
 }
@@ -1537,7 +1538,7 @@ foreach ($w in @(60, 80)) {
 # A selected label like 'Opus 5.5[1M]' becomes the cell "<On-glyph> [Opus 5.5[1M]]" - one bracket
 # nested inside another. A highlight regex that matches ANY '[...]' pair, not anchored to the
 # selection marker, lands on the wrong span: the INNER '[1M]' instead of the whole selected cell,
-# and it goes on to paint an UNselected cell's own literal bracket text ('Sonnet 5[1M]', shown but
+# and it goes on to paint an UNselected cell's own literal bracket text ('Opus 5.5[1M]', shown but
 # not chosen) as if it were selected too. The pre-existing strip-colour round trip alone cannot
 # catch either failure - stripping ANSI gives back the same plain text either way, since only the
 # highlight PLACEMENT is wrong, not the underlying characters. Both properties below must hold.
@@ -1563,8 +1564,15 @@ $innerOnlyHighlight = $script:Palette.Bold + $script:Palette.Green + '[1M]' + $s
 Assert-Equal $false ($nestedModelColored.Contains($innerOnlyHighlight)) 'nested-bracket model row: the inner [1M] alone is not separately highlighted'
 
 # The other old-bug shape: an unselected cell's own literal bracket text painted as if selected.
-$oldBugArtifact = 'Sonnet 5' + $script:Palette.Bold + $script:Palette.Green + '[1M]' + $script:Palette.Reset
-Assert-Equal $false ($nestedModelColored.Contains($oldBugArtifact)) 'nested-bracket model row: the unselected Sonnet 5[1M] cell is not painted as if it were selected'
+# Opus is the static label that still carries a literal '[1M]', so it is drawn UNselected here
+# (Sonnet chosen instead) to put that bracket text in an unselected cell.
+$unselState = New-LaunchState
+$unselState.Model = 'sonnet1m'
+$unselState.Row = (Get-RowIndex -Name 'Model')
+$unselModelColored = @(Get-LaunchFrame -State $unselState -Width 120 -Height 24 -DefaultModelLabel 'default (Fable 5.1[1M])' -Color | Where-Object { $_ -match 'model' })[0]
+Assert-Equal $true ((Remove-AnsiColor -Text $unselModelColored).Contains('Opus 5.5[1M]')) 'nested-bracket model row: the unselected Opus 5.5[1M] cell is drawn in full'
+$oldBugArtifact = 'Opus 5.5' + $script:Palette.Bold + $script:Palette.Green + '[1M]' + $script:Palette.Reset
+Assert-Equal $false ($unselModelColored.Contains($oldBugArtifact)) 'nested-bracket model row: the unselected Opus 5.5[1M] cell is not painted as if it were selected'
 
 # Property 3: the specific failure named in review - a bracket-matching character class that
 # allows '[' can, in a LATER pass, swallow half of an earlier-emitted escape sequence and leave a
@@ -1966,7 +1974,7 @@ Assert-Equal 'default,opus,off' (@($mfMap.Rows[$avIdx].Cells | ForEach-Object Va
 $noneFrame = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $noneLim)
 $mfLine = @($noneFrame | Where-Object { $_ -match '\bmodel\b' })[0]
 Assert-Equal $false ($mfLine -match 'Fable 5\.1') 'the drawn Model row no longer shows the Fable 5.1 label'
-Assert-True (($mfLine -match 'Opus 5\.5') -and ($mfLine -match 'Sonnet 5') -and ($mfLine -match 'Haiku 4\.5')) 'while Opus, Sonnet and Haiku are all still drawn there'
+Assert-True (($mfLine -match 'Opus 5\.5') -and ($mfLine -match 'Sonnet 5\.5') -and ($mfLine -match 'Haiku 4\.5')) 'while Opus, Sonnet and Haiku are all still drawn there'
 $afLine = @($noneFrame | Where-Object { $_ -match '\badvisor\b' })[0]
 Assert-Equal $false ($afLine -match 'fable') 'the drawn Advisor row no longer offers fable'
 Assert-True (($afLine -match 'opus') -and ($afLine -match 'off')) 'while opus and off are both still drawn there'
@@ -5918,7 +5926,7 @@ Assert-Equal $true $hsResult 'confirm: a resize does not answer the question'
 Assert-Equal 2 $script:hsDraws 'confirm: a resize repaints'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1955
+$script:Expected = 1957
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

@@ -5,7 +5,7 @@
    [2maccount[0m     [1m[32m[work [32m41%[0m][0m ┊ personal [32m17%[0m ┊ low [32m43%[0m
      5h ▓▓▓░░░░░  [32m41%[0m  7d ▓▓▓▓▓░░░  [33m63%[0m  fable ▓░░░░░░░  [32m15%[0m   [2m12 min ago[0m
    [2mremote[0m      ● [1m[32m[on][0m ○ off ○ on+QR ○ stop server
-   [2mmodel[0m       ● [1m[32m[default (Fable 5.1[1M])][0m ○ Fable 5.1 ○ Opus 5.5[1M] ○ Sonnet 5[1M] ○ Haiku 4.5
+   [2mmodel[0m       ● [1m[32m[default (Fable 5.1[1M])][0m ○ Fable 5.1 ○ Opus 5.5[1M] ○ Sonnet 5.5 ○ Haiku 4.5
  [93m❯[0m [2meffort[0m      ● [1m[32m[default][0m ○ low ○ medium ○ high ○ xhigh [48;5;238m○ max[0m ○ ultracode
    [2madvisor[0m     ● [1m[32m[default][0m ○ fable ○ opus ○ off
    [2mpermission[0m  ● [1m[32m[default][0m ○ plan ○ auto ○ acceptEdits ○ bypass

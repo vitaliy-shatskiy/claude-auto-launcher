@@ -766,7 +766,7 @@ function Get-McpConfigPaths {
 
 # The fallback mirrors the Labels table in Screens.ps1: what the row says when the binary cannot be
 # read (npm install, preview with a cold cache). Bump both together when a release lands.
-$script:StaticFamilyLabels = [ordered]@{ fable = 'Fable 5.1'; opus = 'Opus 5.5'; sonnet = 'Sonnet 5'; haiku = 'Haiku 4.5' }
+$script:StaticFamilyLabels = [ordered]@{ fable = 'Fable 5.1'; opus = 'Opus 5.5'; sonnet = 'Sonnet 5.5'; haiku = 'Haiku 4.5' }
 $script:ModelCatalog = $null   # set by Initialize-ModelCatalog; $null means "static labels only"
 
 function Get-ModelCatalogCachePath { return (Join-Path $HOME '.claude\claude-auto-models.json') }
