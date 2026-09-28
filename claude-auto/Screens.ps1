@@ -50,7 +50,7 @@ $script:Rows = @(
 function Set-ModelRowLabels {
     # Pure: rewrites the model row's Labels from a family -> display-name table (the shape
     # Get-ModelFamilyLabels in Env.ps1 returns, read out of the installed claude.exe). The 1M keys
-    # (except sonnet1m, see below) append their bracket here, so the table stays plain family names. A family the table leaves
+    # (except sonnet1m, see Get-Model1mBracket) append their bracket here, so the table stays plain family names. A family the table leaves
     # empty keeps its current label. The Labels above are the STATIC fallback for when the binary
     # cannot be read.
     param([Parameter(Mandatory)]$FamilyLabels)
@@ -59,9 +59,8 @@ function Set-ModelRowLabels {
     foreach ($key in @($familyOfKey.Keys)) {
         $label = $FamilyLabels[$familyOfKey[$key]]
         if (-not $label) { continue }
-        # sonnet1m draws no bracket: Sonnet 5.5's 1M context is native, so '[1M]' says nothing and
-        # its two characters are what keeps the full model row inside the 96-column inner box.
-        $suffix = if ($key -like '*1m' -and $key -ne 'sonnet1m') { '[1M]' } else { '' }
+        # Get-Model1mBracket (Env.ps1) gives sonnet1m no bracket: Sonnet 5.5's 1M context is native.
+        $suffix = if ($key -like '*1m') { Get-Model1mBracket -Family $familyOfKey[$key] } else { '' }
         $row.Labels[$key] = [string]$label + $suffix
     }
 }

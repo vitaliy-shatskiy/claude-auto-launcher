@@ -1391,6 +1391,7 @@ Assert-Equal 'Fable 5.1[1M]' (Get-FriendlyModelName -Raw 'claude-fable-5-1[1m]')
 Assert-Equal 'Fable 5.1' (Get-FriendlyModelName -Raw 'fable') 'friendly name: the bare fable alias (what /model writes) is the current Fable release'
 Assert-Equal 'Opus 5.5[1M]' (Get-FriendlyModelName -Raw 'opus[1m]') 'friendly name: bare alias form also resolves'
 Assert-Equal 'Sonnet 5.5' (Get-FriendlyModelName -Raw 'claude-sonnet-4-6') 'friendly name: a non-1M full id has no [1M] suffix appended'
+Assert-Equal 'Sonnet 5.5' (Get-FriendlyModelName -Raw 'sonnet[1m]') 'friendly name: a saved sonnet[1m] default draws no [1M] bracket, same rule as the model row'
 Assert-Equal 'Haiku 4.5' (Get-FriendlyModelName -Raw 'haiku') 'friendly name: haiku maps too'
 $longUnknown = 'some-unknown-model-id-xyz-12345678'
 $unknownResult = Get-FriendlyModelName -Raw $longUnknown
@@ -1425,6 +1426,7 @@ Assert-Equal 'Fable 5.1[1M]' (Get-FriendlyModelName -Raw 'fable[1m]' -Catalog $c
 Assert-Equal 'Fable 5[1M]' (Get-FriendlyModelName -Raw 'claude-fable-5[1m]' -Catalog $cat) 'friendly name with catalog: a pinned older id is NOT shadowed by the newer id that contains it'
 Assert-Equal 'Opus 4.8' (Get-FriendlyModelName -Raw 'us.anthropic.claude-opus-4-8' -Catalog $cat) 'friendly name with catalog: a full id under a provider prefix names its own record'
 Assert-Equal 'Sonnet 5' (Get-FriendlyModelName -Raw 'sonnet' -Catalog $cat) 'friendly name with catalog: an alias with no [1m] gets no suffix'
+Assert-Equal 'Sonnet 5' (Get-FriendlyModelName -Raw 'sonnet[1m]' -Catalog $cat) 'friendly name with catalog: sonnet[1m] resolves through the catalog and still draws no [1M] bracket'
 
 $modelRowLive = Get-LaunchRows | Where-Object { $_.Name -eq 'Model' }
 $staticLabels = @{} + $modelRowLive.Labels
@@ -5926,7 +5928,7 @@ Assert-Equal $true $hsResult 'confirm: a resize does not answer the question'
 Assert-Equal 2 $script:hsDraws 'confirm: a resize repaints'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1957
+$script:Expected = 1959
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

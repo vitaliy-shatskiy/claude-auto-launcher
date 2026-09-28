@@ -934,8 +934,18 @@ function Get-FriendlyModelName {
         if ($Raw.Length -gt 24) { return $Raw.Substring(0, 23) + [string][char]0x2026 }
         return $Raw
     }
-    if ($has1m) { $friendly += '[1M]' }
+    if ($has1m) { $friendly += (Get-Model1mBracket -Family $(if ($base -imatch 'sonnet') { 'sonnet' } else { '' })) }
     return $friendly
+}
+
+function Get-Model1mBracket {
+    # The '[1M]' a 1M model label carries, or '' for a family whose 1M context is native (Sonnet
+    # 5.5): there the bracket says nothing, and its two characters are what keeps the full model
+    # row inside the 96-column inner box. One rule for the row (Set-ModelRowLabels) and a resolved
+    # default (Get-FriendlyModelName).
+    param([string]$Family)
+    if ($Family -ieq 'sonnet') { return '' }
+    return '[1M]'
 }
 
 function Get-DefaultModelLabel {
