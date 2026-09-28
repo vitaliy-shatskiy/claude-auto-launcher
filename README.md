@@ -16,7 +16,7 @@ CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
 ╰────────────────────────────────────────────────────────────────────────────╯
 
  ❯ account     [work]
-   model       ‹ Sonnet 5 ›
+   model       ‹ Sonnet 5.5 ›
    effort      ○ low ○ medium ● [high] ○ xhigh ○ max ○ ultracode
    advisor     ● [default] ○ fable ○ opus ○ off
    permission  ○ plan ● [auto] ○ acceptEdits ○ bypass

@@ -26,7 +26,7 @@ $script:Rows = @(
     # (Invoke-ProjectScreen's -Action) sets it in claude-auto.ps1 - only the row that let this
     # screen edit it directly is gone.
     @{ Name = 'Model';      Label = 'model';      Values = @('default', 'fable', 'opus1m', 'sonnet1m', 'haiku')
-       Labels = @{ fable = 'Fable 5.1'; opus1m = 'Opus 5.5[1M]'; sonnet1m = 'Sonnet 5[1M]'; haiku = 'Haiku 4.5' }
+       Labels = @{ fable = 'Fable 5.1'; opus1m = 'Opus 5.5[1M]'; sonnet1m = 'Sonnet 5.5'; haiku = 'Haiku 4.5' }
        Args   = @{ fable = 'fable';   opus1m = 'opus[1m]';   sonnet1m = 'sonnet[1m]';   haiku = 'haiku' } }
     # 'ultracode' added 2026-09-04: 2.1.260 accepts it silently, where a bogus --effort value warns
     # on stderr. That warning is the only test the CLI offers, so the row is what it accepts and not
@@ -50,7 +50,7 @@ $script:Rows = @(
 function Set-ModelRowLabels {
     # Pure: rewrites the model row's Labels from a family -> display-name table (the shape
     # Get-ModelFamilyLabels in Env.ps1 returns, read out of the installed claude.exe). The 1M keys
-    # append their bracket here, so the table stays plain family names. A family the table leaves
+    # (except sonnet1m, see Get-Model1mBracket) append their bracket here, so the table stays plain family names. A family the table leaves
     # empty keeps its current label. The Labels above are the STATIC fallback for when the binary
     # cannot be read.
     param([Parameter(Mandatory)]$FamilyLabels)
@@ -59,7 +59,8 @@ function Set-ModelRowLabels {
     foreach ($key in @($familyOfKey.Keys)) {
         $label = $FamilyLabels[$familyOfKey[$key]]
         if (-not $label) { continue }
-        $suffix = if ($key -like '*1m') { '[1M]' } else { '' }
+        # Get-Model1mBracket (Env.ps1) gives sonnet1m no bracket: Sonnet 5.5's 1M context is native.
+        $suffix = if ($key -like '*1m') { Get-Model1mBracket -Family $familyOfKey[$key] } else { '' }
         $row.Labels[$key] = [string]$label + $suffix
     }
 }
@@ -465,8 +466,8 @@ function Add-LaunchColor {
     # label can carry its own literal bracket, though ('Opus 5.5[1M]', and the resolved default
     # label 'default (Fable 5.1[1M])'): a bare '\[([^\[\]]+)\]' matches whichever bracket pair it
     # meets first, which on the selected cell "[Opus 5.5[1M]]" is the INNER '[1M]' only - and the
-    # same pattern goes on to paint an UNselected cell's own literal '[1M]' text (e.g. 'Sonnet
-    # 5[1M]' shown but not chosen) as if it were selected too, because nothing in that pattern
+    # same pattern goes on to paint an UNselected cell's own literal '[1M]' text (e.g. 'Opus
+    # 5.5[1M]' shown but not chosen) as if it were selected too, because nothing in that pattern
     # cares whether a '[' is preceded by the selection marker.
     #
     # Fix: anchor on "On-glyph + space" via a zero-width lookbehind, so only the '[' that actually
@@ -1076,7 +1077,7 @@ function Get-LaunchFrame {
             $unreadable = -not $wide -and -not $radio.Compact
         }
 
-        # The model row's human-readable labels ('Sonnet 5[1M]', a resolved 'default (...)') can
+        # The model row's human-readable labels ('Opus 5.5[1M]', a resolved 'default (...)') can
         # outgrow the box even in New-RadioRow's compact form - and a mid-word cut there is exactly
         # what this exists to avoid. Collapse to the selected value alone, marked with ‹ › to say
         # more options exist off-screen (the footer already explains left/right cycles them).
@@ -1325,13 +1326,13 @@ function New-RadioRow {
     # The compact form separates values with ONE space and nothing else, so a value whose own label
     # carries a space stops being one value: the remote row would read '   remote      on off on+QR
     # [stop server]' - four values that parse as six words - and the model row's labels ('Fable 5.1',
-    # 'Sonnet 5[1M]') do the same. Such a row keeps the FULL form even over -MaxWidth and lets the
+    # 'Opus 5.5[1M]') do the same. Such a row keeps the FULL form even over -MaxWidth and lets the
     # caller's own overflow branch (Get-LaunchFrame's ‹ › collapse) handle it, exactly as before this
     # row existed. Controller ruling R4 - deliberately not a two-space or middle-dot separator, which
     # would change every row that already reads correctly.
     # Keys on a literal space in the RENDERED label (labelOf's output - a Labels[] override when one
-    # exists, the raw value otherwise), never in $v itself: the value 'sonnet1m' has none, but the
-    # label it draws as, 'Sonnet 5[1M]', does.
+    # exists, the raw value otherwise), never in $v itself: the value 'opus1m' has none, but the
+    # label it draws as, 'Opus 5.5[1M]', does.
     if (-not $readable) { return $full }
     return (& $build $true)
 }
