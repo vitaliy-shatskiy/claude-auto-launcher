@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-02
+
 ### Added
 
 - Two switches for the MCP mirror that `sharing` runs: `CLAUDE_AUTO_MIRROR_EXCLUDE` names servers
@@ -16,6 +18,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - Project screen: when the current directory is a known project, the top row names it
   (`<project> (current directory)`, with its age) and the project is no longer listed a second time
   below. The cursor always opens on that top row instead of on the last launched project.
+- Model row: Sonnet is labelled `Sonnet 5.5` with no `[1M]` marker (its 1M context is native), and
+  a saved `sonnet[1m]` default reads `default (Sonnet 5.5)`.
 
 ### Fixed
 
