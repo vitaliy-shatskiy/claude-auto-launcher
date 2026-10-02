@@ -761,7 +761,6 @@ function Invoke-ProjectScreen {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects,
         [string]$Cwd = '',
-        [string]$Initial = '',
         # What the action field opens on. Nothing persists it (review W1) - the launcher passes
         # nothing and the default applies - but it stays a parameter so the suites can open the
         # screen on any of the four. Canonicalised, never trusted: it decides which flags reach
@@ -797,33 +796,32 @@ function Invoke-ProjectScreen {
     $projectList = $Projects
     $cwdPath = $Cwd
 
-    # Mirrors Get-ProjectFrame's row assembly. Kept here rather than exported so the frame stays
-    # pure; the two are pinned against each other by the RowCount assertion in Test-Ui. Slug rides
-    # along on a project row so a pick never has to look the project back up by (ambiguous) name.
+    # Get-ProjectRows is the one row builder - the frame draws from it too, so the row picked here is
+    # the row the cursor is drawn on. Slug rides along on a project row so a pick never has to look
+    # the project back up by (ambiguous) name.
     $rowsFor = {
         param([string]$f)
-        $items = @(Select-ProjectMatch -Projects $projectList -Filter $f)
-        # Same order as the frame: the current directory first (spec D6), then the registry, then the
-        # free-path row. The two orders are pinned against each other - a list built the other way
-        # here would pick a different row than the one the cursor is drawn on.
-        $built = @([pscustomobject]@{ Kind = 'cwd'; Path = $cwdPath; Slug = ''; Slugs = @() })
-        $built += @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Path = $_.Path; Slug = $_.Slug; Slugs = @(if ($_.Slugs) { $_.Slugs } else { $_.Slug }) } })
-        $built += [pscustomobject]@{ Kind = 'path'; Path = '';       Slug = ''; Slugs = @() }
-        return @($built)
+        return @(Get-ProjectRows -Projects $projectList -Filter $f -Cwd $cwdPath | ForEach-Object {
+            [pscustomobject]@{ Kind = $_.Kind; Path = $_.Item.Path; Slug = "$($_.Item.Slug)"; Slugs = @(if ($_.Item.Slugs) { $_.Item.Slugs } elseif ($_.Item.Slug) { $_.Item.Slug }); Match = [bool]$_.Item.Match }
+        })
     }
 
     # Where the cursor belongs for a given filter text (R16). A filter is a SEARCH: once it narrows
-    # to at least one project, the cursor stands on the first match - row 1, the row under the
-    # current directory - so closing the box and pressing Enter runs what was searched for. An empty
-    # filter, or one nothing matches, leaves it on row 0: there is no match to stand on, and the cwd
-    # row is what Enter means on this screen with nothing chosen.
+    # to at least one project, the cursor stands on the first match - row 0 when the current
+    # directory's own project matches (it is drawn there, not in the list), else row 1, the first
+    # list row - so closing the box and pressing Enter runs what was searched for. An empty filter,
+    # or one nothing matches, leaves it on row 0: there is no match to stand on, and the cwd row is
+    # what Enter means on this screen with nothing chosen.
     #
     # Applied where the filter CHANGES rather than in Before, so the owner can still walk back onto
     # the current directory with the cursor keys while a filter is open - a Before that re-parked
     # every frame would make row 0 unreachable and 'w' look dead.
     $parkOnMatch = {
         param([string]$f)
-        if ($f -and @(Select-ProjectMatch -Projects $projectList -Filter $f).Count -gt 0) { return 1 }
+        if (-not $f) { return 0 }
+        $built = @(& $rowsFor $f)
+        if ($built[0].Match) { return 0 }
+        if (@($built | Where-Object Kind -eq 'project').Count -gt 0) { return 1 }
         return 0
     }
 
@@ -892,20 +890,10 @@ function Invoke-ProjectScreen {
         return @{ Log = @{ action = $s.Action } }
     }
 
-    # The remembered project starts under the cursor rather than at the top: arriving at this screen
-    # and pressing Enter must reproduce the last launch. Compared through ConvertTo-ProjectKey, not
-    # raw string equality: -Initial is whatever the caller last stored, which may differ from the
-    # registry's own spelling by case or slash direction (fix round 2, reviewer: 'c:/w/beta/' silently
-    # preselected the wrong row under a bare [Array]::IndexOf).
-    # Row 0 is the CURRENT DIRECTORY now, so a remembered project sits one row lower than its index
-    # in the registry: 1 + that index. With nothing remembered the cursor stays on row 0, which is
-    # what makes "arrive and press Enter" mean "run here" (spec D6).
+    # The cursor always opens on row 0, the current directory (owner, 02.10.2026): the registry is
+    # newest-first under it, so the recent projects are one step down instead of a walk up from a
+    # remembered project parked deep in the list.
     $startIndex = 0
-    if ($Initial) {
-        $initialKey = ConvertTo-ProjectKey $Initial
-        $at = [Array]::IndexOf(@($Projects | ForEach-Object { ConvertTo-ProjectKey $_.Path }), $initialKey)
-        if ($at -ge 0) { $startIndex = 1 + $at }
-    }
 
     # The action field is an INDICATOR, not a cursor stop (review W2/W3): Left/Right and a/d step it
     # from every row, so it never needs focus - and the focus state it used to have could only be

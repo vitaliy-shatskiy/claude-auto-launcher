@@ -11,6 +11,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   `headers`. No behaviour change for existing users: a verbatim copy, secrets included, stays the
   default.
 
+### Changed
+
+- Project screen: when the current directory is a known project, the top row names it
+  (`<project> (current directory)`, with its age) and the project is no longer listed a second time
+  below. The cursor always opens on that top row instead of on the last launched project.
+
 ### Fixed
 
 - Each launcher instance writes the companion server's log to its own

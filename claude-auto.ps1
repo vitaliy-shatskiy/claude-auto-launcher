@@ -401,7 +401,7 @@ if ($UseUi) {
                           -Width $w -Height $hh -Color:$useColor -Ascii:$ascii -RowMap ([ref]$pmap))
                 $pmap
             }
-            $chosen = Invoke-ProjectScreen -Projects $projects -Cwd $LaunchCwd -Initial "$($state.Project)" `
+            $chosen = Invoke-ProjectScreen -Projects $projects -Cwd $LaunchCwd `
                       -ReadKey $KeySource -Wait $wait -Draw $projDraw -ReadPath $readClaudePath
             # Escape at the project screen goes back to the launch screen, exactly as Escape at the
             # session picker already does. Preview cannot loop - its key list is finite - so it breaks.

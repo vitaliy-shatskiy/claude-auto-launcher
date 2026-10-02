@@ -164,6 +164,32 @@ function Select-ProjectMatch {
     return @($Projects | Where-Object { "$($_.Name) $($_.Path) $($_.Worktree)" -like "*$f*" })
 }
 
+function Get-ProjectRows {
+    # The project screen's rows in cursor order: the current directory, the registry matches, the
+    # free-path row. The ONE builder Get-ProjectFrame draws and Invoke-ProjectScreen picks from, so a
+    # pick can never land on a row other than the one the cursor is drawn on.
+    #
+    # One directory, one row: when the current directory IS a known project, the cwd row carries that
+    # project (its name, age, worktree mark and slugs) and the project leaves the list below - the
+    # same folder listed twice, once as 'current directory' and once by name, was the owner's report.
+    # Match says the cwd's project is among the filter's matches, so a search for it parks on row 0.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects, [string]$Filter = '', [string]$Cwd = '')
+    $cwdKey = ConvertTo-ProjectKey $Cwd
+    $here = if ($cwdKey) { @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $cwdKey }) | Select-Object -First 1 } else { $null }
+    $matched = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
+    $cwdItem = if ($here) {
+        [pscustomobject]@{ Name = "$($here.Name) (current directory)"; Path = $Cwd; LastActivity = $here.LastActivity; Worktree = $here.Worktree
+                           Slug = $here.Slug; Slugs = @(if ($here.Slugs) { $here.Slugs } else { $here.Slug })
+                           Match = [bool]($Filter -and @($matched | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $cwdKey }).Count) }
+    } else {
+        [pscustomobject]@{ Name = 'current directory'; Path = $Cwd; LastActivity = $null; Worktree = $null; Slug = ''; Slugs = @(); Match = $false }
+    }
+    $rows = @([pscustomobject]@{ Kind = 'cwd'; Item = $cwdItem })
+    $rows += @($matched | Where-Object { -not $here -or (ConvertTo-ProjectKey $_.Path) -ne $cwdKey } | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Item = $_ } })
+    $rows += [pscustomobject]@{ Kind = 'path'; Item = [pscustomobject]@{ Name = 'enter a path...'; Path = ''; LastActivity = $null; Slug = ''; Slugs = @() } }
+    return @($rows)
+}
+
 function ConvertTo-ProjectKey {
     # The one place two paths are compared for "is this the same directory". Three sources feed a
     # comparison against a registry path - a raw cwd string, a prefs file value nobody has

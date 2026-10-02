@@ -3291,16 +3291,40 @@ try {
     $p6d = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('/', 'z', 'Escape', 'Escape')) -Draw {}
     Assert-True ($null -eq $p6d) 'the second Escape leaves the screen'
 
-    # -Initial puts the cursor on a remembered project.
-    $p7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
-    Assert-Equal $tmpBeta $p7.Path 'the initial project is preselected'
+    # The cursor always opens on the current directory (owner, 02.10.2026): no remembered project
+    # parks it further down, so the screen has no -Initial to pass one through.
+    Assert-True (-not (Get-Command Invoke-ProjectScreen).Parameters.ContainsKey('Initial')) 'Invoke-ProjectScreen takes no -Initial: the cursor opens on row 0'
 
-    # -Initial through ConvertTo-ProjectKey (fix round 2, IMPORTANT 3): a caller passing a
-    # differently-cased, forward-slashed, trailing-slashed spelling of the SAME directory must still
-    # preselect it - a raw [Array]::IndexOf silently preselected the wrong row (or none) here.
+    # A current directory that IS a known project: one row, the cwd row, named after the project, and
+    # the project is not listed a second time below it. Matched through ConvertTo-ProjectKey, so a
+    # case/slash variant of the cwd is the same directory.
     $betaVariant = ($tmpBeta -replace '\\', '/').ToUpperInvariant() + '/'
-    $p7b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $betaVariant -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
-    Assert-Equal $tmpBeta $p7b.Path '-Initial matches by normalised key, not exact string - a case/slash variant still preselects beta'
+    $rows7 = @(Get-ProjectRows -Projects $pProjs -Cwd $betaVariant)
+    Assert-Equal 3 $rows7.Count 'cwd = beta: the cwd row, alpha, the free-path row - beta is not listed twice'
+    Assert-Equal 'beta (current directory)' $rows7[0].Item.Name 'the cwd row names the project it is'
+    Assert-Equal 'B' "$($rows7[0].Item.Slug)" 'and carries its slug'
+    Assert-Equal 'alpha' $rows7[1].Item.Name 'the list below holds the other projects only'
+    $rows7n = @(Get-ProjectRows -Projects $pProjs -Cwd $tmpCwd)
+    Assert-Equal 4 $rows7n.Count 'a cwd that is no project: both projects stay listed'
+    Assert-Equal 'current directory' $rows7n[0].Item.Name 'and the cwd row keeps its plain name'
+    $f7 = @(Get-ProjectFrame -Projects $pProjs -Cwd $tmpBeta -Width 120 -Height 24)
+    Assert-Equal 1 @($f7 | Where-Object { $_.Contains($tmpBeta) }).Count 'the frame paints beta''s path once'
+    Assert-True (($f7 -join "`n").Contains('beta (current directory)')) 'on the cwd row, under the project''s name'
+    Assert-True (($f7 -join "`n") -match 'project .{1,3} 2 known') 'the title still counts beta as known'
+    $p7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p7.Path 'Enter on the opening frame runs in the cwd project'
+    Assert-Equal 'B' "$($p7.Slug)" 'with its slug, so resume finds its sessions'
+    $p7s = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('s', 'Enter')) -Draw {}
+    Assert-Equal $tmpAlpha $p7s.Path 'one step down is the next project, not beta again'
+    # 'eta' matches beta AND betamax: the cursor parks on the cwd row (beta, the first match), not on
+    # betamax - a park that ignored the cwd row's match would stand on row 1.
+    $tmpBetamax = Join-Path $tmpRoot 'betamax'
+    New-Item -ItemType Directory -Path $tmpBetamax -Force | Out-Null
+    $pProjs7 = @($pProjs) + [pscustomobject]@{ Slug = 'BM'; Path = $tmpBetamax; Name = 'betamax'; Worktree = $null; LastActivity = (Get-Date).AddDays(-2) }
+    $p7f = Invoke-ProjectScreen -Projects $pProjs7 -Cwd $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('/', 'e', 't', 'a', 'Enter', 'Enter')) -Draw {}
+    Assert-Equal $tmpBeta $p7f.Path 'a filter matching the cwd project parks on the cwd row, ahead of the other matches'
+    $p7a = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('/', 'a', 'l', 'p', 'Enter', 'Enter')) -Draw {}
+    Assert-Equal $tmpAlpha $p7a.Path 'a filter matching another project parks on it'
 
     # The free-path row reads through -ReadPath. A path that does not exist must not be returned -
     # the loop stays open, proven by needing a further Escape to leave rather than returning on Enter.
@@ -3964,8 +3988,6 @@ try {
     # The loop agrees with the frame: Enter on the opening frame runs in the CURRENT DIRECTORY.
     $r9 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw { $null }
     Assert-Equal $tmpCwd $r9.Path 'Enter on the opening frame runs in the current directory'
-    $r9b = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpCwd -Initial $pProjs[1].Path -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw { $null }
-    Assert-Equal $tmpBeta $r9b.Path 'while -Initial still preselects the remembered project - one row further down than its index'
 
     # A click BELOW the first separator. With FirstRowY/RowCount arithmetic the blank line counts as
     # a row and the click lands one row too low - on the free-path row, which prompts for a path.
@@ -4366,7 +4388,8 @@ try {
     Assert-Equal 'all' $uiPickLeave.Data.scope 'and the picker leaves in that scope, not the one it opened in'
 
     $uiEnter = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.name -eq 'project' -and $_.Data.phase -eq 'enter' })[0]
-    Assert-Equal 3 $uiEnter.Data.rows 'a screen record carries the row COUNT (one project, the cwd row, the free-path row)'
+    # Two, not three: the cwd here IS the one project (gamma), drawn once on the cwd row.
+    Assert-Equal 2 $uiEnter.Data.rows 'a screen record carries the row COUNT (the cwd row - gamma itself - and the free-path row)'
     Assert-Equal 0 $uiEnter.Data.index 'and where the cursor was'
     $uiLeave = @($script:uiRecords | Where-Object { $_.Stage -eq 'screen' -and $_.Data.name -eq 'project' -and $_.Data.phase -eq 'leave' })[0]
     Assert-True ($uiLeave.Data.ContainsKey('ms')) 'a leave record carries how long the screen was up'
@@ -5928,7 +5951,7 @@ Assert-Equal $true $hsResult 'confirm: a resize does not answer the question'
 Assert-Equal 2 $script:hsDraws 'confirm: a resize repaints'
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1959
+$script:Expected = 1971
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
