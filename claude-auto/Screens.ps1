@@ -1388,15 +1388,15 @@ function Get-ProjectFrame {
                (Get-ListSignature -Items $Projects -Fields @('Name', 'Path', 'Worktree', 'LastActivity'))
     $memoHit = Get-MemoFrame -Builder 'project' -Key $memoKey -HoverRow $HoverRow -HoverValue $HoverValue -Hover $Hover -RowMap $RowMap
     if ($null -ne $memoHit) { return $memoHit }
+    # The title counts every match, the cwd's own project included: it is still known, it is only
+    # drawn on the cwd row instead of twice.
     $items = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
     # The pinned rows are rows: they are selected, hit-tested and entered exactly like a project, so
     # the loop below never needs to know which kind it is looking at. The CURRENT DIRECTORY leads
     # (spec D6): arriving here from a terminal already standing in the right folder is the common
-    # case, and it must be one Enter away rather than a walk past the whole registry. Invoke-
-    # ProjectScreen's own $rowsFor builds the identical order - the two are pinned against each other.
-    $rows = @([pscustomobject]@{ Kind = 'cwd'; Item = [pscustomobject]@{ Name = 'current directory'; Path = $Cwd; LastActivity = $null } })
-    $rows += @($items | ForEach-Object { [pscustomobject]@{ Kind = 'project'; Item = $_ } })
-    $rows += [pscustomobject]@{ Kind = 'path'; Item = [pscustomobject]@{ Name = 'enter a path...';   Path = '';   LastActivity = $null } }
+    # case, and it must be one Enter away rather than a walk past the whole registry. Get-ProjectRows
+    # is the one builder Invoke-ProjectScreen picks from as well.
+    $rows = @(Get-ProjectRows -Projects $Projects -Filter $Filter -Cwd $Cwd)
 
     $title = "project $($g.H) $($items.Count) known"
     # -Typing shows the filter box the moment '/' is pressed, before any character narrows it, and
@@ -1478,8 +1478,16 @@ function Get-ProjectFrame {
             # The reader must see which directory the row means - rendered like a project row's
             # name+path columns, minus the age no pinned row has a real LastActivity for. The narrow
             # tier names it on the detail line instead, like every other row's path.
+            # When the directory is a known project (Get-ProjectRows) the row also carries its age and
+            # worktree mark, as that project's own row would have.
             $cwdTail = if ($wide) { $r.Item.Path } else { '' }
-            $rowText = New-ListRow -Mark $mark -Label $r.Item.Name -Tail $cwdTail -Width $inner -Ascii:$Ascii -DimTail -PathTail -Hover:($i -eq $HoverRow)
+            $cwdName = $r.Item.Name
+            if ($r.Item.Worktree) { $cwdName = "$($g.Worktree) $cwdName" }
+            $cwdAge = if ($r.Item.LastActivity) { Format-RelativeAge -From $r.Item.LastActivity -Now $Now } else { '' }
+            $rowText =
+                if (-not $cwdAge) { New-ListRow -Mark $mark -Label $cwdName -Tail $cwdTail -Width $inner -Ascii:$Ascii -DimTail -PathTail -Hover:($i -eq $HoverRow) }
+                elseif ($wide) { New-ListRow -Mark $mark -Label $cwdName -Tail $cwdTail -Age $cwdAge -Width $inner -Ascii:$Ascii -DimTail -DimAge -PathTail -Hover:($i -eq $HoverRow) }
+                else { New-ListRow -Mark $mark -Label $cwdName -Age $cwdAge -Width $inner -Ascii:$Ascii -DimAge -AgeGutter -Hover:($i -eq $HoverRow) }
             $rowBands[$i] = @{ Y = $rowBandY; Length = (Get-RowBandLength -Row $rowText -PaneWidth $inner) }
             $body.Add($rowText)
             # And the blank line UNDER it: the current directory is a group of its own, so the eye
