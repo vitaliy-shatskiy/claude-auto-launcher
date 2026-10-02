@@ -3308,7 +3308,10 @@ try {
     Assert-Equal 4 $rows7n.Count 'a cwd that is no project: both projects stay listed'
     Assert-Equal 'current directory' $rows7n[0].Item.Name 'and the cwd row keeps its plain name'
     $f7 = @(Get-ProjectFrame -Projects $pProjs -Cwd $tmpBeta -Width 120 -Height 24)
-    Assert-Equal 1 @($f7 | Where-Object { $_.Contains($tmpBeta) }).Count 'the frame paints beta''s path once'
+    # Counted by the NAME, not the full path: the box is capped at 100 columns and a long TEMP (CI's
+    # runner) has its path tail shortened. 'beta' cannot come from anywhere else - the fixture root is
+    # 32 hex digits, which never hold a 't'.
+    Assert-Equal 1 @($f7 | Where-Object { $_.Contains('beta') }).Count 'the frame paints beta on one line only'
     Assert-True (($f7 -join "`n").Contains('beta (current directory)')) 'on the cwd row, under the project''s name'
     Assert-True (($f7 -join "`n") -match 'project .{1,3} 2 known') 'the title still counts beta as known'
     $p7 = Invoke-ProjectScreen -Projects $pProjs -Cwd $tmpBeta -ReadKey (New-ScriptedKeyReader -Keys @('Enter')) -Draw {}
