@@ -524,6 +524,65 @@ Assert 'Repair-SharedProfiles forgets the resolved-path memo before it re-points
     if (Test-Path -LiteralPath $fake2) { Remove-Item -LiteralPath $fake2 -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# --- a shared directory missing from the CANONICAL root -----------------------------------------
+# Claude Code's retention sweep removes an empty state directory, so the canonical side of a share
+# can vanish: every secondary root's junction then points at nothing, and a root without the
+# junction never got one. The launcher creates the target first. Fake roots; the real ones are
+# never touched.
+$origWorkRoot5 = $WorkRoot; $origSecondary5 = $SecondaryRoots
+$fake5 = Join-Path $env:TEMP ("cct-shared-target-test-" + [guid]::NewGuid().ToString('N'))
+try {
+    $WorkRoot = Join-Path $fake5 'work'
+    $rootT = Join-Path $fake5 'low'
+    $SecondaryRoots = @($rootT)
+    New-Item -ItemType Directory -Force $WorkRoot, $rootT | Out-Null
+    $workTasks = Join-Path $WorkRoot 'tasks'; $linkTasks = Join-Path $rootT 'tasks'
+
+    Repair-SharedJunction -Name 'tasks' -Root $rootT 6>$null
+    Assert 'a shared directory missing from the canonical root is created there' (Test-Path -LiteralPath $workTasks -PathType Container)
+    Assert 'and the secondary root gets its junction onto it' ([bool]((Get-Item -LiteralPath $linkTasks -Force -ErrorAction SilentlyContinue).Attributes -band [IO.FileAttributes]::ReparsePoint))
+
+    # The state found live: the junction exists, its target is gone.
+    Remove-Item -LiteralPath $workTasks -Force
+    $danglingNoise = @(Repair-SharedJunction -Name 'tasks' -Root $rootT 6>&1 | ForEach-Object { "$_" })
+    Assert 'a dangling junction gets its target back' (Test-Path -LiteralPath $workTasks -PathType Container)
+    Set-Content -LiteralPath (Join-Path $linkTasks 'probe.txt') -Value 'x' -NoNewline -ErrorAction SilentlyContinue
+    Assert 'and a write through the junction lands in the canonical root' (Test-Path -LiteralPath (Join-Path $workTasks 'probe.txt'))
+    # Silent: the sweep empties this directory again and again, and a line here would be a new line
+    # in the launch preamble each time.
+    Assert 'restoring the target prints nothing' ($danglingNoise.Count -eq 0)
+
+    # No canonical root at all is not this function's to fix.
+    $WorkRoot = Join-Path $fake5 'no-such-work'
+    Repair-SharedJunction -Name 'tasks' -Root $rootT 6>$null
+    Assert 'a missing canonical ROOT is not created' (-not (Test-Path -LiteralPath $WorkRoot))
+    # And a missing secondary root still creates nothing on the canonical side.
+    $WorkRoot = Join-Path $fake5 'work'
+    Repair-SharedJunction -Name 'plans' -Root (Join-Path $fake5 'never-created') 6>$null
+    Assert 'a missing secondary root creates nothing in the canonical root' (-not (Test-Path -LiteralPath (Join-Path $WorkRoot 'plans')))
+
+    # The mirror runs for EVERY secondary account, each with its own root.
+    $savedConfigDir5 = $env:CLAUDE_CONFIG_DIR
+    try {
+        $script:MirrorRoots = @()
+        $rootRecorder = { param($Root) $script:MirrorRoots += $Root; '' }
+        $secondaryKeys = @($ProfileRoots.Keys | Where-Object { $_ -ne $CanonicalAccount })
+        foreach ($k in $secondaryKeys) { $null = Set-ClaudeProfile -Account $k -Mirror $rootRecorder 6>&1 }
+        $null = Set-ClaudeProfile -Account $CanonicalAccount -Mirror $rootRecorder 6>&1
+        Assert 'the mirror runs once for each secondary account, with that account''s root' ($secondaryKeys.Count -eq 3 -and (($script:MirrorRoots -join '|') -eq (($secondaryKeys | ForEach-Object { $ProfileRoots[$_] }) -join '|')))
+    } finally {
+        if ($null -eq $savedConfigDir5) { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+        else { $env:CLAUDE_CONFIG_DIR = $savedConfigDir5 }
+    }
+} finally {
+    $WorkRoot = $origWorkRoot5; $SecondaryRoots = $origSecondary5
+    # The junction and its root carry deny ACEs (Protect-SharedJunction); lift them or the fixture stays.
+    $who5 = "$env:USERDOMAIN\$env:USERNAME"
+    & icacls.exe (Join-Path $fake5 'low\tasks') /L /remove:d $who5 *> $null
+    & icacls.exe (Join-Path $fake5 'low') /remove:d $who5 *> $null
+    if (Test-Path -LiteralPath $fake5) { Remove-Item -LiteralPath $fake5 -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # Get-ClaudeInvocation: a SUBCOMMAND must not get --mcp-config (2026-08-22).
 # `claude auto-mode defaults` died with `error: unknown option '--mcp-config'` after the full launch
 # preamble, because the flags were appended to every pass-through. A positional PROMPT is not a
@@ -850,7 +909,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = 182
+$script:ExpectedRan = 190
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

@@ -242,8 +242,95 @@ function writeJson(file, obj) {
   assertEqual('0|false|false|true', `${cli4.status}|${'env' in (s4.stdio ?? {})}|${'headers' in (s4.web ?? {})}|${/env not copied/.test(cli4.stdout)}`, 'CLAUDE_AUTO_MIRROR_SECRETS=0 makes the CLI strip env/headers and say so on stdout');
 }
 
-if (Ran !== 32) {
-  console.log(`COULD NOT RUN: expected 32 assertions, ran ${Ran} - an assertion was skipped`);
+// ---------------------------------------------------------------- user-scope servers
+
+{
+  // The top-level mcpServers map is the user scope. Work is canonical for it: the target ends up
+  // with every work server under the work definition, keeps a server only it has, and changes in
+  // nothing else - the account record, the counters and the per-project map sit in the same file.
+  const home = freshDir('user-home');
+  const target = freshDir('user-target');
+  const workFile = path.join(home, '.claude.json');
+  const personalFile = path.join(target, '.claude.json');
+  writeJson(workFile, {
+    numStartups: 900,
+    oauthAccount: { emailAddress: 'work@example.invalid' },
+    mcpServers: {
+      graph: { command: 'graph-cmd', args: ['--stdio'], env: { GRAPH_TOKEN: 'fixture-user-token' } },
+      search: { type: 'http', url: 'https://search.example.invalid', headers: { Authorization: 'Bearer fixture-user-token' } },
+      same: { command: 'same-cmd', args: ['a'], env: { K: 'v' } },
+    },
+  });
+  const targetBefore = {
+    numStartups: 7,
+    oauthAccount: { emailAddress: 'personal@example.invalid', accountUuid: 'fixture-uuid' },
+    mcpServers: {
+      mine: { command: 'only-here-cmd' },
+      search: { type: 'http', url: 'https://old.example.invalid' },
+      // Same definition as work's, keys in another order: not a difference.
+      same: { env: { K: 'v' }, args: ['a'], command: 'same-cmd' },
+    },
+    projects: { '/repo/six': { mcpServers: { local: { command: 'local-cmd' } }, lastCost: 1.5 } },
+    userID: 'fixture-user-id',
+  };
+  writeJson(personalFile, targetBefore);
+
+  const logs = [];
+  const code = runMirror({ workFile, personalFile, log: (m) => logs.push(m) });
+  const after = JSON.parse(fs.readFileSync(personalFile, 'utf8'));
+  const line = logs.join('\n');
+  assertEqual(0, code, 'a user-scope mirror exits 0');
+  assertEqual(JSON.stringify(JSON.parse(fs.readFileSync(workFile, 'utf8')).mcpServers.graph), JSON.stringify(after.mcpServers?.graph), 'a user-scope server the target lacks is added with the work definition');
+  assertEqual('https://search.example.invalid|Bearer fixture-user-token', `${after.mcpServers?.search?.url}|${after.mcpServers?.search?.headers?.Authorization}`, 'a user-scope server defined differently takes the work definition');
+  assertEqual('only-here-cmd', after.mcpServers?.mine?.command, 'a user-scope server only the target has is kept');
+  assertEqual('env,args,command', Object.keys(after.mcpServers?.same ?? {}).join(','), 'a server that differs only in key order is left as it is');
+  const { mcpServers: _b, ...restBefore } = targetBefore;
+  const { mcpServers: _a, ...restAfter } = after;
+  assertEqual(JSON.stringify(restBefore), JSON.stringify(restAfter), 'nothing outside mcpServers changes: account record, counters, per-project map');
+  assertEqual(Object.keys(targetBefore).join(','), Object.keys(after).join(','), 'the top-level key order is kept');
+  assertEqual('mine,search,same,graph', Object.keys(after.mcpServers ?? {}).join(','), 'existing servers keep their place, a new one goes last');
+  assertEqual(true, /graph @ user/.test(line) && /search @ user \(updated\)/.test(line) && /mine @ user \(only in the target, kept\)/.test(line), 'the line names the added, the updated and the target-only server');
+  assertEqual(false, /fixture-user-token|example\.invalid|-cmd/.test(line), 'and carries names only, never a value from a definition');
+  assertEqual(false, /same @ user/.test(line), 'a server that already agrees is not reported');
+
+  const statBefore = fs.statSync(personalFile);
+  const logs2 = [];
+  const code2 = runMirror({ workFile, personalFile, log: (m) => logs2.push(m) });
+  assertEqual(`0|${statBefore.mtimeMs}`, `${code2}|${fs.statSync(personalFile).mtimeMs}`, 'a second user-scope run writes nothing');
+  assertEqual(true, logs2.length === 1 && /mine @ user \(only in the target, kept\)/.test(logs2[0]) && !/graph|search/.test(logs2[0]), 'and still reports the target-only server, alone');
+
+  // A target with no user-scope map at all (a fresh account) gets one; a work file with none
+  // leaves the target alone.
+  const target2 = freshDir('user-empty-target');
+  const personalFile2 = path.join(target2, '.claude.json');
+  writeJson(personalFile2, { userID: 'fixture-user-id-2' });
+  const code3 = runMirror({ workFile, personalFile: personalFile2, log: () => {}, exclude: ['search'] });
+  const after2 = JSON.parse(fs.readFileSync(personalFile2, 'utf8'));
+  assertEqual('0|userID,mcpServers|graph,same', `${code3}|${Object.keys(after2).join(',')}|${Object.keys(after2.mcpServers ?? {}).join(',')}`, 'a target with no user-scope map gets one, minus the excluded names');
+
+  const workFile3 = path.join(home, 'work3.claude.json');
+  writeJson(workFile3, { userID: 'w' });
+  const stat3 = fs.statSync(personalFile);
+  const logs3 = [];
+  const code4 = runMirror({ workFile: workFile3, personalFile, log: (m) => logs3.push(m) });
+  assertEqual(`0|${stat3.mtimeMs}|4`, `${code4}|${fs.statSync(personalFile).mtimeMs}|${Object.keys(JSON.parse(fs.readFileSync(personalFile, 'utf8')).mcpServers).length}`, 'a work file with no user-scope servers leaves the target untouched');
+
+  // copySecrets=false: the work definition without env/headers; credentials the target already
+  // holds for that server stay where they are.
+  const target4 = freshDir('user-optout-target');
+  const personalFile4 = path.join(target4, '.claude.json');
+  writeJson(personalFile4, { mcpServers: { graph: { command: 'stale-cmd', env: { GRAPH_TOKEN: 'target-own-token' } } } });
+  const logs4 = [];
+  runMirror({ workFile, personalFile: personalFile4, log: (m) => logs4.push(m), copySecrets: false });
+  const s4 = JSON.parse(fs.readFileSync(personalFile4, 'utf8')).mcpServers ?? {};
+  assertEqual('graph-cmd|target-own-token|false', `${s4.graph?.command}|${s4.graph?.env?.GRAPH_TOKEN}|${'headers' in (s4.search ?? {})}`, 'copySecrets=false updates the definition, keeps the target credentials, adds a server without its headers');
+  const stat4 = fs.statSync(personalFile4);
+  runMirror({ workFile, personalFile: personalFile4, log: () => {}, copySecrets: false });
+  assertEqual(String(stat4.mtimeMs), String(fs.statSync(personalFile4).mtimeMs), 'and a second copySecrets=false run writes nothing');
+}
+
+if (Ran !== 49) {
+  console.log(`COULD NOT RUN: expected 49 assertions, ran ${Ran} - an assertion was skipped`);
   process.exit(2);
 }
 if (Failed) {

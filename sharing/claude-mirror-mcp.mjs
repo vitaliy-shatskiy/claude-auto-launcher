@@ -1,4 +1,11 @@
-// Mirrors project-scoped MCP servers from the work profile into a secondary profile.
+// Mirrors MCP servers from the work profile into a secondary profile: the project-scoped ones
+// (additive) and the user-scoped ones (work's definition wins).
+//
+// USER SCOPE is the top-level mcpServers map. Work is canonical for it: after a run the target
+// holds every work server under the work definition - a missing one is added, one defined
+// differently is replaced (key order is not a difference). A server only the target has is kept
+// and named on the output line at every run, never deleted. Nothing else in the file is decided
+// here. The output names servers and never a value from a definition.
 //
 // The TARGET ROOT is argv[2] (default: the personal profile, which is what every caller passed
 // before the third account arrived on 2026-08-20). Hardcoding it was correct while there was
@@ -21,8 +28,10 @@
 // included, because the accounts are one person's on one machine and should not differ.
 // CLAUDE_AUTO_MIRROR_SECRETS=0 is the only way to strip those two fields (unset or any other value
 // copies them); CLAUDE_AUTO_MIRROR_EXCLUDE (comma-separated server names) is never copied at all.
-// Additive means a server already in the target is not updated, so either switch affects only
-// servers not mirrored yet.
+// Project scope is additive - a server already in the target is not updated - so there either
+// switch affects only servers not mirrored yet. In the user scope an excluded name is never
+// touched, and with SECRETS=0 the work definition is taken without those two fields while the
+// ones the target already holds for that server stay.
 //
 // NOT format-preserving, though: every write here re-serialises the WHOLE target file
 // (JSON.parse then JSON.stringify(obj, null, 2)), because a JSON document cannot be edited in
@@ -92,6 +101,57 @@ function sameStat(a, b) {
 // The fields that carry a server's credentials: `env` (stdio) and `headers` (http/sse).
 const SECRET_FIELDS = ['env', 'headers'];
 
+// Key order is serialisation, not configuration: compare with keys sorted at every level.
+function canonical(node) {
+  if (Array.isArray(node)) return `[${node.map(canonical).join(',')}]`;
+  if (node && typeof node === 'object') {
+    return `{${Object.keys(node).sort().map(k => `${JSON.stringify(k)}:${canonical(node[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(node) ?? 'null';
+}
+
+const isMap = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+function withoutSecrets(cfg) {
+  if (!isMap(cfg)) return cfg;
+  const copy = { ...cfg };
+  for (const field of SECRET_FIELDS) delete copy[field];
+  return copy;
+}
+
+// Pure: mutates `personal.mcpServers` in place. `changed` are the edits that need a write,
+// `notes` what is reported without one. Names only in both.
+function mergeUserServers(work, personal, { exclude = [], copySecrets = true } = {}) {
+  const changed = [];
+  const notes = [];
+  const servers = work.mcpServers;
+  if (!isMap(servers)) return { changed, notes };
+  const current = isMap(personal.mcpServers) ? personal.mcpServers : {};
+  for (const [name, cfg] of Object.entries(servers)) {
+    if (exclude.includes(name)) continue;
+    const has = Object.hasOwn(current, name);
+    let next = cfg;
+    if (copySecrets) {
+      if (has && canonical(current[name]) === canonical(cfg)) continue;
+    } else {
+      // Compared and written without the credential fields; the target's own ones are carried over.
+      next = withoutSecrets(cfg);
+      if (has && canonical(withoutSecrets(current[name])) === canonical(next)) continue;
+      if (has && isMap(next) && isMap(current[name])) {
+        for (const field of SECRET_FIELDS) if (field in current[name]) next[field] = current[name][field];
+      }
+    }
+    // Assigned only now, so a run with nothing to change never creates an empty map.
+    personal.mcpServers = current;
+    current[name] = next;
+    changed.push(`${name} @ user${has ? ' (updated)' : ''}`);
+  }
+  for (const name of Object.keys(current)) {
+    if (!Object.hasOwn(servers, name) && !exclude.includes(name)) notes.push(`${name} @ user (only in the target, kept)`);
+  }
+  return { changed, notes };
+}
+
 // Pure: mutates `personal` in place, returns the list of human-readable additions.
 function mergeProjects(work, personal, { exclude = [], copySecrets = true } = {}) {
   const added = [];
@@ -150,8 +210,9 @@ export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.l
   function loadTargetAndMerge() {
     const baseline = statOf(fsImpl, personalFile);
     const personal = readJsonFile(fsImpl, personalFile, 'target file');
-    const added = mergeProjects(work, personal, { exclude, copySecrets });
-    return { baseline, personal, added };
+    const user = mergeUserServers(work, personal, { exclude, copySecrets });
+    const added = [...user.changed, ...mergeProjects(work, personal, { exclude, copySecrets })];
+    return { baseline, personal, added, notes: user.notes };
   }
 
   let attempt;
@@ -161,7 +222,10 @@ export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.l
     return fail(log, e.message);
   }
 
-  if (attempt.added.length === 0) return 0;
+  // Nothing to write. A target-only user-scope server is still named, at every run, until the
+  // owner resolves it.
+  const reportOnly = (a) => { if (a.notes.length > 0) log(a.notes.join(', ')); return 0; };
+  if (attempt.added.length === 0) return reportOnly(attempt);
 
   // Stat immediately before the write, not immediately after the read: the merge itself does no
   // I/O, so this is as close to "right before the rename" as a single-threaded script gets.
@@ -174,7 +238,7 @@ export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.l
     } catch (e) {
       return fail(log, e.message);
     }
-    if (attempt.added.length === 0) return 0;
+    if (attempt.added.length === 0) return reportOnly(attempt);
     nowStat = statOf(fsImpl, personalFile);
     if (!sameStat(attempt.baseline, nowStat)) {
       return fail(log, 'target file changed twice during merge - aborting rather than lose a concurrent write');
@@ -191,7 +255,7 @@ export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.l
     return fail(log, `could not write target file: ${e.message}`);
   }
 
-  log(attempt.added.join(', '));
+  log([...attempt.added, ...attempt.notes].join(', '));
   return 0;
 }
 

@@ -621,10 +621,17 @@ function Repair-SharedJunction {
     # -LiteralPath on all three. -Path is a wildcard pattern, so under a real directory named
     # 'br[x]dir' every one of them answered False: this returned at the first line and a diverged
     # directory stayed invisible forever, which is the exact failure it exists to report.
-    if (-not (Test-Path -LiteralPath $w)) { return }
     # A root that does not exist yet is not a broken share: New-ClaudeProfileRoot creates it, and
     # creating a junction under a missing parent would only raise a warning at every launch.
     if (-not (Test-Path -LiteralPath $Root)) { return }
+    if (-not (Test-Path -LiteralPath $w)) {
+        # The canonical side is gone - Claude Code's retention sweep removes an empty state
+        # directory - so every root's junction points at nothing and a root without one never got
+        # it. Put the target back first. Silent: it recurs, and a line here would be a new line in
+        # the launch preamble each time. A missing canonical ROOT is not this function's to create.
+        if (-not (Test-Path -LiteralPath $WorkRoot -PathType Container)) { return }
+        New-Item -ItemType Directory -Path $w -ErrorAction Stop | Out-Null
+    }
     $rootName = Split-Path -Leaf $Root
     if (Test-Path -LiteralPath $p) {
         if (-not ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
