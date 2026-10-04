@@ -1385,12 +1385,15 @@ function Get-ProjectFrame {
                # No Slug: this screen draws Name, Path, the worktree glyph and the age, and nothing
                # else - a field the rows cannot show cannot move them, and every field costs a
                # property read per project on a key that is rebuilt on every hover.
-               (Get-ListSignature -Items $Projects -Fields @('Name', 'Path', 'Worktree', 'LastActivity'))
+               # Hidden: it decides whether a row is drawn at all and what the title counts.
+               (Get-ListSignature -Items $Projects -Fields @('Name', 'Path', 'Worktree', 'LastActivity', 'Hidden'))
     $memoHit = Get-MemoFrame -Builder 'project' -Key $memoKey -HoverRow $HoverRow -HoverValue $HoverValue -Hover $Hover -RowMap $RowMap
     if ($null -ne $memoHit) { return $memoHit }
     # The title counts every match, the cwd's own project included: it is still known, it is only
     # drawn on the cwd row instead of twice.
-    $items = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
+    # Hidden projects (scratch directories) are not among them; the title says how many were left
+    # out, so a list shorter than the registry never reads as a registry that lost something.
+    $count = Get-ProjectCount -Projects $Projects -Filter $Filter -Cwd $Cwd
     # The pinned rows are rows: they are selected, hit-tested and entered exactly like a project, so
     # the loop below never needs to know which kind it is looking at. The CURRENT DIRECTORY leads
     # (spec D6): arriving here from a terminal already standing in the right folder is the common
@@ -1398,7 +1401,8 @@ function Get-ProjectFrame {
     # is the one builder Invoke-ProjectScreen picks from as well.
     $rows = @(Get-ProjectRows -Projects $Projects -Filter $Filter -Cwd $Cwd)
 
-    $title = "project $($g.H) $($items.Count) known"
+    $title = "project $($g.H) $($count.Known) known"
+    if ($count.Hidden -gt 0) { $title += " $($g.H) $($count.Hidden) hidden" }
     # -Typing shows the filter box the moment '/' is pressed, before any character narrows it, and
     # the trailing '_' is the only cursor this plain-text title has room for.
     # Through the same sanitiser every other transcript-sourced field on this screen goes through.

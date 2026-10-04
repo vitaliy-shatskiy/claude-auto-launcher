@@ -5953,8 +5953,50 @@ $hsResult = try { Confirm-HeldSession -ReadKey { throw 'unused' } -Wait { $hsQue
 Assert-Equal $true $hsResult 'confirm: a resize does not answer the question'
 Assert-Equal 2 $script:hsDraws 'confirm: a resize repaints'
 
+# --- scratch directories: known, not listed, one filter away ----------------------------------------
+# The registry marks a Temp or job-tmp directory Hidden (Projects.ps1). The screen leaves those rows
+# out, says how many it left out, and a filter that matches one brings it back - no new key.
+$hidRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("pp-scr-$([Guid]::NewGuid().ToString('N'))")
+$hidReal = Join-Path $hidRoot 'realproj'
+$hidProbe = Join-Path $hidRoot 'probe-319'
+$hidJob = Join-Path $hidRoot 'w585'
+foreach ($p in @($hidReal, $hidProbe, $hidJob)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
+$hidProjs = @(
+    [pscustomobject]@{ Slug = 'R'; Path = $hidReal;  Name = 'realproj';  Worktree = $null; LastActivity = (Get-Date).AddMinutes(-4); Hidden = $false }
+    [pscustomobject]@{ Slug = 'P'; Path = $hidProbe; Name = 'probe-319'; Worktree = $null; LastActivity = (Get-Date).AddMinutes(-9); Hidden = $true }
+    [pscustomobject]@{ Slug = 'J'; Path = $hidJob;   Name = 'w585';      Worktree = $null; LastActivity = (Get-Date).AddHours(-3);   Hidden = $true }
+)
+try {
+    $hidMap = $null
+    $hidText = @(Get-ProjectFrame -Projects $hidProjs -Cwd 'C:\somewhere' -Width 120 -Height 24 -RowMap ([ref]$hidMap)) -join "`n"
+    Assert-Equal 3 $hidMap.RowCount 'two hidden projects: the cwd row, the one listed project, the free-path row'
+    Assert-True ($hidText -match 'project .{1,3} 1 known .{1,3} 2 hidden') 'the title counts the listed rows and says how many are hidden'
+    Assert-True (-not $hidText.Contains('probe-319') -and -not $hidText.Contains('w585')) 'and neither hidden project is drawn'
+    $hidAscii = @(Get-ProjectFrame -Projects $hidProjs -Cwd 'C:\somewhere' -Width 120 -Height 24 -Ascii) -join "`n"
+    Assert-True ($hidAscii.Contains('project - 1 known - 2 hidden')) 'the ASCII title carries the same count'
+    $hidFilterText = @(Get-ProjectFrame -Projects $hidProjs -Filter 'probe' -Cwd 'C:\somewhere' -Width 120 -Height 24) -join "`n"
+    Assert-True ($hidFilterText.Contains('probe-319')) 'a filter that matches a hidden project draws it'
+    Assert-True ($hidFilterText -match 'project .{1,3} 1 known .{1,3} 1 hidden .{1,3} filter: probe') 'and the title counts what the filter still leaves out'
+    $hidCwdText = @(Get-ProjectFrame -Projects $hidProjs -Cwd $hidJob -Width 120 -Height 24) -join "`n"
+    Assert-True ($hidCwdText.Contains('w585 (current directory)')) 'a hidden project that IS the current directory is drawn on the cwd row'
+    Assert-True ($hidCwdText -match 'project .{1,3} 2 known .{1,3} 1 hidden') 'and counted as known'
+    $hidNone = @(Get-ProjectFrame -Projects @($hidProjs[0]) -Cwd 'C:\somewhere' -Width 120 -Height 24) -join "`n"
+    Assert-True ($hidNone -match '1 known' -and $hidNone -notmatch 'hidden') 'with nothing hidden the title says nothing about hidden rows'
+    # The memo keys on Hidden: the same paths with the flags cleared are a different list.
+    $hidShown = @($hidProjs | ForEach-Object { [pscustomobject]@{ Slug = $_.Slug; Path = $_.Path; Name = $_.Name; Worktree = $null; LastActivity = $_.LastActivity; Hidden = $false } })
+    $hidShownText = @(Get-ProjectFrame -Projects $hidShown -Cwd 'C:\somewhere' -Width 120 -Height 24) -join "`n"
+    Assert-True ($hidShownText -match 'project .{1,3} 3 known' -and $hidShownText.Contains('probe-319')) 'the frame memo does not answer a list whose Hidden flags differ'
+    # Reachable end to end: the filter finds it, the cursor parks on it, Enter runs there.
+    $hidPick = Invoke-ProjectScreen -Projects $hidProjs -Cwd $hidRoot -ReadKey (New-ScriptedKeyReader -Keys @('/', 'w', '5', '8', 'Enter', 'Enter')) -Draw {}
+    Assert-Equal $hidJob $hidPick.Path 'a hidden project is one filter away: the cursor parks on it and Enter runs there'
+    Assert-Equal 'J' "$($hidPick.Slug)" 'with its slug'
+    $hidStep = Invoke-ProjectScreen -Projects $hidProjs -Cwd $hidRoot -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {} -ReadPath { $hidProbe }
+    Assert-Equal $hidProbe $hidStep.Path 'the row under the one listed project is the free-path row, and a typed path to a hidden project still runs'
+    Assert-Equal 'P' "$($hidStep.Slug)" 'and still resolves its slug'
+} finally { Remove-Item -LiteralPath $hidRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1971
+$script:Expected = 1985
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

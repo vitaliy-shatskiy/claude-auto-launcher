@@ -33,6 +33,75 @@ function Remove-StalePreviewProjectsCache {
     }
 }
 
+function Get-ProjectTempRoots {
+    # Where a throwaway cwd lives. Both spellings: GetTempPath follows TEMP/TMP, which a shell can
+    # point anywhere, and the profile's own Temp is where the other tools on the machine wrote.
+    $roots = @([IO.Path]::GetTempPath())
+    if ($env:LOCALAPPDATA) { $roots += (Join-Path $env:LOCALAPPDATA 'Temp') }
+    return @($roots | Where-Object { $_ } | ForEach-Object { ConvertTo-ProjectKey $_ } | Select-Object -Unique)
+}
+
+function Get-ProjectProfileRoots {
+    # The profile roots a job tmp directory can sit under, when the caller names none: the default
+    # root and the one this process was started for. The launcher passes its whole roster instead.
+    $roots = @(Join-Path $HOME '.claude')
+    if ($env:CLAUDE_CONFIG_DIR) { $roots += $env:CLAUDE_CONFIG_DIR }
+    return @($roots)
+}
+
+function Test-ProjectScratchPath {
+    # Is this cwd a scratch directory rather than a project: anything at or under a temp root, or a
+    # job's tmp directory (<profile root>\jobs\<id>\tmp) and anything under it. String work only -
+    # nothing here touches the disk, and the comparison is ConvertTo-ProjectKey's, so case, slash
+    # direction and a trailing separator on either side do not matter.
+    param([string]$Path, [string[]]$TempRoots = @(), [string[]]$ProfileRoots = @())
+    $key = ConvertTo-ProjectKey $Path
+    if (-not $key) { return $false }
+    foreach ($root in $TempRoots) {
+        $r = ConvertTo-ProjectKey $root
+        if (-not $r) { continue }
+        if ($key -eq $r -or $key.StartsWith($r + '\', [StringComparison]::Ordinal)) { return $true }
+    }
+    foreach ($root in $ProfileRoots) {
+        $r = ConvertTo-ProjectKey $root
+        if (-not $r) { continue }
+        $jobs = $r + '\jobs\'
+        if (-not $key.StartsWith($jobs, [StringComparison]::Ordinal)) { continue }
+        # <id>\tmp[\...]: the id is one segment, and tmp is the whole of the next one.
+        $rest = $key.Substring($jobs.Length).Split('\')
+        if ($rest.Count -ge 2 -and $rest[0] -and $rest[1] -eq 'tmp') { return $true }
+    }
+    return $false
+}
+
+function Test-ProjectPathPresent {
+    # Test-Path that never waits on a network. A UNC path, and a path on a network drive, is taken as
+    # present WITHOUT being probed: an unreachable host costs a timeout of many seconds per row, on
+    # the screen the launcher opens with, and picking the row checks it anyway (Invoke-ProjectScreen).
+    # A drive letter that is not there, or a local drive that is not ready, is absent without a look
+    # at the path. -DriveCache carries the per-drive answer across one registry build.
+    param([string]$Path, [hashtable]$DriveCache = @{})
+    if (-not $Path) { return $false }
+    if ($Path.StartsWith('\\') -or $Path.StartsWith('//')) { return $true }
+    if ($Path.Length -ge 2 -and $Path[1] -eq ':' -and [char]::IsLetter($Path[0])) {
+        $letter = [string][char]::ToLowerInvariant($Path[0])
+        if (-not $DriveCache.ContainsKey($letter)) {
+            $DriveCache[$letter] =
+                try {
+                    $drive = [IO.DriveInfo]::new($letter)
+                    # DriveType is answered from the drive table; IsReady on a network drive is the
+                    # network call this function exists to avoid, so it is asked of local drives only.
+                    if ($drive.DriveType -eq [IO.DriveType]::Network) { 'skip' }
+                    elseif ($drive.DriveType -eq [IO.DriveType]::NoRootDirectory -or -not $drive.IsReady) { 'absent' }
+                    else { 'probe' }
+                } catch { 'absent' }
+        }
+        if ($DriveCache[$letter] -eq 'skip') { return $true }
+        if ($DriveCache[$letter] -eq 'absent') { return $false }
+    }
+    return [bool](Test-Path -LiteralPath $Path)
+}
+
 function Get-ProjectRegistry {
     # Every project slug directory, resolved and ordered by last activity. The cache holds only
     # DERIVED data - slug, resolved path, activity - so a lost or corrupt write costs one recompute
@@ -51,7 +120,11 @@ function Get-ProjectRegistry {
         # Computed in the BODY, not as a default expression: `Split-Path 'C:\' -Parent` is '' and
         # Join-Path rejects an empty -Path, so a drive-root CLAUDE_AUTO_PROJECTS_ROOT threw during
         # parameter binding - before any guard in here could run (adversarial review 2026-09-16, B8).
-        [string]$CachePath = ''
+        [string]$CachePath = '',
+        # What makes a row a scratch directory (Test-ProjectScratchPath). Parameters, so a suite can
+        # keep its fixture under the real TEMP and still say which part of it is "temp".
+        [string[]]$TempRoots = @(Get-ProjectTempRoots),
+        [string[]]$ProfileRoots = @(Get-ProjectProfileRoots)
     )
     if (-not $CachePath) {
         $cacheParent = try { Split-Path -Path $ProjectsRoot -Parent } catch { '' }
@@ -68,7 +141,7 @@ function Get-ProjectRegistry {
         } catch { $cache = @{} }
     }
 
-    $out = @(); $fresh = @{}
+    $out = @(); $fresh = @{}; $drives = @{}
     foreach ($d in (Get-ChildItem -LiteralPath $ProjectsRoot -Directory -Force -ErrorAction SilentlyContinue)) {
         $newest = Get-ChildItem -LiteralPath $d.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue |
                   Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -90,8 +163,9 @@ function Get-ProjectRegistry {
         if (-not $path -or $path.IndexOf([char]0) -ge 0) { continue }
         $fresh[$key] = @{ Path = $path }
         # Checked every run, never cached: a folder can be deleted between two launches, and a row
-        # that cannot be entered is worse than a missing one.
-        if (-not (Test-Path -LiteralPath $path)) { continue }
+        # that cannot be entered is worse than a missing one. Never across a network, though
+        # (Test-ProjectPathPresent): a dead share must not hold the launcher's first screen.
+        if (-not (Test-ProjectPathPresent -Path $path -DriveCache $drives)) { continue }
         $names = ConvertFrom-ClaudeProjectSlug -Slug $d.Name
         # -LiteralPath has no -Leaf parameter set (same trap noted in Sessions.ps1's
         # Test-ClaudeSessionFile: -LiteralPath alone returns the PARENT, no -Leaf switch exists
@@ -108,6 +182,11 @@ function Get-ProjectRegistry {
             Name         = $leaf
             Worktree     = $names.Worktree
             LastActivity = $newest.LastWriteTime
+            # A scratch directory - every headless run in a temporary cwd leaves a slug folder - is
+            # KNOWN but not listed: the row stays in the registry, so its sessions, its slug and the
+            # start-project rule all still work, and the screen leaves it out until a filter asks
+            # (Select-ProjectMatch). Judged on the recorded cwd, never on where a link leads.
+            Hidden       = (Test-ProjectScratchPath -Path $path -TempRoots $TempRoots -ProfileRoots $ProfileRoots)
         }
     }
 
@@ -138,9 +217,25 @@ function Get-ProjectRegistry {
             Name         = $top.Name
             Worktree     = $top.Worktree
             LastActivity = $top.LastActivity
+            Hidden       = [bool]$top.Hidden
         }
     }
     return @($merged | Sort-Object LastActivity -Descending)
+}
+
+function Get-ProjectCount {
+    # The title's two numbers, from the same rule that decides the rows: Known is what
+    # Select-ProjectMatch lists for this filter and cwd, Hidden is the hidden projects it left out.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects, [string]$Filter = '', [string]$Cwd = '')
+    $listed = @(Select-ProjectMatch -Projects $Projects -Filter $Filter -Cwd $Cwd)
+    $cwdKey = ConvertTo-ProjectKey $Cwd
+    $hidden = 0
+    foreach ($p in $Projects) {
+        if (-not $p.Hidden) { continue }
+        if ($cwdKey -and (ConvertTo-ProjectKey $p.Path) -eq $cwdKey) { continue }
+        if ($listed -notcontains $p) { $hidden++ }
+    }
+    return [pscustomobject]@{ Known = $listed.Count; Hidden = $hidden }
 }
 
 function Select-ProjectMatch {
@@ -154,12 +249,20 @@ function Select-ProjectMatch {
     # this filter would take the screen down. Escaping the filter text (not a try/catch) is the
     # fix: someone who typed '[' is looking for a literal '[', and Escape gives them that, where a
     # catch would return an empty list with no reason shown.
-    param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects, [string]$Filter)
+    #
+    # A Hidden project (a scratch directory, Get-ProjectRegistry) is left out of the UNFILTERED list
+    # and found by any filter that matches it: the filter box is how a hidden row is reached, so the
+    # screen needs no key for it. -Cwd names the one exception - the directory the launcher was
+    # started in is always listed, hidden or not.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects, [string]$Filter, [string]$Cwd = '')
     # @() on the way out too: `return $Projects` unrolls a one-element array on the pipeline, so the
     # empty-filter branch answered with a bare object where the filtering branch answers with an
     # array. Both call sites wrap the call themselves today; the next one would not know to
     # (adversarial review 2026-09-16, A4).
-    if ([string]::IsNullOrWhiteSpace($Filter)) { return @($Projects) }
+    if ([string]::IsNullOrWhiteSpace($Filter)) {
+        $cwdKey = ConvertTo-ProjectKey $Cwd
+        return @($Projects | Where-Object { -not $_.Hidden -or ($cwdKey -and (ConvertTo-ProjectKey $_.Path) -eq $cwdKey) })
+    }
     $f = [Management.Automation.WildcardPattern]::Escape($Filter.Trim())
     return @($Projects | Where-Object { "$($_.Name) $($_.Path) $($_.Worktree)" -like "*$f*" })
 }
@@ -176,7 +279,7 @@ function Get-ProjectRows {
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Projects, [string]$Filter = '', [string]$Cwd = '')
     $cwdKey = ConvertTo-ProjectKey $Cwd
     $here = if ($cwdKey) { @($Projects | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq $cwdKey }) | Select-Object -First 1 } else { $null }
-    $matched = @(Select-ProjectMatch -Projects $Projects -Filter $Filter)
+    $matched = @(Select-ProjectMatch -Projects $Projects -Filter $Filter -Cwd $Cwd)
     $cwdItem = if ($here) {
         [pscustomobject]@{ Name = "$($here.Name) (current directory)"; Path = $Cwd; LastActivity = $here.LastActivity; Worktree = $here.Worktree
                            Slug = $here.Slug; Slugs = @(if ($here.Slugs) { $here.Slugs } else { $here.Slug })

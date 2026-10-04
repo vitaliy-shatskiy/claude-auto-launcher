@@ -358,7 +358,97 @@ try { $null = Get-ProjectRegistry -ProjectsRoot (Join-Path $env:TEMP "claude-aut
 catch { $bindErr = $_.Exception -is [System.Management.Automation.ParameterBindingException] }
 Assert-True $bindErr 'Get-ProjectRegistry rejects an unknown parameter instead of running on defaults'
 
-if ($script:Ran -ne 58) { Write-Host "COULD NOT RUN: expected 58 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- scratch directories are known, but not listed --------------------------------------------------
+# Every headless `claude -p` run in a temporary cwd leaves a slug folder behind, and the project
+# screen listed each as a project: more than half of the rows were Temp and job-tmp directories.
+# The registry marks them Hidden; the screen leaves them out until a filter asks for one.
+$scTemp = 'C:\Users\x\AppData\Local\Temp'
+$scProfiles = @('C:\Users\x\.claude', 'C:\Users\x\.claude-personal')
+Assert-True (Test-ProjectScratchPath -Path 'C:\Users\x\AppData\Local\Temp\claude\slug\sess\rules\child' -TempRoots $scTemp -ProfileRoots $scProfiles) 'a directory under the temp root is scratch'
+Assert-True (Test-ProjectScratchPath -Path 'c:/users/X/appdata/local/TEMP/probe-319/' -TempRoots "$scTemp\" -ProfileRoots $scProfiles) 'whatever the case, the slash direction or a trailing separator on either side'
+Assert-True (Test-ProjectScratchPath -Path $scTemp -TempRoots $scTemp -ProfileRoots $scProfiles) 'the temp root itself is scratch'
+Assert-True (-not (Test-ProjectScratchPath -Path 'C:\Users\x\AppData\Local\Temporary\repo' -TempRoots $scTemp -ProfileRoots $scProfiles)) 'a sibling that only shares the temp root''s prefix is not'
+Assert-True (Test-ProjectScratchPath -Path 'C:\Users\x\.claude-personal\jobs\76c3aa80\tmp\w585' -TempRoots $scTemp -ProfileRoots $scProfiles) 'a job tmp directory under ANY profile root is scratch'
+Assert-True (Test-ProjectScratchPath -Path 'C:\Users\x\.claude\jobs\76c3aa80\tmp' -TempRoots $scTemp -ProfileRoots $scProfiles) 'the job tmp directory itself as well'
+Assert-True (-not (Test-ProjectScratchPath -Path 'C:\Users\x\.claude\jobs\76c3aa80\work\repo' -TempRoots $scTemp -ProfileRoots $scProfiles)) 'another directory of the same job is not'
+Assert-True (-not (Test-ProjectScratchPath -Path 'C:\Users\x\Projects\jobs\1\tmp\repo' -TempRoots $scTemp -ProfileRoots $scProfiles)) 'a jobs\<id>\tmp outside every profile root is not'
+Assert-True (-not (Test-ProjectScratchPath -Path 'C:\Users\x' -TempRoots $scTemp -ProfileRoots $scProfiles)) 'the home directory is a real cwd and stays'
+Assert-True (-not (Test-ProjectScratchPath -Path 'C:\Users\x\Projects\a' -TempRoots @('', $null) -ProfileRoots @())) 'an empty root hides nothing'
+
+# The registry: the roots are injected, so the fixture can live under the real TEMP like every other.
+$scRoot = Join-Path $env:TEMP ('claude-auto-scratch-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$scProjects = Join-Path $scRoot 'projects'
+$scFakeTemp = Join-Path $scRoot 'faketemp'
+$scFakeProfile = Join-Path $scRoot '.claude-x'
+$scReal = Join-Path $scRoot 'work\real'
+$scInTemp = Join-Path $scFakeTemp 'claude\slug\session\rules\child'
+$scJob = Join-Path $scFakeProfile 'jobs\76c3aa80\tmp\w585'
+$scLink = Join-Path $scRoot 'work\linked'
+$scGone = Join-Path $scFakeTemp 'gone'
+foreach ($p in @($scReal, $scInTemp, $scJob)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
+# A junction that LIVES outside the temp root and points into it: the row is judged by where the
+# session ran, not by where the link leads.
+New-Item -ItemType Junction -Path $scLink -Target $scInTemp | Out-Null
+$scWrite = {
+    param([string]$Slug, [string]$Cwd, [int]$MinutesAgo)
+    $d = Join-Path $scProjects $Slug
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+    $f = Join-Path $d "$Slug.jsonl"
+    [IO.File]::WriteAllText($f, '{"type":"user","cwd":' + (ConvertTo-Json $Cwd) + '}' + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    (Get-Item -LiteralPath $f).LastWriteTime = (Get-Date).AddMinutes(-$MinutesAgo)
+}
+& $scWrite 'real' $scReal 1
+& $scWrite 'intemp' ($scInTemp.ToUpperInvariant().Replace('\', '/')) 2
+& $scWrite 'job' $scJob 3
+& $scWrite 'linked' $scLink 4
+& $scWrite 'gone' $scGone 5
+$scReg = @(Get-ProjectRegistry -ProjectsRoot $scProjects -CachePath (Join-Path $scRoot 'c.json') -TempRoots @($scFakeTemp) -ProfileRoots @($scFakeProfile))
+Assert-Equal 'real,intemp,job,linked' (@($scReg | ForEach-Object Slug) -join ',') 'scratch rows stay IN the registry (their sessions must stay reachable); a vanished directory is still dropped'
+Assert-Equal 'False,True,True,False' (@($scReg | ForEach-Object { [bool]$_.Hidden }) -join ',') 'a temp directory and a job tmp directory are Hidden; a real project and a junction outside temp are not'
+# The same run from the warm cache answers the same.
+$scReg2 = @(Get-ProjectRegistry -ProjectsRoot $scProjects -CachePath (Join-Path $scRoot 'c.json') -TempRoots @($scFakeTemp) -ProfileRoots @($scFakeProfile))
+Assert-Equal 'False,True,True,False' (@($scReg2 | ForEach-Object { [bool]$_.Hidden }) -join ',') 'and a warm cache answers the same'
+
+# The list: no filter leaves the hidden rows out, a filter that matches one finds it.
+Assert-Equal 'real,linked' (@(Select-ProjectMatch -Projects $scReg -Filter '' | ForEach-Object Slug) -join ',') 'with no filter the hidden rows are not listed'
+Assert-Equal 'job' (@(Select-ProjectMatch -Projects $scReg -Filter 'w585' | ForEach-Object Slug) -join ',') 'a filter that matches a hidden row finds it'
+Assert-Equal 'real,intemp,linked' (@(Select-ProjectMatch -Projects $scReg -Filter '' -Cwd "$scInTemp\" | ForEach-Object Slug) -join ',') 'the current directory''s own project is never hidden'
+$scRows = @(Get-ProjectRows -Projects $scReg -Cwd $scJob)
+Assert-Equal 'cwd,project,project,path' (@($scRows | ForEach-Object Kind) -join ',') 'a cwd inside a job tmp: its row, the two visible projects, the free-path row'
+Assert-Equal 'w585 (current directory)' $scRows[0].Item.Name 'and the cwd row still carries its project'
+Assert-Equal 'job' "$($scRows[0].Item.Slug)" 'with its slug, so resume finds its sessions'
+$scCount = Get-ProjectCount -Projects $scReg -Filter '' -Cwd ''
+Assert-Equal '2/2' "$($scCount.Known)/$($scCount.Hidden)" 'the count: two listed, two hidden'
+$scCountCwd = Get-ProjectCount -Projects $scReg -Filter '' -Cwd $scJob
+Assert-Equal '3/1' "$($scCountCwd.Known)/$($scCountCwd.Hidden)" 'a hidden project that is the cwd counts as known, not as hidden'
+$scCountF = Get-ProjectCount -Projects $scReg -Filter 'w585' -Cwd ''
+Assert-Equal '1/1' "$($scCountF.Known)/$($scCountF.Hidden)" 'under a filter the hidden count is what the filter still leaves out'
+$scState = [pscustomobject]@{ Project = ''; ProjectSlug = ''; ProjectSlugs = @() }
+Assert-Equal 'cwd' (Set-LaunchStartProject -State $scState -Cwd $scInTemp -Projects $scReg) 'a cwd inside Temp that holds sessions is still the start project'
+Assert-Equal 'intemp' $scState.ProjectSlug 'with its slug'
+$script:LaunchStartContext = $null
+Remove-Item -LiteralPath $scLink -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $scRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# --- the existence check never waits on a network ---------------------------------------------------
+# A UNC path and a network drive are not probed at all - an unreachable host is a timeout of many
+# seconds per row, on the screen the launcher opens with. A drive letter that is not there is
+# simply absent.
+$exSw = [Diagnostics.Stopwatch]::StartNew()
+$exUnc = Test-ProjectPathPresent -Path '\\claude-auto-no-such-host-604\share\repo' -DriveCache @{}
+$exSw.Stop()
+Assert-True $exUnc 'a UNC path is taken as present without being probed'
+Assert-True ($exSw.ElapsedMilliseconds -lt 500) "and costs no network wait (took $($exSw.ElapsedMilliseconds) ms)"
+$exFree = @(67..90 | ForEach-Object { [string][char]$_ } | Where-Object { -not [IO.Directory]::Exists("${_}:\") -and $_ -notin @([IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1) }) }) | Select-Object -Last 1
+Assert-True (-not (Test-ProjectPathPresent -Path "${exFree}:\src\repo" -DriveCache @{})) 'a path on a drive letter that is not there is absent'
+$exCache = @{ 'q' = 'skip' }
+Assert-True (Test-ProjectPathPresent -Path 'Q:\src\repo' -DriveCache $exCache) 'a drive already classed as network is not probed again (the per-run drive cache)'
+$exCache = @{ 'q' = 'absent' }
+Assert-True (-not (Test-ProjectPathPresent -Path 'Q:\src\repo' -DriveCache $exCache)) 'and one classed as not ready is absent without a second look'
+Assert-True (Test-ProjectPathPresent -Path $PSScriptRoot -DriveCache @{}) 'an ordinary directory is present'
+Assert-True (-not (Test-ProjectPathPresent -Path (Join-Path $PSScriptRoot 'no-such-dir-604') -DriveCache @{})) 'and a deleted one is not'
+
+if ($script:Ran -ne 89) { Write-Host "COULD NOT RUN: expected 89 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

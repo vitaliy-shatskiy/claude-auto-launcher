@@ -305,7 +305,8 @@ if ($UseUi) {
             $previewProjectsCache = Join-Path $env:TEMP "claude-auto-projects-preview-$PID.json"
             $projectsCacheArgs = @{ CachePath = $previewProjectsCache }
         }
-        $projects = @(Get-ProjectRegistry @projectsCacheArgs)
+        # Every account's root, so a job tmp directory under ANY profile is recognised as scratch.
+        $projects = @(Get-ProjectRegistry @projectsCacheArgs -ProfileRoots @(@(Get-ProjectProfileRoots) + @($Accounts | ForEach-Object { "$($_.Root)" } | Where-Object { $_ })))
         # cwd when it is a known project or holds a .git; otherwise what this account launched last;
         # otherwise nothing, and the project screen opens with the cursor at the top.
         $projectSource = Set-LaunchStartProject -State $state -Cwd $LaunchCwd -Projects $projects
