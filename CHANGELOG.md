@@ -9,13 +9,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - Project screen: scratch directories are no longer listed as projects. A directory under the temp
   folder or under a profile's `jobs\<id>\tmp` (what a headless `claude -p` run in a temporary cwd
   leaves behind) stays known but hidden: the title reads `10 known ─ 19 hidden`, and typing a filter
-  (`/`) that matches a hidden project lists it. The current directory is always shown.
+  (`/`) that matches a hidden project lists it, after the visible matches. The current directory is
+  always shown. A temp root that is a drive root, or the home directory or above it, is ignored.
 
 ### Fixed
 
-- Project screen: the existence check no longer probes a UNC path or a network drive, so an
-  unreachable share cannot hold the first screen; a drive letter that is not there is skipped
-  without a look.
+- Project screen: neither the registry nor the remembered-project check probes a network path
+  (`\\host\share`, `\\?\UNC\...`, a mapped network drive) any more, so an unreachable share cannot
+  hold the first screen or a tab switch; such a row is listed unchecked and refused at launch if it
+  cannot be entered. A drive letter that is not there is skipped without a look.
 
 ## [0.5.0] — 2026-10-02
 

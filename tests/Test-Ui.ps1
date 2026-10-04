@@ -5993,10 +5993,21 @@ try {
     $hidStep = Invoke-ProjectScreen -Projects $hidProjs -Cwd $hidRoot -ReadKey (New-ScriptedKeyReader -Keys @('s', 's', 'Enter')) -Draw {} -ReadPath { $hidProbe }
     Assert-Equal $hidProbe $hidStep.Path 'the row under the one listed project is the free-path row, and a typed path to a hidden project still runs'
     Assert-Equal 'P' "$($hidStep.Slug)" 'and still resolves its slug'
+    # A scratch path embeds its parent project's slug and is usually newer: the filter must still park
+    # on the real project (review of 604, m1).
+    $ordAcme = Join-Path $hidRoot 'Projects\Acme'
+    $ordScratch = Join-Path $hidRoot 'Temp\claude\C--Projects-Acme\s1\scratchpad\cwd'
+    foreach ($p in @($ordAcme, $ordScratch)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
+    $ordProjs = @(
+        [pscustomobject]@{ Slug = 'S'; Path = $ordScratch; Name = 'cwd';  Worktree = $null; LastActivity = (Get-Date);               Hidden = $true }
+        [pscustomobject]@{ Slug = 'A'; Path = $ordAcme;    Name = 'Acme'; Worktree = $null; LastActivity = (Get-Date).AddHours(-1);  Hidden = $false }
+    )
+    $ordPick = Invoke-ProjectScreen -Projects $ordProjs -Cwd $hidRoot -ReadKey (New-ScriptedKeyReader -Keys @('/', 'a', 'c', 'm', 'e', 'Enter', 'Enter')) -Draw {}
+    Assert-Equal $ordAcme $ordPick.Path 'a filter parks on the real project, not on a newer scratch directory that carries its name'
 } finally { Remove-Item -LiteralPath $hidRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1985
+$script:Expected = 1986
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

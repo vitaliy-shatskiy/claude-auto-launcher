@@ -448,7 +448,72 @@ Assert-True (-not (Test-ProjectPathPresent -Path 'Q:\src\repo' -DriveCache $exCa
 Assert-True (Test-ProjectPathPresent -Path $PSScriptRoot -DriveCache @{}) 'an ordinary directory is present'
 Assert-True (-not (Test-ProjectPathPresent -Path (Join-Path $PSScriptRoot 'no-such-dir-604') -DriveCache @{})) 'and a deleted one is not'
 
-if ($script:Ran -ne 89) { Write-Host "COULD NOT RUN: expected 89 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- a degenerate temp root hides nothing (review of 604, M1) --------------------------------------
+# With TEMP/TMP unset GetTempPath answers the user profile, and a TEMP at a drive root is the whole
+# drive: taken as a temp root either would hide every real project under it.
+Assert-Equal 0 @(Get-ProjectTempRoots -Candidates @('C:\Users\x') -HomePath 'C:\Users\x').Count 'a temp root that IS the home directory is ignored'
+Assert-Equal 0 @(Get-ProjectTempRoots -Candidates @('C:\Users\') -HomePath 'C:\Users\x').Count 'and so is one above it'
+Assert-Equal 0 @(Get-ProjectTempRoots -Candidates @('B:\') -HomePath 'C:\Users\x').Count 'a drive root is not a temp root'
+Assert-Equal 0 @(Get-ProjectTempRoots -Candidates @('\\srv\share') -HomePath 'C:\Users\x').Count 'nor is a share root'
+Assert-Equal 'c:\users\x\appdata\local\temp' (@(Get-ProjectTempRoots -Candidates @('C:\Users\x\AppData\Local\Temp\', 'C:\Users\x') -HomePath 'C:\Users\x') -join ',') 'a real temp directory under the home directory is kept'
+Assert-True (-not (Test-ProjectScratchPath -Path 'B:\wt\repo' -TempRoots 'B:\' -ProfileRoots @())) 'a drive root handed over as a temp root still hides nothing'
+$m1Saved = @{ TEMP = $env:TEMP; TMP = $env:TMP }
+try {
+    $env:TEMP = $HOME; $env:TMP = $HOME
+    $m1Roots = @(Get-ProjectTempRoots)
+    Assert-True (-not (Test-ProjectScratchPath -Path (Join-Path $HOME 'Desktop\Projects\claude-auto-launcher') -TempRoots $m1Roots -ProfileRoots @())) 'with TEMP pointing at the home directory a real project is still a project'
+} finally { $env:TEMP = $m1Saved.TEMP; $env:TMP = $m1Saved.TMP }
+
+# --- the scratch check normalises first (m4) ---------------------------------------------------------
+Assert-True (Test-ProjectScratchPath -Path 'C:\Users\x\Projects\..\AppData\Local\Temp\probe' -TempRoots $scTemp -ProfileRoots @()) 'a .. segment that leads into temp is resolved'
+Assert-True (-not (Test-ProjectScratchPath -Path 'C:\Users\x\AppData\Local\Temp\..\..\..\Projects\real' -TempRoots $scTemp -ProfileRoots @())) 'and one that leads OUT of temp is not scratch'
+Assert-True (Test-ProjectScratchPath -Path 'C:\Users\x\AppData\\Local\Temp\\probe' -TempRoots $scTemp -ProfileRoots @()) 'doubled separators do not hide a temp path from the check'
+Assert-True (Test-ProjectScratchPath -Path '\\?\C:\Users\x\AppData\Local\Temp\probe' -TempRoots $scTemp -ProfileRoots @()) 'nor does the \\?\ prefix'
+# The 8.3 form: a cwd can be recorded in either spelling of the temp root, so a root answers in both.
+# On a volume with short names disabled both spellings are one and the assertions hold trivially.
+$snLong = Join-Path $env:TEMP ('claude-auto long name fixture ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $snLong | Out-Null
+$snShort = try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($snLong).ShortPath } catch { $snLong }
+Assert-True (Test-ProjectScratchPath -Path (Join-Path $snShort 'child\deeper') -TempRoots @($snLong) -ProfileRoots @()) "a cwd recorded in the 8.3 form is under the temp root given in its long form ($(Split-Path -Path $snShort -Leaf))"
+Assert-True (Test-ProjectScratchPath -Path (Join-Path $snLong 'child\deeper') -TempRoots @($snShort) -ProfileRoots @()) 'and a cwd in the long form is under the temp root given in its 8.3 form'
+Remove-Item -LiteralPath $snLong -Recurse -Force -ErrorAction SilentlyContinue
+
+# --- under a filter, a real project outranks a scratch one (m1) --------------------------------------
+# A scratch path embeds its parent project's slug, and the registry is newest first: without this the
+# scratch row is the first match and takes the cursor.
+$ordProjs = @(
+    [pscustomobject]@{ Slug = 'S'; Path = 'C:\Users\x\AppData\Local\Temp\claude\C--Projects-Acme\s1\scratchpad\cwd'; Name = 'cwd'; Worktree = $null; LastActivity = (Get-Date); Hidden = $true }
+    [pscustomobject]@{ Slug = 'A'; Path = 'C:\Projects\Acme'; Name = 'Acme'; Worktree = $null; LastActivity = (Get-Date).AddHours(-1); Hidden = $false }
+)
+Assert-Equal 'Acme,cwd' (@(Select-ProjectMatch -Projects $ordProjs -Filter 'acme' | ForEach-Object Name) -join ',') 'a filter lists the visible matches ahead of the hidden ones'
+
+# --- \\?\X:\ is a local path; the no-probe rule is for real network paths (m2) -----------------------
+Assert-True (Test-ProjectPathPresent -Path "\\?\$PSScriptRoot" -DriveCache @{}) 'a \\?\ path to a local directory is probed and found'
+Assert-True (-not (Test-ProjectPathPresent -Path "\\?\$PSScriptRoot\no-such-dir-604" -DriveCache @{})) 'and a deleted one is dropped, not taken as present'
+$uncSw = [Diagnostics.Stopwatch]::StartNew()
+$uncLong = Test-ProjectPathPresent -Path '\\?\UNC\claude-auto-no-such-host-604\share\repo' -DriveCache @{}
+$uncSw.Stop()
+Assert-True ($uncLong -and $uncSw.ElapsedMilliseconds -lt 500) "a \\?\UNC\ path is a network path: present, unprobed (took $($uncSw.ElapsedMilliseconds) ms)"
+
+# --- the drive classes, through the real drive table (m5) ---------------------------------------------
+$dcCache = @{}
+$null = Test-ProjectPathPresent -Path $PSScriptRoot -DriveCache $dcCache
+Assert-Equal 'probe' $dcCache[$PSScriptRoot.Substring(0, 1).ToLowerInvariant()] 'the drive this suite runs from is classed as one to probe'
+$null = Test-ProjectPathPresent -Path "${exFree}:\src\repo" -DriveCache $dcCache
+Assert-Equal 'absent' $dcCache[$exFree.ToLowerInvariant()] 'a drive letter that is not there is classed absent'
+$dcNet = @([IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq [IO.DriveType]::Network }) | Select-Object -First 1
+$dcNetClass = if ($dcNet) { $null = Test-ProjectPathPresent -Path "$($dcNet.Name)x" -DriveCache $dcCache; $dcCache[$dcNet.Name.Substring(0, 1).ToLowerInvariant()] } else { 'skip' }
+Assert-Equal 'skip' $dcNetClass "a mapped network drive is classed skip ($(if ($dcNet) { $dcNet.Name } else { 'none mapped on this machine - not exercised' }))"
+
+# --- the remembered project is checked the same way (m3) ---------------------------------------------
+# Resolve-StartProject runs before the first screen and again on every account-tab switch.
+$rsSw = [Diagnostics.Stopwatch]::StartNew()
+$rsUnc = Resolve-StartProject -Cwd '' -Remembered '\\claude-auto-no-such-host-604\share\repo' -Projects @()
+$rsSw.Stop()
+Assert-True ($rsSw.ElapsedMilliseconds -lt 500) "a remembered project on an unreachable host costs no network wait (took $($rsSw.ElapsedMilliseconds) ms)"
+Assert-Equal 'none' (Resolve-StartProject -Cwd '' -Remembered "${exFree}:\src\repo" -Projects @()).Source 'and one on a drive that is not there is unresolved'
+
+if ($script:Ran -ne 111) { Write-Host "COULD NOT RUN: expected 111 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
