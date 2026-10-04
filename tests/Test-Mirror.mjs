@@ -323,14 +323,93 @@ function writeJson(file, obj) {
   const logs4 = [];
   runMirror({ workFile, personalFile: personalFile4, log: (m) => logs4.push(m), copySecrets: false });
   const s4 = JSON.parse(fs.readFileSync(personalFile4, 'utf8')).mcpServers ?? {};
-  assertEqual('graph-cmd|target-own-token|false', `${s4.graph?.command}|${s4.graph?.env?.GRAPH_TOKEN}|${'headers' in (s4.search ?? {})}`, 'copySecrets=false updates the definition, keeps the target credentials, adds a server without its headers');
+  assertEqual('graph-cmd|target-own-token|https://search.example.invalid|false', `${s4.graph?.command}|${s4.graph?.env?.GRAPH_TOKEN}|${s4.search?.url}|${'headers' in (s4.search ?? {})}`, 'copySecrets=false updates the definition, keeps the target credentials, adds a server without its headers');
   const stat4 = fs.statSync(personalFile4);
   runMirror({ workFile, personalFile: personalFile4, log: () => {}, copySecrets: false });
   assertEqual(String(stat4.mtimeMs), String(fs.statSync(personalFile4).mtimeMs), 'and a second copySecrets=false run writes nothing');
 }
 
-if (Ran !== 49) {
-  console.log(`COULD NOT RUN: expected 49 assertions, ran ${Ran} - an assertion was skipped`);
+// ---------------------------------------------------------------- a write between the tmp file and the rename
+
+{
+  // The other writer lands AFTER this run wrote its tmp file and BEFORE the rename: a guard that
+  // stats only before the tmp write renames over that write. Injected through writeFileSync, so
+  // it does not depend on how many stat calls the script makes.
+  const home = freshDir('tmp-race-home');
+  const target = freshDir('tmp-race-target');
+  const workFile = path.join(home, '.claude.json');
+  const personalFile = path.join(target, '.claude.json');
+  writeJson(workFile, { mcpServers: { graph: { command: 'graph-cmd' } } });
+  function concurrentOnTmpWrite(times) {
+    let n = 0;
+    return {
+      ...fs,
+      writeFileSync: (p, data) => {
+        fs.writeFileSync(p, data);
+        if (String(p).includes('.tmp-') && n < times) {
+          n++;
+          const current = JSON.parse(fs.readFileSync(personalFile, 'utf8'));
+          current.writtenBySession = `session-write-${n}-` + 'y'.repeat(n * 50);
+          fs.writeFileSync(personalFile, JSON.stringify(current, null, 2));
+        }
+      },
+    };
+  }
+  const leftovers = () => fs.readdirSync(target).filter(f => f.includes('.tmp-')).length;
+
+  writeJson(personalFile, { userID: 'fixture' });
+  const code1 = runMirror({ workFile, personalFile, fsImpl: concurrentOnTmpWrite(1), log: () => {} });
+  const after1 = JSON.parse(fs.readFileSync(personalFile, 'utf8'));
+  assertEqual('0|true|true|0', `${code1}|${`${after1.writtenBySession}`.startsWith('session-write-1-')}|${!!after1.mcpServers?.graph}|${leftovers()}`, 'a write landing between the tmp file and the rename is kept: the merge is redone on it, no tmp file is left');
+
+  writeJson(personalFile, { userID: 'fixture' });
+  const logs2 = [];
+  const code2 = runMirror({ workFile, personalFile, fsImpl: concurrentOnTmpWrite(2), log: (m) => logs2.push(m) });
+  const after2 = JSON.parse(fs.readFileSync(personalFile, 'utf8'));
+  assertEqual('1|true|false|0', `${code2}|${`${after2.writtenBySession}`.startsWith('session-write-2-')}|${!!after2.mcpServers?.graph}|${leftovers()}`, 'two such writes abort without renaming over either, and no tmp file is left');
+
+  // A rename that fails leaves no tmp file behind either.
+  writeJson(personalFile, { userID: 'fixture' });
+  const code3 = runMirror({ workFile, personalFile, fsImpl: { ...fs, renameSync: () => { throw new Error('EPERM fixture'); } }, log: () => {} });
+  assertEqual('1|0', `${code3}|${leftovers()}`, 'a failed rename exits 1 and removes its tmp file');
+}
+
+// ---------------------------------------------------------------- a parse error never quotes the file
+
+{
+  const home = freshDir('parse-home');
+  const target = freshDir('parse-target');
+  const workFile = path.join(home, '.claude.json');
+  const personalFile = path.join(target, '.claude.json');
+  writeJson(workFile, { mcpServers: { graph: { command: 'graph-cmd' } } });
+  // An unexpected token right after the secret: V8 quotes ~10 characters on each side of it.
+  fs.writeFileSync(personalFile, '{"oauthAccount":{"token":"fixture-secret-abc123","b":broken}}');
+  const logs = [];
+  const code = runMirror({ workFile, personalFile, log: (m) => logs.push(m) });
+  assertEqual('1|true|false', `${code}|${/target file is not valid JSON/.test(logs.join(' '))}|${/c123|broken|"b"/.test(logs.join(' '))}`, 'a malformed file is named, and nothing around the bad token is quoted');
+}
+
+// ---------------------------------------------------------------- names that would reach a prototype
+
+{
+  const home = freshDir('proto-home');
+  const target = freshDir('proto-target');
+  const workFile = path.join(home, '.claude.json');
+  const personalFile = path.join(target, '.claude.json');
+  // Raw text: an object literal cannot carry an own __proto__ key through JSON.stringify.
+  fs.writeFileSync(workFile, '{"mcpServers":{"__proto__":{"polluted":true},"constructor":{"command":"c"},"graph":{"command":"graph-cmd"}},"projects":{"__proto__":{"mcpServers":{"x":{"command":"x"}}}}}');
+  writeJson(personalFile, { userID: 'fixture' });
+  const logs = [];
+  const code = runMirror({ workFile, personalFile, log: (m) => logs.push(m) });
+  const raw = fs.readFileSync(personalFile, 'utf8');
+  const after = JSON.parse(raw);
+  const line = logs.join(' ');
+  assertEqual('0|graph|false|false', `${code}|${Object.keys(after.mcpServers ?? {}).join(',')}|${({}).polluted === true || ({}).mcpServers !== undefined}|${/"__proto__"|"constructor"/.test(raw)}`, 'a server or project named __proto__ / constructor is never written and pollutes nothing');
+  assertEqual(true, /__proto__ @ user \(unsafe name, skipped\)/.test(line) && /constructor @ user \(unsafe name, skipped\)/.test(line), 'and is named on the output line');
+}
+
+if (Ran !== 55) {
+  console.log(`COULD NOT RUN: expected 55 assertions, ran ${Ran} - an assertion was skipped`);
   process.exit(2);
 }
 if (Failed) {

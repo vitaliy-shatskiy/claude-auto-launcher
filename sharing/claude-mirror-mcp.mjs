@@ -13,16 +13,17 @@
 // the third account would lose its per-project servers - the exact failure this script exists to prevent.
 // "personal" in the comments below therefore means "the target profile".
 //
-// User-scope MCP now comes from --mcp-config (mcp-shared.json + the dynamic Rider
-// port), but PROJECT-scope servers live in .claude.json under
-// projects[<dir>].mcpServers - and that file is the one thing the two profiles
-// cannot share, because it also holds the account identity. Without this the
-// secondary profile silently loses per-project servers: a repository-scoped server
-// registered in the canonical profile was simply absent in the secondary one.
+// User-scope MCP reaches a session through TWO channels: the launcher's --mcp-config
+// (mcp-shared.json + the dynamic Rider port), and the top-level mcpServers of .claude.json, which
+// `claude mcp add -s user` writes. PROJECT-scope servers live in .claude.json under
+// projects[<dir>].mcpServers. That file is the one thing the profiles cannot share, because it
+// also holds the account identity, so both of its MCP parts are mirrored here. Without this the
+// secondary profile silently loses servers: one registered in the canonical profile was simply
+// absent in the secondary one. Which channel SHOULD define a given server is not decided here.
 //
-// One direction only (work is canonical) and additive: a server the personal
-// profile has and work does not is left alone. The DECISION of what to change is
-// scoped to projects[*].mcpServers and projects[*].disabledMcpServers only.
+// One direction only (work is canonical). The DECISION of what to change is scoped to the
+// top-level mcpServers, projects[*].mcpServers and projects[*].disabledMcpServers only; project
+// scope is additive (a server the personal profile has and work does not is left alone).
 //
 // Credentials travel with the server: a copy is verbatim, `env` (stdio) and `headers` (http/sse)
 // included, because the accounts are one person's on one machine and should not differ.
@@ -81,9 +82,15 @@ function readJsonFile(fsImpl, file, label) {
   try {
     return JSON.parse(raw);
   } catch (e) {
-    throw new Error(`${label} is not valid JSON: ${e.message}`);
+    // Never the engine's message: V8 quotes the text around a bad token, and this file holds
+    // tokens. The position alone.
+    const at = /position (\d+)/.exec(e.message ?? '');
+    throw new Error(`${label} is not valid JSON${at ? ` (at position ${at[1]})` : ''}`);
   }
 }
+
+// A name that would reach an object's prototype on assignment.
+const UNSAFE_NAMES = ['__proto__', 'constructor', 'prototype'];
 
 function statOf(fsImpl, file) {
   try {
@@ -129,6 +136,7 @@ function mergeUserServers(work, personal, { exclude = [], copySecrets = true } =
   const current = isMap(personal.mcpServers) ? personal.mcpServers : {};
   for (const [name, cfg] of Object.entries(servers)) {
     if (exclude.includes(name)) continue;
+    if (UNSAFE_NAMES.includes(name)) { notes.push(`${name} @ user (unsafe name, skipped)`); continue; }
     const has = Object.hasOwn(current, name);
     let next = cfg;
     if (copySecrets) {
@@ -147,7 +155,7 @@ function mergeUserServers(work, personal, { exclude = [], copySecrets = true } =
     changed.push(`${name} @ user${has ? ' (updated)' : ''}`);
   }
   for (const name of Object.keys(current)) {
-    if (!Object.hasOwn(servers, name) && !exclude.includes(name)) notes.push(`${name} @ user (only in the target, kept)`);
+    if (!Object.hasOwn(servers, name) && !exclude.includes(name) && !UNSAFE_NAMES.includes(name)) notes.push(`${name} @ user (only in the target, kept)`);
   }
   return { changed, notes };
 }
@@ -156,13 +164,14 @@ function mergeUserServers(work, personal, { exclude = [], copySecrets = true } =
 function mergeProjects(work, personal, { exclude = [], copySecrets = true } = {}) {
   const added = [];
   for (const [dir, wp] of Object.entries(work.projects ?? {})) {
+    if (UNSAFE_NAMES.includes(dir)) continue;
     const servers = wp?.mcpServers;
     if (servers && Object.keys(servers).length > 0) {
       personal.projects ??= {};
       personal.projects[dir] ??= {};
       const target = (personal.projects[dir].mcpServers ??= {});
       for (const [name, cfg] of Object.entries(servers)) {
-        if (name in target || exclude.includes(name)) continue;
+        if (name in target || exclude.includes(name) || UNSAFE_NAMES.includes(name)) continue;
         const dropped = [];
         let copy = cfg;
         if (!copySecrets && cfg && typeof cfg === 'object') {
@@ -227,10 +236,28 @@ export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.l
   const reportOnly = (a) => { if (a.notes.length > 0) log(a.notes.join(', ')); return 0; };
   if (attempt.added.length === 0) return reportOnly(attempt);
 
-  // Stat immediately before the write, not immediately after the read: the merge itself does no
-  // I/O, so this is as close to "right before the rename" as a single-threaded script gets.
-  let nowStat = statOf(fsImpl, personalFile);
-  if (!sameStat(attempt.baseline, nowStat)) {
+  // Temp + rename so a crash cannot leave a half-written state file, which Claude Code would
+  // read as a corrupt profile. The target is stat'ed before the tmp write AND after it, right
+  // before the rename: serialising a large file takes long enough for a session to write in
+  // between, and a check taken only before the tmp write would rename over that write.
+  const tmp = `${personalFile}.tmp-${process.pid}`;
+  const dropTmp = () => { try { fsImpl.unlinkSync(tmp); } catch { /* never written, or gone */ } };
+  function writeIfUnchanged(a) {
+    if (!sameStat(a.baseline, statOf(fsImpl, personalFile))) return false;
+    fsImpl.writeFileSync(tmp, JSON.stringify(a.personal, null, 2));
+    if (!sameStat(a.baseline, statOf(fsImpl, personalFile))) { dropTmp(); return false; }
+    fsImpl.renameSync(tmp, personalFile);
+    return true;
+  }
+
+  let written;
+  try {
+    written = writeIfUnchanged(attempt);
+  } catch (e) {
+    dropTmp();
+    return fail(log, `could not write target file: ${e.message}`);
+  }
+  if (!written) {
     // Something else wrote the target while this merge ran - redo it once against the fresh copy
     // rather than overwrite whatever that write just put there.
     try {
@@ -239,20 +266,15 @@ export function runMirror({ workFile, personalFile, fsImpl = fs, log = console.l
       return fail(log, e.message);
     }
     if (attempt.added.length === 0) return reportOnly(attempt);
-    nowStat = statOf(fsImpl, personalFile);
-    if (!sameStat(attempt.baseline, nowStat)) {
+    try {
+      written = writeIfUnchanged(attempt);
+    } catch (e) {
+      dropTmp();
+      return fail(log, `could not write target file: ${e.message}`);
+    }
+    if (!written) {
       return fail(log, 'target file changed twice during merge - aborting rather than lose a concurrent write');
     }
-  }
-
-  // Temp + rename so a crash cannot leave a half-written state file, which Claude Code would
-  // read as a corrupt profile.
-  const tmp = `${personalFile}.tmp-${process.pid}`;
-  try {
-    fsImpl.writeFileSync(tmp, JSON.stringify(attempt.personal, null, 2));
-    fsImpl.renameSync(tmp, personalFile);
-  } catch (e) {
-    return fail(log, `could not write target file: ${e.message}`);
   }
 
   log([...attempt.added, ...attempt.notes].join(', '));

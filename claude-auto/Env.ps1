@@ -153,7 +153,7 @@ function Set-ClaudeProfile {
     try {
         $mirrored = & $Mirror $root
         if ($LASTEXITCODE -eq 0) {
-            if ($mirrored) { Write-Host "  project MCP mirrored: $mirrored" -ForegroundColor DarkGray }
+            if ($mirrored) { Write-Host "  MCP mirror: $mirrored" -ForegroundColor DarkGray }
         } else {
             # A non-zero exit used to print NOTHING - the exact silent failure this mirror exists to
             # prevent, since the owner would never learn a project's MCP servers stopped syncing.

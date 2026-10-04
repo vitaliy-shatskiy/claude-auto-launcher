@@ -570,6 +570,10 @@ try {
         foreach ($k in $secondaryKeys) { $null = Set-ClaudeProfile -Account $k -Mirror $rootRecorder 6>&1 }
         $null = Set-ClaudeProfile -Account $CanonicalAccount -Mirror $rootRecorder 6>&1
         Assert 'the mirror runs once for each secondary account, with that account''s root' ($secondaryKeys.Count -eq 3 -and (($script:MirrorRoots -join '|') -eq (($secondaryKeys | ForEach-Object { $ProfileRoots[$_] }) -join '|')))
+        # It carries user-scope servers now, not only project ones: the line says "MCP mirror".
+        $global:LASTEXITCODE = 0
+        $mirrorLine = @(Set-ClaudeProfile -Account $secondaryKeys[0] -Mirror { param($Root) $global:LASTEXITCODE = 0; 'graph @ user' } 6>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match 'graph @ user' })
+        Assert 'the launch line is labelled "MCP mirror:"' ($mirrorLine.Count -eq 1 -and $mirrorLine[0] -ceq '  MCP mirror: graph @ user')
     } finally {
         if ($null -eq $savedConfigDir5) { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
         else { $env:CLAUDE_CONFIG_DIR = $savedConfigDir5 }
@@ -909,7 +913,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = 190
+$script:ExpectedRan = 191
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
