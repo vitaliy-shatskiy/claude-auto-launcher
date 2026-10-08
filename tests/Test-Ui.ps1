@@ -536,7 +536,7 @@ foreach ($w in @(60, 80, 100, 120)) {
 # The collapse is content-driven, not width-driven alone: short labels at a generous width still
 # show every option, proving the compact form is not hardcoded to always fire.
 $f = Get-LaunchFrame -State (New-LaunchState) -Width 120 -Height 24 -DefaultModelLabel 'default'
-Assert-Equal 1 (@($f | Where-Object { $_ -match [regex]::Escape('Haiku 4.5') }).Count) 'at width 120 with short labels the model row shows every option, not just the selected one'
+Assert-Equal 1 (@($f | Where-Object { $_ -match [regex]::Escape('Haiku 5.5') }).Count) 'at width 120 with short labels the model row shows every option, not just the selected one'
 # And when it DOES collapse, it must actually show the compact ‹ › form rather than silently
 # truncating - Limit-Line would truncate too and this width check alone cannot tell them apart.
 # Matched against the line carrying the selected label itself, not "any line in the frame" - at
@@ -1392,7 +1392,7 @@ Assert-Equal 'Fable 5.1' (Get-FriendlyModelName -Raw 'fable') 'friendly name: th
 Assert-Equal 'Opus 5.5[1M]' (Get-FriendlyModelName -Raw 'opus[1m]') 'friendly name: bare alias form also resolves'
 Assert-Equal 'Sonnet 5.5' (Get-FriendlyModelName -Raw 'claude-sonnet-4-6') 'friendly name: a non-1M full id has no [1M] suffix appended'
 Assert-Equal 'Sonnet 5.5' (Get-FriendlyModelName -Raw 'sonnet[1m]') 'friendly name: a saved sonnet[1m] default draws no [1M] bracket, same rule as the model row'
-Assert-Equal 'Haiku 4.5' (Get-FriendlyModelName -Raw 'haiku') 'friendly name: haiku maps too'
+Assert-Equal 'Haiku 5.5' (Get-FriendlyModelName -Raw 'haiku') 'friendly name: haiku maps too'
 $longUnknown = 'some-unknown-model-id-xyz-12345678'
 $unknownResult = Get-FriendlyModelName -Raw $longUnknown
 Assert-Equal $true ($unknownResult.Length -le 24) 'friendly name: an unrecognised family is truncated, never left to blow up the row width'
@@ -1527,7 +1527,7 @@ foreach ($w in @(102, 120)) {
     $line = @($frame | Where-Object { $_ -match 'model' })[0]
     $hasAllFive = ($line -match [regex]::Escape('default (Fable 5.1[1M])')) -and ($line -match [regex]::Escape(' Fable 5.1 ')) -and
                   ($line -match [regex]::Escape('Opus 5.5[1M]')) -and ($line -match [regex]::Escape('Sonnet 5.5')) -and
-                  ($line -match [regex]::Escape('Haiku 4.5')) -and ($line -notmatch [regex]::Escape($glyphs.LAngle))
+                  ($line -match [regex]::Escape('Haiku 5.5')) -and ($line -notmatch [regex]::Escape($glyphs.LAngle))
     Assert-Equal $true $hasAllFive "at width $w the model row shows all five options in full form, not collapsed"
 }
 foreach ($w in @(60, 80)) {
@@ -1976,7 +1976,7 @@ Assert-Equal 'default,opus,off' (@($mfMap.Rows[$avIdx].Cells | ForEach-Object Va
 $noneFrame = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $noneLim)
 $mfLine = @($noneFrame | Where-Object { $_ -match '\bmodel\b' })[0]
 Assert-Equal $false ($mfLine -match 'Fable 5\.1') 'the drawn Model row no longer shows the Fable 5.1 label'
-Assert-True (($mfLine -match 'Opus 5\.5') -and ($mfLine -match 'Sonnet 5\.5') -and ($mfLine -match 'Haiku 4\.5')) 'while Opus, Sonnet and Haiku are all still drawn there'
+Assert-True (($mfLine -match 'Opus 5\.5') -and ($mfLine -match 'Sonnet 5\.5') -and ($mfLine -match 'Haiku 5\.5')) 'while Opus, Sonnet and Haiku are all still drawn there'
 $afLine = @($noneFrame | Where-Object { $_ -match '\badvisor\b' })[0]
 Assert-Equal $false ($afLine -match 'fable') 'the drawn Advisor row no longer offers fable'
 Assert-True (($afLine -match 'opus') -and ($afLine -match 'off')) 'while opus and off are both still drawn there'
