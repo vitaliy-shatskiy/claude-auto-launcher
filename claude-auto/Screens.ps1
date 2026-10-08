@@ -26,7 +26,7 @@ $script:Rows = @(
     # (Invoke-ProjectScreen's -Action) sets it in claude-auto.ps1 - only the row that let this
     # screen edit it directly is gone.
     @{ Name = 'Model';      Label = 'model';      Values = @('default', 'fable', 'opus1m', 'sonnet1m', 'haiku')
-       Labels = @{ fable = 'Fable 5.1'; opus1m = 'Opus 5.5[1M]'; sonnet1m = 'Sonnet 5.5'; haiku = 'Haiku 4.5' }
+       Labels = @{ fable = 'Fable 5.1'; opus1m = 'Opus 5.5[1M]'; sonnet1m = 'Sonnet 5.5'; haiku = 'Haiku 5.5' }
        Args   = @{ fable = 'fable';   opus1m = 'opus[1m]';   sonnet1m = 'sonnet[1m]';   haiku = 'haiku' } }
     # 'ultracode' added 2026-09-04: 2.1.260 accepts it silently, where a bogus --effort value warns
     # on stderr. That warning is the only test the CLI offers, so the row is what it accepts and not
