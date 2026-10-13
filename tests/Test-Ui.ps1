@@ -4033,15 +4033,25 @@ try {
         $gapRows = @(Get-ProjectRows -Projects $longProjects -Cwd 'C:\x').Count
         $gapHeight = -1
         $gapBad = @()
+        $gapJumps = @()
+        $gapStart = $null
+        $gapAllRows = @(Get-ProjectRows -Projects $longProjects -Cwd 'C:\x')
         for ($gi = 0; $gi -lt $gapRows; $gi++) {
             $gm = $null
             $gf = @(Get-ProjectFrame -Projects $longProjects -Index $gi -Cwd 'C:\x' -Width $gapTier.W -Height $gapTier.H -RowMap ([ref]$gm))
             if ($gapHeight -lt 0) { $gapHeight = $gf.Count }
             if ($gf.Count -ne $gapHeight) { $gapBad += "${gi}:height $($gf.Count)" }
-            if ($gm.RowYs[-1] + 1 + $gapTier.Detail -ne $gm.Action.Y) { $gapBad += "${gi}:blank above the action row" }
+            # The one blank allowed above the action row is the free-path row's own separator, when
+            # that row is the next one below the window: the list scrolls a LINE at a time.
+            $gapNext = $gm.Start + $gm.RowCount
+            $gapSep = $gapNext -lt $gapAllRows.Count -and $gapAllRows[$gapNext].Kind -eq 'path'
+            if (-not $gapSep -and $gm.RowYs[-1] + 1 + $gapTier.Detail -ne $gm.Action.Y) { $gapBad += "${gi}:blank above the action row" }
             if ($gi -lt $gm.Start -or $gi -ge ($gm.Start + $gm.RowCount)) { $gapBad += "${gi}:cursor off the window" }
+            if ($null -ne $gapStart -and [Math]::Abs($gm.Start - $gapStart) -gt 1) { $gapJumps += "${gi}:$gapStart->$($gm.Start)" }
+            $gapStart = $gm.Start
         }
         Assert-Equal '' ($gapBad -join ', ') "CS-218 at $($gapTier.W)x$($gapTier.H): at every Index the frame keeps one height, the cursor stays in the window and no reserved slot stands blank above the action row"
+        Assert-Equal '' ($gapJumps -join ', ') "CS-218 at $($gapTier.W)x$($gapTier.H): one Down or Up moves the window's first row by one at most, the bottom edge included"
     }
     Assert-Equal ($m9t.RowCount + 1) $m9m.RowCount 'mid-scroll, where no gap is drawn, the list shows one row MORE than at the top, where one gap is'
     Assert-Equal $m9t.RowCount $m9b.RowCount 'and the bottom of the list, with its one gap, shows as many as the top'
@@ -5350,9 +5360,7 @@ $null = Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 120 -Height 24 
 Assert-Equal ([int]$p14Probe.RowYs[0]) ([int]$p14PickProbe.FirstRowY) 'the project screen''s cwd row and the picker''s row 0 sit on the SAME screen line - which is what lets one queued press mean two different things'
 $p14Y = [int]$p14Probe.RowYs[0]
 $p14Run = {
-    # -PickerPending: what the PICKER's queue probe answers (CS-224 a). Plain, not a closure: it
-    # resolves $p14Q from this scope at call time, so it can answer from the very queue it reads.
-    param([object[]]$Events, [object[]]$Stamps, [scriptblock]$PickerPending = { $false })
+    param([object[]]$Events, [object[]]$Stamps)
     $p14Q = [System.Collections.Queue]::new(); foreach ($e in $Events) { $p14Q.Enqueue($e) }
     $p14S = [System.Collections.Queue]::new(); foreach ($s in $Stamps) { $p14S.Enqueue($s) }
     $p14Read  = { if ($p14Q.Count -eq 0) { throw 'events exhausted' }; $p14Q.Dequeue() }.GetNewClosure()
@@ -5363,7 +5371,7 @@ $p14Run = {
         $null = Get-PickerFrame -Sessions $s -Index $i -Hover $hv -HoverRow $hr -Width 120 -Height 24 -RowMap ([ref]$script:p14MapB); $script:p14MapB }
     $script:LastActivation = $null   # each run is its own gesture; nothing before it is in flight
     $p14Chosen = Invoke-ProjectScreen -Projects $projs6 -Cwd $p14Cwd -InitialAction 'resume' -ReadKey $p14Read -Draw $p14DrawA -Wait $p14Read -GetWindowTop { 0 } -InputPending { $false } -RecordTime $p14Clock
-    $p14Picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $p14Read -Draw $p14DrawB -Wait $p14Read -GetWindowTop { 0 } -InputPending $PickerPending -RecordTime $p14Clock
+    $p14Picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $p14Read -Draw $p14DrawB -Wait $p14Read -GetWindowTop { 0 } -InputPending { $false } -RecordTime $p14Clock
     return [pscustomobject]@{ Chosen = $p14Chosen; Picked = $p14Picked; Left = $p14Q.Count }
 }
 $p14Console = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left -Double), $esc) @()
@@ -5384,18 +5392,61 @@ Assert-Equal 's1' "$($p14Late.Picked.Session.SessionId)" 'while a plain press 80
 # first click.
 $p14Back = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(9000, 1000)
 Assert-Equal 's1' "$($p14Back.Picked.Session.SessionId)" 'a press on the next screen whose stamp moves BACKWARDS is the owner, not the twin, and reaches the picker'
-# CS-224 (a): the stamp is the READ time, so a VT twin that waited out a slow transition (session
-# scan + first frame) reads 900 ms late and passed the window as a real click. An Early record is
-# one the terminal had ALREADY queued when the picker opened; the probe answers from the queue.
-$p14Early = { param($e) $e | Add-Member -NotePropertyName Early -NotePropertyValue $true -PassThru }
-$p14QueuedProbe = { $p14Q.Count -gt 0 -and [bool]$p14Q.Peek().Early }
-$p14Slow = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (& $p14Early (New-MouseEvent -X 3 -Y $p14Y -Left)), $esc) @(1000, 1900) $p14QueuedProbe
-Assert-True ($null -eq $p14Slow.Picked) 'CS-224 a: a VT twin already queued when the picker opened is dropped however long the transition took'
-Assert-Equal 0 $p14Slow.Left 'and leaves the single record for Escape'
-# The control: the queue ran dry (only a move was waiting) before the press, so the press came after
-# the picker stood idle - judged by the stamp again, 900 ms is a real click.
-$p14Drained = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (& $p14Early (New-MouseEvent -X 40 -Y $p14Y -Move)), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1900) $p14QueuedProbe
-Assert-Equal 's1' "$($p14Drained.Picked.Session.SessionId)" 'CS-224 a: once the queue ran dry a press at the same point 900 ms later is the owner and reaches the picker'
+# CS-224 (a), over a MODELLED console queue: every record carries the time it ARRIVES, the clock
+# moves only as the real Wait-KeyOrResize polls (60 ms timeouts) and as the session scan between the
+# screens takes its 900 ms, the pending probe counts every arrived record - key-ups too, as
+# GetNumberOfConsoleInputEvents does - and a key-up reads as $null, as ConvertTo-ClaudeInputEvent
+# returns it. The real Wait-KeyOrResize and the screens' default probes run against it: the console
+# calls are shadowed in a child scope only, so nothing outside this block sees the model.
+$cmRun = {
+    param([object[]]$Arrivals)
+    & {
+        $cmQ = [System.Collections.Queue]::new(); foreach ($a in $Arrivals) { $cmQ.Enqueue($a) }
+        $cm = @{ Now = 0; Last = $null }
+        function Read-ClaudeInputEvent {
+            param($State, [int]$TimeoutMs = 60)
+            if ($cmQ.Count -eq 0) { throw 'events exhausted' }
+            if ($cmQ.Peek().At -gt $cm.Now + $TimeoutMs) { $cm.Now += $TimeoutMs; return $null }
+            $cmR = $cmQ.Dequeue(); $cm.Now = [Math]::Max($cm.Now, $cmR.At); $cm.Last = $cm.Now
+            if ($cmR.KeyUp) { return $null }
+            return $cmR.Event
+        }
+        function Test-ClaudeInputPending { param($State) $cmQ.Count -gt 0 -and $cmQ.Peek().At -le $cm.Now }
+        function Get-ClaudeInputRecordTime { $cm.Last }
+        $cmState = [pscustomobject]@{ Closed = $false }
+        $cmWait = { Wait-KeyOrResize -ReadKey { throw 'ReadKey is not the armed path' } -Width 120 -Height 24 -GetSize { @(120, 24) } -MouseState $cmState }
+        $cmDrawA = { param($p, $i, $f, $t, $h, $n, $a, $hr, $hv) $script:cmMapA = $null
+            $null = Get-ProjectFrame -Projects $p -Index $i -Cwd $p14Cwd -Action $a -HoverRow $hr -HoverValue $hv -Width 120 -Height 24 -RowMap ([ref]$script:cmMapA); $script:cmMapA }
+        $cmDrawB = { param($s, $i, $f, $sc, $pn, $hv, $hr) $script:cmMapB = $null
+            $null = Get-PickerFrame -Sessions $s -Index $i -Hover $hv -HoverRow $hr -Width 120 -Height 24 -RowMap ([ref]$script:cmMapB); $script:cmMapB }
+        $script:LastActivation = $null
+        try {
+            $cmChosen = Invoke-ProjectScreen -Projects $projs6 -Cwd $p14Cwd -InitialAction 'resume' -ReadKey $cmWait -Draw $cmDrawA -Wait $cmWait -GetWindowTop { 0 }
+            $cm.Now += 900   # the session scan: whatever arrives meanwhile is queued when the picker opens
+            $cmPicked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $cmWait -Draw $cmDrawB -Wait $cmWait -GetWindowTop { 0 }
+        } catch { return [pscustomobject]@{ Picked = "threw: $($_.Exception.Message)"; Chosen = $null } }
+        return [pscustomobject]@{ Chosen = $cmChosen; Picked = $cmPicked }
+    }
+}
+$cmAt = { param([int]$At, $Event) [pscustomobject]@{ At = $At; Event = $Event; KeyUp = $false } }
+$cmUp = { param([int]$At) [pscustomobject]@{ At = $At; Event = $null; KeyUp = $true } }
+$cmPress = New-MouseEvent -X 3 -Y $p14Y -Left
+$cmRelease = New-MouseEvent -X 3 -Y $p14Y
+$cmEsc = & $cmAt 9000 $esc
+# The original defect: the VT twin arrived 10 ms after the press, waited out the scan, and was read
+# 900 ms after the activation - past the 500 ms window - and opened row 0.
+$cmTwin = & $cmRun @((& $cmAt 1000 $cmPress), (& $cmAt 1010 $cmPress), $cmEsc)
+Assert-Equal $p14Cwd "$($cmTwin.Chosen.Path)" 'CS-224 a (modelled queue): the press picks the current directory'
+Assert-True ($null -eq $cmTwin.Picked) 'CS-224 a: a twin already queued when the picker opened is dropped however long the scan took'
+# The review's repro: what the gesture left queued was only its release and the key-up behind a VT
+# report. Wait-KeyOrResize reads the key-up as nothing and keeps waiting, the queue is dry, and the
+# owner clicks row 0 four seconds later: that press is a decision and must reach the picker.
+$cmLate = & $cmRun @((& $cmAt 1000 $cmPress), (& $cmAt 1010 $cmRelease), (& $cmUp 1012), (& $cmAt 5900 $cmPress), $cmEsc)
+Assert-Equal 's1' "$($cmLate.Picked.Session.SessionId)" 'CS-224 a: after the queue ran dry inside the wait, a click on the same cell 4 s later opens row 0'
+# And the mark survives a record the wait discards while the queue is NOT yet dry: release, key-up,
+# then the twin, all queued during the scan - the twin is still dropped.
+$cmBehind = & $cmRun @((& $cmAt 1000 $cmPress), (& $cmAt 1010 $cmRelease), (& $cmUp 1012), (& $cmAt 1020 $cmPress), (& $cmUp 1022), $cmEsc)
+Assert-True ($null -eq $cmBehind.Picked) 'CS-224 a: a twin queued behind a discarded key-up is still dropped'
 # CS-224 (b): a THIRD record of one gesture. The twin used to consume the cross-screen record, so
 # the third reached the picker and opened row 0. A twin now re-arms it.
 $p14Third = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left -Double), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1040, 1080)
@@ -6082,7 +6133,7 @@ try {
 } finally { Remove-Item -LiteralPath $hidRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 2003
+$script:Expected = 2006
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

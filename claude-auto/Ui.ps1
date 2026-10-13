@@ -145,6 +145,13 @@ function Wait-KeyOrResize {
             # replacement rather than an addition.
             $ev = Read-ClaudeInputEvent -State $MouseState -TimeoutMs 60
             if ($null -ne $ev) { return $ev }
+            # CS-224 (a): the twin guard's Queued mark lasts while the queue does, and the queue can
+            # run dry HERE - a key-up behind a VT report reads as $null and this keeps waiting - out
+            # of sight of the screen loop's own check before each read. Dry now means whatever
+            # arrives next came after the screen stood idle.
+            if ($script:LastActivation -and $script:LastActivation.Queued -and -not (Test-ClaudeInputPending -State $MouseState)) {
+                $script:LastActivation.Queued = $false
+            }
             # Idle is the only moment the trace may touch the disk: nothing is waiting on the menu
             # here, so the write cannot land between a keypress and the frame that answers it.
             if ($script:TraceOn) { Flush-ClaudeInputTrace }
@@ -390,8 +397,9 @@ function Invoke-ScreenLoop {
     # 500 ms test as a real click. A record ALREADY QUEUED when this screen opens arrived while the
     # launcher was busy, before anyone could see this screen, so it cannot be a decision about it:
     # Queued marks the record so the point match alone decides. It lasts while the queue does - the
-    # check before each read drops it the moment the queue runs dry, so a press made after this
-    # screen stood idle is judged by the stamp again.
+    # check before each read, and Wait-KeyOrResize for a dry queue it finds while it waits, drop it
+    # the moment the queue runs dry, so a press made after this screen stood idle is judged by the
+    # stamp again.
     if ($script:LastActivation) { $script:LastActivation.Queued = [bool](& $InputPending) }
     while ($true) {
         if ($loopH.Before) { $null = & $loopH.Before $State }

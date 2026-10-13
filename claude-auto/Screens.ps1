@@ -1338,47 +1338,38 @@ function New-RadioRow {
 }
 
 function Get-ProjectViewport {
-    # The window over the project rows that fills -Lines body lines best, separators included
-    # (CS-218). The frame reserves two separator slots so its height never depends on the scroll
-    # position (R15); a window that draws fewer gaps than it reserved gives the rest back to the
-    # list instead of leaving blank lines above the action row. Candidates are every window of
-    # Visible-0/1/2 rows (at most two gaps exist) that holds the cursor; the best fills the most
-    # lines, then sits closest to Get-Viewport's centred start, then shows more rows.
+    # The window over the project rows, separators included (CS-218). The frame reserves two
+    # separator slots so its height never depends on the scroll position (R15); a window that draws
+    # fewer gaps than it reserved gives the rest back to the list instead of leaving blank lines
+    # above the action row. The list is laid out as LINES - every row, plus a gap line where the
+    # frame draws one - and the window is Get-Viewport over those lines, centred on the cursor's
+    # line, so one Down or Up moves its first row by one at most at either edge. A window that would
+    # open on a gap line opens one line later (the frame never draws a gap first); one that closes
+    # on a gap line shows it as the blank it is - the separator of the row just below the window.
     #
-    # The gap count is the body loop's two rules in Get-ProjectFrame - change one, change both: the
+    # The gap lines are the body loop's two rules in Get-ProjectFrame - change one, change both: the
     # blank line above the free-path row unless that row opens the window, and the one under the cwd
-    # row unless that row closes the window or the free-path row follows it. Inline, not a helper:
-    # a window per candidate start is up to three times the list's height in probes per keypress.
+    # row unless that row closes the window or the free-path row follows it.
     param([Parameter(Mandatory)][array]$Rows, [int]$Index, [int]$Lines)
     $count = @($Rows).Count
-    $cwdAt = [Collections.Generic.List[int]]::new()
-    $pathAt = [Collections.Generic.List[int]]::new()
+    # $lineRow[k]: the row on line k, -1 for a gap line; $rowLine[i]: the line of row i.
+    $lineRow = [Collections.Generic.List[int]]::new()
+    $rowLine = [int[]]::new($count)
     for ($i = 0; $i -lt $count; $i++) {
-        if ($Rows[$i].Kind -eq 'cwd') {
-            # Only a cwd row whose successor is not the free-path row can draw its gap at all.
-            if ($i + 1 -lt $count -and $Rows[$i + 1].Kind -ne 'path') { $cwdAt.Add($i) }
-        } elseif ($Rows[$i].Kind -eq 'path') { $pathAt.Add($i) }
+        if ($Rows[$i].Kind -eq 'path' -and $i -gt 0) { $lineRow.Add(-1) }
+        $rowLine[$i] = $lineRow.Count
+        $lineRow.Add($i)
+        if ($Rows[$i].Kind -eq 'cwd' -and $i + 1 -lt $count -and $Rows[$i + 1].Kind -ne 'path') { $lineRow.Add(-1) }
     }
-    $vMax = [Math]::Max(1, [Math]::Min($Lines, $count))
-    $best = $null
-    for ($v = $vMax; $v -ge [Math]::Max(1, $vMax - 2); $v--) {
-        $centre = (Get-Viewport -Count $count -Index $Index -Visible $v).Start
-        $lo = [Math]::Max(0, $Index - $v + 1)
-        $hi = [Math]::Max($lo, [Math]::Min($Index, $count - $v))
-        for ($s = $lo; $s -le $hi; $s++) {
-            $end = $s + $v - 1
-            $used = $v
-            foreach ($p in $pathAt) { if ($p -gt $s -and $p -le $end) { $used++ } }
-            foreach ($c in $cwdAt) { if ($c -ge $s -and $c -lt $end) { $used++ } }
-            if ($used -gt $Lines) { continue }
-            $off = [Math]::Abs($s - $centre)
-            # Strictly better only: $v walks down, so a tie keeps the window with more rows.
-            if ($null -eq $best -or $used -gt $best.Used -or ($used -eq $best.Used -and $off -lt $best.Off)) {
-                $best = @{ Start = $s; Visible = $v; Used = $used; Off = $off }
-            }
-        }
-    }
-    return [pscustomobject]@{ Start = [int]$best.Start; Visible = [int]$best.Visible }
+    if ($count -eq 0) { return [pscustomobject]@{ Start = 0; Visible = 0 } }
+    $Index = [Math]::Max(0, [Math]::Min($Index, $count - 1))
+    $lv = Get-Viewport -Count $lineRow.Count -Index $rowLine[$Index] -Visible ([Math]::Max(1, $Lines))
+    $first = $lv.Start
+    $last = $lv.Start + $lv.Visible - 1
+    # Opening on a gap: start a line later, the window keeping its length while the list has lines.
+    if ($lineRow[$first] -lt 0) { $first++; $last = [Math]::Min($last + 1, $lineRow.Count - 1) }
+    while ($lineRow[$last] -lt 0) { $last-- }
+    return [pscustomobject]@{ Start = [int]$lineRow[$first]; Visible = [int]($lineRow[$last] - $lineRow[$first] + 1) }
 }
 
 function Get-ProjectFrame {
@@ -1570,8 +1561,8 @@ function Get-ProjectFrame {
     # mid-scroll - so without this the box bottom and the whole footer would jump a line the moment
     # the list scrolls past a separator. Padding to a height that does not depend on $Index is what
     # keeps the frame still while the list moves inside it. Get-ProjectViewport has already spent
-    # every slot it could on rows (CS-218); what is padded here is only a slot no window can fill
-    # (a list one row longer than the viewport).
+    # every slot it could on rows (CS-218); what is padded here is a slot no window can fill (a list
+    # one row longer than the viewport) or the separator of the free-path row just below the window.
     while ($body.Count -lt $listLines) { $body.Add('') }
 
     # The narrow tier's detail line: the highlighted row's full path, middle-cut to keep its leaf,
