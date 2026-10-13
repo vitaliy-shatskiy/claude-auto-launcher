@@ -1337,6 +1337,41 @@ function New-RadioRow {
     return (& $build $true)
 }
 
+function Get-ProjectViewport {
+    # The window over the project rows, separators included (CS-218). The frame reserves two
+    # separator slots so its height never depends on the scroll position (R15); a window that draws
+    # fewer gaps than it reserved gives the rest back to the list instead of leaving blank lines
+    # above the action row. The list is laid out as LINES - every row, plus a gap line where the
+    # frame draws one - and the window is Get-Viewport over those lines, centred on the cursor's
+    # line, so one Down or Up moves its first row by one at most at either edge. A window that would
+    # open on a gap line opens one line later (the frame never draws a gap first); one that closes
+    # on a gap line shows it as the blank it is - the separator of the row just below the window.
+    #
+    # The gap lines are the body loop's two rules in Get-ProjectFrame - change one, change both: the
+    # blank line above the free-path row unless that row opens the window, and the one under the cwd
+    # row unless that row closes the window or the free-path row follows it.
+    param([Parameter(Mandatory)][array]$Rows, [int]$Index, [int]$Lines)
+    $count = @($Rows).Count
+    # $lineRow[k]: the row on line k, -1 for a gap line; $rowLine[i]: the line of row i.
+    $lineRow = [Collections.Generic.List[int]]::new()
+    $rowLine = [int[]]::new($count)
+    for ($i = 0; $i -lt $count; $i++) {
+        if ($Rows[$i].Kind -eq 'path' -and $i -gt 0) { $lineRow.Add(-1) }
+        $rowLine[$i] = $lineRow.Count
+        $lineRow.Add($i)
+        if ($Rows[$i].Kind -eq 'cwd' -and $i + 1 -lt $count -and $Rows[$i + 1].Kind -ne 'path') { $lineRow.Add(-1) }
+    }
+    if ($count -eq 0) { return [pscustomobject]@{ Start = 0; Visible = 0 } }
+    $Index = [Math]::Max(0, [Math]::Min($Index, $count - 1))
+    $lv = Get-Viewport -Count $lineRow.Count -Index $rowLine[$Index] -Visible ([Math]::Max(1, $Lines))
+    $first = $lv.Start
+    $last = $lv.Start + $lv.Visible - 1
+    # Opening on a gap: start a line later, the window keeping its length while the list has lines.
+    if ($lineRow[$first] -lt 0) { $first++; $last = [Math]::Min($last + 1, $lineRow.Count - 1) }
+    while ($lineRow[$last] -lt 0) { $last-- }
+    return [pscustomobject]@{ Start = [int]$lineRow[$first]; Visible = [int]($lineRow[$last] - $lineRow[$first] + 1) }
+}
+
 function Get-ProjectFrame {
     # Where the session will run, and what it will do there. Pure like every builder in this file.
     # The pinned rows (current directory, enter a path) sit after the registry so the common case -
@@ -1449,7 +1484,11 @@ function Get-ProjectFrame {
     # registry of any size. The narrow tier's detail line comes out of the same budget.
     $bodyRows = [Math]::Max(3, $Height - 4 - 2 - $detailRows - @($footer.Lines).Count)
     if ($Index -ge $rows.Count) { $Index = [Math]::Max(0, $rows.Count - 1) }
-    $vp = Get-Viewport -Count $rows.Count -Index $Index -Visible $bodyRows
+    # The list's line budget: its rows plus the two reserved separator slots (R15), sized off the
+    # plain viewport so the frame's height still depends on the list's length alone, never on
+    # $Index. Get-ProjectViewport spends the slots a window does not draw as gaps on more rows.
+    $listLines = (Get-Viewport -Count $rows.Count -Index $Index -Visible $bodyRows).Visible + 2
+    $vp = Get-ProjectViewport -Rows $rows -Index $Index -Lines $listLines
     $inner = $frameWidth - 2
 
     # $rowYs: where each VISIBLE cursor row landed in $body. The separators below are blank body
@@ -1521,8 +1560,10 @@ function Get-ProjectFrame {
     # where the viewport sits - both when the whole list fits, one at either end of a long list, none
     # mid-scroll - so without this the box bottom and the whole footer would jump a line the moment
     # the list scrolls past a separator. Padding to a height that does not depend on $Index is what
-    # keeps the frame still while the list moves inside it.
-    while ($body.Count -lt ($vp.Visible + 2)) { $body.Add('') }
+    # keeps the frame still while the list moves inside it. Get-ProjectViewport has already spent
+    # every slot it could on rows (CS-218); what is padded here is a slot no window can fill (a list
+    # one row longer than the viewport) or the separator of the free-path row just below the window.
+    while ($body.Count -lt $listLines) { $body.Add('') }
 
     # The narrow tier's detail line: the highlighted row's full path, middle-cut to keep its leaf,
     # dim like the path column it replaces, one cell short of the border like the rows. Drawn blank
