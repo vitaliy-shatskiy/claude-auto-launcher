@@ -421,7 +421,7 @@ if ($UseUi) {
                     $continueSlugs = @($state.ProjectSlugs | Where-Object { $_ })
                     if ($continueSlugs.Count -eq 0 -and $state.ProjectSlug) { $continueSlugs = @("$($state.ProjectSlug)") }
                     Get-ContinueSessionHolder -SessionsDir $heldSessionsDirs -ProjectSlug $continueSlugs `
-                        -ProjectsRoot (Get-SessionsRootForAccount -Account $state.Account -ProfileRoots $ProfileRoots)
+                        -ProjectsRoot (Get-SessionsRoot)
                 } catch { $null }
                 if (& $confirmHeld $continueHolder) { break }
                 if ($Preview) { $previewHeldBack = $true; break }
@@ -444,10 +444,8 @@ if ($UseUi) {
                 & $paint (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Scope $scope -ProjectName $name -Hover $hv -HoverRow $hr -Width $w -Height $h -Color:$useColor -Ascii:$ascii -RowMap ([ref]$map))
                 $map
             }
-            # deferred review finding: this used to call Get-ClaudeSessions with no root at all,
-            # which lists the CANONICAL account's sessions regardless of which account is selected -
-            # with sharing off, resuming one then attaches under a CLAUDE_CONFIG_DIR that never held it.
-            $sessionsRoot = Get-SessionsRootForAccount -Account $state.Account -ProfileRoots $ProfileRoots
+            # One list for every account (CS-197, Get-SessionsRoot): a session continues on any account.
+            $sessionsRoot = Get-SessionsRoot
             # @() is load-bearing (same trap as $mcpConfigs below): Get-ClaudeSessions returning ZERO
             # items unrolls to $null on the pipeline, and Invoke-SessionPicker's -Sessions is
             # Mandatory - an account with no sessions yet (a fresh secondary root, or any account
@@ -696,7 +694,11 @@ $claude = $resolvedClaude.Path
 # on the machine - which is exactly what the built-in cwd-scoped picker cannot do.
 $launchArgs = @($args)
 if ($UseUi -and $state) {
-    $launchArgs = @(Get-LaunchArgs -State $state -ResumeId $resumeId -Fork:$forkSession)
+    # Per-account model availability (CS-231): the selected account's widget availableModels and
+    # what its settings.json model resolves to decide whether 'default' must pin Opus.
+    $launchAvailable = if ($limits -and $limits[$state.Account]) { $limits[$state.Account].AvailableModels } else { $null }
+    $launchDefaultModel = if ($defaultLabelsByAccount -and $defaultLabelsByAccount[$state.Account]) { [string]$defaultLabelsByAccount[$state.Account].Model } else { '' }
+    $launchArgs = @(Get-LaunchArgs -State $state -ResumeId $resumeId -Fork:$forkSession -Available $launchAvailable -DefaultModel $launchDefaultModel)
 }
 
 # crc forwards everything after `--` to `claude --bg` verbatim (crc.mjs:37), so session-shaping

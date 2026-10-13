@@ -11,6 +11,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   leaves behind) stays known but hidden: the title reads `10 known ─ 19 hidden`, and typing a filter
   (`/`) that matches a hidden project lists it, after the visible matches. The current directory is
   always shown. A temp root that is a drive root, or the home directory or above it, is ignored.
+- Launch screen: on an account whose widget `availableModels` lacks the family `settings.json`'s
+  model belongs to (today Fable on one Team account), the `default` model launches with
+  `--model claude-opus-5-5[1m]` and the row names `Opus 5.5[1M]`; an account that has the model, or
+  one the widget never reported, still passes no `--model`. The advisor row keeps `default (plan default)`.
+- Session picker: one session list for every account, read from the projects directory the project
+  screen lists, so one summary cache serves all accounts; per-account session scoping is removed.
 
 ### Fixed
 

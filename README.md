@@ -129,7 +129,7 @@ belongs to the CLI.
 - `~/.claude/claude-auto-hash-cache.json` - the maintenance screen's version-check cache
 - `~/.claude/claude-auto-models.json` - the model catalog read out of `claude.exe`, keyed on the binary's path, size and mtime
 - `~/.claude/claude-auto-update.json` - the release channel's last answer (30 minutes; a failure 5)
-- `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (one per account root)
+- `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (one file; every account reads the same session list)
 - `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day
 - `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan
 - `%TEMP%\claude-remote-server-<pid>.log` (plus `.err`, `.build`) - the companion server's output, one set per launcher that started it (`remote: true` only), not swept

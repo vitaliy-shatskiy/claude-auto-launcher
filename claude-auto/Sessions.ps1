@@ -381,15 +381,14 @@ function Get-ClaudeSessionSummary {
     }
 }
 
-function Get-SessionsRootForAccount {
-    # deferred review finding: the session picker used to call Get-ClaudeSessions with no root at
-    # all, which defaults to the CANONICAL account's ~/.claude/projects regardless of which account
-    # is actually selected. With sharing off (the shipped default) that lists the wrong account's
-    # sessions, and a chosen one then resumes into a CLAUDE_CONFIG_DIR that never held it.
-    # Extracted so the resolution itself is assertable without a console.
-    param([Parameter(Mandatory)][string]$Account, [Parameter(Mandatory)][System.Collections.IDictionary]$ProfileRoots)
-    if (-not $ProfileRoots.Contains($Account)) { throw "unknown account '$Account' (roster: $($ProfileRoots.Keys -join ', '))" }
-    return (Join-Path $ProfileRoots[$Account] 'projects')
+function Get-SessionsRoot {
+    # CS-197: ONE session list for every account. The profile roots' projects\ are one directory and a
+    # session continues on any account, so the picker and the continue check read one root whichever
+    # account is selected - the same root the project screen lists (Get-ProjectRegistry: the
+    # CLAUDE_AUTO_PROJECTS_ROOT override, else the canonical ~/.claude/projects). One root also means
+    # one summary cache file (Get-SessionsCachePath), so an account switch is never a cold start.
+    if ($env:CLAUDE_AUTO_PROJECTS_ROOT) { return $env:CLAUDE_AUTO_PROJECTS_ROOT }
+    return (Join-Path $HOME '.claude\projects')
 }
 
 function Get-PhysicalDirectoryPath {

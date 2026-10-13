@@ -1330,7 +1330,8 @@ Assert-Equal ($permRow.Values -join ' ') ((Get-VisibleRowValues -Row $permRow) -
 Assert-Equal 'high' (Get-RowOptionText -Row $effortRow -Key 'default' -DefaultLabels $labelsHigh) 'option text: the resolved default is the bare value'
 Assert-Equal 'opus' (Get-RowOptionText -Row $advisorRow -Key 'default' -DefaultAdvisorLabel 'default (opus)' -DefaultLabels $labelsHigh) 'option text: the table wins over the wrapped advisor label'
 Assert-Equal 'Fable 5.1[1M]' (Get-RowOptionText -Row $modelRow -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultLabels $labelsHigh) 'option text: the table wins over the wrapped model label'
-Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRow -Key 'default' -DefaultLabels $labelsHigh -Available @('opus')) 'option text: a resolved default the account lacks is still named honestly'
+Assert-Equal 'Opus 5.5[1M]' (Get-RowOptionText -Row $modelRow -Key 'default' -DefaultLabels $labelsHigh -Available @('opus')) 'option text: a resolved default the account lacks names the model the launch runs instead (CS-231)'
+Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $advisorRow -Key 'default' -DefaultLabels @{ Advisor = 'fable' } -Available @()) 'option text: the advisor default the account lacks keeps the plan-default wording'
 Assert-Equal $true (Test-HiddenRowValue -Row $effortRow -Key 'high' -DefaultLabels $labelsHigh) 'the folded twin is reported hidden'
 Assert-Equal $false (Test-HiddenRowValue -Row $effortRow -Key 'max' -DefaultLabels $labelsHigh) 'an unfolded option is not'
 Assert-Equal $false (Test-HiddenRowValue -Row $effortRow -Key 'default' -DefaultLabels $labelsHigh) 'default itself is never hidden'
@@ -2108,29 +2109,42 @@ foreach ($acc in @('work', 'personal', 'low')) {
 
 # --- 'default' is not exempt. settings.json holds ONE model for all four accounts, so on an account
 # without Fable the model row drew '[default (Fable 5.1[1M])]' as the SELECTED option while Fable is
-# exactly what that account lacks - the option was hidden and the default still named it. The label,
-# and only the label, changes: what Get-LaunchArgs emits for 'default' is untouched. The wording
-# stays 'default (plan default)' - the screen cannot know which model the CLI will fall back to,
-# only that it will not be the one settings.json names. --------------------------------------------
-Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @()) 'a resolved default naming a hidden family is drawn as default (plan default)'
+# exactly what that account lacks - the option was hidden and the default still named it. CS-231:
+# on such an account the launch pins --model claude-opus-5-5[1m] (Get-LaunchArgs below), so the
+# label names that model; the advisor row keeps 'default (plan default)'. -------------------------
+Assert-Equal 'default (Opus 5.5[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @()) 'a resolved default naming a hidden family is drawn as the model the launch pins'
 Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @('fable')) 'the same label is left alone on an account that has Fable'
 Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])') 'and left alone when there is no availability information at all'
 Assert-Equal 'default (Opus 5.5)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Opus 5.5)' -Available @()) 'a default naming a family that is never hidden is left alone'
-Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (claude-fable-5-1[1m])' -Available @()) 'the family is found in a raw model id too, not only in the friendly name'
+Assert-Equal 'default (Opus 5.5[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (claude-fable-5-1[1m])' -Available @()) 'the family is found in a raw model id too, not only in the friendly name'
 Assert-Equal 'default (plan default)' (Get-RowOptionText -Row $advRowDef -Key 'default' -DefaultAdvisorLabel 'default (fable)' -Available @()) 'the advisor default gets the same treatment'
 Assert-Equal 'default (opus)' (Get-RowOptionText -Row $advRowDef -Key 'default' -DefaultAdvisorLabel 'default (opus)' -Available @()) 'and an advisor default the account can use is left alone'
 Assert-Equal 'Fable 5.1' (Get-RowOptionText -Row $modelRowDef -Key 'fable' -Available @()) 'only the default key is rewritten - a static label is never touched'
 # On the drawn frame, where the owner actually reads it.
 $defNone = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $noneLim -DefaultModelLabel 'default (Fable 5.1[1M])' -DefaultAdvisorLabel 'default (fable)')
 $defNoneModel = @($defNone | Where-Object { $_ -match '\bmodel\b' })[0]
-Assert-True ($defNoneModel -match 'default \(plan default\)') 'the drawn Model row shows default (plan default) with no fable bucket'
+Assert-True ($defNoneModel -match 'default \(Opus 5\.5\[1M\]\)') 'the drawn Model row names the pinned Opus with no fable bucket'
 Assert-Equal $false ($defNoneModel -match 'Fable') 'and the word Fable is gone from that row entirely'
 Assert-True ((@($defNone | Where-Object { $_ -match '\badvisor\b' })[0]) -match 'default \(plan default\)') 'and the drawn Advisor row says the same'
 $defFable = @(Get-LaunchFrame -State (New-LaunchState) -Width 100 -Height 30 -Limits $fableLim -DefaultModelLabel 'default (Fable 5.1[1M])')
 Assert-True ((@($defFable | Where-Object { $_ -match '\bmodel\b' })[0]) -match 'Fable 5\.1') 'while on an account that has Fable the resolved default still names it'
-# The flags are NOT touched: 'default' means no flag everywhere, exactly as before.
+# CS-231: availability is judged PER ACCOUNT (its widget availableModels). Where the settings model is
+# available, or nothing is known, 'default' emits no flag; where it is not, the launch pins Opus.
 $defState = New-LaunchState; $defState.Account = 'work'
-Assert-Equal 0 (@(Get-LaunchArgs -State $defState).Count) 'a default state still emits no arguments at all'
+Assert-Equal 0 (@(Get-LaunchArgs -State $defState).Count) 'a default state with no availability input emits no arguments at all'
+Assert-Equal '--model claude-opus-5-5[1m]' (@(Get-LaunchArgs -State $defState -Available @() -DefaultModel 'Fable 5.1[1M]') -join ' ') 'an account without Fable pins Opus 5.5[1M] when settings names Fable'
+Assert-Equal '--model claude-opus-5-5[1m]' (@(Get-LaunchArgs -State $defState -Available @('opus') -DefaultModel 'claude-fable-5-1[1m]') -join ' ') 'and the raw settings id is recognised too'
+Assert-Equal 0 (@(Get-LaunchArgs -State $defState -Available @('fable') -DefaultModel 'Fable 5.1[1M]').Count) 'an account with Fable passes no --model'
+Assert-Equal 0 (@(Get-LaunchArgs -State $defState -Available $null -DefaultModel 'Fable 5.1[1M]').Count) 'no availability information passes no --model'
+Assert-Equal 0 (@(Get-LaunchArgs -State $defState -Available @() -DefaultModel 'Opus 5.5[1M]').Count) 'a settings model the account has passes no --model'
+Assert-Equal 0 (@(Get-LaunchArgs -State $defState -Available @() -DefaultModel 'default').Count) 'an unresolved settings model passes no --model'
+$pinState = New-LaunchState; $pinState.Model = 'sonnet1m'
+Assert-Equal '--model sonnet[1m]' (@(Get-LaunchArgs -State $pinState -Available @() -DefaultModel 'Fable 5.1[1M]') -join ' ') 'an explicit pick is never replaced by the pin'
+$defAdv = New-LaunchState; $defAdv.Effort = 'high'
+Assert-Equal '--model claude-opus-5-5[1m] --effort high' (@(Get-LaunchArgs -State $defAdv -Available @() -DefaultModel 'Fable 5.1[1M]') -join ' ') 'the pin keeps the model-first flag order'
+# The drawn work row folds opus1m into the default cell: both run Opus 5.5[1M].
+$foldLabels = @{ Model = 'Fable 5.1[1M]'; Advisor = 'default'; Effort = 'default'; Permission = 'default' }
+Assert-Equal 'default sonnet1m haiku' ((Get-VisibleRowValues -Row $modelRowDef -Available @() -DefaultLabels $foldLabels) -join ' ') 'without Fable the default cell takes the opus1m slot'
 
 # --- The snap lives in the loop's Before handler, not in the frame builder: it runs before the first
 # draw, so a -Draw {} caller snaps too, and Get-LaunchFrame no longer writes to the state it renders.
@@ -6133,7 +6147,7 @@ try {
 } finally { Remove-Item -LiteralPath $hidRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 2006
+$script:Expected = 2016
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

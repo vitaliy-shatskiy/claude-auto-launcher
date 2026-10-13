@@ -95,9 +95,8 @@ $script:RunCwd = @{}
 # sessions" text against the fixture 'second' account's empty session root. CLAUDE_AUTO_PROJECTS_ROOT
 # (Get-ProjectRegistry, Projects.ps1) now lets this point the registry at an isolated fixture tree -
 # never the owner's real registry, never the real machine's session history - and that same tree
-# doubles as the fixture 'second' account's own session root (Get-SessionsRootForAccount already
-# resolves ~/.claude-preview-fixture/projects for it), exactly as a real launch keeps them the same
-# kind of directory for the account actually selected.
+# doubles as the session root (Get-SessionsRoot follows the same override, CS-197), exactly as a
+# real launch reads sessions from the one directory the project screen lists.
 #
 # Two sessions, two DIFFERENT slugs, the SAME display Project name ("Shared", two different real
 # repos both named that on disk) - the exact shape Invoke-SessionPicker's own Test-Ui.ps1 coverage

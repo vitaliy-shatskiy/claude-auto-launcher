@@ -328,18 +328,33 @@ function Step-LaunchValue {
     return $State
 }
 
-function Get-HonestDefaultLabel {
-    # The resolved 'default' label, or 'default (plan default)' when what it resolved to belongs to a
-    # family this account does not have. Short on purpose: the screen cannot know which model the CLI
-    # will fall back to, only that it will not be the one settings.json names, and a label that
-    # guesses would be the same lie one step later. No availability information, or a label naming
-    # nothing hidden, returns the label untouched - so the frame is unchanged wherever the filter
-    # does nothing.
+# CS-231: what a 'default' model launch runs on an account that lacks the family settings.json names
+# (judged per account by its availableModels, never by plan type). The launch pins this id rather
+# than leaving the CLI to fall back to a plan default nobody can name, so the row can say it.
+$script:UnavailableDefaultModel = @{ Arg = 'claude-opus-5-5[1m]'; Label = 'Opus 5.5[1M]' }
+
+function Test-DefaultModelUnavailable {
+    # Whether a resolved default (friendly 'Fable 5.1[1M]' or raw 'claude-fable-5-1[1m]') names a
+    # family this account does not have. No availability information hides nothing, so it is $false.
     param([string]$Label, $Available)
     foreach ($f in @(Get-HiddenFamilies -Available $Available)) {
-        if ($Label -match "(?i)\b$([regex]::Escape($f))\b") { return 'default (plan default)' }
+        if ($Label -match "(?i)\b$([regex]::Escape($f))\b") { return $true }
     }
-    return $Label
+    return $false
+}
+
+function Get-HonestDefaultLabel {
+    # The resolved 'default' label, rewritten when what it resolved to belongs to a family this
+    # account does not have. Model row: the model the launch pins instead (Get-LaunchArgs), bare or
+    # in the 'default (...)' wrapper the label came in. Advisor row: 'default (plan default)' - no pin
+    # exists there, so the screen cannot name what the CLI will use. No availability information, or
+    # a label naming nothing hidden, returns the label untouched.
+    param([string]$Label, $Available, [string]$RowName = 'Model')
+    if (-not (Test-DefaultModelUnavailable -Label $Label -Available $Available)) { return $Label }
+    if ($RowName -ne 'Model') { return 'default (plan default)' }
+    $runs = $script:UnavailableDefaultModel.Label
+    if ($Label -match '^default \(') { return "default ($runs)" }
+    return $runs
 }
 
 function Get-RowOptionText {
@@ -361,11 +376,11 @@ function Get-RowOptionText {
     # default's place, honest the same way for the two model rows.
     if ($Key -eq 'default' -and $DefaultLabels -and $DefaultLabels.ContainsKey($Row.Name) -and $DefaultLabels[$Row.Name]) {
         $resolved = [string]$DefaultLabels[$Row.Name]
-        if ($Row.Name -in @('Model', 'Advisor')) { return (Get-HonestDefaultLabel -Label $resolved -Available $Available) }
+        if ($Row.Name -in @('Model', 'Advisor')) { return (Get-HonestDefaultLabel -Label $resolved -Available $Available -RowName $Row.Name) }
         return $resolved
     }
-    if ($Row.Name -eq 'Model' -and $Key -eq 'default') { return (Get-HonestDefaultLabel -Label $DefaultModelLabel -Available $Available) }
-    if ($Row.Name -eq 'Advisor' -and $Key -eq 'default') { return (Get-HonestDefaultLabel -Label $DefaultAdvisorLabel -Available $Available) }
+    if ($Row.Name -eq 'Model' -and $Key -eq 'default') { return (Get-HonestDefaultLabel -Label $DefaultModelLabel -Available $Available -RowName 'Model') }
+    if ($Row.Name -eq 'Advisor' -and $Key -eq 'default') { return (Get-HonestDefaultLabel -Label $DefaultAdvisorLabel -Available $Available -RowName 'Advisor') }
     if ($Row.Labels -and $Row.Labels.ContainsKey($Key)) { return $Row.Labels[$Key] }
     return $Key
 }
@@ -374,7 +389,11 @@ function Get-LaunchArgs {
     # The whole point of this function is its first line of behaviour: a default state yields
     # NOTHING. The nightly audit and the Rider plugin both depend on the launcher adding no flags
     # of its own, so every branch below is gated on a non-default value.
-    param($State, [string]$ResumeId, [switch]$Fork)
+    # -Available (the account's availableModels) and -DefaultModel (what settings.json's model resolves
+    # to, Get-DefaultLabels .Model): the one exception to "default adds nothing" (CS-231). When the
+    # account lacks that model's family, 'default' pins $script:UnavailableDefaultModel instead of
+    # letting the CLI fall back silently. Omitted -> no information -> no flag, as before.
+    param($State, [string]$ResumeId, [switch]$Fork, $Available, [string]$DefaultModel)
     $a = @()
     # The model row stores an internal key (e.g. 'sonnet1m'); Args maps it to the literal
     # --model value ('sonnet[1m]'). 'default' has no Args entry, so the lookup is $null and no
@@ -383,6 +402,9 @@ function Get-LaunchArgs {
     # string.
     $modelRow = $script:Rows | Where-Object { $_.Name -eq 'Model' } | Select-Object -First 1
     $modelArg = $modelRow.Args[$State.Model]
+    if (-not $modelArg -and $State.Model -eq 'default' -and $DefaultModel -and (Test-DefaultModelUnavailable -Label $DefaultModel -Available $Available)) {
+        $modelArg = $script:UnavailableDefaultModel.Arg
+    }
     if ($modelArg) { $a += @('--model', $modelArg) }
     if ($State.Effort -ne 'default') { $a += @('--effort', $State.Effort) }
     # Only the two model values produce a flag. 'default' means "say nothing" like every other row;
