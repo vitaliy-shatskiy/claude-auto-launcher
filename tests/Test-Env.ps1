@@ -746,6 +746,30 @@ try {
     if (Test-Path -LiteralPath $pa) { Remove-Item -LiteralPath $pa -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# CS-231: availableModels now decides a --model pin, so a STALE widget record is no answer. Past
+# -AvailabilityMaxAge (default 30 min) the list is unknown; inside it the list stands. The
+# percentages are untouched by the cap - their age is drawn on screen instead.
+$ps = Join-Path $env:TEMP ("cct-availage-test-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $ps | Out-Null
+$savedRL = $env:CLAUDE_AUTO_RATE_LIMITS_DIR
+try {
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    Set-Content -LiteralPath "$ps\work.widget.json"     -Value ('{"fiveHour":40,"sevenDay":48,"atMs":' + ($nowMs - 31 * 60000) + ',"availableModels":[]}')
+    Set-Content -LiteralPath "$ps\personal.widget.json" -Value ('{"fiveHour":10,"sevenDay":20,"atMs":' + ($nowMs - 29 * 60000) + ',"availableModels":[]}')
+    $sum = Get-RateLimitSummary -Directory $ps
+    Assert 'a widget availableModels older than 30 min is unknown'           ($null -eq $sum.work.AvailableModels)
+    Assert 'and its percentages still arrive'                                ($sum.work.FiveHour -eq 40)
+    Assert 'one younger than 30 min still answers, present and empty'        ($null -ne $sum.personal.AvailableModels -and @($sum.personal.AvailableModels).Count -eq 0)
+    $sum = Get-RateLimitSummary -Directory $ps -AvailabilityMaxAge ([TimeSpan]::FromMinutes(60))
+    Assert 'the cap is a parameter'                                          ($null -ne $sum.work.AvailableModels)
+    # The store override the preview check uses (CLAUDE_AUTO_RATE_LIMITS_DIR).
+    $env:CLAUDE_AUTO_RATE_LIMITS_DIR = $ps
+    Assert 'CLAUDE_AUTO_RATE_LIMITS_DIR points the default store at a fixture' ((Get-RateLimitSummary).personal.FiveHour -eq 10)
+} finally {
+    if ($null -eq $savedRL) { Remove-Item Env:CLAUDE_AUTO_RATE_LIMITS_DIR -ErrorAction SilentlyContinue } else { $env:CLAUDE_AUTO_RATE_LIMITS_DIR = $savedRL }
+    if (Test-Path -LiteralPath $ps) { Remove-Item -LiteralPath $ps -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # Get-DefaultAdvisorLabel: what 'default' on the advisor row means right now. Same shape and same
 # failure policy as Get-DefaultModelLabel - this is a menu, not a validator, so every failure
 # degrades to a plain label instead of taking the launch screen down.
@@ -913,7 +937,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = 191
+$script:ExpectedRan = 196
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2

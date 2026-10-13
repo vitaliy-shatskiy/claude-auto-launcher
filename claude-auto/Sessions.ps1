@@ -382,13 +382,20 @@ function Get-ClaudeSessionSummary {
 }
 
 function Get-SessionsRoot {
-    # CS-197: ONE session list for every account. The profile roots' projects\ are one directory and a
-    # session continues on any account, so the picker and the continue check read one root whichever
-    # account is selected - the same root the project screen lists (Get-ProjectRegistry: the
-    # CLAUDE_AUTO_PROJECTS_ROOT override, else the canonical ~/.claude/projects). One root also means
-    # one summary cache file (Get-SessionsCachePath), so an account switch is never a cold start.
-    if ($env:CLAUDE_AUTO_PROJECTS_ROOT) { return $env:CLAUDE_AUTO_PROJECTS_ROOT }
-    return (Join-Path $HOME '.claude\projects')
+    # CS-197: with sharing on, the profile roots' projects\ are one directory and a session continues
+    # on any account, so every account reads ONE root - the one the project screen lists
+    # (Get-ProjectRegistry: the CLAUDE_AUTO_PROJECTS_ROOT override, else the canonical
+    # ~/.claude/projects) - and one summary cache file (Get-SessionsCachePath), so an account switch
+    # is never a cold start. With sharing off each root holds its own transcripts and `claude --resume`
+    # finds a session only under the CLAUDE_CONFIG_DIR that wrote it, so the selected account's own
+    # projects\ is read, with its own cache beside it.
+    param([Parameter(Mandatory)][string]$Account, [Parameter(Mandatory)][System.Collections.IDictionary]$ProfileRoots, [switch]$Sharing)
+    if ($Sharing) {
+        if ($env:CLAUDE_AUTO_PROJECTS_ROOT) { return $env:CLAUDE_AUTO_PROJECTS_ROOT }
+        return (Join-Path $HOME '.claude\projects')
+    }
+    if (-not $ProfileRoots.Contains($Account)) { throw "unknown account '$Account' (roster: $($ProfileRoots.Keys -join ', '))" }
+    return (Join-Path $ProfileRoots[$Account] 'projects')
 }
 
 function Get-PhysicalDirectoryPath {

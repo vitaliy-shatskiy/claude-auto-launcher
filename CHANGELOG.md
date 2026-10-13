@@ -12,11 +12,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   (`/`) that matches a hidden project lists it, after the visible matches. The current directory is
   always shown. A temp root that is a drive root, or the home directory or above it, is ignored.
 - Launch screen: on an account whose widget `availableModels` lacks the family `settings.json`'s
-  model belongs to (today Fable on one Team account), the `default` model launches with
-  `--model claude-opus-5-5[1m]` and the row names `Opus 5.5[1M]`; an account that has the model, or
-  one the widget never reported, still passes no `--model`. The advisor row keeps `default (plan default)`.
-- Session picker: one session list for every account, read from the projects directory the project
-  screen lists, so one summary cache serves all accounts; per-account session scoping is removed.
+  model belongs to (today Fable on one Team account), the `default` model launches with the
+  `Opus[1M]` option's own `--model opus[1m]` and the row names that option's label; an account that
+  has the model, or one the widget never reported, still passes no `--model`. A widget record older
+  than 30 minutes counts as unreported. The advisor row keeps `default (plan default)`.
+- Session picker: with `sharing` on, one session list for every account, read from the projects
+  directory the project screen lists, so one summary cache serves all accounts. With `sharing` off
+  each account still lists its own sessions.
 
 ### Fixed
 

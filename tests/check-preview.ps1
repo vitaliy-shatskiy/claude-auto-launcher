@@ -123,6 +123,20 @@ function Initialize-ProjectSlugFixture {
     foreach ($c in @(Get-ChildItem -LiteralPath $Root -Filter 'claude-auto-*.json' -File -Force -ErrorAction SilentlyContinue)) {
         Remove-Item -LiteralPath $c.FullName -Force -ErrorAction SilentlyContinue
     }
+    # CS-231 wiring (claude-auto.ps1's Get-LaunchArgs call): a rate-limit store of the fixture's own
+    # (CLAUDE_AUTO_RATE_LIMITS_DIR) where 'work' has Fable and 'second' does not, and a 'second'
+    # settings.json naming Fable. 'second' must then launch with the opus1m pin and 'work' with none
+    # - whatever the live store and the owner's settings.json say, since 'work' has the family either way.
+    $rateDir = Join-Path $Root 'rate-limits'
+    if (Test-Path -LiteralPath $rateDir) { Remove-Item -LiteralPath $rateDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $rateDir | Out-Null
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText((Join-Path $rateDir 'work.widget.json'), ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"availableModels":["fable"]}'), $utf8)
+    [IO.File]::WriteAllText((Join-Path $rateDir 'second.widget.json'), ('{"fiveHour":10,"sevenDay":20,"atMs":' + $nowMs + ',"availableModels":[]}'), $utf8)
+    [IO.File]::WriteAllText((Join-Path $Root 'settings.json'), '{"model":"claude-fable-5-1[1m]"}', $utf8)
+    $script:RateLimitsFixtureDir = $rateDir
+
     $repoA = Join-Path $reposRoot 'repo-a\Shared'
     $repoB = Join-Path $reposRoot 'repo-b\Shared'
     New-Item -ItemType Directory -Force -Path $repoA | Out-Null
@@ -235,10 +249,12 @@ function Invoke-PreviewRun {
     param([Parameter(Mandatory)][string]$Keys, [Parameter(Mandatory)][string]$LauncherPath, [string]$WorkingDirectory)
     $savedConfig = $env:CLAUDE_AUTO_CONFIG
     $savedProjectsRoot = $env:CLAUDE_AUTO_PROJECTS_ROOT
+    $savedRateLimits = $env:CLAUDE_AUTO_RATE_LIMITS_DIR
     $pushed = $false
     try {
         $env:CLAUDE_AUTO_CONFIG = $FixtureConfig
         $env:CLAUDE_AUTO_PROJECTS_ROOT = $script:ProjectsFixtureRoot
+        $env:CLAUDE_AUTO_RATE_LIMITS_DIR = $script:RateLimitsFixtureDir
         # The child inherits this, and the project screen's 'current directory' row is built from it.
         if ($WorkingDirectory) { Push-Location -LiteralPath $WorkingDirectory; $pushed = $true }
         $out = & pwsh -NoProfile -File $Preview -Keys $Keys -Launcher $LauncherPath -Full 2>&1
@@ -251,6 +267,28 @@ function Invoke-PreviewRun {
         else { $env:CLAUDE_AUTO_CONFIG = $savedConfig }
         if ($null -eq $savedProjectsRoot) { Remove-Item Env:CLAUDE_AUTO_PROJECTS_ROOT -ErrorAction SilentlyContinue }
         else { $env:CLAUDE_AUTO_PROJECTS_ROOT = $savedProjectsRoot }
+        if ($null -eq $savedRateLimits) { Remove-Item Env:CLAUDE_AUTO_RATE_LIMITS_DIR -ErrorAction SilentlyContinue }
+        else { $env:CLAUDE_AUTO_RATE_LIMITS_DIR = $savedRateLimits }
+    }
+}
+
+# CS-231, pinned in this file rather than only in the machine-local reference: a run's block must
+# carry exactly this launch args line. Returns the failures as text.
+$script:LaunchArgPins = [ordered]@{
+    'default-enter'  = ''                   # work has Fable: no pin
+    'switch-account' = '--model opus[1m]'   # second lacks Fable and settings names it: the opus1m pin
+}
+function Test-LaunchArgPins {
+    param([Parameter(Mandatory)][string[]]$Lines, [Parameter(Mandatory)][string]$Shape)
+    $run = ''
+    $seen = @{}
+    foreach ($l in $Lines) {
+        if ($l -match '^=== (.+) ===$') { $run = $Matches[1]; continue }
+        if ($script:LaunchArgPins.Contains($run) -and $l -match '^launch args\s*:\s?(.*)$') { $seen[$run] = $Matches[1].Trim() }
+    }
+    foreach ($run in $script:LaunchArgPins.Keys) {
+        if (-not $seen.ContainsKey($run)) { "[$Shape] $run printed no launch args line"; continue }
+        if ($seen[$run] -cne $script:LaunchArgPins[$run]) { "[$Shape] $run launch args '$($seen[$run])', expected '$($script:LaunchArgPins[$run])'" }
     }
 }
 
@@ -350,6 +388,12 @@ try {
 
 $none = '(no such line)'
 $bad = 0
+foreach ($shape in $byShape.Keys) {
+    foreach ($pinFail in @(Test-LaunchArgPins -Lines $byShape[$shape] -Shape $shape)) {
+        $bad++
+        Write-Host "REGRESSION [launch-args pin]: $pinFail" -ForegroundColor Red
+    }
+}
 foreach ($shape in $byShape.Keys) {
     $pairs = @(Compare-ToReference -Reference $refLines -Actual $byShape[$shape])
     if ($pairs.Count -eq 0) { continue }

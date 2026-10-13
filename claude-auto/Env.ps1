@@ -1054,7 +1054,12 @@ function Get-RateLimitSummary {
     #
     # -Directory is a parameter so the suite can run against a throwaway store: the default reads the
     # live one, and a check that cannot be run casually stops being run.
-    param([string]$Directory = (Join-Path $HOME '.claude\rate-limits'))
+    # CLAUDE_AUTO_RATE_LIMITS_DIR overrides the store, same shape as CLAUDE_AUTO_PROJECTS_ROOT:
+    # check-preview.ps1 points it at a fixture so the preview's launch args never read live records.
+    # -AvailabilityMaxAge: a widget availableModels older than this is unknown (no hiding, no model
+    # pin, CS-231). The widget writes every five minutes while it runs; six missed polls is stale.
+    param([string]$Directory = $(if ($env:CLAUDE_AUTO_RATE_LIMITS_DIR) { $env:CLAUDE_AUTO_RATE_LIMITS_DIR } else { Join-Path $HOME '.claude\rate-limits' }),
+          [TimeSpan]$AvailabilityMaxAge = [TimeSpan]::FromMinutes(30))
     $out = @{}
     foreach ($profileName in @($ProfileRoots.Keys)) {
         $j = Get-FreshestRateLimitRecord -Directory $Directory -ProfileName $profileName
@@ -1106,7 +1111,11 @@ function Get-RateLimitSummary {
                         # atMs is the widget's own stamp on every record it writes, so a record
                         # without one is not a widget export - a truncated write that still parsed,
                         # or a file something else left there. Its list is not trusted.
-                        if ($null -ne $wj.atMs -and $wj.PSObject.Properties['availableModels']) {
+                        # A stale record is no answer: it now decides a --model pin, and an account
+                        # whose entitlement changed since must not launch on last week's list.
+                        $widgetFresh = $null -ne $wj.atMs -and
+                            ([datetimeoffset]::Now - [datetimeoffset]::FromUnixTimeMilliseconds([long]$wj.atMs)) -le $AvailabilityMaxAge
+                        if ($widgetFresh -and $wj.PSObject.Properties['availableModels']) {
                             # @($null).Count is 1 in PowerShell, so a JSON null would arrive as a
                             # one-member array of nothing: strip the empty members instead of
                             # counting them. Present and empty either way - that is the rule.

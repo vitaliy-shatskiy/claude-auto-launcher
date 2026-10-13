@@ -328,10 +328,19 @@ function Step-LaunchValue {
     return $State
 }
 
-# CS-231: what a 'default' model launch runs on an account that lacks the family settings.json names
-# (judged per account by its availableModels, never by plan type). The launch pins this id rather
-# than leaving the CLI to fall back to a plan default nobody can name, so the row can say it.
-$script:UnavailableDefaultModel = @{ Arg = 'claude-opus-5-5[1m]'; Label = 'Opus 5.5[1M]' }
+# CS-231: the model row KEY a 'default' launch runs on an account that lacks the family settings.json
+# names (judged per account by its availableModels, never by plan type). Its own Args and Labels
+# entries are the pin and its name (Get-UnavailableDefaultModel), so the pin follows the next Opus
+# with the catalog and stays folded with that option on the row, rather than leaving the CLI to fall
+# back to a plan default nobody can name.
+$script:UnavailableDefaultKey = 'opus1m'
+
+function Get-UnavailableDefaultModel {
+    # @{ Arg; Label } for the pin, read off the model row at call time (Set-ModelRowLabels rewrites
+    # the label from the installed binary's catalog after load).
+    $row = $script:Rows | Where-Object { $_.Name -eq 'Model' } | Select-Object -First 1
+    return @{ Arg = $row.Args[$script:UnavailableDefaultKey]; Label = $row.Labels[$script:UnavailableDefaultKey] }
+}
 
 function Test-DefaultModelUnavailable {
     # Whether a resolved default (friendly 'Fable 5.1[1M]' or raw 'claude-fable-5-1[1m]') names a
@@ -352,7 +361,7 @@ function Get-HonestDefaultLabel {
     param([string]$Label, $Available, [string]$RowName = 'Model')
     if (-not (Test-DefaultModelUnavailable -Label $Label -Available $Available)) { return $Label }
     if ($RowName -ne 'Model') { return 'default (plan default)' }
-    $runs = $script:UnavailableDefaultModel.Label
+    $runs = (Get-UnavailableDefaultModel).Label
     if ($Label -match '^default \(') { return "default ($runs)" }
     return $runs
 }
@@ -391,7 +400,7 @@ function Get-LaunchArgs {
     # of its own, so every branch below is gated on a non-default value.
     # -Available (the account's availableModels) and -DefaultModel (what settings.json's model resolves
     # to, Get-DefaultLabels .Model): the one exception to "default adds nothing" (CS-231). When the
-    # account lacks that model's family, 'default' pins $script:UnavailableDefaultModel instead of
+    # account lacks that model's family, 'default' pins the opus1m row's arg (Get-UnavailableDefaultModel) instead of
     # letting the CLI fall back silently. Omitted -> no information -> no flag, as before.
     param($State, [string]$ResumeId, [switch]$Fork, $Available, [string]$DefaultModel)
     $a = @()
@@ -403,7 +412,7 @@ function Get-LaunchArgs {
     $modelRow = $script:Rows | Where-Object { $_.Name -eq 'Model' } | Select-Object -First 1
     $modelArg = $modelRow.Args[$State.Model]
     if (-not $modelArg -and $State.Model -eq 'default' -and $DefaultModel -and (Test-DefaultModelUnavailable -Label $DefaultModel -Available $Available)) {
-        $modelArg = $script:UnavailableDefaultModel.Arg
+        $modelArg = (Get-UnavailableDefaultModel).Arg
     }
     if ($modelArg) { $a += @('--model', $modelArg) }
     if ($State.Effort -ne 'default') { $a += @('--effort', $State.Effort) }

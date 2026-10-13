@@ -2110,7 +2110,7 @@ foreach ($acc in @('work', 'personal', 'low')) {
 # --- 'default' is not exempt. settings.json holds ONE model for all four accounts, so on an account
 # without Fable the model row drew '[default (Fable 5.1[1M])]' as the SELECTED option while Fable is
 # exactly what that account lacks - the option was hidden and the default still named it. CS-231:
-# on such an account the launch pins --model claude-opus-5-5[1m] (Get-LaunchArgs below), so the
+# on such an account the launch pins the opus1m row's --model opus[1m] (Get-LaunchArgs below), so the
 # label names that model; the advisor row keeps 'default (plan default)'. -------------------------
 Assert-Equal 'default (Opus 5.5[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @()) 'a resolved default naming a hidden family is drawn as the model the launch pins'
 Assert-Equal 'default (Fable 5.1[1M])' (Get-RowOptionText -Row $modelRowDef -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @('fable')) 'the same label is left alone on an account that has Fable'
@@ -2132,8 +2132,8 @@ Assert-True ((@($defFable | Where-Object { $_ -match '\bmodel\b' })[0]) -match '
 # available, or nothing is known, 'default' emits no flag; where it is not, the launch pins Opus.
 $defState = New-LaunchState; $defState.Account = 'work'
 Assert-Equal 0 (@(Get-LaunchArgs -State $defState).Count) 'a default state with no availability input emits no arguments at all'
-Assert-Equal '--model claude-opus-5-5[1m]' (@(Get-LaunchArgs -State $defState -Available @() -DefaultModel 'Fable 5.1[1M]') -join ' ') 'an account without Fable pins Opus 5.5[1M] when settings names Fable'
-Assert-Equal '--model claude-opus-5-5[1m]' (@(Get-LaunchArgs -State $defState -Available @('opus') -DefaultModel 'claude-fable-5-1[1m]') -join ' ') 'and the raw settings id is recognised too'
+Assert-Equal '--model opus[1m]' (@(Get-LaunchArgs -State $defState -Available @() -DefaultModel 'Fable 5.1[1M]') -join ' ') 'an account without Fable pins Opus 5.5[1M] when settings names Fable'
+Assert-Equal '--model opus[1m]' (@(Get-LaunchArgs -State $defState -Available @('opus') -DefaultModel 'claude-fable-5-1[1m]') -join ' ') 'and the raw settings id is recognised too'
 Assert-Equal 0 (@(Get-LaunchArgs -State $defState -Available @('fable') -DefaultModel 'Fable 5.1[1M]').Count) 'an account with Fable passes no --model'
 Assert-Equal 0 (@(Get-LaunchArgs -State $defState -Available $null -DefaultModel 'Fable 5.1[1M]').Count) 'no availability information passes no --model'
 Assert-Equal 0 (@(Get-LaunchArgs -State $defState -Available @() -DefaultModel 'Opus 5.5[1M]').Count) 'a settings model the account has passes no --model'
@@ -2141,7 +2141,14 @@ Assert-Equal 0 (@(Get-LaunchArgs -State $defState -Available @() -DefaultModel '
 $pinState = New-LaunchState; $pinState.Model = 'sonnet1m'
 Assert-Equal '--model sonnet[1m]' (@(Get-LaunchArgs -State $pinState -Available @() -DefaultModel 'Fable 5.1[1M]') -join ' ') 'an explicit pick is never replaced by the pin'
 $defAdv = New-LaunchState; $defAdv.Effort = 'high'
-Assert-Equal '--model claude-opus-5-5[1m] --effort high' (@(Get-LaunchArgs -State $defAdv -Available @() -DefaultModel 'Fable 5.1[1M]') -join ' ') 'the pin keeps the model-first flag order'
+Assert-Equal '--model opus[1m] --effort high' (@(Get-LaunchArgs -State $defAdv -Available @() -DefaultModel 'Fable 5.1[1M]') -join ' ') 'the pin keeps the model-first flag order'
+# The pin's name is the opus1m option's own label, so the next Opus in the catalog renames both.
+$liveModelRow = (Get-LaunchRows) | Where-Object { $_.Name -eq 'Model' }
+$savedOpusLabel = $liveModelRow.Labels['opus1m']
+try {
+    $liveModelRow.Labels['opus1m'] = 'Opus 6[1M]'
+    Assert-Equal 'default (Opus 6[1M])' (Get-RowOptionText -Row $liveModelRow -Key 'default' -DefaultModelLabel 'default (Fable 5.1[1M])' -Available @()) 'the pin label follows the opus1m label the catalog sets'
+} finally { $liveModelRow.Labels['opus1m'] = $savedOpusLabel }
 # The drawn work row folds opus1m into the default cell: both run Opus 5.5[1M].
 $foldLabels = @{ Model = 'Fable 5.1[1M]'; Advisor = 'default'; Effort = 'default'; Permission = 'default' }
 Assert-Equal 'default sonnet1m haiku' ((Get-VisibleRowValues -Row $modelRowDef -Available @() -DefaultLabels $foldLabels) -join ' ') 'without Fable the default cell takes the opus1m slot'
@@ -6147,7 +6154,7 @@ try {
 } finally { Remove-Item -LiteralPath $hidRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 2016
+$script:Expected = 2017
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

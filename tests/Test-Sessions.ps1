@@ -167,21 +167,38 @@ Assert-Equal 'Here: [code: 3 lines] Done.' $s.RecentMessages[1].Text 'a fenced b
 
 # 14. CS-197: ONE session list for every account. The four profile roots' projects\ are one
 #     directory, and a session continues on any account, so the picker reads one root - the same one
-#     the project screen lists (Get-ProjectRegistry) - whichever account is selected. Per-account
-#     scoping (Get-SessionsRootForAccount) is gone, and with one root there is one cache file.
-Assert-Equal $null (Get-Command Get-SessionsRootForAccount -ErrorAction SilentlyContinue) 'per-account session scoping no longer exists'
+#     the project screen lists (Get-ProjectRegistry) - whichever account is selected, when sharing is
+#     on. With sharing OFF (the shipped default) each root holds its own transcripts and `claude
+#     --resume` finds one only under the CLAUDE_CONFIG_DIR that wrote it, so the account's own root.
+Assert-Equal $null (Get-Command Get-SessionsRootForAccount -ErrorAction SilentlyContinue) 'the old per-account resolver is gone'
+$mrRoot = Join-Path $env:TEMP ("claude-auto-multiroot-$(Get-Random)")
+$rootsFake = [ordered]@{ work = (Join-Path $mrRoot 'work'); second = (Join-Path $mrRoot 'second') }
 $savedPR = $env:CLAUDE_AUTO_PROJECTS_ROOT
 try {
     Remove-Item Env:CLAUDE_AUTO_PROJECTS_ROOT -ErrorAction SilentlyContinue
-    Assert-Equal (Join-Path $HOME '.claude\projects') (Get-SessionsRoot) 'the session root is the canonical projects directory'
-    $env:CLAUDE_AUTO_PROJECTS_ROOT = "$fx\multi-root\override"
-    Assert-Equal "$fx\multi-root\override" (Get-SessionsRoot) 'and follows the project registry override'
+    Assert-Equal (Join-Path $HOME '.claude\projects') (Get-SessionsRoot -Account 'second' -ProfileRoots $rootsFake -Sharing) 'sharing on: every account reads the canonical projects directory'
+    $env:CLAUDE_AUTO_PROJECTS_ROOT = "$mrRoot\override"
+    Assert-Equal "$mrRoot\override" (Get-SessionsRoot -Account 'second' -ProfileRoots $rootsFake -Sharing) 'and follows the project registry override'
+    Assert-Equal (Join-Path $rootsFake['second'] 'projects') (Get-SessionsRoot -Account 'second' -ProfileRoots $rootsFake) 'sharing off: the selected account''s own root, override or not'
 } finally {
     if ($null -eq $savedPR) { Remove-Item Env:CLAUDE_AUTO_PROJECTS_ROOT -ErrorAction SilentlyContinue } else { $env:CLAUDE_AUTO_PROJECTS_ROOT = $savedPR }
 }
-$launcherSrc = Get-Content -LiteralPath "$PSScriptRoot\..\claude-auto.ps1" -Raw
-Assert-Equal $false ($launcherSrc -match 'Get-SessionsRootForAccount') 'the launcher no longer scopes sessions by account'
-Assert-Equal 2 ([regex]::Matches($launcherSrc, '-ProjectsRoot \(Get-SessionsRoot\)|\$sessionsRoot = Get-SessionsRoot\b')).Count 'both the picker and the continue holder read the one shared root'
+try { $null = Get-SessionsRoot -Account 'nope' -ProfileRoots $rootsFake; $threw = $false } catch { $threw = $true }
+Assert-Equal $true $threw 'sharing off: an unknown account throws rather than silently resolving somewhere'
+
+$workProjects = Join-Path $mrRoot 'work\projects'; $secondProjects = Join-Path $mrRoot 'second\projects'
+New-Item -ItemType Directory -Force (Join-Path $workProjects 'C--Users-someone-Desktop-Projects-WorkOnly') | Out-Null
+New-Item -ItemType Directory -Force (Join-Path $secondProjects 'C--Users-someone-Desktop-Projects-SecondOnly') | Out-Null
+$workLines = @('{"type":"user","message":{"content":"work session prompt"}}', '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}')
+$secondLines = @('{"type":"user","message":{"content":"second session prompt"}}', '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}')
+[IO.File]::WriteAllText((Join-Path $workProjects 'C--Users-someone-Desktop-Projects-WorkOnly\aaaaaaaa.jsonl'), (($workLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText((Join-Path $secondProjects 'C--Users-someone-Desktop-Projects-SecondOnly\bbbbbbbb.jsonl'), (($secondLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+# Sharing off, behaviour: a secondary account lists its OWN sessions, cached beside its own root.
+$sessionsForSecond = @(Get-ClaudeSessions -ProjectsRoot (Get-SessionsRoot -Account 'second' -ProfileRoots $rootsFake) -Limit 40)
+Assert-Equal 'bbbbbbbb' (@($sessionsForSecond.SessionId) -join ',') 'sharing off: account second sees exactly its own session, not work''s'
+Assert-Equal $true (Test-Path (Join-Path $rootsFake['second'] 'claude-auto-sessions.json')) 'sharing off: account second gets its own cache file'
+Assert-Equal $false (Test-Path (Join-Path $rootsFake['work'] 'claude-auto-sessions.json')) 'and the work root''s cache is not touched by it'
+Remove-Item -LiteralPath $mrRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 # 15. Transcript text is UNTRUSTED: these files routinely hold fetched web pages and other repos'
 #     source. Every summary field reaches the terminal through Write-Frame -> [Console]::Write, so a
@@ -1014,7 +1031,7 @@ foreach ($bindCmd in 'Get-ClaudeSessions', 'Get-ClaudeSessionFile') {
     Assert-True $bindErr "$bindCmd rejects an unknown parameter instead of running on defaults"
 }
 
-if ($script:Ran -ne 196) { Write-Host "COULD NOT RUN: expected 196 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 199) { Write-Host "COULD NOT RUN: expected 199 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0
