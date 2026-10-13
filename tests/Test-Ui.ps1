@@ -3113,9 +3113,10 @@ Assert-Equal 1 $mapScroll.FirstRowY 'the scrolled row map still sits just under 
 # 16 and 16, not 19 and 13, since the action field joined the box (2026-09-16) and the two separators
 # joined it in Task 9: all three come out of the LIST's viewport, which is the whole point of putting
 # them inside the box - the frame still fits the same terminal, with fewer list rows on it. 15 and
-# 17 since the narrow tier's detail line joined them.
-Assert-Equal 15 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
-Assert-Equal 17 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
+# 17 since the narrow tier's detail line joined them. 16 and 16 since CS-218: at the bottom of the
+# list only the free-path gap is drawn, so the cwd gap's reserved slot holds one more row.
+Assert-Equal 16 $mapScroll.RowCount 'the scrolled row map still reports how many rows are visible'
+Assert-Equal 16 $mapScroll.Start 'the scrolled row map start is the actual first visible index, not the degenerate 0'
 Assert-True ($f6Text -match 'continue') 'the footer advertises continue'
 # Plain (no -Color) hints are bracketed like every other screen's footer - '[t] worktree',
 # never ' t worktree' - see the picker's '[f] fork' etc. at 50 columns. The brief's own sample
@@ -4024,6 +4025,26 @@ try {
     # moment the list scrolls past a separator.
     Assert-Equal $tall9.Count $tall9m.Count 'the frame keeps ONE height while scrolling: mid-scroll matches the top of the list'
     Assert-Equal $tall9.Count $tall9b.Count 'and the bottom of the list matches it too'
+    # CS-218: a reserved slot the window does not draw as a gap goes back to the LIST. Mid-scroll no
+    # gap is drawn, so the list takes both slots; at either end one gap is drawn and the list takes
+    # the other. Every Index at both tiers, so no cursor position leaves a blank line standing above
+    # the detail line and the action row, changes the frame's height, or loses the cursor.
+    foreach ($gapTier in @(@{ W = 50; H = 20; Detail = 1 }, @{ W = 120; H = 30; Detail = 0 })) {
+        $gapRows = @(Get-ProjectRows -Projects $longProjects -Cwd 'C:\x').Count
+        $gapHeight = -1
+        $gapBad = @()
+        for ($gi = 0; $gi -lt $gapRows; $gi++) {
+            $gm = $null
+            $gf = @(Get-ProjectFrame -Projects $longProjects -Index $gi -Cwd 'C:\x' -Width $gapTier.W -Height $gapTier.H -RowMap ([ref]$gm))
+            if ($gapHeight -lt 0) { $gapHeight = $gf.Count }
+            if ($gf.Count -ne $gapHeight) { $gapBad += "${gi}:height $($gf.Count)" }
+            if ($gm.RowYs[-1] + 1 + $gapTier.Detail -ne $gm.Action.Y) { $gapBad += "${gi}:blank above the action row" }
+            if ($gi -lt $gm.Start -or $gi -ge ($gm.Start + $gm.RowCount)) { $gapBad += "${gi}:cursor off the window" }
+        }
+        Assert-Equal '' ($gapBad -join ', ') "CS-218 at $($gapTier.W)x$($gapTier.H): at every Index the frame keeps one height, the cursor stays in the window and no reserved slot stands blank above the action row"
+    }
+    Assert-Equal ($m9t.RowCount + 1) $m9m.RowCount 'mid-scroll, where no gap is drawn, the list shows one row MORE than at the top, where one gap is'
+    Assert-Equal $m9t.RowCount $m9b.RowCount 'and the bottom of the list, with its one gap, shows as many as the top'
     # The both-gaps case, which only a registry that fits whole can produce: counted, not bounded -
     # every row, the two blank lines, the narrow tier's detail line, the action row, two box borders
     # and the footer.
@@ -5329,7 +5350,9 @@ $null = Get-PickerFrame -Sessions $mouseSessions -Index 0 -Width 120 -Height 24 
 Assert-Equal ([int]$p14Probe.RowYs[0]) ([int]$p14PickProbe.FirstRowY) 'the project screen''s cwd row and the picker''s row 0 sit on the SAME screen line - which is what lets one queued press mean two different things'
 $p14Y = [int]$p14Probe.RowYs[0]
 $p14Run = {
-    param([object[]]$Events, [object[]]$Stamps)
+    # -PickerPending: what the PICKER's queue probe answers (CS-224 a). Plain, not a closure: it
+    # resolves $p14Q from this scope at call time, so it can answer from the very queue it reads.
+    param([object[]]$Events, [object[]]$Stamps, [scriptblock]$PickerPending = { $false })
     $p14Q = [System.Collections.Queue]::new(); foreach ($e in $Events) { $p14Q.Enqueue($e) }
     $p14S = [System.Collections.Queue]::new(); foreach ($s in $Stamps) { $p14S.Enqueue($s) }
     $p14Read  = { if ($p14Q.Count -eq 0) { throw 'events exhausted' }; $p14Q.Dequeue() }.GetNewClosure()
@@ -5340,7 +5363,7 @@ $p14Run = {
         $null = Get-PickerFrame -Sessions $s -Index $i -Hover $hv -HoverRow $hr -Width 120 -Height 24 -RowMap ([ref]$script:p14MapB); $script:p14MapB }
     $script:LastActivation = $null   # each run is its own gesture; nothing before it is in flight
     $p14Chosen = Invoke-ProjectScreen -Projects $projs6 -Cwd $p14Cwd -InitialAction 'resume' -ReadKey $p14Read -Draw $p14DrawA -Wait $p14Read -GetWindowTop { 0 } -InputPending { $false } -RecordTime $p14Clock
-    $p14Picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $p14Read -Draw $p14DrawB -Wait $p14Read -GetWindowTop { 0 } -InputPending { $false } -RecordTime $p14Clock
+    $p14Picked = Invoke-SessionPicker -Sessions $mouseSessions -ReadKey $p14Read -Draw $p14DrawB -Wait $p14Read -GetWindowTop { 0 } -InputPending $PickerPending -RecordTime $p14Clock
     return [pscustomobject]@{ Chosen = $p14Chosen; Picked = $p14Picked; Left = $p14Q.Count }
 }
 $p14Console = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left -Double), $esc) @()
@@ -5361,6 +5384,58 @@ Assert-Equal 's1' "$($p14Late.Picked.Session.SessionId)" 'while a plain press 80
 # first click.
 $p14Back = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(9000, 1000)
 Assert-Equal 's1' "$($p14Back.Picked.Session.SessionId)" 'a press on the next screen whose stamp moves BACKWARDS is the owner, not the twin, and reaches the picker'
+# CS-224 (a): the stamp is the READ time, so a VT twin that waited out a slow transition (session
+# scan + first frame) reads 900 ms late and passed the window as a real click. An Early record is
+# one the terminal had ALREADY queued when the picker opened; the probe answers from the queue.
+$p14Early = { param($e) $e | Add-Member -NotePropertyName Early -NotePropertyValue $true -PassThru }
+$p14QueuedProbe = { $p14Q.Count -gt 0 -and [bool]$p14Q.Peek().Early }
+$p14Slow = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (& $p14Early (New-MouseEvent -X 3 -Y $p14Y -Left)), $esc) @(1000, 1900) $p14QueuedProbe
+Assert-True ($null -eq $p14Slow.Picked) 'CS-224 a: a VT twin already queued when the picker opened is dropped however long the transition took'
+Assert-Equal 0 $p14Slow.Left 'and leaves the single record for Escape'
+# The control: the queue ran dry (only a move was waiting) before the press, so the press came after
+# the picker stood idle - judged by the stamp again, 900 ms is a real click.
+$p14Drained = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (& $p14Early (New-MouseEvent -X 40 -Y $p14Y -Move)), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1900) $p14QueuedProbe
+Assert-Equal 's1' "$($p14Drained.Picked.Session.SessionId)" 'CS-224 a: once the queue ran dry a press at the same point 900 ms later is the owner and reaches the picker'
+# CS-224 (b): a THIRD record of one gesture. The twin used to consume the cross-screen record, so
+# the third reached the picker and opened row 0. A twin now re-arms it.
+$p14Third = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left -Double), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1040, 1080)
+Assert-True ($null -eq $p14Third.Picked) 'CS-224 b: a third press of one gesture is dropped like the second'
+Assert-Equal 0 $p14Third.Left 'and leaves the single record for Escape'
+$p14ThirdVt = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1080, 1160)
+Assert-True ($null -eq $p14ThirdVt.Picked) 'and so is the VT one, three plain presses inside the window'
+# Re-arming never stretches the window: it still runs from the activation, so a press 800 ms after
+# it is a decision even when a twin came between.
+$p14ThirdLate = & $p14Run @((New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), (New-MouseEvent -X 3 -Y $p14Y -Left), $esc) @(1000, 1080, 1800)
+Assert-Equal 's1' "$($p14ThirdLate.Picked.Session.SessionId)" 'CS-224 b: after a dropped twin, a press 800 ms past the activation still reaches the picker'
+
+# CS-224 (d): the launch and maintenance screens forward -InputPending and -RecordTime to the loop.
+# The stamp rides on the event the way Get-ClaudeInputRecordTime reports the last record read.
+$fwStampRun = {
+    param([string]$Screen, [object[]]$Events, [scriptblock]$Pending = { $false })
+    $fwQ = [System.Collections.Queue]::new(); foreach ($e in $Events) { $fwQ.Enqueue($e) }
+    $script:fwStamp = $null; $script:fwDraws = 0; $script:fwFires = 0
+    $script:LastActivation = $null
+    $fwWait = { $fwE = $fwQ.Dequeue(); if ($null -ne $fwE.PSObject.Properties['Stamp']) { $script:fwStamp = $fwE.Stamp }; $fwE }
+    try {
+        if ($Screen -eq 'launch') {
+            $null = Invoke-LaunchScreen -State (New-LaunchState) -ReadKey $fwWait -Wait $fwWait -GetWindowTop { 0 } `
+                -Draw { param($st) $script:fwDraws++; $ft2Map } -OnKey { param($k) if ("$($k.KeyChar)" -eq 'c') { $script:fwFires++; return $true }; $false } `
+                -InputPending $Pending -RecordTime { $script:fwStamp }
+        } else {
+            Invoke-MaintenanceScreen -ReadKey $fwWait -Wait $fwWait -GetWindowTop { 0 } -Draw { param($i, $st, $hv) $script:fwDraws++; $ft2Map } `
+                -Actions @([pscustomobject]@{ Key = 'c'; Label = 'probe'; Script = (Join-Path $PSScriptRoot 'fixtures\config-four.json'); ConfirmTwice = $false }) `
+                -Runner { param($p) $script:fwFires++; [pscustomobject]@{ Output = @('ok'); ExitCode = 0 } } `
+                -InputPending $Pending -RecordTime { $script:fwStamp }
+        }
+    } catch { return [pscustomobject]@{ Fires = "threw: $($_.Exception.Message)"; Draws = -1 } }
+    return [pscustomobject]@{ Fires = $script:fwFires; Draws = $script:fwDraws }
+}
+$fwPress = { param([int]$At) (New-MouseEvent -X 3 -Y 6 -Left) | Add-Member -NotePropertyName Stamp -NotePropertyValue $At -PassThru }
+foreach ($fwScreen in 'launch', 'maintenance') {
+    Assert-Equal '1' "$((& $fwStampRun $fwScreen @((& $fwPress 1000), (& $fwPress 1080), $esc)).Fires)" "CS-224 d: $fwScreen forwards -RecordTime - a VT twin on a footer button 80 ms later fires it once"
+    Assert-Equal '2' "$((& $fwStampRun $fwScreen @((& $fwPress 1000), (& $fwPress 1800), $esc)).Fires)" "and two presses 800 ms apart fire it twice on $fwScreen"
+    Assert-Equal '1' "$((& $fwStampRun $fwScreen @((New-MouseEvent -X 3 -Y 6 -Move), $esc) { $true }).Draws)" "CS-224 d: $fwScreen forwards -InputPending - with the queue reported non-empty the hover frame is coalesced away and only the initial frame is drawn"
+}
 Remove-Item -LiteralPath $p14Cwd -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- Task 7 (spec D4): every frame fits - no rendered line reaches the last console column -----
@@ -6007,7 +6082,7 @@ try {
 } finally { Remove-Item -LiteralPath $hidRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 1986
+$script:Expected = 2003
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

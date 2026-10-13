@@ -366,7 +366,7 @@ function Invoke-ScreenLoop {
     # and the LOWER bound is why it exists: a twin arrives after the gesture it repeats, so a
     # negative delta is not one. `-lt $loopTwinMs` alone read every backwards step of the clock as a
     # twin and swallowed the press. Not reachable through Get-ClaudeInputRecordTime (TickCount64,
-    # monotonic), but -RecordTime is a public parameter of this function and of all three screens,
+    # monotonic), but -RecordTime is a public parameter of this function and of every screen,
     # and a caller handing in a wall clock or a per-screen stopwatch would eat clicks with every
     # suite green. $loopNow is a free name resolved against this scope at call time, exactly as
     # $loopAlias reads $loopKey.
@@ -384,10 +384,20 @@ function Invoke-ScreenLoop {
     $loopFooterY = -1
     $loopFooterIndex = -1
     $loopFooterAt = $null
+    # CS-224 (a): the stamp is taken when a record is READ, so a twin that waited out a slow screen
+    # change (the project screen's pick, then the session scan and the picker's first frame) reads as
+    # late as the transition was long, and in a VT terminal - no double-click flag - it passed the
+    # 500 ms test as a real click. A record ALREADY QUEUED when this screen opens arrived while the
+    # launcher was busy, before anyone could see this screen, so it cannot be a decision about it:
+    # Queued marks the record so the point match alone decides. It lasts while the queue does - the
+    # check before each read drops it the moment the queue runs dry, so a press made after this
+    # screen stood idle is judged by the stamp again.
+    if ($script:LastActivation) { $script:LastActivation.Queued = [bool](& $InputPending) }
     while ($true) {
         if ($loopH.Before) { $null = & $loopH.Before $State }
         if ($loopNeedDraw) { $loopMap = & $Draw $State }
         $loopNeedDraw = $true
+        if ($script:LastActivation -and $script:LastActivation.Queued -and -not (& $InputPending)) { $script:LastActivation.Queued = $false }
         $loopKey = & $Wait
         if ("$loopKey" -eq 'resize') { continue }
         # A KEY press is a gesture of its own and disarms ALL THREE twin guards, for the reason the
@@ -457,14 +467,18 @@ function Invoke-ScreenLoop {
             # P14: the twin that OUTLIVED its screen (the header carries the whole argument). Every
             # Left press in every screen looks at the record first, footer presses included - the
             # POINT decides, X as well as Y, because the next screen's rows are not this one's and a
-            # twin never moves. Y alone would blind a whole screen line for half a second. It guards
-            # the NEXT press and only that one: matched or not, it is consumed right here, so an
-            # ordinary click that happens to follow an activation is never swallowed twice over.
+            # twin never moves. Y alone would blind a whole screen line for half a second. A press
+            # that is NOT a twin consumes it right here, so an ordinary click that happens to follow
+            # an activation is never swallowed. A twin re-arms it (CS-224 b): a third record of the
+            # same gesture is judged against the same activation and dropped too, instead of
+            # reaching the screen the second one was kept from. The window still runs from the
+            # activation's own stamp, so re-arming never stretches it.
             if ($script:LastActivation) {
                 $loopLast = $script:LastActivation
                 $script:LastActivation = $null
                 if ($loopKey.X -eq $loopLast.X -and $loopKey.Y -eq $loopLast.Y -and
-                    ($loopKey.IsDoubleClick -or (& $loopIsTwin $loopLast.At))) {
+                    ($loopKey.IsDoubleClick -or $loopLast.Queued -or (& $loopIsTwin $loopLast.At))) {
+                    $script:LastActivation = $loopLast
                     $loopNeedDraw = $false
                     continue
                 }
@@ -636,7 +650,12 @@ function Invoke-LaunchScreen {
         # the same tables the frame folds twins with. Stepping and clicking walk the SAME folded
         # list the frame drew, or a step would land on a cell the owner cannot see. Empty keeps
         # every caller unfolded.
-        [hashtable]$DefaultLabelsByAccount = @{}
+        [hashtable]$DefaultLabelsByAccount = @{},
+        # Forwarded to the loop (CS-224 d), as Invoke-ProjectScreen does: the hover coalescing and
+        # the twin guards' clock. The defaults are the loop's own, so a caller that omits them
+        # behaves exactly as before; a suite can now drive both on this screen.
+        [scriptblock]$InputPending = { Test-ClaudeInputPending },
+        [scriptblock]$RecordTime = { try { Get-ClaudeInputRecordTime } catch { $null } }
     )
     # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
     # the rule; this screen's own state travels as $s.State, never as $State.
@@ -671,7 +690,7 @@ function Invoke-LaunchScreen {
     }
 
     $st = @{ Index = [int]$State.Row; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false; State = $State }
-    return (Invoke-ScreenLoop -Screen 'launch' -State $st -Wait $Wait -GetWindowTop $GetWindowTop `
+    return (Invoke-ScreenLoop -Screen 'launch' -State $st -Wait $Wait -GetWindowTop $GetWindowTop -InputPending $InputPending -RecordTime $RecordTime `
         -Draw { param($s) & $paintLaunch $s.State } -Handlers @{
         # The cursor lives in two places - the loop's Index, and the state's Row that the frame
         # draws and Step-LaunchValue steps. Index wins here; a handler that replaces the state
@@ -1392,7 +1411,10 @@ function Invoke-MaintenanceScreen {
         # microseconds apart however slow the screen is. $null - the keyboard-only ReadKey path -
         # leaves the guard inert rather than blocking a confirm the reader really did press twice.
         [scriptblock]$RecordTime = { try { Get-ClaudeInputRecordTime } catch { $null } },
-        [int]$ConfirmMinMs = 150
+        [int]$ConfirmMinMs = 150,
+        # Forwarded to the loop with -RecordTime (CS-224 d): the confirm gate above and the loop's
+        # footer twin guard read the same clock, and the hover coalescing is injectable here too.
+        [scriptblock]$InputPending = { Test-ClaudeInputPending }
     )
     # Aliased because a handler resolves its names against Invoke-ScreenLoop first - its header has
     # the rule. This screen also opens from inside the LAUNCH screen's OnKey, so its scope chain
@@ -1533,6 +1555,6 @@ function Invoke-MaintenanceScreen {
     # 'd' is doctor) and nothing on it is clickable but the footer, which the loop already turns into
     # that hint's key. -Silent: this screen writes no log records and never did.
     # The install info is refreshed by the DRAW, so the frame and the info on it are always one pass.
-    $null = Invoke-ScreenLoop -Screen 'maintenance' -State $maintState -Wait $Wait -GetWindowTop $GetWindowTop -Silent `
+    $null = Invoke-ScreenLoop -Screen 'maintenance' -State $maintState -Wait $Wait -GetWindowTop $GetWindowTop -Silent -InputPending $InputPending -RecordTime $RecordTime `
         -Draw { param($s) $s.Info = Get-ClaudeInstallInfo; & $paintMaint $s.Info $s.Status $s.Hover } -Handlers $maintHandlers
 }
