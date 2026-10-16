@@ -238,9 +238,18 @@ try {
     Assert 'sharing counts live accounts only'                 (-not $as.Sharing -and @($as.Warnings | Where-Object { $_ -match 'two accounts' }).Count -eq 1)
     Set-Content (Join-Path $tmp 'arch-bad.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"~/.claude-b","archived":"yes"}, {"key":"c","root":"~/.claude-c","tint":"Cyan","archived":"false"} ] }'
     $ab = Read-LauncherConfig -Path (Join-Path $tmp 'arch-bad.json')
-    Assert 'an unparseable archived value keeps the account live' (@($ab.Accounts | Where-Object Key -eq 'b').Count -eq 1)
+    Assert 'an unparseable archived value archives the account (fail-safe)' (@($ab.Accounts | Where-Object Key -eq 'b').Count -eq 0)
     Assert 'and warns naming the account and the value'        (@($ab.Warnings | Where-Object { $_ -match "'b'" -and $_ -match 'archived' -and $_ -match 'yes' }).Count -eq 1)
     Assert 'string "false" archived stays live'                (@($ab.Accounts | Where-Object Key -eq 'c').Count -eq 1)
+    Set-Content (Join-Path $tmp 'arch-num.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"~/.claude-b","tint":"Cyan","archived":1}, {"key":"c","root":"~/.claude-c","tint":"Blue","archived":false}, {"key":"d","root":"~/.claude-d","tint":"Red","archived":null} ] }'
+    $an = Read-LauncherConfig -Path (Join-Path $tmp 'arch-num.json')
+    Assert 'archived 1 or null archives, boolean false stays live' ((@($an.Accounts | ForEach-Object Key) -join ',') -eq 'work,c')
+    Set-Content (Join-Path $tmp 'arch-quiet.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"~/.claude-b","tint":"Pink","hidden":"maybe","archived":true} ] }'
+    $aq = Read-LauncherConfig -Path (Join-Path $tmp 'arch-quiet.json')
+    Assert 'an archived entry warns nothing about its tint or hidden' (@($aq.Warnings).Count -eq 0)
+    Set-Content (Join-Path $tmp 'arch-rel.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"rel/b","archived":true} ] }'
+    $arl = Read-LauncherConfig -Path (Join-Path $tmp 'arch-rel.json')
+    Assert 'an archived entry still needs an absolute root'    (@($arl.Warnings | Where-Object { $_ -match "'b'" -and $_ -match 'absolute' }).Count -eq 1)
     Set-Content (Join-Path $tmp 'arch-canon.json') '{ "accounts": [ {"key":"work","root":"~/.claude","archived":true}, {"key":"b","root":"~/.claude-b","tint":"Cyan"} ] }'
     $ac = Read-LauncherConfig -Path (Join-Path $tmp 'arch-canon.json')
     Assert 'archiving the canonical account is refused: it stays live' ((@($ac.Accounts | ForEach-Object Key) -join ',') -eq 'work,b' -and $ac.Accounts[0].Canonical)

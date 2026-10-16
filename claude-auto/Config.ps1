@@ -93,6 +93,21 @@ function ConvertTo-LauncherRoster {
         # Judged BEFORE expansion: GetFullPath makes every path absolute, so the check would never fire after it.
         $rooted = ($rawRoot -match '^~([\\/]|$)') -or [IO.Path]::IsPathRooted($rawRoot)
         $root = Expand-LauncherPath $rawRoot
+        # Trailing separator trimmed on BOTH sides. GetFullPath keeps one, so `~/.claude/`
+        # compared unequal to `~/.claude` and the account stopped being canonical - which
+        # discards the whole roster, several accounts at once, over a character the warning then
+        # prints back looking entirely correct.
+        $canonical = ([IO.Path]::TrimEndingDirectorySeparator($root) -eq [IO.Path]::TrimEndingDirectorySeparator($canonicalRoot))
+        # archived = parked: kept in the file for a restore, invisible to the launcher (no row, no
+        # relink, no junction, no limits). Fail-safe, the rule every roster reader shares: the key
+        # present and anything but a false value = archived, so a typo never relinks a parked root.
+        # The canonical root is the absence of CLAUDE_CONFIG_DIR and the link target of every other
+        # root, so it cannot be parked.
+        $hasArchived = ($a -is [psobject]) -and ($a.PSObject.Properties.Name -contains 'archived')
+        $archivedResult = ConvertTo-LauncherBool -Value $a.archived -Default $hasArchived -Name "account '$key': archived"
+        if ($archivedResult.Warning) { $warnings += $archivedResult.Warning }
+        $archived = $archivedResult.Value
+        if ($archived -and $canonical) { $warnings += "account '$key': archived is refused for the canonical account ($canonicalRoot); kept live"; $archived = $false }
         $tint = if ($a.tint) { "$($a.tint)" } else { 'Green' }
         # Kept alongside Root (the expanded, absolute one) so a fatal roster failure below can name
         # the RAW value the owner actually wrote, not the resolved path that hides the mistake.
@@ -101,21 +116,12 @@ function ConvertTo-LauncherRoster {
         # verbatim - any later exact-case lookup keyed on the stored value would then miss it.
         $canonicalTint = $script:AllowedTints | Where-Object { $_ -eq $tint } | Select-Object -First 1
         if ($canonicalTint) { $tint = $canonicalTint }
-        else { $warnings += "account '$key': tint '$tint' is not one of $($script:AllowedTints -join ', '); using Green"; $tint = 'Green' }
+        # A parked account's tint and hidden are never shown, so they warn nothing; key and root
+        # are still validated below (a restore must find them sound).
+        elseif (-not $archived) { $warnings += "account '$key': tint '$tint' is not one of $($script:AllowedTints -join ', '); using Green"; $tint = 'Green' }
+        else { $tint = 'Green' }
         $hiddenResult = ConvertTo-LauncherBool -Value $a.hidden -Default $false -Name "account '$key': hidden"
-        if ($hiddenResult.Warning) { $warnings += $hiddenResult.Warning }
-        # Trailing separator trimmed on BOTH sides. GetFullPath keeps one, so `~/.claude/`
-        # compared unequal to `~/.claude` and the account stopped being canonical - which
-        # discards the whole roster, several accounts at once, over a character the warning then
-        # prints back looking entirely correct.
-        $canonical = ([IO.Path]::TrimEndingDirectorySeparator($root) -eq [IO.Path]::TrimEndingDirectorySeparator($canonicalRoot))
-        # archived = parked: kept in the file for a restore, invisible to the launcher (no row, no
-        # relink, no junction, no limits). The canonical root is the absence of CLAUDE_CONFIG_DIR and
-        # the link target of every other root, so it cannot be parked.
-        $archivedResult = ConvertTo-LauncherBool -Value $a.archived -Default $false -Name "account '$key': archived"
-        if ($archivedResult.Warning) { $warnings += $archivedResult.Warning }
-        $archived = $archivedResult.Value
-        if ($archived -and $canonical) { $warnings += "account '$key': archived is refused for the canonical account ($canonicalRoot); kept live"; $archived = $false }
+        if ($hiddenResult.Warning -and -not $archived) { $warnings += $hiddenResult.Warning }
         $accounts += [pscustomobject]@{
             Key = $key; Root = $root
             Label = if ($a.label) { "$($a.label)" } else { "$key account" }
