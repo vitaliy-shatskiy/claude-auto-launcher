@@ -227,6 +227,82 @@ try {
     Set-Content (Join-Path $tmp 'winpath.json') '{ "accounts": [ {"key":"work","root":"C:\Users\me\.claude"} ] }'
     $wp = Read-LauncherConfig -Path (Join-Path $tmp 'winpath.json')
     Assert 'a single backslash JSON parse failure names it as the likely cause' (@($wp.Warnings | Where-Object { $_ -match 'backslash' }).Count -eq 1)
+
+    # --- archived accounts: invisible to the launcher, filtered once where the roster is read ---
+    Set-Content (Join-Path $tmp 'arch.json') '{ "accounts": [ {"key":"work","root":"~/.claude","tint":"Green"}, {"key":"b","root":"~/.claude-b","tint":"Magenta"}, {"key":"low","root":"~/.claude-low","tint":"Magenta","archived":true}, {"key":"s","root":"~/.claude-s","tint":"Cyan","archived":"true"} ], "sharing": true }'
+    $ar = Read-LauncherConfig -Path (Join-Path $tmp 'arch.json')
+    Assert 'archived accounts are left out of the roster'      ((@($ar.Accounts | ForEach-Object Key) -join ',') -eq 'work,b')
+    Assert 'a tint shared only with an archived account warns nothing' (@($ar.Warnings).Count -eq 0)
+    Set-Content (Join-Path $tmp 'arch-share.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"low","root":"~/.claude-low","archived":true} ], "sharing": true }'
+    $as = Read-LauncherConfig -Path (Join-Path $tmp 'arch-share.json')
+    Assert 'sharing counts live accounts only'                 (-not $as.Sharing -and @($as.Warnings | Where-Object { $_ -match 'two accounts' }).Count -eq 1)
+    Set-Content (Join-Path $tmp 'arch-bad.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"~/.claude-b","archived":"yes"}, {"key":"c","root":"~/.claude-c","tint":"Cyan","archived":"false"} ] }'
+    $ab = Read-LauncherConfig -Path (Join-Path $tmp 'arch-bad.json')
+    Assert 'an unparseable archived value keeps the account live' (@($ab.Accounts | Where-Object Key -eq 'b').Count -eq 1)
+    Assert 'and warns naming the account and the value'        (@($ab.Warnings | Where-Object { $_ -match "'b'" -and $_ -match 'archived' -and $_ -match 'yes' }).Count -eq 1)
+    Assert 'string "false" archived stays live'                (@($ab.Accounts | Where-Object Key -eq 'c').Count -eq 1)
+    Set-Content (Join-Path $tmp 'arch-canon.json') '{ "accounts": [ {"key":"work","root":"~/.claude","archived":true}, {"key":"b","root":"~/.claude-b","tint":"Cyan"} ] }'
+    $ac = Read-LauncherConfig -Path (Join-Path $tmp 'arch-canon.json')
+    Assert 'archiving the canonical account is refused: it stays live' ((@($ac.Accounts | ForEach-Object Key) -join ',') -eq 'work,b' -and $ac.Accounts[0].Canonical)
+    Assert 'and the refusal is a warning naming it'            (@($ac.Warnings | Where-Object { $_ -match "'work'" -and $_ -match 'archived' -and $_ -match 'canonical' }).Count -eq 1)
+    Set-Content (Join-Path $tmp 'arch-dup.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"~/.claude-b","tint":"Cyan"}, {"key":"b","root":"~/.claude-b2","tint":"Blue","archived":true} ] }'
+    $ad = Read-LauncherConfig -Path (Join-Path $tmp 'arch-dup.json')
+    Assert 'an archived key still counts for uniqueness (restore must not collide)' (@($ad.Warnings | Where-Object { $_ -match 'unique' }).Count -eq 1)
+
+    # AC1: an archived account has no row, no relink and no junction repair. The launcher modules
+    # derive their tables at load, so they run in a child pwsh against a fixture whose every
+    # non-canonical root sits under $tmp; $WorkRoot is re-pointed at a fake too, so the real
+    # ~/.claude is never touched.
+    $fake = (Join-Path $tmp 'ac1').Replace('\', '/')
+    $ac1Cfg = Join-Path $tmp 'ac1.json'
+    [IO.File]::WriteAllText($ac1Cfg, ('{ "accounts": [ {"key":"work","root":"~/.claude","tint":"Green"}, {"key":"pers","root":"FAKE/pers","tint":"Magenta"}, {"key":"low","root":"FAKE/low","tint":"Blue","archived":true} ], "sharing": true }' -replace 'FAKE', $fake))
+    $ac1Script = Join-Path $tmp 'ac1-child.ps1'
+    [IO.File]::WriteAllText($ac1Script, @'
+param([string]$Fake)
+$ErrorActionPreference = 'Stop'
+$m = Join-Path $env:CLAUDE_AUTO_SRC 'claude-auto'
+foreach ($f in 'Theme', 'Layout', 'Sessions', 'Screens', 'Projects', 'Prefs', 'Env') { . (Join-Path $m "$f.ps1") }
+# No icacls deny ACEs under $env:TEMP: they would make the fixture undeletable. The junction itself is still made.
+function Protect-SharedJunction { param([string]$Path, [string]$Root) }
+$WorkRoot = Join-Path $Fake 'work'
+$SharedFiles = @('settings.json'); $SharedDirs = @('projects')
+$low = Join-Path $Fake 'low'
+New-Item -ItemType Directory -Force (Join-Path $WorkRoot 'projects'), $low | Out-Null
+Set-Content -LiteralPath (Join-Path $WorkRoot 'settings.json') -Value '{"theme":"work"}' -NoNewline
+Set-Content -LiteralPath (Join-Path $low 'settings.json') -Value '{"theme":"drifted"}' -NoNewline
+(Get-Item -LiteralPath (Join-Path $low 'settings.json')).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-2)
+Repair-SharedProfiles 6>$null
+Set-LaunchRoster -Accounts $Accounts -Default $CanonicalAccount
+$prompt = Get-AccountPrompt -Accounts $Accounts -Default $CanonicalAccount
+$merged = Merge-LaunchPrefs -State (New-LaunchState) -Prefs @{ Account = 'low' } -Rows $script:Rows
+$rl = Join-Path $Fake 'rl'; New-Item -ItemType Directory -Force $rl | Out-Null
+$now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+foreach ($k in 'pers', 'low') { Set-Content -LiteralPath (Join-Path $rl "$k.json") -Value "{`"atMs`":$now,`"fiveHour`":10,`"sevenDay`":20}" }
+$limits = Get-RateLimitSummary -Directory $rl
+[pscustomobject]@{
+    Row = @(($script:Rows | Where-Object Name -eq 'Account').Values)
+    Prompt = $prompt.Text; MapKeys = @($prompt.Map.Values); LetterL = (Resolve-AccountAnswer -Answer 'l' -Prompt $prompt.Map -Default 'work'); FullLow = (Resolve-AccountAnswer -Answer 'low' -Prompt $prompt.Map -Default 'work')
+    Restored = $merged.State.Account
+    Limits = @($limits.Keys)
+    LowDrifted = ((Get-Content -LiteralPath (Join-Path $low 'settings.json') -Raw) -eq '{"theme":"drifted"}')
+    LowJunction = (Test-Path -LiteralPath (Join-Path $low 'projects'))
+    PersLinked = ((Get-Content -LiteralPath (Join-Path $Fake 'pers\settings.json') -Raw) -eq '{"theme":"work"}')
+    PersJunction = (Test-Path -LiteralPath (Join-Path $Fake 'pers\projects'))
+} | ConvertTo-Json -Compress
+'@)
+    $savedCfg = $env:CLAUDE_AUTO_CONFIG; $savedSrc = $env:CLAUDE_AUTO_SRC
+    try {
+        $env:CLAUDE_AUTO_CONFIG = $ac1Cfg; $env:CLAUDE_AUTO_SRC = (Resolve-Path "$PSScriptRoot\..").Path
+        $ac1Out = & pwsh -NoProfile -File $ac1Script -Fake (Join-Path $tmp 'ac1') 2>&1
+    } finally { $env:CLAUDE_AUTO_CONFIG = $savedCfg; $env:CLAUDE_AUTO_SRC = $savedSrc }
+    $ac1 = $null
+    try { $ac1 = ($ac1Out | Select-Object -Last 1) | ConvertFrom-Json } catch { Write-Host "AC1 child output: $($ac1Out -join ' | ')" }
+    Assert 'AC1: the child launcher run produced a result'       ($null -ne $ac1)
+    Assert 'AC1: an archived account has no row, no relink and no junction repair' ($ac1 -and (@($ac1.Row) -join ',') -eq 'work,pers' -and $ac1.LowDrifted -and -not $ac1.LowJunction)
+    Assert 'AC1: positive control - the live account was relinked and got its junction' ($ac1 -and $ac1.PersLinked -and $ac1.PersJunction)
+    Assert 'AC1: no prompt entry and no letter fallback for it'  ($ac1 -and ($ac1.Prompt -replace '[\[\]]', '') -notmatch '\blow\b' -and @($ac1.MapKeys) -notcontains 'low' -and $ac1.LetterL -eq 'work' -and $ac1.FullLow -eq 'work')
+    Assert 'AC1: a remembered archived account falls back to the default' ($ac1 -and $ac1.Restored -eq 'work')
+    Assert 'AC1: no rate-limit summary entry for it'             ($ac1 -and (@($ac1.Limits) -join ',') -eq 'pers')
 } finally { Remove-Item $tmp -Recurse -Force }
 if ($script:Ran -eq 0) { Write-Host 'COULD NOT RUN: no assertion executed'; exit 2 }
 if ($script:Failed) { Write-Host "$($script:Failed) failed"; exit 1 }

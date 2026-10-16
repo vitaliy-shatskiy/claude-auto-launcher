@@ -44,7 +44,7 @@ function ConvertTo-LauncherBool {
 
 function Get-LauncherDefaults {
     return [pscustomobject]@{
-        Accounts = @([pscustomobject]@{ Key = 'work'; Root = (Join-Path $HOME '.claude'); Label = 'work account'; Tint = 'Green'; Hidden = $false; Canonical = $true; Rooted = $true })
+        Accounts = @([pscustomobject]@{ Key = 'work'; Root = (Join-Path $HOME '.claude'); Label = 'work account'; Tint = 'Green'; Hidden = $false; Archived = $false; Canonical = $true; Rooted = $true })
         Sharing = $false; Remote = $false; RiderMcp = 'auto'
         ExtraMcpConfigs = @((Join-Path $HOME '.claude\mcp-shared.json'))
         # The credential store: one file per environment variable, tiers shared -> org -> project
@@ -104,19 +104,27 @@ function ConvertTo-LauncherRoster {
         else { $warnings += "account '$key': tint '$tint' is not one of $($script:AllowedTints -join ', '); using Green"; $tint = 'Green' }
         $hiddenResult = ConvertTo-LauncherBool -Value $a.hidden -Default $false -Name "account '$key': hidden"
         if ($hiddenResult.Warning) { $warnings += $hiddenResult.Warning }
+        # Trailing separator trimmed on BOTH sides. GetFullPath keeps one, so `~/.claude/`
+        # compared unequal to `~/.claude` and the account stopped being canonical - which
+        # discards the whole roster, several accounts at once, over a character the warning then
+        # prints back looking entirely correct.
+        $canonical = ([IO.Path]::TrimEndingDirectorySeparator($root) -eq [IO.Path]::TrimEndingDirectorySeparator($canonicalRoot))
+        # archived = parked: kept in the file for a restore, invisible to the launcher (no row, no
+        # relink, no junction, no limits). The canonical root is the absence of CLAUDE_CONFIG_DIR and
+        # the link target of every other root, so it cannot be parked.
+        $archivedResult = ConvertTo-LauncherBool -Value $a.archived -Default $false -Name "account '$key': archived"
+        if ($archivedResult.Warning) { $warnings += $archivedResult.Warning }
+        $archived = $archivedResult.Value
+        if ($archived -and $canonical) { $warnings += "account '$key': archived is refused for the canonical account ($canonicalRoot); kept live"; $archived = $false }
         $accounts += [pscustomobject]@{
             Key = $key; Root = $root
             Label = if ($a.label) { "$($a.label)" } else { "$key account" }
-            Tint = $tint; Hidden = $hiddenResult.Value
-            # Trailing separator trimmed on BOTH sides. GetFullPath keeps one, so `~/.claude/`
-            # compared unequal to `~/.claude` and the account stopped being canonical - which
-            # discards the whole roster, several accounts at once, over a character the warning then
-            # prints back looking entirely correct.
-            Canonical = ([IO.Path]::TrimEndingDirectorySeparator($root) -eq [IO.Path]::TrimEndingDirectorySeparator($canonicalRoot))
+            Tint = $tint; Hidden = $hiddenResult.Value; Archived = $archived
+            Canonical = $canonical
             Rooted = $rooted; RawRoot = $rawRoot
         }
     }
-    foreach ($g in @($accounts | Group-Object Tint | Where-Object { $_.Count -gt 1 })) {
+    foreach ($g in @($accounts | Where-Object { -not $_.Archived } | Group-Object Tint | Where-Object { $_.Count -gt 1 })) {
         $warnings += "accounts $(($g.Group | ForEach-Object Key) -join ', ') share tint '$($g.Name)'"
     }
     # Every branch below names the offending account(s) and, where there is one, the raw value that
@@ -146,7 +154,9 @@ function ConvertTo-LauncherRoster {
         $warnings += "accounts: $fatal; using the default roster"
         return @{ Accounts = (Get-LauncherDefaults).Accounts; Warnings = $warnings }
     }
-    return @{ Accounts = $accounts; Warnings = $warnings }
+    # Validated whole above (an archived key still blocks a duplicate, so a restore cannot collide);
+    # filtered here, once, so every launcher table built from Accounts sees live accounts only.
+    return @{ Accounts = @($accounts | Where-Object { -not $_.Archived }); Warnings = $warnings }
 }
 
 function ConvertTo-MaintenanceActions {
