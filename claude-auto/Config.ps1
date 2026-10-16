@@ -36,7 +36,7 @@ function ConvertTo-LauncherBool {
     param($Value, [bool]$Default, [string]$Name)
     if ($null -eq $Value) { return @{ Value = $Default; Warning = $null } }
     if ($Value -is [bool]) { return @{ Value = $Value; Warning = $null } }
-    $s = "$Value"
+    $s = "$Value".Trim()
     if ($s -eq 'true') { return @{ Value = $true; Warning = $null } }
     if ($s -eq 'false') { return @{ Value = $false; Warning = $null } }
     return @{ Value = $Default; Warning = "$Name`: '$s' is not a boolean; using $Default" }

@@ -241,6 +241,8 @@ try {
     Assert 'an unparseable archived value archives the account (fail-safe)' (@($ab.Accounts | Where-Object Key -eq 'b').Count -eq 0)
     Assert 'and warns naming the account and the value'        (@($ab.Warnings | Where-Object { $_ -match "'b'" -and $_ -match 'archived' -and $_ -match 'yes' }).Count -eq 1)
     Assert 'string "false" archived stays live'                (@($ab.Accounts | Where-Object Key -eq 'c').Count -eq 1)
+    Set-Content (Join-Path $tmp 'arch-pad.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"c","root":"~/.claude-c","tint":"Cyan","archived":"False "} ] }'
+    Assert 'a padded "False " archived stays live, as the roster helpers read it' (@((Read-LauncherConfig -Path (Join-Path $tmp 'arch-pad.json')).Accounts | Where-Object Key -eq 'c').Count -eq 1)
     Set-Content (Join-Path $tmp 'arch-num.json') '{ "accounts": [ {"key":"work","root":"~/.claude"}, {"key":"b","root":"~/.claude-b","tint":"Cyan","archived":1}, {"key":"c","root":"~/.claude-c","tint":"Blue","archived":false}, {"key":"d","root":"~/.claude-d","tint":"Red","archived":null} ] }'
     $an = Read-LauncherConfig -Path (Join-Path $tmp 'arch-num.json')
     Assert 'archived 1 or null archives, boolean false stays live' ((@($an.Accounts | ForEach-Object Key) -join ',') -eq 'work,c')
