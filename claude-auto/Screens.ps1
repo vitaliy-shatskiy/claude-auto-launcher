@@ -432,7 +432,10 @@ function Get-LaunchArgs {
     }
     if ($State.Mode -eq 'safe') { $a += '--safe-mode' }
     $launchMode = Get-LaunchMode -Name $State.Action
-    if ($launchMode) { $a += @(& $launchMode.Args $ResumeId $Fork) }
+    if ($launchMode -and $launchMode.Flag) {
+        if (-not $launchMode.PicksSession) { $a += $launchMode.Flag }
+        elseif ($ResumeId) { $a += @($launchMode.Flag, $ResumeId); if ($Fork) { $a += '--fork-session' } }
+    }
     return $a
 }
 

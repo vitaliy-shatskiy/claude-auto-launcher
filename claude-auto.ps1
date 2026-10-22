@@ -715,17 +715,14 @@ if ($UseUi -and $state) {
 # roaming path, and the old `$launchArgs.Count -eq 0` gate would have dropped remote silently the
 # moment anyone picked a non-default model. Decided here, before Preview's exit, so preview shows
 # the same $remote a real launch would use rather than the pre-crc-gate value.
-$selectsSession = @($launchArgs | Where-Object { $_ -in @('--resume', '-c', '-w') }).Count -gt 0
+# Which modes leave the crc path, and the line each prints, are the launch-mode table's (RemoteOff,
+# claude-auto\LaunchModes.ps1), found by their Flag so a passthrough `claude-auto -c` is caught too.
+# The LAST matching row speaks: on a line carrying both -c and -w the worktree reason wins, as it did
+# before the table.
+$remoteOffModes = @(Get-LaunchModes | Where-Object { $_.RemoteOff -and $_.Flag -and ($launchArgs -contains $_.Flag) })
+$selectsSession = $remoteOffModes.Count -gt 0
 if ($selectsSession -and $remote) {
-    # Same gate, different reason: -w CREATES a session (the "cannot resume one" wording is simply
-    # wrong for it), while --resume/-c attach to one that already exists. Whether `claude --bg -w`
-    # would birth correctly through crc is NOT verified, so -w still leaves the crc path here - this
-    # only fixes what gets printed, not which flags trigger the override.
-    if ($launchArgs -contains '-w') {
-        Write-Host "  remote off for this session: a worktree launch is not routed through crc (unverified interaction)" -ForegroundColor DarkYellow
-    } else {
-        Write-Host "  remote off for this session: crc births a new session, it cannot attach to an existing one" -ForegroundColor DarkYellow
-    }
+    Write-Host "  remote off for this session: $($remoteOffModes[-1].RemoteOff)" -ForegroundColor DarkYellow
     $remote = $false
 }
 
