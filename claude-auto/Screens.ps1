@@ -1,6 +1,10 @@
 # Pure frame builders. Every function here returns string[] and takes its geometry as parameters:
 # nothing reads [Console], so all three screens are assertable from a session that has no terminal.
 
+# The launch-mode table (new/continue/resume/worktree). Loaded from here so every caller that loads
+# this file - the launcher and each test suite - gets the table with it.
+. (Join-Path $PSScriptRoot 'LaunchModes.ps1')
+
 # Order: account, remote and action are chosen on almost every launch; model, effort and
 # permission are now remembered between launches (see Prefs.ps1) and usually left alone. The
 # three live choices sit at the top so the owner does not arrow past settled preferences to
@@ -275,10 +279,10 @@ function New-LaunchState {
     }
 }
 
-# The project screen's action field. Exactly the values claude-auto.ps1 already dispatches on
-# (Get-LaunchArgs' switch, and its own `if ($state.Action -ne 'resume')`), so the field can never
-# produce one the rest of the launcher has not heard of.
-$script:ProjectActions = @('new', 'continue', 'resume', 'worktree')
+# The project screen's action field: the names of the launch-mode table (LaunchModes.ps1), the same
+# rows Get-LaunchArgs and claude-auto.ps1 read, so the field can never produce a value the rest of
+# the launcher has not heard of.
+$script:ProjectActions = [string[]]@($script:LaunchModes | ForEach-Object { $_.Name })
 
 function Get-ProjectActions { return $script:ProjectActions }
 
@@ -297,7 +301,7 @@ function Step-Option {
 }
 
 function Step-ProjectAction {
-    # Thin wrapper: the values are the four the launcher dispatches on (Get-LaunchArgs).
+    # Thin wrapper: the values are the launch-mode table's names (LaunchModes.ps1).
     param([string]$Action, [int]$Delta)
     return (Step-Option -Values $script:ProjectActions -Current $Action -Delta $Delta)
 }
@@ -427,11 +431,8 @@ function Get-LaunchArgs {
         $a += @('--permission-mode', $mode)
     }
     if ($State.Mode -eq 'safe') { $a += '--safe-mode' }
-    switch ($State.Action) {
-        'continue' { $a += '-c' }
-        'worktree' { $a += '-w' }
-        'resume'   { if ($ResumeId) { $a += @('--resume', $ResumeId); if ($Fork) { $a += '--fork-session' } } }
-    }
+    $launchMode = Get-LaunchMode -Name $State.Action
+    if ($launchMode) { $a += @(& $launchMode.Args $ResumeId $Fork) }
     return $a
 }
 
@@ -1479,6 +1480,10 @@ function Get-ProjectFrame {
     if ($Filter -or $Typing) { $title += " $($g.H) filter: $(Get-CleanTranscriptText -Text $Filter)"; if ($Typing) { $title += '_' } }
     if ($Notice) { $title += " $($g.H) $(Get-CleanTranscriptText -Text $Notice)" }
 
+    # One button per launch mode that has a hotkey, in table order (LaunchModes.ps1).
+    $modeButtons = @(Get-LaunchModes | Where-Object { $_.Hotkey } | ForEach-Object {
+        @{ Token = $_.Hotkey; Label = $_.Name; Clickable = $true; Key = ''; Char = $_.Hotkey }
+    })
     $footer = New-HintFooter -Glyphs $g -Width $frameWidth -Plain:(-not $Color) -Hints @(
         @{ Token = 'w/s';   Label = 'move';     Clickable = $false }
         # Not clickable, for the reason the launch screen's own arrow hints are not: the token names
@@ -1491,9 +1496,7 @@ function Get-ProjectFrame {
         # footer reading 'new' beside a field reading 'resume' advertises a key that does something
         # else - the one failure New-HintFooter's whole data-driven shape exists to prevent.
         @{ Token = 'enter'; Label = 'run';      Clickable = $true; Key = 'Enter';  Char = '' }
-        @{ Token = 'c';     Label = 'continue'; Clickable = $true; Key = '';       Char = 'c' }
-        @{ Token = 'r';     Label = 'resume';   Clickable = $true; Key = '';       Char = 'r' }
-        @{ Token = 't';     Label = 'worktree'; Clickable = $true; Key = '';       Char = 't' }
+        $modeButtons
         @{ Token = '/';     Label = 'filter';   Clickable = $true; Key = '';       Char = '/' }
         @{ Token = 'esc';   Label = 'back';     Clickable = $true; Key = 'Escape'; Char = '' }
     )
@@ -1651,12 +1654,8 @@ function Get-ProjectFrame {
     # Enter runs whatever the field says, so that button should never look idle. 'new' lights
     # nothing - there is no 'n' hotkey on this footer, only the enter/run button, and lighting
     # 'enter' here would light it for every action, not just new (W3).
-    $selected = switch (Step-ProjectAction -Action $Action -Delta 0) {
-        'continue' { @(@{ Key = ''; Char = 'c' }) }
-        'resume'   { @(@{ Key = ''; Char = 'r' }) }
-        'worktree' { @(@{ Key = ''; Char = 't' }) }
-        default    { @() }
-    }
+    $selectedMode = Get-LaunchMode -Name (Step-ProjectAction -Action $Action -Delta 0)
+    $selected = if ($selectedMode -and $selectedMode.Hotkey) { @(@{ Key = ''; Char = $selectedMode.Hotkey }) } else { @() }
     # +1 on every Start for the box's own left border, which New-Box puts in front of every body
     # line: these are FRAME columns, the same coordinates the row map's click cells are in.
     $memoRows = @{}

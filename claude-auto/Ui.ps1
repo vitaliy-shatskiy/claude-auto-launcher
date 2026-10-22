@@ -926,6 +926,14 @@ function Invoke-ProjectScreen {
     # from every row, so it never needs focus - and the focus state it used to have could only be
     # entered from the LAST list row, which parked the commit on 'enter a path...' and made the
     # arrows-only path end at a Read-Host prompt.
+    # The hotkeys: '/' opens the filter, and one per launch mode that has a hotkey (LaunchModes.ps1)
+    # sets the field to that mode and commits. A closure, so each handler keeps its own mode name.
+    $projectHotkeys = @{ '/' = { param($s) $s.Typing = $true; @{ Log = @{ filter = 'open' } } } }
+    foreach ($hotkeyMode in @(Get-LaunchModes | Where-Object { $_.Hotkey })) {
+        $modeName = $hotkeyMode.Name
+        $projectHotkeys[$hotkeyMode.Hotkey] = { param($s) $s.Action = $modeName; & $commit $s 'hotkey' }.GetNewClosure()
+    }
+
     $st = @{ Index = $startIndex; Hover = -1; HoverRow = -1; HoverValue = ''; Typing = $false
              Filter = ''; Notice = ''; Action = (Step-ProjectAction -Action $InitialAction -Delta 0); Rows = @() }
     return (Invoke-ScreenLoop -Screen 'project' -State $st -Wait $Wait -GetWindowTop $GetWindowTop -InputPending $InputPending -RecordTime $RecordTime `
@@ -996,12 +1004,7 @@ function Invoke-ProjectScreen {
         # The hotkeys fire immediately AND set the field: the press is the answer, and the screen
         # has to say what just happened - which matters most exactly when the pick is REJECTED and
         # the screen draws again with the field the press left behind.
-        Hotkeys = @{
-            'c' = { param($s) $s.Action = 'continue'; & $commit $s 'hotkey' }
-            'r' = { param($s) $s.Action = 'resume';   & $commit $s 'hotkey' }
-            't' = { param($s) $s.Action = 'worktree'; & $commit $s 'hotkey' }
-            '/' = { param($s) $s.Typing = $true; @{ Log = @{ filter = 'open' } } }
-        }
+        Hotkeys = $projectHotkeys
         Click = {
             param($s, $hit)
             # The action field sits below the last list row and is NOT in RowCount, so it arrives as

@@ -415,7 +415,9 @@ if ($UseUi) {
             # And nowhere else: the chosen action is NOT remembered (review W1). Prefs.ps1's header
             # states the rule - an action describes one launch, not a habit - and a remembered
             # 'worktree' would make the next launch's reflexive Enter create a git worktree.
-            if ($state.Action -eq 'continue') {
+            # The per-mode steps come from the launch-mode table (claude-auto\LaunchModes.ps1).
+            $launchMode = Get-LaunchMode -Name $state.Action
+            if ($launchMode -and $launchMode.AttachesNewest) {
                 # The session `claude -c` would attach to: the newest transcript of this project.
                 $continueHolder = try {
                     $continueSlugs = @($state.ProjectSlugs | Where-Object { $_ })
@@ -427,7 +429,7 @@ if ($UseUi) {
                 if ($Preview) { $previewHeldBack = $true; break }
                 continue
             }
-            if ($state.Action -ne 'resume') { break }
+            if (-not ($launchMode -and $launchMode.PicksSession)) { break }
 
             $projectName = Split-Path -Path $state.Project -Leaf
             # SEVEN parameters, and the trailing ones forwarded - same rule as $projDraw above: one
