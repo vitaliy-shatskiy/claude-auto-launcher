@@ -19,10 +19,14 @@ $SecondaryRoots = @($Accounts | Where-Object { -not $_.Canonical } | ForEach-Obj
 # empty label and a $null tint, so all three are filled from the same roster in one pass.
 $ProfileRoots = [ordered]@{}; $ProfileLabels = @{}; $ProfileTints = @{}
 foreach ($a in $Accounts) { $ProfileRoots[$a.Key] = $a.Root; $ProfileLabels[$a.Key] = $a.Label; $ProfileTints[$a.Key] = $a.Tint }
-# CLAUDE.md is deliberately NOT shared: Claude Code reads ~/.claude/CLAUDE.md even
-# when CLAUDE_CONFIG_DIR points elsewhere, so a personal copy made every personal
-# session load the same ~4.6k tokens twice (found 2026-07-31). Single copy in ~/.claude.
 $SharedFiles = @('settings.json', 'statusline.js')
+# Shared as a FILE SYMLINK to the canonical copy, never a hardlink. With CLAUDE_CONFIG_DIR set,
+# Claude Code reads the user instructions from $CLAUDE_CONFIG_DIR\CLAUDE.md; ~/.claude/CLAUDE.md
+# reaches such a session only as a project file of an ancestor folder, so only when the cwd is under
+# the home directory - a worktree on another drive got no global instructions at all. A hardlink
+# loads twice under the home tree (once as user, once as project file); a symlink loads once
+# everywhere (measured with /context, 27.10.2026).
+$SharedSymlinks = @('CLAUDE.md')
 # Keys each account may hold on its own: `/model` rewrites one root's settings.json atomically, and a
 # copy differing ONLY in these is allowed - Repair-SharedLink leaves it a separate file.
 $SharedVolatileKeys = @{ 'settings.json' = @('model', 'effortLevel', 'advisorModel') }
@@ -517,18 +521,87 @@ function Repair-SharedProfiles {
     # Every account's root exists from the first launch onwards, so the owner can pick it and log in
     # rather than discovering a missing directory mid-launch.
     foreach ($r in $SecondaryRoots) {
-        try { $null = New-ClaudeProfileRoot -Root $r } catch { Write-Host "  profile root check failed for ${r}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+        try { $null = New-ClaudeProfileRoot -Root $r } catch { Write-SharingNote "profile root check failed for ${r}: $($_.Exception.Message)" }
     }
     foreach ($f in $SharedFiles) {
         # One call per file, not per pair: Repair-SharedLink compares the File ID of every root at
         # once, because a pairwise check passes while a third copy drifts.
-        try { Repair-SharedLink -Name $f } catch { Write-Host "  link check failed for ${f}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+        try { Repair-SharedLink -Name $f } catch { Write-SharingNote "link check failed for ${f}: $($_.Exception.Message)" }
     }
     foreach ($r in $SecondaryRoots) {
         foreach ($d in $SharedDirs) {
-            try { Repair-SharedJunction -Name $d -Root $r } catch { Write-Host "  junction check failed for ${d}: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+            try { Repair-SharedJunction -Name $d -Root $r } catch { Write-SharingNote "junction check failed for ${d}: $($_.Exception.Message)" }
+        }
+        foreach ($f in $SharedSymlinks) {
+            try { Repair-SharedSymlink -Name $f -Root $r } catch { Write-SharingNote "symlink check failed for ${f} in ${r}: $($_.Exception.Message)" }
         }
     }
+}
+
+function Write-SharingNote {
+    # One indented launch-preamble line from the sharing repair; DarkYellow = needs a look.
+    param([Parameter(Mandatory)][string]$Text, [ConsoleColor]$Color = 'DarkYellow')
+    Write-Host "  $Text" -ForegroundColor $Color
+}
+
+function Repair-SharedSymlink {
+    # Keeps $Root\$Name a file symlink to the canonical copy (why a symlink: see $SharedSymlinks).
+    # Missing -> created. A symlink elsewhere -> re-pointed. A regular file or hardlink with the
+    # canonical content -> saved as .pre-symlink.<stamp> and replaced. A diverged copy is the owner's
+    # edit: left in place and named, never deleted.
+    #
+    # The new link is built under a temporary name and moved over the old entry, so a failed create
+    # (no symlink privilege: non-elevated without Developer Mode) leaves whatever was there intact.
+    # -NewSymlink is the seam the suite uses to make creation fail on a machine that has the privilege.
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Root,
+          [scriptblock]$NewSymlink = { param($Path, $Target) New-Item -ItemType SymbolicLink -Path $Path -Target $Target -ErrorAction Stop | Out-Null })
+    $w = Join-Path $WorkRoot $Name
+    $p = Join-Path $Root $Name
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return }
+    if (-not (Test-Path -LiteralPath $w -PathType Leaf)) { return }
+    $rootName = Split-Path -Leaf $Root
+    $tmp = "$p.symlink-$([guid]::NewGuid().ToString('N'))"
+    $makeLink = $NewSymlink
+    # Best effort: a leftover temp link is litter, never a reason to stop the launch.
+    $dropTemp = { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } }
+    # The body yields at most one note, [text, colour]; nothing = already correct.
+    $note = & {
+        # Get-Item -Force, not Test-Path: Get-Item also returns a dangling symlink, which is a wrong target.
+        $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+        $backup = $null
+        if ($item) {
+            if ($item.PSIsContainer) { return , @("$Name is a directory in $rootName, not a symlink to work - fix it by hand", 'DarkYellow') }
+            if ($item.LinkType -eq 'SymbolicLink') {
+                $t = "$($item.LinkTarget)"
+                if (-not [IO.Path]::IsPathRooted($t)) { $t = Join-Path $Root $t }
+                if ([IO.Path]::GetFullPath($t) -ieq [IO.Path]::GetFullPath($w)) { return }
+            } else {
+                # Unreadable either side = not proven equal = diverged: never replaced.
+                $same = try { [Linq.Enumerable]::SequenceEqual([IO.File]::ReadAllBytes($item.FullName), [IO.File]::ReadAllBytes([IO.Path]::GetFullPath($w))) } catch { $false }
+                if (-not $same) { return , @("$Name in $rootName differs from the work copy - left in place, merge it by hand", 'DarkYellow') }
+                $backup = "$p.pre-symlink.$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
+            }
+        }
+        try {
+            & $makeLink $tmp $w
+            if (-not (Test-Path -LiteralPath $tmp)) { throw 'the link was not created' }
+        } catch {
+            & $dropTemp
+            return , @("could not symlink $Name in $rootName to work ($($_.Exception.Message -replace '\r?\n', ' ')) - run once elevated or enable Developer Mode", 'DarkYellow')
+        }
+        # The backup only once the link exists: without the privilege this runs every launch, and a
+        # backup taken first would add a copy per launch.
+        if ($backup) {
+            try { Copy-Item -LiteralPath $p -Destination $backup -ErrorAction Stop }
+            catch { & $dropTemp; return , @("could not back up $Name in $rootName before replacing it ($($_.Exception.Message)); left alone", 'DarkYellow') }
+        }
+        # Rename over the old entry: a symlink or hardlink name is replaced, its target untouched.
+        try { [IO.File]::Move($tmp, $p, $true) }
+        catch { & $dropTemp; return , @("could not replace $Name in $rootName with the symlink ($($_.Exception.Message)); left alone", 'DarkYellow') }
+        $saved = if ($backup) { " (the copy saved as $(Split-Path -Leaf $backup))" } else { '' }
+        return , @("symlinked $Name in $rootName -> work$saved", 'Yellow')
+    }
+    if ($note) { Write-SharingNote $note[0] -Color $note[1] }
 }
 
 function Invoke-LaunchHooks {

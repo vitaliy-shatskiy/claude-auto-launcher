@@ -22,6 +22,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Fixed
 
+- Multi-account sharing: every secondary account's root gets `CLAUDE.md` as a file symlink to the
+  canonical one, repaired at each launch. A session under `CLAUDE_CONFIG_DIR` reads its user
+  instructions from there, so outside the home tree it ran with none. A copy equal to the canonical
+  file is saved as `CLAUDE.md.pre-symlink.<yyyyMMdd-HHmmss>` and replaced, a diverged one is left and
+  named, and without the symlink privilege one warning line is printed and the launch goes on.
 - Project screen: neither the registry nor the remembered-project check probes a network path
   (`\\host\share`, `\\?\UNC\...`, a mapped network drive) any more, so an unreachable share cannot
   hold the first screen or a tab switch; such a row is listed unchecked and refused at launch if it

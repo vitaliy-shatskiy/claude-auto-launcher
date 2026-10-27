@@ -524,6 +524,82 @@ Assert 'Repair-SharedProfiles forgets the resolved-path memo before it re-points
     if (Test-Path -LiteralPath $fake2) { Remove-Item -LiteralPath $fake2 -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# --- CLAUDE.md: a file symlink to the canonical copy in every secondary root ---------------------
+# With CLAUDE_CONFIG_DIR set Claude Code reads $CLAUDE_CONFIG_DIR\CLAUDE.md, so a root without the
+# link runs with no global instructions outside the home tree. Fake roots; the real ones are never touched.
+$origWorkRoot6 = $WorkRoot; $origSecondary6 = $SecondaryRoots; $origSharedFiles6 = $SharedFiles; $origSharedDirs6 = $SharedDirs; $origSymlinks6 = $SharedSymlinks
+$fake6 = Join-Path $env:TEMP ("cct-symlink-test-" + [guid]::NewGuid().ToString('N'))
+try {
+    $WorkRoot = Join-Path $fake6 'work'
+    $rootS = Join-Path $fake6 'personal'
+    $SecondaryRoots = @($rootS)
+    $SharedFiles = @(); $SharedDirs = @(); $SharedSymlinks = @('CLAUDE.md')
+    New-Item -ItemType Directory -Force $WorkRoot, $rootS | Out-Null
+    $canon = Join-Path $WorkRoot 'CLAUDE.md'
+    $other = Join-Path $fake6 'other.md'
+    $linkS = Join-Path $rootS 'CLAUDE.md'
+    Set-Content -LiteralPath $canon -Value '# global' -NoNewline
+    Set-Content -LiteralPath $other -Value '# other' -NoNewline
+    function Get-SymlinkState { $i = Get-Item -LiteralPath $linkS -Force -ErrorAction SilentlyContinue; if ($i) { "$($i.LinkType)|$($i.LinkTarget)" } else { 'missing' } }
+    function Get-SymlinkBackupList { @(Get-ChildItem -LiteralPath $rootS -Force -Filter 'CLAUDE.md.pre-symlink.*') }
+
+    # Preview first, on a root missing the link: nothing may appear.
+    Repair-SharedProfiles -Preview 6>$null
+    Assert 'symlink preview: nothing is created' ((Get-SymlinkState) -eq 'missing')
+
+    $out = @(Repair-SharedProfiles 6>&1 | ForEach-Object { "$_" })
+    Assert 'a missing CLAUDE.md is created as a symlink to the canonical file' ((Get-SymlinkState) -eq "SymbolicLink|$canon")
+    Assert 'and the creation is announced'          (@($out | Where-Object { $_ -match 'symlinked CLAUDE\.md in personal' }).Count -eq 1)
+    $again = @(Repair-SharedSymlink -Name 'CLAUDE.md' -Root $rootS 6>&1)
+    Assert 'a correct symlink is left alone, silently' ($again.Count -eq 0 -and (Get-SymlinkState) -eq "SymbolicLink|$canon")
+
+    Remove-Item -LiteralPath $linkS -Force
+    New-Item -ItemType SymbolicLink -Path $linkS -Target $other | Out-Null
+    Repair-SharedSymlink -Name 'CLAUDE.md' -Root $rootS 6>$null
+    Assert 'a symlink to another file is re-pointed' ((Get-SymlinkState) -eq "SymbolicLink|$canon")
+    Assert 'and the wrong target itself is untouched' ((Get-Content -LiteralPath $other -Raw) -eq '# other')
+
+    # An identical hardlink: backed up, replaced; the canonical file keeps its content.
+    Remove-Item -LiteralPath $linkS -Force
+    New-Item -ItemType HardLink -Path $linkS -Target $canon | Out-Null
+    Repair-SharedSymlink -Name 'CLAUDE.md' -Root $rootS 6>$null
+    $bk = Get-SymlinkBackupList
+    Assert 'an identical hardlink is replaced by the symlink' ((Get-SymlinkState) -eq "SymbolicLink|$canon")
+    Assert 'its copy is saved as .pre-symlink.<stamp>' ($bk.Count -eq 1 -and $bk[0].Name -match '^CLAUDE\.md\.pre-symlink\.\d{8}-\d{6}$' -and (Get-Content -LiteralPath $bk[0].FullName -Raw) -eq '# global')
+    Assert 'the canonical file is intact'            ((Get-Content -LiteralPath $canon -Raw) -eq '# global')
+    $bk | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+
+    # A diverged regular file: the owner's edit, left and named.
+    Remove-Item -LiteralPath $linkS -Force
+    Set-Content -LiteralPath $linkS -Value '# edited by hand' -NoNewline
+    $warn = @(Repair-SharedSymlink -Name 'CLAUDE.md' -Root $rootS 6>&1 | ForEach-Object { "$_" })
+    Assert 'a diverged regular file is left in place' ((Get-SymlinkState) -ne "SymbolicLink|$canon" -and (Get-Content -LiteralPath $linkS -Raw) -eq '# edited by hand')
+    Assert 'and named on one warning line'           (@($warn | Where-Object { $_ -match 'CLAUDE\.md in personal differs' }).Count -eq 1)
+    Assert 'and no backup is taken of it'            ((Get-SymlinkBackupList).Count -eq 0)
+
+    # An identical regular file with no symlink privilege: one warning, the file and the launch survive,
+    # and no backup piles up per launch.
+    Set-Content -LiteralPath $linkS -Value '# global' -NoNewline
+    $denied = { param($Path, $Target) throw "A required privilege is not held by the client: $Path -> $Target" }
+    $warn = @(Repair-SharedSymlink -Name 'CLAUDE.md' -Root $rootS -NewSymlink $denied 6>&1 | ForEach-Object { "$_" })
+    Assert 'no privilege: one warning naming the root' (@($warn | Where-Object { $_ -match 'could not symlink CLAUDE\.md in personal' }).Count -eq 1)
+    Assert 'no privilege: the file is left as it was' ((Get-SymlinkState) -ne "SymbolicLink|$canon" -and (Get-Content -LiteralPath $linkS -Raw) -eq '# global')
+    Assert 'no privilege: no backup and no temp link left' (@(Get-ChildItem -LiteralPath $rootS -Force).Count -eq 1)
+
+    # Then with the privilege the identical regular file is replaced.
+    Repair-SharedSymlink -Name 'CLAUDE.md' -Root $rootS 6>$null
+    Assert 'an identical regular file is backed up and replaced' ((Get-SymlinkState) -eq "SymbolicLink|$canon" -and (Get-SymlinkBackupList).Count -eq 1)
+
+    # Preview on a wrong target: nothing re-pointed.
+    Remove-Item -LiteralPath $linkS -Force
+    New-Item -ItemType SymbolicLink -Path $linkS -Target $other | Out-Null
+    Repair-SharedProfiles -Preview 6>$null
+    Assert 'symlink preview: a wrong target is not re-pointed' ((Get-SymlinkState) -eq "SymbolicLink|$other")
+} finally {
+    $WorkRoot = $origWorkRoot6; $SecondaryRoots = $origSecondary6; $SharedFiles = $origSharedFiles6; $SharedDirs = $origSharedDirs6; $SharedSymlinks = $origSymlinks6
+    if (Test-Path -LiteralPath $fake6) { Remove-Item -LiteralPath $fake6 -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # --- a shared directory missing from the CANONICAL root -----------------------------------------
 # Claude Code's retention sweep removes an empty state directory, so the canonical side of a share
 # can vanish: every secondary root's junction then points at nothing, and a root without the
@@ -937,7 +1013,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = 196
+$script:ExpectedRan = 213
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
