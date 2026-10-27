@@ -135,10 +135,6 @@ function Set-ClaudeProfile {
     )
     if (-not $ProfileRoots.Contains($Account)) { throw "unknown account '$Account' (roster: $($ProfileRoots.Keys -join ', '))" }
     $label = $ProfileLabels[$Account]; $tint = $ProfileTints[$Account]
-    # The session's marker: a SessionStart hook tells "started through claude-auto" from "started by
-    # hand" by this alone. Every account, canonical included. This process's own environment, inherited
-    # by the child and gone with it, so preview may set it like CLAUDE_CONFIG_DIR below.
-    $env:CLAUDE_AUTO_LAUNCHED = '1'
     if ($Account -eq $CanonicalAccount) {
         Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
         Write-Host "-> $label" -ForegroundColor $tint
@@ -169,6 +165,22 @@ function Set-ClaudeProfile {
             Write-Host "  project MCP mirror failed: $mirrored" -ForegroundColor DarkYellow
         }
     } catch { Write-Host "  project MCP mirror skipped: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+}
+
+function Enter-LaunchMarker {
+    # The session's marker: a SessionStart hook tells "started through claude-auto" from "started by
+    # hand" by CLAUDE_AUTO_LAUNCHED=1 alone. Set only around the child start, never earlier: pwsh runs
+    # ~\bin\claude-auto.ps1 in the CALLER's process, so a value left set would mark a later bare
+    # `claude` typed in the same terminal. Returns the prior value for Exit-LaunchMarker.
+    $prior = $env:CLAUDE_AUTO_LAUNCHED
+    $env:CLAUDE_AUTO_LAUNCHED = '1'
+    return $prior
+}
+
+function Exit-LaunchMarker([AllowNull()][string]$Prior) {
+    # Called from a finally: puts back exactly what was there before, including nothing.
+    if ([string]::IsNullOrEmpty($Prior)) { Remove-Item Env:CLAUDE_AUTO_LAUNCHED -ErrorAction SilentlyContinue }
+    else { $env:CLAUDE_AUTO_LAUNCHED = $Prior }
 }
 
 function Resolve-ClaudeExecutable {
@@ -601,7 +613,13 @@ function Repair-SharedSymlink {
         }
         # Rename over the old entry: a symlink or hardlink name is replaced, its target untouched.
         try { [IO.File]::Move($tmp, $p, $true) }
-        catch { & $dropTemp; return , @("could not replace $Name in $rootName with the symlink ($($_.Exception.Message)); left alone", 'DarkYellow') }
+        catch {
+            # The backup is byte-identical to the file still in place: kept, a locked or read-only
+            # CLAUDE.md would add one copy per launch.
+            & $dropTemp
+            if ($backup) { Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue }
+            return , @("could not replace $Name in $rootName with the symlink ($($_.Exception.Message)); left alone", 'DarkYellow')
+        }
         $saved = if ($backup) { " (the copy saved as $(Split-Path -Leaf $backup))" } else { '' }
         return , @("symlinked $Name in $rootName -> work$saved", 'Yellow')
     }

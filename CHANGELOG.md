@@ -24,6 +24,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 - Launch: the Claude session the launcher starts carries `CLAUDE_AUTO_LAUNCHED=1` in its
   environment, on every account, so a SessionStart hook can tell a launcher start from one by hand.
+  It is set only around the child start and removed after, so a later `claude` typed in the same
+  terminal does not carry it.
 - Multi-account sharing: every secondary account's root gets `CLAUDE.md` as a file symlink to the
   canonical one, repaired at each launch. A session under `CLAUDE_CONFIG_DIR` reads its user
   instructions from there, so outside the home tree it ran with none. A copy equal to the canonical

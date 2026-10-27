@@ -835,10 +835,14 @@ if ($LauncherConfig.Remote -and -not $selectsSession -and $env:CLAUDE_NO_ROAM -n
             argv       = @($crcArgs)
             ms         = [int]((Get-Date) - $LaunchStartedAt).TotalMilliseconds
         }
-        & $crc.Source -- @crcArgs
-        # Read $LASTEXITCODE into a variable FIRST: any command in between - the log write included
-        # - overwrites it, and `exit $LASTEXITCODE` would then report the logger's status.
-        $crcExit = $LASTEXITCODE
+        # The marker only around the child (Enter-LaunchMarker, Env.ps1): this script runs in the
+        # caller's shell. Read $LASTEXITCODE into a variable FIRST: any command in between - the log
+        # write included - overwrites it, and `exit $LASTEXITCODE` would then report the logger's status.
+        $priorMarker = Enter-LaunchMarker
+        try {
+            & $crc.Source -- @crcArgs
+            $crcExit = $LASTEXITCODE
+        } finally { Exit-LaunchMarker $priorMarker }
         $null = Write-LauncherLog -Stage 'exit' -RunId $RunId -Data @{
             via  = 'crc'
             code = $crcExit
@@ -862,9 +866,12 @@ $null = Write-LauncherLog -Stage 'decision' -RunId $RunId -Data @{
     argv       = @($claudeArgs)
     ms         = [int]((Get-Date) - $LaunchStartedAt).TotalMilliseconds
 }
-& $claude @claudeArgs
-# Same trap as the crc branch: capture the exit code before the logger runs.
-$claudeExit = $LASTEXITCODE
+# Same as the crc branch: the marker only around the child, the exit code captured before the logger runs.
+$priorMarker = Enter-LaunchMarker
+try {
+    & $claude @claudeArgs
+    $claudeExit = $LASTEXITCODE
+} finally { Exit-LaunchMarker $priorMarker }
 $null = Write-LauncherLog -Stage 'exit' -RunId $RunId -Data @{
     via  = 'claude'
     code = $claudeExit
