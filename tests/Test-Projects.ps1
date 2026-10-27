@@ -571,7 +571,7 @@ $hlRegGit = @(Get-ProjectRegistry -ProjectsRoot $hlProjects -CachePath $hlCache 
 Assert-Equal -Expected $false -Actual (@($hlRegGit | Where-Object { $_.Slug -eq 'Gr' })[0].Hidden) -Because 'the repository-root answer comes from the cache'
 # The verdict is cached per transcript: the head never changes, so a second build reads no head.
 $hlCached = Get-Content -LiteralPath $hlCache -Raw | ConvertFrom-Json
-Assert-True ([bool]($hlCached.PSObject.Properties.Name | Where-Object { $_ -like 'entrypoint|Mx|m2.jsonl' })) 'the headless verdict is written to the projects cache'
+Assert-True ([bool]($hlCached.PSObject.Properties.Name | Where-Object { $_ -like 'entrypoint|Mx|m2.jsonl|*' })) 'the headless verdict is written to the projects cache'
 $mxHeadWhen = (Get-Item -LiteralPath $mxHeadless).LastWriteTime
 [IO.File]::WriteAllText($mxHeadless, (@{ type = 'user'; cwd = $hlDirs.mx; entrypoint = 'cli' } | ConvertTo-Json -Compress) + "`n")
 (Get-Item -LiteralPath $mxHeadless).LastWriteTime = $mxHeadWhen
@@ -580,9 +580,52 @@ Assert-Equal -Expected $mxInteractive.ToString('o') -Actual (@($hlReg2 | Where-O
 Assert-Equal -Expected $true -Actual (Test-HeadlessTranscript -Path (Join-Path $hlProjects 'Py\p1.jsonl')) -Because 'Test-HeadlessTranscript: sdk-py is headless'
 Assert-Equal -Expected $false -Actual (Test-HeadlessTranscript -Path (Join-Path $hlProjects 'Old\o1.jsonl')) -Because 'Test-HeadlessTranscript: no entrypoint is interactive'
 Assert-Equal -Expected $false -Actual (Test-HeadlessTranscript -Path (Join-Path $hlRoot 'no-such.jsonl')) -Because 'Test-HeadlessTranscript: an unreadable file is not called headless'
+
+# A headless run resumed interactively appends a 'cli' entrypoint: interactive, read at the head
+# (a small file is read whole) and at the tail (a large one).
+$rsDir = Join-Path $hlRoot 'resumed'
+New-Item -ItemType Directory -Force -Path $rsDir | Out-Null
+$rsSdk = (@{ type = 'user'; entrypoint = 'sdk-cli' } | ConvertTo-Json -Compress) + "`n"
+$rsCli = (@{ type = 'user'; entrypoint = 'cli' } | ConvertTo-Json -Compress) + "`n"
+$rsPad = ((@{ type = 'assistant'; text = ('x' * 1000) } | ConvertTo-Json -Compress) + "`n") * 200
+[IO.File]::WriteAllText((Join-Path $rsDir 'small.jsonl'), $rsSdk + $rsCli)
+[IO.File]::WriteAllText((Join-Path $rsDir 'big-cli.jsonl'), $rsSdk + $rsPad + $rsCli)
+[IO.File]::WriteAllText((Join-Path $rsDir 'big-sdk.jsonl'), $rsSdk + $rsPad + $rsSdk)
+Assert-Equal -Expected $false -Actual (Test-HeadlessTranscript -Path (Join-Path $rsDir 'small.jsonl')) -Because 'sdk-cli then cli in a small transcript is interactive'
+Assert-Equal -Expected $false -Actual (Test-HeadlessTranscript -Path (Join-Path $rsDir 'big-cli.jsonl')) -Because 'sdk-cli then cli past 128 KB is interactive (the tail is read)'
+Assert-Equal -Expected $true -Actual (Test-HeadlessTranscript -Path (Join-Path $rsDir 'big-sdk.jsonl')) -Because 'sdk-cli at both ends of a large transcript is headless'
+
+# Two slugs of one folder (the cwd differs in case): one interactive, one newer and headless-only.
+# The row is visible and dated by the interactive slug, for a plain folder and a repository root.
+$hlProjects = Join-Path $hlRoot 'projects-merge'
+$mgPlain = Join-Path $hlRoot 'merge-plain'
+$mgRepo = Join-Path $hlRoot 'merge-repo'
+New-Item -ItemType Directory -Force -Path $mgPlain, (Join-Path $mgRepo '.git') | Out-Null
+$mgCli = $hlNow.AddHours(-2)
+$null = Add-HlTranscript -Slug 'Pa' -Name 'a1' -Cwd $mgPlain -Entrypoint 'cli' -When $mgCli
+$null = Add-HlTranscript -Slug 'Pb' -Name 'b1' -Cwd $mgPlain.ToUpperInvariant() -Entrypoint 'sdk-cli' -When $hlNow.AddMinutes(-1)
+$null = Add-HlTranscript -Slug 'Ra' -Name 'a1' -Cwd $mgRepo -Entrypoint 'cli' -When $mgCli
+$null = Add-HlTranscript -Slug 'Rb' -Name 'b1' -Cwd $mgRepo.ToUpperInvariant() -Entrypoint 'sdk-cli' -When $hlNow.AddMinutes(-1)
+$mgReg = @(Get-ProjectRegistry -ProjectsRoot $hlProjects -CachePath (Join-Path $hlRoot 'mg.json') -TempRoots @() -ProfileRoots @())
+$mgPlainRows = @($mgReg | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq (ConvertTo-ProjectKey $mgPlain) })
+$mgRepoRow = @($mgReg | Where-Object { (ConvertTo-ProjectKey $_.Path) -eq (ConvertTo-ProjectKey $mgRepo) })[0]
+Assert-Equal -Expected 1 -Actual $mgPlainRows.Count -Because 'two slugs of one folder are one row'
+Assert-Equal -Expected $false -Actual $mgPlainRows[0].Hidden -Because 'a plain folder with an interactive slug is not hidden by a newer headless-only slug'
+Assert-Equal -Expected $mgCli.ToString('o') -Actual $mgPlainRows[0].LastActivity.ToString('o') -Because 'and is dated by the interactive slug'
+Assert-Equal -Expected $false -Actual $mgRepoRow.Hidden -Because 'a repository root with an interactive slug is listed'
+Assert-Equal -Expected $mgCli.ToString('o') -Actual $mgRepoRow.LastActivity.ToString('o') -Because 'and is dated by the interactive slug, not the newer headless run'
+
+# A headless-only cwd on a share is never probed for .git: no network wait, and not hidden.
+$hlProjects = Join-Path $hlRoot 'projects-net'
+$null = Add-HlTranscript -Slug 'Net' -Name 'n1' -Cwd '//claude-auto-no-such-host-hl/share/repo' -Entrypoint 'sdk-cli' -When $hlNow
+$netSw = [Diagnostics.Stopwatch]::StartNew()
+$netReg = @(Get-ProjectRegistry -ProjectsRoot $hlProjects -CachePath (Join-Path $hlRoot 'net.json') -TempRoots @() -ProfileRoots @())
+$netSw.Stop()
+Assert-True ($netSw.ElapsedMilliseconds -lt 1500) "a headless-only //host/share cwd costs no network wait (took $($netSw.ElapsedMilliseconds) ms)"
+Assert-Equal -Expected $false -Actual (@($netReg | Where-Object { $_.Slug -eq 'Net' })[0].Hidden) -Because 'and it is not hidden'
 Remove-Item -LiteralPath $hlRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 129) { Write-Host "COULD NOT RUN: expected 129 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 139) { Write-Host "COULD NOT RUN: expected 139 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

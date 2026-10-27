@@ -935,36 +935,58 @@ function Format-RelativeAge {
     return '{0:N0} d' -f $age.TotalDays
 }
 
-function Get-TranscriptEntrypoint {
-    # The first "entrypoint" a transcript's head carries ('cli', 'claude-vscode', 'sdk-cli', ...), or
-    # '' when the head has none (a transcript older than the field). Claude writes it on the first
-    # records - line 3 to 5 on every transcript measured here - so the head is read in 8 KB steps up to
-    # -WindowBytes and the read stops at the first match: never the whole file. Unreadable = $null.
+function Get-TranscriptHeadlessVerdict {
+    # $true when every "entrypoint" seen is a headless one (Test-HeadlessEntrypoint), $false when any
+    # is not, $null when none is seen or the file cannot be read - both read as interactive. Seen =
+    # the head up to its first entrypoint (Claude writes it on the first records, read in 8 KB steps
+    # up to -WindowBytes) plus the last -WindowBytes: a headless run resumed interactively later
+    # appends a 'cli' entrypoint at the end. A file up to two windows long is read whole.
     param([Parameter(Mandatory)][string]$Path, [int]$WindowBytes = 65536)
+    $pattern = '"entrypoint":\s?"([^"]*)"'
     $fs = $null
+    $seen = ''
     try {
         $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
-        $buf = [byte[]]::new($WindowBytes)
+        $len = $fs.Length
+        $headMax = if ($len -le 2 * $WindowBytes) { [int]$len } else { $WindowBytes }
+        $buf = [byte[]]::new([Math]::Max(1, $headMax))
         $got = 0
-        while ($got -lt $WindowBytes) {
-            $n = $fs.Read($buf, $got, [Math]::Min(8192, $WindowBytes - $got))
+        while ($got -lt $headMax) {
+            $n = $fs.Read($buf, $got, [Math]::Min(8192, $headMax - $got))
             if ($n -le 0) { break }
             $got += $n
-            $m = [regex]::Match([Text.Encoding]::UTF8.GetString($buf, 0, $got), '"entrypoint":\s?"([^"]*)"')
-            if ($m.Success) { return $m.Groups[1].Value }
+            # A whole-read file needs every record, a head only its first entrypoint.
+            if ($headMax -lt $len -and [regex]::IsMatch([Text.Encoding]::UTF8.GetString($buf, 0, $got), $pattern)) { break }
         }
-        return ''
+        $seen = [Text.Encoding]::UTF8.GetString($buf, 0, $got)
+        # An interactive head is the answer already: only a headless head needs the tail.
+        $head = [regex]::Match($seen, $pattern)
+        if ($head.Success -and -not (Test-HeadlessEntrypoint -Entrypoint $head.Groups[1].Value)) { return $false }
+        if ($headMax -lt $len) {
+            $tail = [byte[]]::new($WindowBytes)
+            $fs.Position = $len - $WindowBytes
+            $tgot = 0
+            while ($tgot -lt $WindowBytes) { $n = $fs.Read($tail, $tgot, $WindowBytes - $tgot); if ($n -le 0) { break }; $tgot += $n }
+            $seen += "`n" + [Text.Encoding]::UTF8.GetString($tail, 0, $tgot)
+        }
     } catch { return $null }
     finally { if ($fs) { $fs.Dispose() } }
+    if (-not [regex]::IsMatch($seen, $pattern)) { return $null }
+    # Every record carries the field, so one regex pass, not a function call per match.
+    if ([regex]::IsMatch($seen, $script:NonHeadlessEntrypoint)) { return $false }
+    return $true
 }
 
 function Test-HeadlessTranscript {
-    # A headless run (`claude -p`, an SDK): its entrypoint starts with 'sdk-' (sdk-cli, sdk-ts,
-    # sdk-py). No entrypoint, or an unreadable file, is NOT headless: an old interactive transcript
-    # must never disappear from the project list or the resume picker.
+    # A headless run (`claude -p`, an SDK) never resumed interactively (Get-TranscriptHeadlessVerdict).
+    # No entrypoint, or an unreadable file, is NOT headless: an old interactive transcript must never
+    # disappear from the project list or the resume picker.
     param([Parameter(Mandatory)][string]$Path)
-    return Test-HeadlessEntrypoint -Entrypoint (Get-TranscriptEntrypoint -Path $Path)
+    return ((Get-TranscriptHeadlessVerdict -Path $Path) -eq $true)
 }
+
+# Test-HeadlessEntrypoint's rule as one pattern: an entrypoint that does NOT start with 'sdk-'.
+$script:NonHeadlessEntrypoint = '"entrypoint":\s?"(?!sdk-)'
 
 function Test-HeadlessEntrypoint {
     # The one rule: an entrypoint starting with 'sdk-' is a headless run. Empty or $null is not.

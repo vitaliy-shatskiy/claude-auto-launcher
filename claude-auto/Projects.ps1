@@ -206,7 +206,7 @@ function Get-ProjectRegistry {
         $newest = $transcripts[0]
         # Activity is the newest INTERACTIVE session: a `claude -p` run is not the owner working in
         # the project. A folder only headless runs used is dated by its newest run and may be hidden
-        # (Test-ProjectHeadlessHidden below).
+        # ($headlessHidden below, Test-ProjectGitRoot).
         $interactive = Find-ProjectInteractiveTranscript -Slug $d.Name -Transcripts $transcripts -Cache $cache -Fresh $fresh
         $activity = if ($interactive) { $interactive.LastWriteTime } else { $newest.LastWriteTime }
         $key = "$($d.Name)|$($newest.LastWriteTimeUtc.Ticks)"
@@ -227,7 +227,8 @@ function Get-ProjectRegistry {
         # that cannot be entered is worse than a missing one. Never across a network, though
         # (Test-ProjectPathPresent): a dead share must not hold the launcher's first screen.
         if (-not (Test-ProjectPathPresent -Path $path -DriveCache $drives)) { continue }
-        $onNetwork = $path.StartsWith('\\') -or $drives["$($path[0])".ToLowerInvariant()] -eq 'skip'
+        # The same network test as Test-ProjectPathPresent: a share is never probed for .git.
+        $onNetwork = $path.StartsWith('\\') -or $path.StartsWith('//') -or $drives["$($path[0])".ToLowerInvariant()] -eq 'skip'
         $headlessHidden = $false
         if (-not $interactive -and -not $onNetwork) {
             # Cached beside the path, under the same key: a new transcript re-asks it.
@@ -251,6 +252,7 @@ function Get-ProjectRegistry {
             Name         = $leaf
             Worktree     = $names.Worktree
             LastActivity = $activity
+            Interactive  = [bool]$interactive
             # A scratch directory - every headless run in a temporary cwd leaves a slug folder - is
             # KNOWN but not listed: the row stays in the registry, so its sessions, its slug and the
             # start-project rule all still work, and the screen leaves it out until a filter asks
@@ -277,18 +279,21 @@ function Get-ProjectRegistry {
     # just named it (adversarial review 2026-09-16, A12). ConvertTo-ProjectKey already proves the two
     # are one directory; here the same normaliser decides the rows, rather than a second, ad-hoc one.
     # The row keeps EVERY slug, because that is what the session picker has to scope on.
+    # The directory is hidden only when every slug of it is, and dated by its newest interactive
+    # slug - a newer headless-only slug of the same folder neither hides nor dates it.
     $merged = @()
     foreach ($g in ($out | Group-Object { ConvertTo-ProjectKey $_.Path })) {
         $group = @($g.Group | Sort-Object LastActivity -Descending)
         $top = $group[0]
+        $dated = @($group | Where-Object { $_.Interactive })
         $merged += [pscustomobject]@{
             Slug         = $top.Slug
             Slugs        = @($group | ForEach-Object { $_.Slug })
             Path         = $top.Path
             Name         = $top.Name
             Worktree     = $top.Worktree
-            LastActivity = $top.LastActivity
-            Hidden       = [bool]$top.Hidden
+            LastActivity = $(if ($dated.Count -gt 0) { $dated[0].LastActivity } else { $top.LastActivity })
+            Hidden       = (@($group | Where-Object { -not $_.Hidden }).Count -eq 0)
         }
     }
     return @($merged | Sort-Object LastActivity -Descending)
@@ -296,19 +301,20 @@ function Get-ProjectRegistry {
 
 function Find-ProjectInteractiveTranscript {
     # The newest transcript of one slug folder that is not a headless run (Test-HeadlessTranscript),
-    # or $null. -Transcripts is newest first. The verdict is cached per transcript under
-    # 'entrypoint|<slug>|<file>' in the registry's cache: a transcript's head never changes, so a
-    # warm build opens no file. Only a FOUND entrypoint is cached - a transcript seen before its
-    # first records were written reads as interactive and must be asked again next build.
+    # or $null. -Transcripts is newest first. The verdict is cached per transcript and mtime under
+    # 'entrypoint|<slug>|<file>|<ticks>' in the registry's cache: an unchanged transcript is never
+    # reopened, an appended one (a headless run resumed interactively) is asked again. Only a FOUND
+    # entrypoint is cached - a transcript seen before its first records were written reads as
+    # interactive and must be asked again next build.
     param([string]$Slug, [array]$Transcripts, [hashtable]$Cache, [hashtable]$Fresh)
     foreach ($t in $Transcripts) {
-        $key = "entrypoint|$Slug|$($t.Name)"
+        $key = "entrypoint|$Slug|$($t.Name)|$($t.LastWriteTimeUtc.Ticks)"
         if ($Cache.ContainsKey($key) -and $null -ne $Cache[$key].Headless) {
             $headless = [bool]$Cache[$key].Headless
         } else {
-            $entry = Get-TranscriptEntrypoint -Path $t.FullName
-            if (-not $entry) { return $t }
-            $headless = Test-HeadlessEntrypoint -Entrypoint $entry
+            $verdict = Get-TranscriptHeadlessVerdict -Path $t.FullName
+            if ($null -eq $verdict) { return $t }
+            $headless = [bool]$verdict
         }
         $Fresh[$key] = @{ Headless = $headless }
         if (-not $headless) { return $t }
