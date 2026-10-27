@@ -509,7 +509,7 @@ if ($UseUi) {
             $pickerSlugs = @($state.ProjectSlugs | Where-Object { $_ })
             if ($pickerSlugs.Count -eq 0 -and $state.ProjectSlug) { $pickerSlugs = @("$($state.ProjectSlug)") }
             $picked = Invoke-SessionPicker -Sessions @(& $fetchNextPage 0 $pickerSlugs) `
-                      -FetchMore $fetchNextPage `
+                      -FetchMore $fetchNextPage -FillRows $sessionPageSize `
                       -ProjectSlug $pickerSlugs -ProjectName $projectName -ReadKey $KeySource -Wait $wait -Draw $pdraw
             if ($picked) {
                 $resumeId = $picked.Session.SessionId; $forkSession = [bool]$picked.Fork

@@ -1930,8 +1930,11 @@ function Get-PickerFrame {
     # A session nobody typed anything into is not offered - see Select-ResumableSessions. The count
     # is stated rather than the list just quietly getting shorter: dropping rows silently reads as
     # "these are all your sessions" when 16 of 40 were never a real conversation.
+    # Headless runs are counted apart from empty sessions: they are a different reason to leave a
+    # row out, and lumping them in read as "10 empty" for ten `claude -p` runs.
     $resumable = @(Select-ResumableSessions -Sessions $Sessions)
-    $hiddenCount = @($Sessions).Count - $resumable.Count
+    $headlessCount = @(@($Sessions).Where({ $_.Headless })).Count
+    $hiddenCount = @($Sessions).Count - $resumable.Count - $headlessCount
     $items = @(Select-SessionMatch -Sessions $resumable -Filter $Filter)
     # Fix round 2, item 4: a filter can shrink $items below whatever -Index the caller passed - the
     # loop in Invoke-SessionPicker always re-clamps its own $index before drawing, so production
@@ -1945,6 +1948,7 @@ function Get-PickerFrame {
     # phrase only when the caller knows a slug but never learned a display name for it.
     if ($Scope -eq 'project') { $title += " $($g.H) " + $(if ($ProjectName) { $ProjectName } else { 'this project' }) }
     if ($hiddenCount -gt 0) { $title += " $($g.H) $hiddenCount empty hidden" }
+    if ($headlessCount -gt 0) { $title += " $($g.H) $headlessCount headless hidden" }
     if ($Filter) { $title += " $($g.H) filter: $(Get-CleanTranscriptText -Text $Filter)" }
     # Same rule as the launch screen: the arrow hint names two directions and cannot be clicked
     # into one of them; every single action can. w/s, not up/down (2026-09-09) - see Get-LaunchFrame.
@@ -1971,6 +1975,7 @@ function Get-PickerFrame {
     if ($items.Count -eq 0) {
         $emptyMsg =
             if ($Filter) { '  nothing matches that filter' }
+            elseif ($headlessCount -gt 0) { "  all $($hiddenCount + $headlessCount) sessions here are empty or headless - nothing to resume" }
             elseif ($hiddenCount -gt 0) { "  all $hiddenCount sessions here are empty - nothing to resume" }
             else { '  no sessions found' }
         $lines = New-Box -Lines @('', $emptyMsg, '') -Width $frameWidth -Title $title -Ascii:$Ascii

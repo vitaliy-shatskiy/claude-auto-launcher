@@ -294,6 +294,19 @@ function Get-ClaudeSessionSummary {
     }
     $projectName = if ($ProjectPath) { Split-Path -Path $ProjectPath -Leaf } else { $names.Project }
 
+    # A headless run is never offered (Select-ResumableSessions), so it costs a head and tail read
+    # and nothing more: no title walk, no prompt count. The picker pages past whole runs of these.
+    if (Test-HeadlessTranscript -Path $file.FullName) {
+        return [pscustomobject]@{
+            SessionId = $file.BaseName; Path = $file.FullName; Slug = $slug
+            Project = (Get-CleanTranscriptText -Text $projectName); Worktree = $names.Worktree
+            Modified = $file.LastWriteTime; SizeBytes = $file.Length
+            PromptCount = 0; PromptCountCapped = $false
+            Title = "(headless) " + $file.BaseName.Substring(0, [Math]::Min(8, $file.BaseName.Length))
+            LastUser = ''; LastAssistant = ''; RecentMessages = @(); Headless = $true
+        }
+    }
+
     $title = $null
     foreach ($line in (Get-Content -LiteralPath $Path -TotalCount $HeadLines -ErrorAction SilentlyContinue)) {
         # ConvertFrom-Json on a line that cannot become a title is pure cost, and it was 69% of a
@@ -378,8 +391,7 @@ function Get-ClaudeSessionSummary {
         LastUser        = (Get-CleanTranscriptText -Text $lastUser)
         LastAssistant   = (Get-CleanTranscriptText -Text $lastAssistant)
         RecentMessages  = @($recent | ForEach-Object { [pscustomobject]@{ Speaker = $_.Speaker; Text = (Get-CleanTranscriptText -Text (Get-CodeFenceCollapsedText -Text $_.Text)) } })
-        # A `claude -p` / SDK run: the resume picker leaves it out (Select-ResumableSessions).
-        Headless        = (Test-HeadlessTranscript -Path $file.FullName)
+        Headless        = $false
     }
 }
 

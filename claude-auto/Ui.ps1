@@ -1150,6 +1150,11 @@ function Invoke-SessionPicker {
         # rather than forty. $null for a caller that already holds the whole list - the picker then
         # behaves exactly as it did, and the cursor simply stops at the last row.
         [scriptblock]$FetchMore = $null,
+        # Pages are loaded until this many rows are resumable in the scope, or the sessions run out:
+        # a page of headless or empty sessions alone would otherwise open on "nothing to resume"
+        # with real sessions one page deeper. 0 = one page per request, as before. The launcher
+        # passes its page size.
+        [int]$FillRows = 0,
         # Forwarded to the loop's hover coalescing (R19/P12). A pass-through, not a decision: the
         # default is the loop's own, so a caller that omits it behaves exactly as before, and a
         # suite driving this screen end to end can say "the queue is empty" and get every frame.
@@ -1209,7 +1214,35 @@ function Invoke-SessionPicker {
         $bucket = $s.Pages[$s.Scope]
         $grown = Expand-SessionPage -Sessions $bucket.Sessions -FetchMore $fetchNext -Fetched $bucket.Fetched -Scope (& $slugsForScope $s.Scope)
         $bucket.Sessions = $grown.Sessions; $bucket.Fetched = $grown.Fetched; $bucket.Exhausted = $grown.Exhausted
-        if ($grown.Added -gt 0 -and @($s.Items).Count -gt 0) { $s.Index++ }
+        $added = $grown.Added
+        # A page that adds no resumable row is passed over in the same press, up to the next one.
+        if ($pageFill -gt 0) { $added += & $fillTo $s (@($s.Resumable).Count + 1) }
+        if ($added -gt 0 -and @($s.Items).Count -gt 0) { $s.Index++ }
+    }
+
+    # The scope's pool: the bucket's sessions this scope shows, before the resumable drop.
+    $poolOf = {
+        param($s, $bucket)
+        @(
+            if ($s.Scope -eq 'project' -and $hasScope) {
+                if ($slugSet.Count -gt 0) { $bucket.Sessions | Where-Object { $_.Slug -in $slugSet } }
+                else { $bucket.Sessions | Where-Object { $_.Project -eq $pickerTitle } }
+            } else { $bucket.Sessions }
+        )
+    }
+    # Loads pages until the scope holds $Want resumable rows or the fetcher runs out (-FillRows).
+    # Returns how many sessions it added.
+    $pageFill = $FillRows
+    $fillTo = {
+        param($s, [int]$Want)
+        $bucket = $s.Pages[$s.Scope]
+        $total = 0
+        while ($fetchNext -and -not $bucket.Exhausted -and @(Select-ResumableSessions -Sessions @(& $poolOf $s $bucket)).Count -lt $Want) {
+            $grown = Expand-SessionPage -Sessions $bucket.Sessions -FetchMore $fetchNext -Fetched $bucket.Fetched -Scope (& $slugsForScope $s.Scope)
+            $bucket.Sessions = $grown.Sessions; $bucket.Fetched = $grown.Fetched; $bucket.Exhausted = $grown.Exhausted
+            $total += $grown.Added
+        }
+        return $total
     }
 
     # What a chosen row answers - Enter, f and a double click differ only in the Fork they carry.
@@ -1241,6 +1274,7 @@ function Invoke-SessionPicker {
         Before = {
             param($s)
             if (-not $s.Pages.ContainsKey($s.Scope)) { $s.Pages[$s.Scope] = & $newBucket $s.Scope }
+            if ($pageFill -gt 0) { $null = & $fillTo $s $pageFill }
             $bucket = $s.Pages[$s.Scope]
             # @() wraps the WHOLE if/else, not just its branches: `$x = if (...) {...} else { @() }`
             # unwraps an empty-array branch to $null on assignment regardless of how that branch

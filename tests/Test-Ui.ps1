@@ -4170,6 +4170,32 @@ $pgSelOverlap = Invoke-SessionPicker -Sessions $pgPage1 -FetchMore $pgOverlapFet
 Assert-Equal 3 $script:pgDrawn 'a page that overlaps the previous one adds only the row that was not already there'
 Assert-Equal 'p2a' $pgSelOverlap.Session.SessionId 'and the cursor still lands on the genuinely new row'
 
+# Headless runs are passed over: with -FillRows the picker loads pages until a page's worth is
+# resumable or the sessions run out, so 30 headless runs never open on "nothing to resume" with a
+# real session at position 31.
+$hlAll = @(foreach ($n in 1..40) {
+    $real = ($n -eq 31)
+    [pscustomobject]@{ SessionId = "h$n"; Path = "X:\h\h$n.jsonl"; Slug = 'S'; Project = 'Headless'; Worktree = $null
+                       Modified = (Get-Date '2026-09-01 10:00').AddMinutes(-$n); SizeBytes = 100
+                       PromptCount = $(if ($real) { 3 } else { 0 }); Title = "t$n"; LastUser = 'u'; LastAssistant = 'a'; Headless = (-not $real) }
+})
+$script:hlAsked = @()
+$hlFetch = { param($have) $script:hlAsked += $have; @($hlAll | Select-Object -Skip $have -First 10) }
+$script:hlFirstFrame = $null
+$hlDraw = { param($s, $i, $f) if ($null -eq $script:hlFirstFrame) { $script:hlFirstFrame = (Get-PickerFrame -Sessions $s -Index $i -Filter $f -Width 120 -Height 24 -Ascii) -join "`n" }; $null }
+# Escape after Enter: an empty first screen answers Enter with nothing, and the picker then ends on
+# Escape rather than on a "scripted keys exhausted" throw.
+$hlSel = try { Invoke-SessionPicker -Sessions @($hlAll | Select-Object -First 10) -FetchMore $hlFetch -FillRows 10 -ReadKey (New-ScriptedKeyReader -Keys @('Enter', 'Escape')) -Draw $hlDraw } catch { $null }
+Assert-Equal -Expected 'h31' -Actual $hlSel.Session.SessionId -Because 'the first screen offers the interactive session behind 30 headless runs'
+Assert-Equal -Expected '10,20,30,40' -Actual ($script:hlAsked -join ',') -Because 'pages are loaded until the sessions run out (fewer than ten resumable)'
+Assert-True ($script:hlFirstFrame -match '1 sessions') 'the first frame lists the one resumable session'
+Assert-True ($script:hlFirstFrame -match '39 headless hidden') 'and counts the headless runs apart'
+Assert-True ($script:hlFirstFrame -notmatch 'empty hidden') 'a headless run is not counted as empty'
+Assert-True ($script:hlFirstFrame -notmatch 'nothing to resume') 'and it never says nothing to resume'
+$hlMixed = @($hlAll[0], $hlAll[1], $hlAll[2], $hlAll[30], [pscustomobject]@{ SessionId = 'e1'; Path = 'X:\h\e1.jsonl'; Slug = 'S'; Project = 'Headless'; Worktree = $null; Modified = (Get-Date '2026-09-01 10:00'); SizeBytes = 100; PromptCount = 0; Title = 'e'; LastUser = ''; LastAssistant = ''; Headless = $false })
+$hlMixedTitle = (Get-PickerFrame -Sessions $hlMixed -Index 0 -Filter '' -Width 120 -Height 24 -Ascii)[0]
+Assert-True (($hlMixedTitle -match '1 empty hidden') -and ($hlMixedTitle -match '3 headless hidden')) "the title counts empty and headless apart ($hlMixedTitle)"
+
 # No fetcher at all is every existing caller: the picker behaves exactly as it always has, and Down
 # at the last row does nothing rather than throwing on a $null scriptblock.
 $pgNoFetch = Invoke-SessionPicker -Sessions $pgPage1 -ReadKey (New-ScriptedKeyReader -Keys @('DownArrow','DownArrow','Enter')) -Draw {}
@@ -6157,7 +6183,7 @@ try {
 } finally { Remove-Item -LiteralPath $hidRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 2018
+$script:Expected = 2025
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"

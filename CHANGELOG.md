@@ -14,7 +14,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - Project screen: headless sessions (`claude -p`, the SDKs: entrypoint `sdk-*`) no longer date a
   project, which shows the time of its newest interactive session. A folder only headless runs
   used is hidden like a scratch directory, unless it is a repository root (`.git` directory): a plain
-  folder and a linked worktree are hidden. The session picker leaves headless sessions out.
+  folder and a linked worktree are hidden. The session picker leaves headless sessions out, counts
+  them apart in its title (`N headless hidden`), and loads further pages until a page's worth of
+  sessions is resumable or none are left, so a run of headless sessions never opens it empty.
 - Launch screen: on an account whose widget `availableModels` lacks the family `settings.json`'s
   model belongs to (today Fable on one Team account), the `default` model launches with the
   `Opus[1M]` option's own `--model opus[1m]` and the row names that option's label; an account that
@@ -39,6 +41,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   (`\\host\share`, `\\?\UNC\...`, a mapped network drive) any more, so an unreachable share cannot
   hold the first screen or a tab switch; such a row is listed unchecked and refused at launch if it
   cannot be entered. A drive letter that is not there is skipped without a look.
+
+### Known limits
+
+- A transcript read as headless checks only its first entrypoint and its last 64 KB: a run resumed
+  interactively and then followed by more than 64 KB of headless records still reads as headless.
+- Whether a headless-only folder is a repository root is cached until a new transcript lands in
+  it: a `.git` created or removed in between shows on the next session there, not at once.
 
 ## [0.5.0] — 2026-10-02
 
