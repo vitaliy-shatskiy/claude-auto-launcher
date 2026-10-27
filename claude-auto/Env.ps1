@@ -135,6 +135,10 @@ function Set-ClaudeProfile {
     )
     if (-not $ProfileRoots.Contains($Account)) { throw "unknown account '$Account' (roster: $($ProfileRoots.Keys -join ', '))" }
     $label = $ProfileLabels[$Account]; $tint = $ProfileTints[$Account]
+    # The session's marker: a SessionStart hook tells "started through claude-auto" from "started by
+    # hand" by this alone. Every account, canonical included. This process's own environment, inherited
+    # by the child and gone with it, so preview may set it like CLAUDE_CONFIG_DIR below.
+    $env:CLAUDE_AUTO_LAUNCHED = '1'
     if ($Account -eq $CanonicalAccount) {
         Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
         Write-Host "-> $label" -ForegroundColor $tint

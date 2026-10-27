@@ -399,7 +399,15 @@ try {
     # at the fake tree first, so that even a build with the guard removed cannot reach a real one.
     $savedPersonalRoot = $ProfileRoots['personal']
     $savedConfigDir = $env:CLAUDE_CONFIG_DIR
+    $savedLaunched = $env:CLAUDE_AUTO_LAUNCHED
     try {
+        # The child inherits this process's environment, so the marker in $env: is the child's marker.
+        # Checked through a real child process, not just $env:, so the inheritance itself is proved.
+        Remove-Item Env:CLAUDE_AUTO_LAUNCHED -ErrorAction SilentlyContinue
+        $null = Set-ClaudeProfile -Account 'work' 6>&1
+        $childSees = & pwsh -NoProfile -Command '[Environment]::GetEnvironmentVariable(''CLAUDE_AUTO_LAUNCHED'')'
+        Assert 'the canonical account launch carries CLAUDE_AUTO_LAUNCHED=1 into the child' ("$childSees".Trim() -eq '1')
+        Remove-Item Env:CLAUDE_AUTO_LAUNCHED -ErrorAction SilentlyContinue
         $ProfileRoots['personal'] = $rootA
         # Counted through the injected seam, not read off the output: a mirror run that finds nothing
         # to copy prints NOTHING, so "no line mentioning mirror" is satisfied by a mirror that really
@@ -409,9 +417,15 @@ try {
         $previewOut = @(Set-ClaudeProfile -Account 'personal' -Preview -Mirror $recordingMirror 6>&1 | ForEach-Object { "$_" })
         Assert 'preview never runs the project MCP mirror'   ($script:MirrorRuns -eq 0)
         Assert 'preview still announces the account'         (@($previewOut | Where-Object { $_ -match '->' }).Count -eq 1)
+        Assert 'preview sets the launch marker too (own env only)' ($env:CLAUDE_AUTO_LAUNCHED -eq '1')
+        Remove-Item Env:CLAUDE_AUTO_LAUNCHED -ErrorAction SilentlyContinue
         $null = Set-ClaudeProfile -Account 'personal' -Mirror $recordingMirror 6>&1
         Assert 'and without preview it does run, once'       ($script:MirrorRuns -eq 1)
+        $childSees = & pwsh -NoProfile -Command '[Environment]::GetEnvironmentVariable(''CLAUDE_AUTO_LAUNCHED'')'
+        Assert 'a secondary account launch carries CLAUDE_AUTO_LAUNCHED=1 into the child' ("$childSees".Trim() -eq '1')
     } finally {
+        if ($null -eq $savedLaunched) { Remove-Item Env:CLAUDE_AUTO_LAUNCHED -ErrorAction SilentlyContinue }
+        else { $env:CLAUDE_AUTO_LAUNCHED = $savedLaunched }
         $ProfileRoots['personal'] = $savedPersonalRoot
         if ($null -eq $savedConfigDir) { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
         else { $env:CLAUDE_CONFIG_DIR = $savedConfigDir }
@@ -1013,7 +1027,7 @@ if ($script:fail -gt 0) {
     Write-Host "$script:fail assertion(s) failed" -ForegroundColor Red
     exit 1
 }
-$script:ExpectedRan = 213
+$script:ExpectedRan = 216
 if ($script:Ran -ne $script:ExpectedRan) {
     Write-Host "COULD NOT RUN: expected $script:ExpectedRan assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)" -ForegroundColor Red
     exit 2
