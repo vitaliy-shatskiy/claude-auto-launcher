@@ -378,6 +378,8 @@ function Get-ClaudeSessionSummary {
         LastUser        = (Get-CleanTranscriptText -Text $lastUser)
         LastAssistant   = (Get-CleanTranscriptText -Text $lastAssistant)
         RecentMessages  = @($recent | ForEach-Object { [pscustomobject]@{ Speaker = $_.Speaker; Text = (Get-CleanTranscriptText -Text (Get-CodeFenceCollapsedText -Text $_.Text)) } })
+        # A `claude -p` / SDK run: the resume picker leaves it out (Select-ResumableSessions).
+        Headless        = (Test-HeadlessTranscript -Path $file.FullName)
     }
 }
 
@@ -931,6 +933,43 @@ function Format-RelativeAge {
     if ($age.TotalMinutes -lt 60) { return '{0:N0} min' -f $age.TotalMinutes }
     if ($age.TotalHours -lt 24) { return '{0:N0} h' -f $age.TotalHours }
     return '{0:N0} d' -f $age.TotalDays
+}
+
+function Get-TranscriptEntrypoint {
+    # The first "entrypoint" a transcript's head carries ('cli', 'claude-vscode', 'sdk-cli', ...), or
+    # '' when the head has none (a transcript older than the field). Claude writes it on the first
+    # records - line 3 to 5 on every transcript measured here - so the head is read in 8 KB steps up to
+    # -WindowBytes and the read stops at the first match: never the whole file. Unreadable = $null.
+    param([Parameter(Mandatory)][string]$Path, [int]$WindowBytes = 65536)
+    $fs = $null
+    try {
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        $buf = [byte[]]::new($WindowBytes)
+        $got = 0
+        while ($got -lt $WindowBytes) {
+            $n = $fs.Read($buf, $got, [Math]::Min(8192, $WindowBytes - $got))
+            if ($n -le 0) { break }
+            $got += $n
+            $m = [regex]::Match([Text.Encoding]::UTF8.GetString($buf, 0, $got), '"entrypoint":\s?"([^"]*)"')
+            if ($m.Success) { return $m.Groups[1].Value }
+        }
+        return ''
+    } catch { return $null }
+    finally { if ($fs) { $fs.Dispose() } }
+}
+
+function Test-HeadlessTranscript {
+    # A headless run (`claude -p`, an SDK): its entrypoint starts with 'sdk-' (sdk-cli, sdk-ts,
+    # sdk-py). No entrypoint, or an unreadable file, is NOT headless: an old interactive transcript
+    # must never disappear from the project list or the resume picker.
+    param([Parameter(Mandatory)][string]$Path)
+    return Test-HeadlessEntrypoint -Entrypoint (Get-TranscriptEntrypoint -Path $Path)
+}
+
+function Test-HeadlessEntrypoint {
+    # The one rule: an entrypoint starting with 'sdk-' is a headless run. Empty or $null is not.
+    param([AllowEmptyString()][AllowNull()][string]$Entrypoint)
+    return [bool]($Entrypoint -and $Entrypoint.StartsWith('sdk-', [StringComparison]::Ordinal))
 }
 
 function Test-ContinueCandidate {

@@ -1031,7 +1031,20 @@ foreach ($bindCmd in 'Get-ClaudeSessions', 'Get-ClaudeSessionFile') {
     Assert-True $bindErr "$bindCmd rejects an unknown parameter instead of running on defaults"
 }
 
-if ($script:Ran -ne 199) { Write-Host "COULD NOT RUN: expected 199 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# A headless transcript (entrypoint sdk-*) is marked on its summary, so the resume picker can leave
+# it out (Select-ResumableSessions). No entrypoint is an old interactive transcript.
+$hsRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-sess-hl-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+New-Item -ItemType Directory -Force -Path $hsRoot | Out-Null
+foreach ($hsCase in @(@('sdk-cli', $true), @('sdk-ts', $true), @('cli', $false), @('', $false))) {
+    $hsRec = [ordered]@{ type = 'user'; cwd = $hsRoot; message = @{ role = 'user'; content = 'hello there' } }
+    if ($hsCase[0]) { $hsRec.entrypoint = $hsCase[0] }
+    $hsFile = Join-Path $hsRoot "hs-$($hsCase[0]).jsonl"
+    [IO.File]::WriteAllText($hsFile, ($hsRec | ConvertTo-Json -Compress -Depth 4) + "`n")
+    Assert-Equal -Expected $hsCase[1] -Actual (Get-ClaudeSessionSummary -Path $hsFile -ProjectPath $hsRoot).Headless -Because "a summary of entrypoint '$($hsCase[0])' says Headless=$($hsCase[1])"
+}
+Remove-Item -LiteralPath $hsRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 203) { Write-Host "COULD NOT RUN: expected 203 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

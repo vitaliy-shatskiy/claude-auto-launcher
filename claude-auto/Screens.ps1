@@ -1754,8 +1754,11 @@ function Select-ResumableSessions {
     # .Where() rather than a Where-Object pipeline: measured ~4.4x cheaper on a list this size, and
     # it runs on every cold build. The @() around it is load-bearing exactly as it was - see
     # Select-SessionMatch's own note.
+    #
+    # A headless run (Headless, Get-ClaudeSessionSummary: `claude -p`, an SDK) is left out the same
+    # way: it is machinery, not a conversation to return to. A row with no Headless field is kept.
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Sessions)
-    return @($Sessions.Where({ (Get-PromptCountValue -Session $_) -gt 0 }))
+    return @($Sessions.Where({ -not $_.Headless -and (Get-PromptCountValue -Session $_) -gt 0 }))
 }
 
 function Get-PromptCountValue {

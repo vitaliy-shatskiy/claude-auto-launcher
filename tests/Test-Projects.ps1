@@ -513,7 +513,61 @@ $rsSw.Stop()
 Assert-True ($rsSw.ElapsedMilliseconds -lt 500) "a remembered project on an unreachable host costs no network wait (took $($rsSw.ElapsedMilliseconds) ms)"
 Assert-Equal 'none' (Resolve-StartProject -Cwd '' -Remembered "${exFree}:\src\repo" -Projects @()).Source 'and one on a drive that is not there is unresolved'
 
-if ($script:Ran -ne 111) { Write-Host "COULD NOT RUN: expected 111 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+# --- headless sessions: a project only `claude -p` ever ran in is not a project ---------------------
+# The entrypoint is on the first records: sdk-* is a headless run (sdk-cli, sdk-ts, sdk-py), anything
+# else - or no field at all, an old transcript - is interactive.
+$hlRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-proj-hl-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$hlProjects = Join-Path $hlRoot 'projects'
+function Add-HlTranscript {
+    param([string]$Slug, [string]$Name, [string]$Cwd, [string]$Entrypoint, [datetime]$When)
+    $d = Join-Path $hlProjects $Slug
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+    $first = @{ type = 'queue-operation'; operation = 'enqueue'; sessionId = $Name } | ConvertTo-Json -Compress
+    $user = [ordered]@{ type = 'user'; cwd = $Cwd; sessionId = $Name }
+    if ($Entrypoint) { $user.entrypoint = $Entrypoint }
+    $f = Join-Path $d "$Name.jsonl"
+    [IO.File]::WriteAllText($f, $first + "`n" + ($user | ConvertTo-Json -Compress) + "`n")
+    (Get-Item -LiteralPath $f).LastWriteTime = $When
+    return $f
+}
+$hlDirs = @{}
+foreach ($n in 'hl', 'py', 'mx', 'old', 'vs') {
+    $hlDirs[$n] = Join-Path $hlRoot "real-$n"
+    New-Item -ItemType Directory -Force -Path $hlDirs[$n] | Out-Null
+}
+$hlNow = Get-Date
+$null = Add-HlTranscript -Slug 'Hl' -Name 'h1' -Cwd $hlDirs.hl -Entrypoint 'sdk-cli' -When $hlNow.AddMinutes(-1)
+$null = Add-HlTranscript -Slug 'Hl' -Name 'h2' -Cwd $hlDirs.hl -Entrypoint 'sdk-ts' -When $hlNow.AddMinutes(-2)
+$null = Add-HlTranscript -Slug 'Py' -Name 'p1' -Cwd $hlDirs.py -Entrypoint 'sdk-py' -When $hlNow.AddMinutes(-3)
+$mxInteractive = $hlNow.AddHours(-2)
+$null = Add-HlTranscript -Slug 'Mx' -Name 'm1' -Cwd $hlDirs.mx -Entrypoint 'cli' -When $mxInteractive
+$mxHeadless = Add-HlTranscript -Slug 'Mx' -Name 'm2' -Cwd $hlDirs.mx -Entrypoint 'sdk-cli' -When $hlNow.AddMinutes(-4)
+$null = Add-HlTranscript -Slug 'Old' -Name 'o1' -Cwd $hlDirs.old -Entrypoint '' -When $hlNow.AddHours(-3)
+$null = Add-HlTranscript -Slug 'Vs' -Name 'v1' -Cwd $hlDirs.vs -Entrypoint 'claude-vscode' -When $hlNow.AddHours(-4)
+$hlCache = Join-Path $hlRoot 'c.json'
+$hlReg = @(Get-ProjectRegistry -ProjectsRoot $hlProjects -CachePath $hlCache -TempRoots @() -ProfileRoots @())
+$hlSlugs = @($hlReg | ForEach-Object { $_.Slug })
+Assert-True ($hlSlugs -notcontains 'Hl') 'a project with only sdk-cli / sdk-ts sessions is not listed'
+Assert-True ($hlSlugs -notcontains 'Py') 'a project with only sdk-py sessions is not listed'
+Assert-True ($hlSlugs -contains 'Mx') 'a project with an interactive session among headless ones is listed'
+Assert-Equal -Expected $mxInteractive.ToString('o') -Actual (@($hlReg | Where-Object { $_.Slug -eq 'Mx' })[0].LastActivity).ToString('o') -Because 'and its activity is the interactive session''s time, not the newer headless one'
+Assert-True ($hlSlugs -contains 'Old') 'a transcript with no entrypoint field counts as interactive'
+Assert-True ($hlSlugs -contains 'Vs') 'a non-sdk entrypoint (claude-vscode) counts as interactive'
+Assert-Equal -Expected 'Mx Old Vs' -Actual ($hlSlugs -join ' ') -Because 'ordered by interactive activity'
+# The verdict is cached per transcript: the head never changes, so a second build reads no head.
+$hlCached = Get-Content -LiteralPath $hlCache -Raw | ConvertFrom-Json
+Assert-True ([bool]($hlCached.PSObject.Properties.Name | Where-Object { $_ -like 'entrypoint|Mx|m2.jsonl' })) 'the headless verdict is written to the projects cache'
+$mxHeadWhen = (Get-Item -LiteralPath $mxHeadless).LastWriteTime
+[IO.File]::WriteAllText($mxHeadless, (@{ type = 'user'; cwd = $hlDirs.mx; entrypoint = 'cli' } | ConvertTo-Json -Compress) + "`n")
+(Get-Item -LiteralPath $mxHeadless).LastWriteTime = $mxHeadWhen
+$hlReg2 = @(Get-ProjectRegistry -ProjectsRoot $hlProjects -CachePath $hlCache -TempRoots @() -ProfileRoots @())
+Assert-Equal -Expected $mxInteractive.ToString('o') -Actual (@($hlReg2 | Where-Object { $_.Slug -eq 'Mx' })[0].LastActivity).ToString('o') -Because 'a second build answers the verdict from the cache, not from a re-read head'
+Assert-Equal -Expected $true -Actual (Test-HeadlessTranscript -Path (Join-Path $hlProjects 'Py\p1.jsonl')) -Because 'Test-HeadlessTranscript: sdk-py is headless'
+Assert-Equal -Expected $false -Actual (Test-HeadlessTranscript -Path (Join-Path $hlProjects 'Old\o1.jsonl')) -Because 'Test-HeadlessTranscript: no entrypoint is interactive'
+Assert-Equal -Expected $false -Actual (Test-HeadlessTranscript -Path (Join-Path $hlRoot 'no-such.jsonl')) -Because 'Test-HeadlessTranscript: an unreadable file is not called headless'
+Remove-Item -LiteralPath $hlRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+if ($script:Ran -ne 123) { Write-Host "COULD NOT RUN: expected 123 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

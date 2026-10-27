@@ -198,11 +198,16 @@ function Get-ProjectRegistry {
     $tempKeys = @($TempRoots | ForEach-Object { ConvertTo-ProjectScratchKey $_ } | Where-Object { Test-ProjectRootKeyDeep -Key $_ })
     $profileKeys = @($ProfileRoots | ForEach-Object { ConvertTo-ProjectScratchKey $_ } | Where-Object { $_ })
     foreach ($d in (Get-ChildItem -LiteralPath $ProjectsRoot -Directory -Force -ErrorAction SilentlyContinue)) {
-        $newest = Get-ChildItem -LiteralPath $d.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue |
-                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $transcripts = @(Get-ChildItem -LiteralPath $d.FullName -Filter *.jsonl -File -Force -ErrorAction SilentlyContinue |
+                         Sort-Object LastWriteTime -Descending)
         # No transcript, no path and no activity. 8 of 46 directories on this machine are in this
         # state; they are dropped rather than shown as rows nothing can launch.
-        if (-not $newest) { continue }
+        if ($transcripts.Count -eq 0) { continue }
+        $newest = $transcripts[0]
+        # Activity is the newest INTERACTIVE session: a `claude -p` run is not the owner working in
+        # the project, and a directory only headless runs ever used is no project at all.
+        $interactive = Find-ProjectInteractiveTranscript -Slug $d.Name -Transcripts $transcripts -Cache $cache -Fresh $fresh
+        if (-not $interactive) { continue }
         $key = "$($d.Name)|$($newest.LastWriteTimeUtc.Ticks)"
         if ($cache.ContainsKey($key) -and $cache[$key].Path) {
             $path = "$($cache[$key].Path)"
@@ -236,7 +241,7 @@ function Get-ProjectRegistry {
             Path         = $path
             Name         = $leaf
             Worktree     = $names.Worktree
-            LastActivity = $newest.LastWriteTime
+            LastActivity = $interactive.LastWriteTime
             # A scratch directory - every headless run in a temporary cwd leaves a slug folder - is
             # KNOWN but not listed: the row stays in the registry, so its sessions, its slug and the
             # start-project rule all still work, and the screen leaves it out until a filter asks
@@ -276,6 +281,28 @@ function Get-ProjectRegistry {
         }
     }
     return @($merged | Sort-Object LastActivity -Descending)
+}
+
+function Find-ProjectInteractiveTranscript {
+    # The newest transcript of one slug folder that is not a headless run (Test-HeadlessTranscript),
+    # or $null. -Transcripts is newest first. The verdict is cached per transcript under
+    # 'entrypoint|<slug>|<file>' in the registry's cache: a transcript's head never changes, so a
+    # warm build opens no file. Only a FOUND entrypoint is cached - a transcript seen before its
+    # first records were written reads as interactive and must be asked again next build.
+    param([string]$Slug, [array]$Transcripts, [hashtable]$Cache, [hashtable]$Fresh)
+    foreach ($t in $Transcripts) {
+        $key = "entrypoint|$Slug|$($t.Name)"
+        if ($Cache.ContainsKey($key) -and $null -ne $Cache[$key].Headless) {
+            $headless = [bool]$Cache[$key].Headless
+        } else {
+            $entry = Get-TranscriptEntrypoint -Path $t.FullName
+            if (-not $entry) { return $t }
+            $headless = Test-HeadlessEntrypoint -Entrypoint $entry
+        }
+        $Fresh[$key] = @{ Headless = $headless }
+        if (-not $headless) { return $t }
+    }
+    return $null
 }
 
 function Get-ProjectCount {

@@ -875,6 +875,9 @@ Assert-Equal $true ((@($f | Where-Object { $_ -match 'nothing to resume' }).Coun
 
 # A session with real content is never hidden: PromptCount > 0 alone decides visibility.
 Assert-Equal 1 (Select-ResumableSessions -Sessions $mixed).Count 'Select-ResumableSessions keeps only sessions with at least one human message'
+# A headless run (claude -p, entrypoint sdk-*) is not offered for resume, however many prompts it has.
+$hlPool = @([pscustomobject]@{ SessionId = 'hl'; PromptCount = 5; Headless = $true }, [pscustomobject]@{ SessionId = 'ia'; PromptCount = 5; Headless = $false }, [pscustomobject]@{ SessionId = 'old'; PromptCount = 5 })
+Assert-Equal -Expected 'ia old' -Actual ((Select-ResumableSessions -Sessions $hlPool | ForEach-Object { $_.SessionId }) -join ' ') -Because 'Select-ResumableSessions leaves out a headless session, keeps one with no Headless field'
 
 # --- fix round 2: list snippet, single wrap marker, word-only footer -----------------------
 
@@ -6154,7 +6157,7 @@ try {
 } finally { Remove-Item -LiteralPath $hidRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 Remove-Item Env:CLAUDE_AUTO_CONFIG -ErrorAction SilentlyContinue
-$script:Expected = 2017
+$script:Expected = 2018
 if ($script:Ran -ne $script:Expected) { Write-Host "COULD NOT RUN: expected $script:Expected assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
