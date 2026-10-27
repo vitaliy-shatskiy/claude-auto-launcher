@@ -513,7 +513,7 @@ $rsSw.Stop()
 Assert-True ($rsSw.ElapsedMilliseconds -lt 500) "a remembered project on an unreachable host costs no network wait (took $($rsSw.ElapsedMilliseconds) ms)"
 Assert-Equal 'none' (Resolve-StartProject -Cwd '' -Remembered "${exFree}:\src\repo" -Projects @()).Source 'and one on a drive that is not there is unresolved'
 
-# --- headless sessions: a project only `claude -p` ever ran in is not a project ---------------------
+# --- headless sessions: a folder only `claude -p` ran in is hidden, unless it is a repository root --
 # The entrypoint is on the first records: sdk-* is a headless run (sdk-cli, sdk-ts, sdk-py), anything
 # else - or no field at all, an old transcript - is interactive.
 $hlRoot = Join-Path ([IO.Path]::GetTempPath()) ("cap-proj-hl-" + [guid]::NewGuid().ToString('N').Substring(0,8))
@@ -531,10 +531,13 @@ function Add-HlTranscript {
     return $f
 }
 $hlDirs = @{}
-foreach ($n in 'hl', 'py', 'mx', 'old', 'vs') {
+foreach ($n in 'hl', 'py', 'mx', 'old', 'vs', 'gr', 'wt') {
     $hlDirs[$n] = Join-Path $hlRoot "real-$n"
     New-Item -ItemType Directory -Force -Path $hlDirs[$n] | Out-Null
 }
+# A repository root has a .git DIRECTORY, a linked worktree a .git FILE.
+New-Item -ItemType Directory -Force -Path (Join-Path $hlDirs.gr '.git') | Out-Null
+[IO.File]::WriteAllText((Join-Path $hlDirs.wt '.git'), "gitdir: C:/somewhere/.git/worktrees/wt`n")
 $hlNow = Get-Date
 $null = Add-HlTranscript -Slug 'Hl' -Name 'h1' -Cwd $hlDirs.hl -Entrypoint 'sdk-cli' -When $hlNow.AddMinutes(-1)
 $null = Add-HlTranscript -Slug 'Hl' -Name 'h2' -Cwd $hlDirs.hl -Entrypoint 'sdk-ts' -When $hlNow.AddMinutes(-2)
@@ -544,16 +547,28 @@ $null = Add-HlTranscript -Slug 'Mx' -Name 'm1' -Cwd $hlDirs.mx -Entrypoint 'cli'
 $mxHeadless = Add-HlTranscript -Slug 'Mx' -Name 'm2' -Cwd $hlDirs.mx -Entrypoint 'sdk-cli' -When $hlNow.AddMinutes(-4)
 $null = Add-HlTranscript -Slug 'Old' -Name 'o1' -Cwd $hlDirs.old -Entrypoint '' -When $hlNow.AddHours(-3)
 $null = Add-HlTranscript -Slug 'Vs' -Name 'v1' -Cwd $hlDirs.vs -Entrypoint 'claude-vscode' -When $hlNow.AddHours(-4)
+$null = Add-HlTranscript -Slug 'Gr' -Name 'g1' -Cwd $hlDirs.gr -Entrypoint 'sdk-cli' -When $hlNow.AddMinutes(-5)
+$null = Add-HlTranscript -Slug 'Wt' -Name 'w1' -Cwd $hlDirs.wt -Entrypoint 'sdk-cli' -When $hlNow.AddMinutes(-6)
 $hlCache = Join-Path $hlRoot 'c.json'
 $hlReg = @(Get-ProjectRegistry -ProjectsRoot $hlProjects -CachePath $hlCache -TempRoots @() -ProfileRoots @())
-$hlSlugs = @($hlReg | ForEach-Object { $_.Slug })
-Assert-True ($hlSlugs -notcontains 'Hl') 'a project with only sdk-cli / sdk-ts sessions is not listed'
-Assert-True ($hlSlugs -notcontains 'Py') 'a project with only sdk-py sessions is not listed'
-Assert-True ($hlSlugs -contains 'Mx') 'a project with an interactive session among headless ones is listed'
+$hlHidden = @($hlReg | Where-Object { $_.Hidden } | ForEach-Object { $_.Slug })
+$hlListed = @(Select-ProjectMatch -Projects $hlReg -Filter '' | ForEach-Object { $_.Slug })
+Assert-True ($hlHidden -contains 'Hl') 'a plain folder with only sdk-cli / sdk-ts sessions is hidden'
+Assert-True ($hlHidden -contains 'Py') 'a plain folder with only sdk-py sessions is hidden'
+Assert-True ($hlHidden -contains 'Wt') 'a linked worktree (.git is a file) with only headless sessions is hidden'
+Assert-True ($hlListed -contains 'Gr') 'a repository root (.git directory) with only headless sessions stays listed'
+foreach ($hlFind in 'hl', 'wt', 'gr') {
+    Assert-Equal -Expected 1 -Actual @(Select-ProjectMatch -Projects $hlReg -Filter "real-$hlFind").Count -Because "the filter box finds real-$hlFind"
+}
+Assert-True ($hlListed -contains 'Mx') 'a project with an interactive session among headless ones is listed'
 Assert-Equal -Expected $mxInteractive.ToString('o') -Actual (@($hlReg | Where-Object { $_.Slug -eq 'Mx' })[0].LastActivity).ToString('o') -Because 'and its activity is the interactive session''s time, not the newer headless one'
-Assert-True ($hlSlugs -contains 'Old') 'a transcript with no entrypoint field counts as interactive'
-Assert-True ($hlSlugs -contains 'Vs') 'a non-sdk entrypoint (claude-vscode) counts as interactive'
-Assert-Equal -Expected 'Mx Old Vs' -Actual ($hlSlugs -join ' ') -Because 'ordered by interactive activity'
+Assert-True ($hlListed -contains 'Old') 'a transcript with no entrypoint field counts as interactive'
+Assert-True ($hlListed -contains 'Vs') 'a non-sdk entrypoint (claude-vscode) counts as interactive'
+Assert-Equal -Expected 'Gr Mx Old Vs' -Actual ($hlListed -join ' ') -Because 'the listed rows, by activity'
+# The git-root answer is cached with the path: removing .git under an unchanged transcript changes nothing.
+Remove-Item -LiteralPath (Join-Path $hlDirs.gr '.git') -Recurse -Force
+$hlRegGit = @(Get-ProjectRegistry -ProjectsRoot $hlProjects -CachePath $hlCache -TempRoots @() -ProfileRoots @())
+Assert-Equal -Expected $false -Actual (@($hlRegGit | Where-Object { $_.Slug -eq 'Gr' })[0].Hidden) -Because 'the repository-root answer comes from the cache'
 # The verdict is cached per transcript: the head never changes, so a second build reads no head.
 $hlCached = Get-Content -LiteralPath $hlCache -Raw | ConvertFrom-Json
 Assert-True ([bool]($hlCached.PSObject.Properties.Name | Where-Object { $_ -like 'entrypoint|Mx|m2.jsonl' })) 'the headless verdict is written to the projects cache'
@@ -567,7 +582,7 @@ Assert-Equal -Expected $false -Actual (Test-HeadlessTranscript -Path (Join-Path 
 Assert-Equal -Expected $false -Actual (Test-HeadlessTranscript -Path (Join-Path $hlRoot 'no-such.jsonl')) -Because 'Test-HeadlessTranscript: an unreadable file is not called headless'
 Remove-Item -LiteralPath $hlRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-if ($script:Ran -ne 123) { Write-Host "COULD NOT RUN: expected 123 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
+if ($script:Ran -ne 129) { Write-Host "COULD NOT RUN: expected 129 assertions, ran $($script:Ran) - an assertion was skipped (its argument threw)"; exit 2 }
 if ($script:Failed) { Write-Host ""; Write-Host "$script:Failed failed"; exit 1 }
 Write-Host ""; Write-Host "all passed"
 exit 0

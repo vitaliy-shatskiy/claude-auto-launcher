@@ -11,6 +11,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   leaves behind) stays known but hidden: the title reads `10 known ─ 19 hidden`, and typing a filter
   (`/`) that matches a hidden project lists it, after the visible matches. The current directory is
   always shown. A temp root that is a drive root, or the home directory or above it, is ignored.
+- Project screen: headless sessions (`claude -p`, the SDKs: entrypoint `sdk-*`) no longer date a
+  project, which shows the time of its newest interactive session. A folder only headless runs
+  used is hidden like a scratch directory, unless it is a repository root (`.git` directory): a plain
+  folder and a linked worktree are hidden. The session picker leaves headless sessions out.
 - Launch screen: on an account whose widget `availableModels` lacks the family `settings.json`'s
   model belongs to (today Fable on one Team account), the `default` model launches with the
   `Opus[1M]` option's own `--model opus[1m]` and the row names that option's label; an account that

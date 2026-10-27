@@ -205,9 +205,10 @@ function Get-ProjectRegistry {
         if ($transcripts.Count -eq 0) { continue }
         $newest = $transcripts[0]
         # Activity is the newest INTERACTIVE session: a `claude -p` run is not the owner working in
-        # the project, and a directory only headless runs ever used is no project at all.
+        # the project. A folder only headless runs used is dated by its newest run and may be hidden
+        # (Test-ProjectHeadlessHidden below).
         $interactive = Find-ProjectInteractiveTranscript -Slug $d.Name -Transcripts $transcripts -Cache $cache -Fresh $fresh
-        if (-not $interactive) { continue }
+        $activity = if ($interactive) { $interactive.LastWriteTime } else { $newest.LastWriteTime }
         $key = "$($d.Name)|$($newest.LastWriteTimeUtc.Ticks)"
         if ($cache.ContainsKey($key) -and $cache[$key].Path) {
             $path = "$($cache[$key].Path)"
@@ -226,6 +227,14 @@ function Get-ProjectRegistry {
         # that cannot be entered is worse than a missing one. Never across a network, though
         # (Test-ProjectPathPresent): a dead share must not hold the launcher's first screen.
         if (-not (Test-ProjectPathPresent -Path $path -DriveCache $drives)) { continue }
+        $onNetwork = $path.StartsWith('\\') -or $drives["$($path[0])".ToLowerInvariant()] -eq 'skip'
+        $headlessHidden = $false
+        if (-not $interactive -and -not $onNetwork) {
+            # Cached beside the path, under the same key: a new transcript re-asks it.
+            $gitRoot = if ($cache.ContainsKey($key) -and $null -ne $cache[$key].GitRoot) { [bool]$cache[$key].GitRoot } else { Test-ProjectGitRoot -Path $path }
+            $fresh[$key].GitRoot = $gitRoot
+            $headlessHidden = -not $gitRoot
+        }
         $names = ConvertFrom-ClaudeProjectSlug -Slug $d.Name
         # -LiteralPath has no -Leaf parameter set (same trap noted in Sessions.ps1's
         # Test-ClaudeSessionFile: -LiteralPath alone returns the PARENT, no -Leaf switch exists
@@ -241,12 +250,14 @@ function Get-ProjectRegistry {
             Path         = $path
             Name         = $leaf
             Worktree     = $names.Worktree
-            LastActivity = $interactive.LastWriteTime
+            LastActivity = $activity
             # A scratch directory - every headless run in a temporary cwd leaves a slug folder - is
             # KNOWN but not listed: the row stays in the registry, so its sessions, its slug and the
             # start-project rule all still work, and the screen leaves it out until a filter asks
             # (Select-ProjectMatch). Judged on the recorded cwd, never on where a link leads.
-            Hidden       = ((-not $path.StartsWith('\\')) -and $drives["$($path[0])".ToLowerInvariant()] -ne 'skip' -and (Test-ProjectScratchPath -Path $path -TempRoots $tempKeys -ProfileRoots $profileKeys -RootsAreKeys))
+            # So is a folder only headless runs used that is not a repository root (a plain folder,
+            # or a linked worktree): a repository root stays listed, it is a real project.
+            Hidden       = $headlessHidden -or ((-not $onNetwork) -and (Test-ProjectScratchPath -Path $path -TempRoots $tempKeys -ProfileRoots $profileKeys -RootsAreKeys))
         }
     }
 
@@ -303,6 +314,14 @@ function Find-ProjectInteractiveTranscript {
         if (-not $headless) { return $t }
     }
     return $null
+}
+
+function Test-ProjectGitRoot {
+    # A repository root: '.git' is a DIRECTORY. A linked worktree's '.git' is a FILE and a plain
+    # folder has none - neither counts.
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    return [bool](Test-Path -LiteralPath (Join-Path $Path '.git') -PathType Container)
 }
 
 function Get-ProjectCount {
