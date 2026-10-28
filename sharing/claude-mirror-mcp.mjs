@@ -1,11 +1,12 @@
 // Mirrors MCP servers from the work profile into a secondary profile: the project-scoped ones
-// (additive) and the user-scoped ones (work's definition wins).
+// and the user-scoped ones. Work's definition wins in both scopes.
 //
-// USER SCOPE is the top-level mcpServers map. Work is canonical for it: after a run the target
-// holds every work server under the work definition - a missing one is added, one defined
-// differently is replaced (key order is not a difference). A server only the target has is kept
-// and named on the output line at every run, never deleted. Nothing else in the file is decided
-// here. The output names servers and never a value from a definition.
+// USER SCOPE is the top-level mcpServers map, PROJECT SCOPE is projects[<dir>].mcpServers. Work is
+// canonical for both: after a run the target holds every work server under the work definition -
+// a missing one is added, one defined differently is replaced and reported "(updated)" (key order
+// is not a difference). A server only the target has is kept, never deleted; in the user scope it
+// is also named on the output line at every run. Nothing else in the file is decided here. The
+// output names servers and never a value from a definition.
 //
 // The TARGET ROOT is argv[2] (default: the personal profile, which is what every caller passed
 // before the third account arrived on 2026-08-20). Hardcoding it was correct while there was
@@ -22,17 +23,16 @@
 // absent in the secondary one. Which channel SHOULD define a given server is not decided here.
 //
 // One direction only (work is canonical). The DECISION of what to change is scoped to the
-// top-level mcpServers, projects[*].mcpServers and projects[*].disabledMcpServers only; project
-// scope is additive (a server the personal profile has and work does not is left alone).
+// top-level mcpServers, projects[*].mcpServers and projects[*].disabledMcpServers only (a server
+// the personal profile has and work does not is left alone in either scope).
 //
 // Credentials travel with the server: a copy is verbatim, `env` (stdio) and `headers` (http/sse)
 // included, because the accounts are one person's on one machine and should not differ.
 // CLAUDE_AUTO_MIRROR_SECRETS=0 is the only way to strip those two fields (unset or any other value
 // copies them); CLAUDE_AUTO_MIRROR_EXCLUDE (comma-separated server names) is never copied at all.
-// Project scope is additive - a server already in the target is not updated - so there either
-// switch affects only servers not mirrored yet. In the user scope an excluded name is never
-// touched, and with SECRETS=0 the work definition is taken without those two fields while the
-// ones the target already holds for that server stay.
+// In both scopes an excluded name is never touched, and with SECRETS=0 the work definition is
+// compared and taken without those two fields while the ones the target already holds for that
+// server stay.
 //
 // NOT format-preserving, though: every write here re-serialises the WHOLE target file
 // (JSON.parse then JSON.stringify(obj, null, 2)), because a JSON document cannot be edited in
@@ -126,6 +126,20 @@ function withoutSecrets(cfg) {
   return copy;
 }
 
+// The per-server decision both scopes share: the work definition wins. Returns null when the
+// target already agrees (key order ignored), else the definition to write. With copySecrets off it
+// compares and writes without the credential fields and carries the target's own ones over.
+function nextDefinition(cfg, current, name, copySecrets) {
+  const has = Object.hasOwn(current, name);
+  if (copySecrets) return has && canonical(current[name]) === canonical(cfg) ? null : cfg;
+  const next = withoutSecrets(cfg);
+  if (has && canonical(withoutSecrets(current[name])) === canonical(next)) return null;
+  if (has && isMap(next) && isMap(current[name])) {
+    for (const field of SECRET_FIELDS) if (field in current[name]) next[field] = current[name][field];
+  }
+  return next;
+}
+
 // Pure: mutates `personal.mcpServers` in place. `changed` are the edits that need a write,
 // `notes` what is reported without one. Names only in both.
 function mergeUserServers(work, personal, { exclude = [], copySecrets = true } = {}) {
@@ -138,17 +152,8 @@ function mergeUserServers(work, personal, { exclude = [], copySecrets = true } =
     if (exclude.includes(name)) continue;
     if (UNSAFE_NAMES.includes(name)) { notes.push(`${name} @ user (unsafe name, skipped)`); continue; }
     const has = Object.hasOwn(current, name);
-    let next = cfg;
-    if (copySecrets) {
-      if (has && canonical(current[name]) === canonical(cfg)) continue;
-    } else {
-      // Compared and written without the credential fields; the target's own ones are carried over.
-      next = withoutSecrets(cfg);
-      if (has && canonical(withoutSecrets(current[name])) === canonical(next)) continue;
-      if (has && isMap(next) && isMap(current[name])) {
-        for (const field of SECRET_FIELDS) if (field in current[name]) next[field] = current[name][field];
-      }
-    }
+    const next = nextDefinition(cfg, current, name, copySecrets);
+    if (next === null) continue;
     // Assigned only now, so a run with nothing to change never creates an empty map.
     personal.mcpServers = current;
     current[name] = next;
@@ -160,7 +165,7 @@ function mergeUserServers(work, personal, { exclude = [], copySecrets = true } =
   return { changed, notes };
 }
 
-// Pure: mutates `personal` in place, returns the list of human-readable additions.
+// Pure: mutates `personal` in place, returns the list of human-readable changes.
 function mergeProjects(work, personal, { exclude = [], copySecrets = true } = {}) {
   const added = [];
   for (const [dir, wp] of Object.entries(work.projects ?? {})) {
@@ -171,17 +176,14 @@ function mergeProjects(work, personal, { exclude = [], copySecrets = true } = {}
       personal.projects[dir] ??= {};
       const target = (personal.projects[dir].mcpServers ??= {});
       for (const [name, cfg] of Object.entries(servers)) {
-        if (name in target || exclude.includes(name) || UNSAFE_NAMES.includes(name)) continue;
-        const dropped = [];
-        let copy = cfg;
-        if (!copySecrets && cfg && typeof cfg === 'object') {
-          copy = { ...cfg };
-          for (const field of SECRET_FIELDS) {
-            if (field in copy) { delete copy[field]; dropped.push(field); }
-          }
-        }
-        target[name] = copy;
-        added.push(`${name} @ ${path.basename(dir)}${dropped.length ? ` (${dropped.join(', ')} not copied)` : ''}`);
+        if (exclude.includes(name) || UNSAFE_NAMES.includes(name)) continue;
+        const has = Object.hasOwn(target, name);
+        const next = nextDefinition(cfg, target, name, copySecrets);
+        if (next === null) continue;
+        // A new server names the credential fields it was copied without.
+        const dropped = !has && !copySecrets && isMap(cfg) ? SECRET_FIELDS.filter(f => f in cfg) : [];
+        target[name] = next;
+        added.push(`${name} @ ${path.basename(dir)}${has ? ' (updated)' : ''}${dropped.length ? ` (${dropped.join(', ')} not copied)` : ''}`);
       }
     }
 

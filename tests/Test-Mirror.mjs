@@ -408,8 +408,78 @@ function writeJson(file, obj) {
   assertEqual(true, /__proto__ @ user \(unsafe name, skipped\)/.test(line) && /constructor @ user \(unsafe name, skipped\)/.test(line), 'and is named on the output line');
 }
 
-if (Ran !== 55) {
-  console.log(`COULD NOT RUN: expected 55 assertions, ran ${Ran} - an assertion was skipped`);
+// ---------------------------------------------------------------- project scope: work definition wins
+
+{
+  // Given a project server in both files, work changed a field: the target takes the work
+  // definition and the line names it updated.
+  const home = freshDir('proj-update-home');
+  const target = freshDir('proj-update-target');
+  const workFile = path.join(home, '.claude.json');
+  const personalFile = path.join(target, '.claude.json');
+  writeJson(workFile, {
+    projects: {
+      '/repo/seven': {
+        mcpServers: {
+          tok: { command: 'tok-cmd', env: { TOKEN: 'NEW' } },
+          same: { command: 'same-cmd', args: ['a'], env: { K: 'v' } },
+          skip: { command: 'skip-cmd-new' },
+        },
+      },
+    },
+  });
+  writeJson(personalFile, {
+    projects: {
+      '/repo/seven': {
+        mcpServers: {
+          tok: { command: 'tok-cmd', env: { TOKEN: 'OLD' } },
+          same: { env: { K: 'v' }, args: ['a'], command: 'same-cmd' },
+          skip: { command: 'skip-cmd-old' },
+          mine: { command: 'only-here-cmd' },
+        },
+      },
+    },
+  });
+
+  // When the mirror runs with `skip` excluded.
+  const logs = [];
+  const code = runMirror({ workFile, personalFile, log: (m) => logs.push(m), exclude: ['skip'] });
+  const s = JSON.parse(fs.readFileSync(personalFile, 'utf8')).projects['/repo/seven'].mcpServers;
+  const line = logs.join('\n');
+  // Then: updated, reported; key-order twin untouched; excluded untouched; target-only kept.
+  assertEqual('0|NEW', `${code}|${s.tok?.env?.TOKEN}`, 'a project server work changed takes the work definition');
+  assertEqual(true, /tok @ seven \(updated\)/.test(line), 'and is reported as updated');
+  assertEqual(false, /same @ seven/.test(line), 'a project server differing only in key order is not reported');
+  assertEqual('env,args,command', Object.keys(s.same ?? {}).join(','), 'and is left as it is');
+  assertEqual('skip-cmd-old', s.skip?.command, 'an excluded project server changed in work is never touched');
+  assertEqual('only-here-cmd', s.mine?.command, 'a project server only the target has is kept');
+
+  // Given the targets agree now (key order aside): a second run writes nothing, reports nothing.
+  const stat = fs.statSync(personalFile);
+  const logs2 = [];
+  runMirror({ workFile, personalFile, log: (m) => logs2.push(m), exclude: ['skip'] });
+  assertEqual(`${stat.mtimeMs}|0`, `${fs.statSync(personalFile).mtimeMs}|${logs2.length}`, 'a project scope that agrees up to key order is not written and nothing is reported');
+
+  // Given SECRETS=0 and work changed both args and env: the target takes the new args and keeps
+  // its own env.
+  const home3 = freshDir('proj-optout-home');
+  const target3 = freshDir('proj-optout-target');
+  const workFile3 = path.join(home3, '.claude.json');
+  const personalFile3 = path.join(target3, '.claude.json');
+  writeJson(workFile3, { projects: { '/repo/eight': { mcpServers: { srv: { command: 'srv-cmd', args: ['--new'], env: { TOKEN: 'WORK' } } } } } });
+  writeJson(personalFile3, { projects: { '/repo/eight': { mcpServers: { srv: { command: 'srv-cmd', args: ['--old'], env: { TOKEN: 'TARGET' } } } } } });
+  const logs3 = [];
+  const code3 = runMirror({ workFile: workFile3, personalFile: personalFile3, log: (m) => logs3.push(m), copySecrets: false });
+  const s3 = JSON.parse(fs.readFileSync(personalFile3, 'utf8')).projects['/repo/eight'].mcpServers.srv;
+  assertEqual('0|--new|TARGET', `${code3}|${s3?.args?.join(' ')}|${s3?.env?.TOKEN}`, 'copySecrets=false updates a project server definition and keeps the target env');
+  assertEqual(true, logs3.length === 1 && /srv @ eight \(updated\)/.test(logs3[0]) && !/WORK|TARGET/.test(logs3[0]), 'and reports it updated, names only');
+  const stat3 = fs.statSync(personalFile3);
+  runMirror({ workFile: workFile3, personalFile: personalFile3, log: () => {}, copySecrets: false });
+  assertEqual(String(stat3.mtimeMs), String(fs.statSync(personalFile3).mtimeMs), 'and a second copySecrets=false run on a differing env writes nothing');
+}
+
+if (Ran !== 65) {
+  console.log(`COULD NOT RUN: expected 65 assertions, ran ${Ran} - an assertion was skipped`);
   process.exit(2);
 }
 if (Failed) {

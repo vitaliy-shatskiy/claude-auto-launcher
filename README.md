@@ -178,13 +178,14 @@ pwsh -File tests\check-preview.ps1 -Record
 
 `sharing: true` (two or more accounts; OFF in `config.example.json` on purpose) hardlinks `settings.json` and `statusline.js`, symlinks `CLAUDE.md` (a hardlink would load it twice under the home tree, and a copy equal to the canonical one is replaced, saved as `CLAUDE.md.pre-symlink.<yyyyMMdd-HHmmss>`), and junctions `projects`, `plugins`, `hooks`, `agents`, `skills`, `rules`, `sessions`, `file-history`, `session-env`, `tasks` and `shell-snapshots` from every secondary account's root back to the canonical (`~/.claude`) one, repaired on every launch. The repair links from whichever copy is NEWEST anywhere, so a newer secondary copy can REPLACE the canonical one - the losing copy survives as `<file>.pre-relink`, and an earlier one as `<file>.pre-relink.<yyyyMMdd-HHmmss>`, the newest three kept and older ones deleted. Enabling it also CREATES every secondary account's root directory on the next launch, and each junction it creates gets two `icacls` deny ACEs, so removing one later needs `icacls <path> /L /remove:d "<user>"` before a plain delete will work. Turn it on only once you accept those effects under directories the launcher itself now owns and ACL-locks.
 
-The MCP mirror that `sharing` runs copies project-scoped server definitions from the canonical
-account into the others verbatim, secrets included: a server's `env` and `headers` fields, where it
-keeps its token, land in every account's `.claude.json`. That is the default because the accounts
-are one person's on one machine and should not differ. `CLAUDE_AUTO_MIRROR_SECRETS=0` opts out and
-copies servers without those two fields; `CLAUDE_AUTO_MIRROR_EXCLUDE=name1,name2` never copies
-those servers. The mirror only adds, so a server the target already has is not updated by either
-switch.
+The MCP mirror that `sharing` runs copies user- and project-scoped server definitions from the
+canonical account into the others verbatim, secrets included: a server's `env` and `headers` fields,
+where it keeps its token, land in every account's `.claude.json`. That is the default because the
+accounts are one person's on one machine and should not differ. The canonical definition wins in
+both scopes: a missing server is added, one defined differently is replaced, a server only the
+target has is kept. `CLAUDE_AUTO_MIRROR_SECRETS=0` compares and copies servers without those two
+fields and keeps the target's own ones; `CLAUDE_AUTO_MIRROR_EXCLUDE=name1,name2` never touches
+those servers.
 
 ## Troubleshooting
 
