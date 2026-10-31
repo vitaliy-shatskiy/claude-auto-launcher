@@ -41,6 +41,8 @@ enum UiEnd {
     Cancelled,
     PreviewPickerCancelled,
     PreviewHeldBack,
+    /// `CONIN$` would not arm: the keyboard-free fallback, as when the UI cannot run.
+    NoConsole,
 }
 
 #[derive(Debug)]
@@ -160,6 +162,10 @@ fn launch(run: &Run) -> i32 {
             Ok(UiEnd::PreviewHeldBack) => {
                 preview_banner("--- preview: held-session warning: back ---");
                 return 0;
+            }
+            Ok(UiEnd::NoConsole) => {
+                use_ui = false;
+                fallback_prompts(run, &mut choice, &mut remote_on, &mut show_qr, &mut stop_server);
             }
             Err(e) => {
                 run.logger.write(
@@ -498,9 +504,11 @@ fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool) -> Result<
     } else {
         let mouse = var("CLAUDE_AUTO_NO_MOUSE").as_deref() != Some("1");
         let trace = (var("CLAUDE_AUTO_INPUT_TRACE").as_deref() == Some("1")).then(|| trace_path(&run.ctx));
-        let input = ConsoleInput::open(mouse, output_redirected, trace);
+        let Some(input) = ConsoleInput::open(mouse, output_redirected, trace) else {
+            return Ok(UiEnd::NoConsole);
+        };
         let alt = !output_redirected && !input_redirected;
-        Box::new(ConsoleTerm::open(alt, input, Logger { ..run.logger.clone() }))
+        Box::new(ConsoleTerm::open(alt, Some(input), run.logger.clone()))
     };
 
     let prefs_file = prefs::read_prefs(&prefs::prefs_path(&run.ctx, var("CLAUDE_AUTO_PREFS").as_deref()));
