@@ -301,11 +301,17 @@ fn tailnet(addrs: &[[u8; 4]]) -> Option<String> {
         .map(|a| format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]))
 }
 
+/// `Get-Command crc.cmd`: the `.cmd` shim on PATH, never `crc.ps1` (PowerShell drops `--`).
+/// Public so `app.rs` can write the `decision` record (`via = crc`, `exe`) before the launch.
+pub fn crc_path() -> Option<PathBuf> {
+    crate::invocation::find_on_path("crc", &std::env::var("PATH").unwrap_or_default(), ".CMD")
+}
+
 /// The crc branch: companion server, tailnet address, pairing QR, then `crc.cmd -- argv` (the
 /// `.cmd` shim, so `--` survives). `None` = crc is not on PATH (the caller prints that line and
 /// falls back to plain claude); `Some(code)` = crc ran and exited with `code`.
 pub fn launch_via_crc(req: &CrcLaunch<'_>) -> Option<i32> {
-    let crc = crate::invocation::find_on_path("crc", &std::env::var("PATH").unwrap_or_default(), ".CMD")?;
+    let crc = crc_path()?;
     out::line(
         "  roaming window: session will be reachable from the phone (CLAUDE_NO_ROAM=1 to disable)",
         Fg::DarkGray,
