@@ -17,6 +17,7 @@ use crate::launch::LaunchState;
 use crate::ui::{Exhausted, Term};
 
 pub use paths::project_key;
+pub(crate) use registry::path_from_transcript;
 
 /// One project row (`Get-ProjectRegistry`): one real directory, every slug folder naming it.
 #[derive(Debug, Clone, PartialEq, Eq)]

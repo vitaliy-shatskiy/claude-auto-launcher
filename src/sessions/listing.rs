@@ -75,13 +75,9 @@ fn short_id(id: &str) -> String {
 }
 
 /// `Get-ProjectPathFromTranscript`: the cwd the NEWEST transcript of a slug directory records.
-/// The one copy outside `Projects.ps1`'s port (W2), kept here so the listing needs no W2 file.
 pub(crate) fn project_path_from_transcript(dir: &Path) -> Option<String> {
     let newest = jsonl_files(dir).into_iter().max_by_key(|(_, t)| *t)?.0;
-    head_lines(&newest, 40)
-        .iter()
-        .filter_map(|l| parse_line(l))
-        .find_map(|r| field(&r, "cwd").filter(|c| ps_truthy(Some(c))).map(crate::config::ps_str))
+    crate::projects::path_from_transcript(&newest)
 }
 
 /// `Get-ClaudeSessionSummary`. `pre_filter` false parses every line (the suite's control).
