@@ -243,7 +243,7 @@ fn launch(run: &Run) -> i32 {
     }
     env::repair_shared_profiles(&run.cfg, run.preview);
     if !run.preview {
-        env::run_launch_hooks(&run.cfg.launch_hooks);
+        env::run_launch_hooks_with_env(&run.cfg.launch_hooks, &child);
     }
     let mcp = env::mcp_config_paths(&run.cfg, run.preview);
     let claude = match invocation::resolve_claude() {
@@ -307,6 +307,15 @@ fn launch(run: &Run) -> i32 {
             show_qr,
             child: &child,
         };
+        if let Some(exe) = remote::crc_path() {
+            run.logger.write(
+                "decision",
+                log_data! {
+                    "via" => "crc", "exe" => exe.to_string_lossy(), "account" => choice, "useUi" => use_ui,
+                    "remote" => remote_on, "mcpConfigs" => mcp, "argv" => argv, "ms" => ms(run),
+                },
+            );
+        }
         if let Some(code) = remote::launch_via_crc(&req) {
             run.logger
                 .write("exit", log_data! { "via" => "crc", "code" => code, "ms" => ms(run) });
