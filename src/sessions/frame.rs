@@ -477,6 +477,38 @@ pub fn picker_frame(v: &PickerView<'_>, memo: &mut Memo) -> Frame {
     Frame { lines, map }
 }
 
+fn empty_message(filter: &str, hidden: usize, headless: usize) -> String {
+    if !filter.is_empty() {
+        "  nothing matches that filter".to_owned()
+    } else if headless > 0 {
+        format!(
+            "  all {} sessions here are empty or headless - nothing to resume",
+            hidden + headless
+        )
+    } else if hidden > 0 {
+        format!("  all {hidden} sessions here are empty - nothing to resume")
+    } else {
+        "  no sessions found".to_owned()
+    }
+}
+
+/// (list pane, detail pane) widths: 40 % for the list at >= 100 columns, else the whole frame.
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a frame width; [int] is banker's rounding"
+)]
+fn pane_widths(fw: usize, wide: bool) -> (usize, usize) {
+    let inner = fw.saturating_sub(2);
+    let left = if wide {
+        28.max((inner as f64 * 0.4).round_ties_even() as usize)
+    } else {
+        inner
+    };
+    (left, inner.saturating_sub(left + 1))
+}
+
 #[expect(clippy::many_single_char_names, reason = "the builder's names follow Get-PickerFrame")]
 fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let ascii = v.style.ascii;
@@ -488,44 +520,21 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let h = g.h;
     let title = picker_title(v, items.len(), hidden, headless, h);
     let footer = picker_footer(v.scope, g, fw, !v.style.color);
-    let empty_map = RowMap {
-        list: Some(ListMap::default()),
-        ..RowMap::default()
-    };
     if items.is_empty() {
-        let msg = if !v.filter.is_empty() {
-            "  nothing matches that filter".to_owned()
-        } else if headless > 0 {
-            format!(
-                "  all {} sessions here are empty or headless - nothing to resume",
-                hidden + headless
-            )
-        } else if hidden > 0 {
-            format!("  all {hidden} sessions here are empty - nothing to resume")
-        } else {
-            "  no sessions found".to_owned()
-        };
+        let msg = empty_message(v.filter, hidden, headless);
         return Built {
             lines: new_box(&[String::new(), msg, String::new()], fw, &title, g, ascii),
             footer,
             rows: Vec::new(),
-            map: empty_map,
+            map: RowMap {
+                list: Some(ListMap::default()),
+                ..RowMap::default()
+            },
         };
     }
     let body_rows = v.height.saturating_sub(3 + footer.lines.len()).max(3);
     let wide = v.width >= TWO_PANE_WIDTH;
-    #[expect(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a frame width; [int] is banker's rounding"
-    )]
-    let left_width = if wide {
-        28.max(((fw - 2) as f64 * 0.4).round_ties_even() as usize)
-    } else {
-        fw - 2
-    };
-    let right_width = (fw - 2).saturating_sub(left_width + 1);
+    let (left_width, right_width) = pane_widths(fw, wide);
     let ctx = RowCtx {
         index,
         hover_row: v.hover_row,

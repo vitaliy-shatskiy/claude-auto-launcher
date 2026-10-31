@@ -339,6 +339,7 @@ impl SessionCache {
             Scope::All => session_files(root, &[]),
         };
         let window: Vec<&PathBuf> = all.iter().skip(skip).take(limit).collect();
+        let window_len = window.len();
         let version = summary_version();
         let named = root.to_string_lossy().into_owned();
         let named = if named.chars().count() > 3 {
@@ -379,7 +380,7 @@ impl SessionCache {
             fresh.insert(key, summary.clone());
             out.push(summary);
         }
-        let survey = matches!(scope, Scope::All) && skip == 0 && out.len() == all.len();
+        let survey = matches!(scope, Scope::All) && skip == 0 && window_len == all.len();
         if survey {
             self.write(cache_file, &fresh);
         } else {
