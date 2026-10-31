@@ -593,6 +593,8 @@ mod tests {
             r#"{"type":"user","toolUseResult":{"content":"tool output here"},"message":{"role":"user","content":[{"type":"text","text":"<system-reminder>noise</system-reminder>"}]}}"#,
             r#"{"type":"user","toolUseResult":{"content":"tool output here"},"message":{"role":"user","content":"fix the build"}}"#,
             r#"{"type":"user","message":{"role":"user","content":"why is \"tool_result\" in the docs"}}"#,
+            // A key whose own text opens with an escaped quote is content, not the isMeta flag.
+            r#"{"type":"user","message":{"role":"user","content":"fix it"},"x":{"\"isMeta": true}}"#,
         ];
         for (i, c) in cases.iter().enumerate() {
             let authority = i64::from(parse_line(c).and_then(|r| user_prompt(&r)).is_some());
