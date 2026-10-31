@@ -64,6 +64,9 @@ pub trait Term {
     /// Drops input queued while a child owned the screen.
     fn drain(&mut self);
     fn logger(&self) -> &Logger;
+    /// `Read-ClaudeFreePath`: hands the console back for one cooked line typed after `prompt`
+    /// at the bottom row, then re-arms it. Preview answers an empty line.
+    fn read_line(&mut self, prompt: &str) -> String;
 }
 
 /// The real console: CONOUT$ for size, the armed CONIN$ for events.
@@ -183,6 +186,26 @@ impl Term for ConsoleTerm {
     fn logger(&self) -> &Logger {
         &self.logger
     }
+
+    fn read_line(&mut self, prompt: &str) -> String {
+        let params = self.input.as_ref().map(ConsoleInput::reopen_params);
+        if let Some(mut i) = self.input.take() {
+            i.close();
+        }
+        let (_, h) = self.size();
+        out::raw(&format!("\x1b[?25h\x1b[{h};1H\x1b[K{prompt}"));
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            line.clear();
+        }
+        if self.alt {
+            out::raw("\x1b[?25l");
+        }
+        if let Some((mouse, redirected, trace)) = params {
+            self.input = ConsoleInput::open(mouse, redirected, trace);
+        }
+        line.trim_end_matches(['\r', '\n']).to_owned()
+    }
 }
 
 /// Preview: a fixed size, scripted keys, frames printed linearly so a harness can capture them.
@@ -252,6 +275,10 @@ impl Term for PreviewTerm {
 
     fn logger(&self) -> &Logger {
         &self.logger
+    }
+
+    fn read_line(&mut self, _prompt: &str) -> String {
+        String::new()
     }
 }
 

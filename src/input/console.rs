@@ -134,6 +134,11 @@ impl ConsoleInput {
         ok
     }
 
+    /// What `open` was called with, to re-arm after a cooked-mode read.
+    pub fn reopen_params(&self) -> (bool, bool, Option<std::path::PathBuf>) {
+        (self.mouse, self.output_redirected, self.trace.path.clone())
+    }
+
     pub fn is_closed(&self) -> bool {
         self.closed
     }

@@ -345,6 +345,9 @@ mod tests {
         fn logger(&self) -> &crate::log::Logger {
             self.inner.logger()
         }
+        fn read_line(&mut self, _prompt: &str) -> String {
+            String::new()
+        }
     }
 
     #[test]
