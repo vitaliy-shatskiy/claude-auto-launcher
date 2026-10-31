@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::config::Account;
+use crate::projects::StartContext;
 use crate::theme;
 use crate::types::DefaultLabels;
 
@@ -337,6 +338,9 @@ pub struct LaunchState {
     pub project: String,
     pub project_slug: String,
     pub project_slugs: Vec<String>,
+    /// The context `projects::update_start_selection` re-applies the start rule with on a tab
+    /// switch (`$script:LaunchStartContext`); `None` until the start selection ran.
+    pub start: Option<StartContext>,
 }
 
 impl LaunchState {
@@ -360,6 +364,7 @@ impl LaunchState {
             project: String::new(),
             project_slug: String::new(),
             project_slugs: Vec::new(),
+            start: None,
         }
     }
 

@@ -9,7 +9,6 @@ mod select;
 mod view;
 mod win;
 
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -77,17 +76,11 @@ pub fn project_registry(cache_path: Option<&Path>, profile_roots: &[String]) -> 
     })
 }
 
-/// The launch context the start rule is re-applied with on a tab switch.
-#[derive(Debug, Clone)]
-struct StartContext {
+/// The launch context the start rule is re-applied with on a tab switch (`LaunchState::start`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartContext {
     cwd: String,
     projects: Vec<Project>,
-}
-
-thread_local! {
-    /// `$script:LaunchStartContext`: `update_start_selection` is called from `prefs::switch_account`
-    /// with the state alone, so the context recorded at start lives here, one per UI thread.
-    static START: RefCell<Option<StartContext>> = const { RefCell::new(None) };
 }
 
 fn apply_start(state: &mut LaunchState, cwd: &str, projects: &[Project]) -> &'static str {
@@ -122,11 +115,9 @@ fn apply_start(state: &mut LaunchState, cwd: &str, projects: &[Project]) -> &'st
 pub fn set_launch_start_project(state: &mut LaunchState, cwd: &Path, projects: &[Project]) -> String {
     let cwd = cwd.to_string_lossy().into_owned();
     let source = apply_start(state, &cwd, projects);
-    START.with(|s| {
-        *s.borrow_mut() = Some(StartContext {
-            cwd,
-            projects: projects.to_vec(),
-        });
+    state.start = Some(StartContext {
+        cwd,
+        projects: projects.to_vec(),
     });
     source.into()
 }
@@ -134,11 +125,10 @@ pub fn set_launch_start_project(state: &mut LaunchState, cwd: &Path, projects: &
 /// `Update-LaunchStartSelection`: re-decides the start selection after a tab switch replaced the
 /// remembered project. A no-op when no start selection ran.
 pub fn update_start_selection(state: &mut LaunchState) {
-    START.with(|s| {
-        if let Some(ctx) = s.borrow().as_ref() {
-            apply_start(state, &ctx.cwd, &ctx.projects);
-        }
-    });
+    if let Some(ctx) = state.start.take() {
+        apply_start(state, &ctx.cwd, &ctx.projects);
+        state.start = Some(ctx);
+    }
 }
 
 /// `Remove-StalePreviewProjectsCache`: the per-PID preview caches a killed run left, older than a
