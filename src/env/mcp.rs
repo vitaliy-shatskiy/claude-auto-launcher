@@ -99,8 +99,8 @@ pub(crate) fn parse_listening(netstat: &str, pids: &[u32]) -> Vec<u16> {
 }
 
 /// `Get-RiderMcpUrl`: the cached port first, else a parallel probe of every port; the first that
-/// answers wins and is cached.
-fn rider_url(p: &Probe<'_>) -> Option<String> {
+/// answers wins and is cached (never in preview: preview writes nothing).
+fn rider_url(p: &Probe<'_>, preview: bool) -> Option<String> {
     let ports = (p.ports)();
     if ports.is_empty() {
         return None;
@@ -127,7 +127,7 @@ fn rider_url(p: &Probe<'_>) -> Option<String> {
     }
     drop(tx);
     let hit = rx.iter().flatten().next()?;
-    if std::fs::write(&cache, format!("{hit}\r\n")).is_err() {
+    if !preview && std::fs::write(&cache, format!("{hit}\r\n")).is_err() {
         // The cache only saves the next launch a scan.
     }
     Some(format!("http://127.0.0.1:{hit}/stream"))
@@ -158,7 +158,7 @@ pub(crate) fn config_paths(extras: &[String], mode: RiderMcp, preview: bool, p: 
         RiderMcp::Auto if !p.rider_running => return (paths, notes),
         RiderMcp::Auto | RiderMcp::On => {}
     }
-    let Some(url) = rider_url(p) else {
+    let Some(url) = rider_url(p, preview) else {
         notes.push(Note::new("  rider MCP: not found (is the IDE MCP server enabled?)", Fg::DarkYellow));
         return (paths, notes);
     };
@@ -229,6 +229,7 @@ mod tests {
         let file = dir.join("claude-mcp-rider-4242.json");
         assert_eq!(paths, vec![file.to_string_lossy().into_owned()], "preview still names the file");
         assert!(!file.exists(), "preview writes nothing");
+        assert!(!dir.join("claude-rider-mcp-port.txt").exists(), "not even the port cache");
         assert_eq!(notes[0].text, "  rider MCP: http://127.0.0.1:5001/stream");
         config_paths(&[], RiderMcp::On, false, &probe(&dir, false, &ports, is_mcp));
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
