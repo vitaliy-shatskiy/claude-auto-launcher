@@ -259,3 +259,8 @@ test names. The PowerShell comments record measurements and defects; keep the ru
 - Ctrl+C while `claude` runs is swallowed by a console handler in the launcher (the child keeps it);
   `CLAUDE_AUTO_LAUNCHED=1` and the profile variables are set on the child only.
 - Colour of the `Write-Host` lines is ANSI and only when stdout is a terminal.
+
+## Cut-over
+
+- The sessions cache is `claude-auto-rs-sessions.json` while both launchers run (the PowerShell one keeps
+  `claude-auto-sessions.json`). At cut-over it is renamed to `claude-auto-sessions.json`.
