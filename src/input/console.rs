@@ -20,6 +20,15 @@ pub const TEXT_MOUSE_ON: &str = "\x1b[?1003h\x1b[?1006h";
 /// Every tracking mode reset on exit, including the two the old launcher requested.
 pub const TEXT_MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
+/// psmux forwards bare motion to a pane only when the pane program itself enabled DECSET 1003;
+/// console mouse input alone gets clicks, never motion. So inside a tmux-like host (`TMUX` set,
+/// psmux sets it in every pane) with stdout on the console, any-motion SGR is requested at arm
+/// time, `ENABLE_MOUSE_INPUT` kept. Never elsewhere: in a plain Windows Terminal tab 1003 turns
+/// console mouse records into a per-pixel text flood.
+pub fn wants_vt_motion(tmux: Option<&str>, stdout_console: bool, mouse: bool) -> bool {
+    mouse && stdout_console && tmux.is_some_and(|t| !t.is_empty())
+}
+
 /// The arm: the original mode plus window, mouse and extended flags, minus `QuickEdit` and
 /// processed input (Ctrl+C becomes a key). Keyboard-only keeps `QuickEdit` and asks for no mouse.
 pub fn armed_mode(original: u32, mouse: bool) -> u32 {
@@ -82,6 +91,8 @@ pub struct ConsoleInput {
     closed: bool,
     saw_console_mouse: bool,
     text_mouse: bool,
+    /// Any-motion SGR was requested at arm time (inside psmux/tmux): reset on close.
+    vt_motion: bool,
     output_redirected: bool,
     epoch: Instant,
     last_record_ms: Option<u64>,
@@ -98,6 +109,10 @@ impl ConsoleInput {
         if !sys::set_console_mode(&handle, armed) {
             return None;
         }
+        let vt_motion = wants_vt_motion(std::env::var("TMUX").ok().as_deref(), !output_redirected, mouse);
+        if vt_motion {
+            write_out(TEXT_MOUSE_ON);
+        }
         Some(Self {
             handle,
             original_mode: original,
@@ -106,6 +121,7 @@ impl ConsoleInput {
             closed: false,
             saw_console_mouse: false,
             text_mouse: false,
+            vt_motion,
             output_redirected,
             epoch: Instant::now(),
             last_record_ms: None,
@@ -121,7 +137,7 @@ impl ConsoleInput {
         if self.closed {
             return true;
         }
-        if self.text_mouse {
+        if self.text_mouse || self.vt_motion {
             write_out(TEXT_MOUSE_OFF);
         }
         self.trace.flush();
@@ -227,7 +243,7 @@ impl ConsoleInput {
     /// Takes the mouse off the console and asks the terminal for any-motion SGR reports. One-way,
     /// and never when real `MOUSE_EVENT` records arrived or the output is redirected.
     fn switch_to_text(&mut self) {
-        if self.closed || self.text_mouse || !self.mouse || self.output_redirected || self.saw_console_mouse {
+        if self.closed || self.text_mouse || self.vt_motion || !self.mouse || self.output_redirected || self.saw_console_mouse {
             return;
         }
         let mode = self.armed_mode & !ENABLE_MOUSE_INPUT;
@@ -372,10 +388,27 @@ mod tests {
     }
 
     #[test]
+    fn motion_is_requested_only_inside_tmux_on_a_console_with_mouse() {
+        assert!(wants_vt_motion(Some(r"\\.\pipe\psmux,123,0"), true, true));
+        assert!(!wants_vt_motion(None, true, true), "a plain Windows Terminal tab never gets 1003");
+        assert!(!wants_vt_motion(Some(""), true, true));
+        assert!(
+            !wants_vt_motion(Some("x"), false, true),
+            "redirected stdout would carry the request into a file"
+        );
+        assert!(!wants_vt_motion(Some("x"), true, false), "CLAUDE_AUTO_NO_MOUSE=1 asks for no mouse");
+    }
+
+    #[test]
+    fn arm_keeps_mouse_input_for_psmux_clicks() {
+        assert_ne!(armed_mode(0, true) & ENABLE_MOUSE_INPUT, 0);
+    }
+
+    #[test]
     fn text_mouse_requests_motion_and_exit_resets_it() {
         assert!(TEXT_MOUSE_ON.contains("?1003h"), "any-motion, not press-only");
         assert!(!TEXT_MOUSE_ON.contains("?1003l"));
-        for m in ["?1003l", "?1006l"] {
+        for m in ["?1003l", "?1006l", "?1002l", "?1000l"] {
             assert!(TEXT_MOUSE_OFF.contains(m));
         }
     }

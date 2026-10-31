@@ -431,6 +431,16 @@ mod tests {
     }
 
     #[test]
+    fn console_and_sgr_motion_decode_to_the_same_hover() {
+        let rec = mouse_from_record(57, 6, 0, MOUSE_MOVED);
+        assert!(rec.is_move && !rec.left, "MOUSE_MOVED with no button is a hover");
+        let VtOutcome::Mouse(sgr) = decode_csi("[<35;58;7M") else {
+            panic!("not a mouse report")
+        };
+        assert_eq!((sgr.x, sgr.y, sgr.is_move, sgr.left), (rec.x, rec.y, true, false));
+    }
+
+    #[test]
     fn hotkey_on_cyrillic_layout_and_guards() {
         let cyr = KeyPress::char('\u{0433}');
         assert!(is_hotkey(&cyr, 'u'));

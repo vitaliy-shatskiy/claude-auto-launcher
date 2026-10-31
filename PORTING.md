@@ -250,8 +250,12 @@ test names. The PowerShell comments record measurements and defects; keep the ru
 - The `start` record carries `psVersion: "rust <version>"` and `moduleMs: 0`.
 - Column arithmetic of footers and cells counts Unicode scalars, PowerShell UTF-16 code units: they
   differ only for characters outside the BMP.
-- VT text mouse (CS-1653): the switch requests `?1003h ?1006h` (any motion, SGR) instead of
-  `?1003l ?1002l ?1000h ?1006h`; exit resets 1006, 1003, 1002 and 1000.
+- VT text mouse (CS-1653): inside psmux/tmux (`TMUX` set, stdout a console, mouse on)
+  `?1003h ?1006h` is written right after arming, `ENABLE_MOUSE_INPUT` kept, motion accepted as
+  `MOUSE_MOVED` records and as SGR text (bit 32); never outside `TMUX` (psmux forwards bare motion
+  only to a pane that enabled 1003 itself). Elsewhere the switch on a text report requests
+  `?1003h ?1006h` (any motion, SGR) instead of `?1003l ?1002l ?1000h ?1006h`; exit resets 1006,
+  1003, 1002 and 1000.
 - Ctrl+C while `claude` runs is swallowed by a console handler in the launcher (the child keeps it);
   `CLAUDE_AUTO_LAUNCHED=1` and the profile variables are set on the child only.
 - Colour of the `Write-Host` lines is ANSI and only when stdout is a terminal.
