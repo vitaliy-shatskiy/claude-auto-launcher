@@ -5,14 +5,14 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 
-use super::{CREATE_NO_WINDOW, Note};
+use super::Note;
 use crate::config::RiderMcp;
 use crate::out::Fg;
+use crate::sys::Listener;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -70,28 +70,16 @@ pub(crate) fn is_mcp_port(port: u16) -> bool {
     })
 }
 
-/// The ports Rider processes listen on at 127.0.0.1 (`Get-NetTCPConnection -State Listen`), read
-/// from `netstat -ano -p TCP`.
+/// The ports Rider processes listen on at 127.0.0.1 (`Get-NetTCPConnection -State Listen`).
 pub(crate) fn rider_ports(rider_pids: &[u32]) -> Vec<u16> {
-    let Ok(out) = std::process::Command::new("netstat")
-        .args(["-ano", "-p", "TCP"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-    else {
-        return Vec::new();
-    };
-    parse_listening(&String::from_utf8_lossy(&out.stdout), rider_pids)
+    loopback_ports(&crate::sys::tcp_listeners(crate::sys::Family::V4), rider_pids)
 }
 
-pub(crate) fn parse_listening(netstat: &str, pids: &[u32]) -> Vec<u16> {
-    let mut ports: Vec<u16> = netstat
-        .lines()
-        .filter_map(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            let [proto, local, _, state, pid] = f.as_slice() else { return None };
-            let port = local.strip_prefix("127.0.0.1:")?.parse().ok()?;
-            (proto.eq_ignore_ascii_case("TCP") && *state == "LISTENING" && pids.contains(&pid.parse().ok()?)).then_some(port)
-        })
+pub(crate) fn loopback_ports(listeners: &[Listener], pids: &[u32]) -> Vec<u16> {
+    let mut ports: Vec<u16> = listeners
+        .iter()
+        .filter(|l| l.v4 == Some([127, 0, 0, 1]) && pids.contains(&l.pid))
+        .map(|l| l.port)
         .collect();
     ports.sort_unstable();
     ports.dedup();
@@ -245,11 +233,17 @@ mod tests {
     }
 
     #[test]
-    fn netstat_listening_ports_of_rider_only() {
-        let text = "  Proto  Local Address  Foreign Address  State  PID\n  TCP    127.0.0.1:63342  0.0.0.0:0  LISTENING  10\n  \
-                    TCP    127.0.0.1:64000  0.0.0.0:0  LISTENING  10\n  TCP    0.0.0.0:7000  0.0.0.0:0  LISTENING  10\n  \
-                    TCP    127.0.0.1:5555  0.0.0.0:0  LISTENING  99\n  TCP    127.0.0.1:64001  127.0.0.1:1  ESTABLISHED  10\n";
-        assert_eq!(parse_listening(text, &[10]), vec![63342, 64000]);
+    fn loopback_listening_ports_of_rider_only() {
+        let l = |v4: Option<[u8; 4]>, port, pid| Listener { v4, port, pid };
+        let table = [
+            l(Some([127, 0, 0, 1]), 64000, 10),
+            l(Some([127, 0, 0, 1]), 63342, 10),
+            l(Some([127, 0, 0, 1]), 63342, 10),
+            l(Some([0, 0, 0, 0]), 7000, 10),
+            l(Some([127, 0, 0, 1]), 5555, 99),
+            l(None, 6000, 10),
+        ];
+        assert_eq!(loopback_ports(&table, &[10]), vec![63342, 64000]);
         assert!(is_rider("rider64.exe") && is_rider("Rider.Backend.exe") && !is_rider("pwsh.exe"));
     }
 

@@ -1,29 +1,15 @@
 //! Win32 for the companion path: who listens on a TCP port (IPv4 and IPv6), a process's command
-//! line, stopping a process, and this machine's IPv4 addresses. IP Helper and `ntdll` are linked
-//! here directly (`raw-dylib`): their `windows-sys` features are not enabled in this crate.
+//! line, stopping a process, and this machine's IPv4 addresses.
 #![expect(unsafe_code, reason = "IP Helper, ntdll and process FFI")]
 
 use std::ffi::c_void;
 
+use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessCommandLineInformation};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::NetworkManagement::IpHelper::GetIpAddrTable;
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess};
 
-const AF_INET: u32 = 2;
-const AF_INET6: u32 = 23;
-const TCP_TABLE_OWNER_PID_LISTENER: i32 = 3;
-const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
-const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
-
-#[link(name = "iphlpapi", kind = "raw-dylib")]
-unsafe extern "system" {
-    fn GetExtendedTcpTable(table: *mut c_void, size: *mut u32, order: i32, af: u32, class: i32, reserved: u32) -> u32;
-    fn GetIpAddrTable(table: *mut c_void, size: *mut u32, order: i32) -> u32;
-}
-
-#[link(name = "ntdll", kind = "raw-dylib")]
-unsafe extern "system" {
-    fn NtQueryInformationProcess(process: HANDLE, class: u32, info: *mut c_void, len: u32, ret: *mut u32) -> i32;
-}
+use crate::sys::{Family, sized_table, tcp_listeners, u32_at};
 
 struct Owned(HANDLE);
 
@@ -34,45 +20,14 @@ impl Drop for Owned {
     }
 }
 
-fn u32_at(b: &[u8], off: usize) -> Option<u32> {
-    b.get(off..off + 4).and_then(|s| s.try_into().ok()).map(u32::from_ne_bytes)
-}
-
-/// Calls a size-negotiating IP Helper function until the buffer fits; the bytes it filled.
-fn sized_table(call: &dyn Fn(*mut c_void, *mut u32) -> u32) -> Option<Vec<u8>> {
-    let mut want = 4096u32;
-    for _ in 0..4 {
-        // u64 words: the tables are read as 4-byte fields, and this keeps them aligned.
-        let mut buf = vec![0u64; (want as usize).div_ceil(8)];
-        let mut size = u32::try_from(buf.len() * 8).ok()?;
-        match call(buf.as_mut_ptr().cast(), &raw mut size) {
-            0 => return Some(buf.iter().flat_map(|w| w.to_ne_bytes()).take(size as usize).collect()),
-            ERROR_INSUFFICIENT_BUFFER => want = size.max(want * 2),
-            _ => return None,
-        }
-    }
-    None
-}
-
-fn listener_in(af: u32, port: u16) -> Option<u32> {
-    // SAFETY: `t` and `s` are the buffer and its size from `sized_table`.
-    let call = |t: *mut c_void, s: *mut u32| unsafe { GetExtendedTcpTable(t, s, 0, af, TCP_TABLE_OWNER_PID_LISTENER, 0) };
-    let b = sized_table(&call)?;
-    let n = u32_at(&b, 0)? as usize;
-    // MIB_TCPROW_OWNER_PID (24 bytes) or MIB_TCP6ROW_OWNER_PID (56): local port and owning pid.
-    let (row, port_at, pid_at) = if af == AF_INET { (24, 8, 20) } else { (56, 20, 52) };
-    (0..n).find_map(|i| {
-        let base = 4 + i * row;
-        // The port sits in network order in the field's first two bytes.
-        let local = u16::from_be_bytes(b.get(base + port_at..base + port_at + 2)?.try_into().ok()?);
-        (local == port).then(|| u32_at(&b, base + pid_at)).flatten()
-    })
+fn listener_in(family: Family, port: u16) -> Option<u32> {
+    tcp_listeners(family).into_iter().find(|l| l.port == port).map(|l| l.pid)
 }
 
 /// `Get-NetTCPConnection -LocalPort <port> -State Listen`: the owning pid of a listener on any
 /// address of either family (node listens on `::` by default).
 pub(crate) fn listener_pid(port: u16) -> Option<u32> {
-    listener_in(AF_INET, port).or_else(|| listener_in(AF_INET6, port))
+    listener_in(Family::V4, port).or_else(|| listener_in(Family::V6, port))
 }
 
 /// A process's command line, `None` when it cannot be opened or read.
@@ -85,14 +40,14 @@ pub(crate) fn command_line(pid: u32) -> Option<String> {
     let h = Owned(h);
     let mut len = 0u32;
     // SAFETY: a zero-length probe for the size; the status is ignored, `len` is what is read.
-    unsafe { NtQueryInformationProcess(h.0, PROCESS_COMMAND_LINE_INFORMATION, std::ptr::null_mut(), 0, &raw mut len) };
+    unsafe { NtQueryInformationProcess(h.0, ProcessCommandLineInformation, std::ptr::null_mut(), 0, &raw mut len) };
     if len == 0 {
         return None;
     }
     let mut buf = vec![0u64; (len as usize).div_ceil(8)];
     let cap = u32::try_from(buf.len() * 8).ok()?;
     // SAFETY: `buf` has `cap` writable, 8-aligned bytes for the UNICODE_STRING and its text.
-    let st = unsafe { NtQueryInformationProcess(h.0, PROCESS_COMMAND_LINE_INFORMATION, buf.as_mut_ptr().cast(), cap, &raw mut len) };
+    let st = unsafe { NtQueryInformationProcess(h.0, ProcessCommandLineInformation, buf.as_mut_ptr().cast(), cap, &raw mut len) };
     if st < 0 {
         return None;
     }
@@ -130,7 +85,7 @@ pub(crate) fn terminate(pid: u32) -> Result<(), String> {
 /// Every IPv4 address of this machine, in table order.
 pub(crate) fn ipv4_addresses() -> Vec<[u8; 4]> {
     // SAFETY: `t` and `s` are the buffer and its size from `sized_table`.
-    let call = |t: *mut c_void, s: *mut u32| unsafe { GetIpAddrTable(t, s, 0) };
+    let call = |t: *mut c_void, s: *mut u32| unsafe { GetIpAddrTable(t.cast(), s, 0) };
     let Some(b) = sized_table(&call) else {
         return Vec::new();
     };
