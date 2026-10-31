@@ -1,0 +1,581 @@
+//! Frame pieces every screen shares (`Screens.ps1` middle): the footer as data, radio rows, click
+//! spans, the row map, and the per-line truncate-then-paint chain. Pure.
+
+use crate::layout::{display_width, limit_line, split_text_lines};
+use crate::theme::{self, Glyphs};
+
+/// 50 columns: a phone over RDP. 16 rows: the worst launch frame at 50 columns plus one.
+pub const MIN_WIDTH: usize = 50;
+pub const MIN_HEIGHT: usize = 16;
+pub const TWO_PANE_WIDTH: usize = 100;
+pub const SHORT_PICKER_HEIGHT: usize = 30;
+
+/// `Get-FrameWidth`: the last console column is never written (it wraps on some terminals).
+pub fn frame_width(width: usize) -> usize {
+    width.saturating_sub(1)
+}
+
+/// Colour and glyph decisions for one frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Style {
+    pub color: bool,
+    pub ascii: bool,
+}
+
+/// A clickable or plain hint of the footer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hint {
+    pub token: String,
+    pub label: String,
+    pub clickable: bool,
+    /// The `ConsoleKey` name a click stands in for ('' when `ch` carries it).
+    pub key: String,
+    pub ch: Option<char>,
+}
+
+impl Hint {
+    pub fn plain(token: &str, label: &str) -> Self {
+        Self {
+            token: token.into(),
+            label: label.into(),
+            clickable: false,
+            key: String::new(),
+            ch: None,
+        }
+    }
+
+    pub fn key(token: &str, label: &str, key: &str) -> Self {
+        Self {
+            token: token.into(),
+            label: label.into(),
+            clickable: true,
+            key: key.into(),
+            ch: None,
+        }
+    }
+
+    pub fn ch(token: &str, label: &str, ch: char) -> Self {
+        Self {
+            token: token.into(),
+            label: label.into(),
+            clickable: true,
+            key: String::new(),
+            ch: Some(ch),
+        }
+    }
+}
+
+/// Columns of one hint on its footer line. `start`/`end` cover token and label (-1 when the hint
+/// is not clickable); `key_start`/`key_end` the token alone. Character columns of the plain text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FooterSpan {
+    pub start: i32,
+    pub end: i32,
+    pub key_start: usize,
+    pub key_end: usize,
+    pub key: String,
+    pub ch: Option<char>,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FooterLine {
+    pub text: String,
+    pub spans: Vec<FooterSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Footer {
+    pub lines: Vec<FooterLine>,
+}
+
+/// `New-HintFooter`: one list drives what is printed, where it can be clicked and which key a
+/// click means. Wraps greedily in cells at `width` (0 = never), never splitting a hint.
+pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) -> Footer {
+    let sep = format!("  {}  ", g.hint_sep);
+    let mut lines = Vec::new();
+    let mut text = String::from("  ");
+    let mut spans = Vec::new();
+    for h in hints {
+        let token = if !h.clickable {
+            h.token.clone()
+        } else if plain {
+            format!("[{}]", h.token)
+        } else {
+            format!(" {} ", h.token)
+        };
+        let mut piece = token.clone();
+        if !h.label.is_empty() {
+            piece.push(' ');
+            piece.push_str(&h.label);
+        }
+        let mut has_content = text.chars().count() > 2;
+        if width > 0 && has_content && display_width(&text) + display_width(&sep) + display_width(&piece) > width {
+            lines.push(FooterLine {
+                text: std::mem::replace(&mut text, "  ".into()),
+                spans: std::mem::take(&mut spans),
+            });
+            has_content = false;
+        }
+        if has_content {
+            text.push_str(&sep);
+        }
+        let start = text.chars().count();
+        let token_end = start + token.chars().count() - 1;
+        text.push_str(&piece);
+        let end = text.chars().count() - 1;
+        let col = |v: usize| i32::try_from(v).unwrap_or(i32::MAX);
+        spans.push(FooterSpan {
+            start: if h.clickable { col(start) } else { -1 },
+            end: if h.clickable { col(end) } else { -1 },
+            key_start: start,
+            key_end: token_end,
+            key: if h.clickable { h.key.clone() } else { String::new() },
+            ch: if h.clickable { h.ch } else { None },
+            line: lines.len(),
+        });
+    }
+    lines.push(FooterLine { text, spans });
+    Footer { lines }
+}
+
+/// Which footer button is lit: by (key, char), so a wrapped footer stays correct.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FooterLight {
+    pub hover: Option<(String, Option<char>)>,
+    pub selected: Vec<(String, Option<char>)>,
+}
+
+/// `Get-FooterHover`: the (key, char) a hovered clickable-span INDEX names.
+pub fn footer_hover(footer: &Footer, hover: i32) -> Option<(String, Option<char>)> {
+    let i = usize::try_from(hover).ok()?;
+    footer
+        .lines
+        .iter()
+        .flat_map(|l| &l.spans)
+        .filter(|s| s.start >= 0)
+        .nth(i)
+        .map(|s| (s.key.clone(), s.ch))
+}
+
+fn char_slice(chars: &[char], from: usize, to_inclusive: usize) -> String {
+    chars.get(from..=to_inclusive).map_or_else(String::new, |s| s.iter().collect())
+}
+
+/// `Add-HintColor`: paints key tokens by COLUMN, so stripping the colour returns the line exactly.
+pub fn add_hint_color(line: &str, spans: &[FooterSpan], enabled: bool, light: &FooterLight) -> String {
+    if !enabled || line.is_empty() || spans.is_empty() {
+        return line.to_owned();
+    }
+    let chars: Vec<char> = line.chars().collect();
+    let mut sorted: Vec<&FooterSpan> = spans.iter().collect();
+    sorted.sort_by_key(|s| s.key_start);
+    let mut out = String::new();
+    let mut cursor = 0usize;
+    for s in sorted {
+        if s.key_start < cursor || s.key_end >= chars.len() {
+            continue;
+        }
+        out.push_str(theme::DIM);
+        out.push_str(
+            &chars
+                .get(cursor..s.key_start)
+                .map_or_else(String::new, |c| c.iter().collect::<String>()),
+        );
+        out.push_str(theme::RESET);
+        let id = (s.key.clone(), s.ch);
+        let hovered = s.start >= 0 && light.hover.as_ref() == Some(&id);
+        let selected = s.start >= 0 && light.selected.contains(&id);
+        let cap = if hovered || selected {
+            format!("{}{}", theme::ACCENT_BG, theme::ACCENT_FG)
+        } else if s.start >= 0 {
+            format!("{}{}", theme::BUTTON_BG, theme::BUTTON_FG)
+        } else {
+            theme::DIM.to_owned()
+        };
+        let label_tint = if hovered || selected { theme::BOLD } else { theme::DIM };
+        out.push_str(&cap);
+        out.push_str(&char_slice(&chars, s.key_start, s.key_end));
+        out.push_str(theme::RESET);
+        cursor = s.key_end + 1;
+        if let Ok(end) = usize::try_from(s.end)
+            && end >= cursor
+            && cursor < chars.len()
+        {
+            let label_end = end.min(chars.len() - 1);
+            out.push_str(label_tint);
+            out.push_str(&char_slice(&chars, cursor, label_end));
+            out.push_str(theme::RESET);
+            cursor = label_end + 1;
+        }
+    }
+    if cursor < chars.len() {
+        out.push_str(theme::DIM);
+        out.push_str(&chars.get(cursor..).map_or_else(String::new, |c| c.iter().collect::<String>()));
+        out.push_str(theme::RESET);
+    }
+    out
+}
+
+/// One click cell: inclusive frame columns and the value it stands for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellSpan {
+    pub start: i32,
+    pub end: i32,
+    pub value: String,
+}
+
+/// `Measure-CellSpans`: columns in DISPLAY CELLS of pieces about to be joined.
+pub fn measure_cell_spans(pieces: &[String], joiner: &str, start_x: usize, values: &[String]) -> Vec<CellSpan> {
+    let mut x = i32::try_from(start_x).unwrap_or(0);
+    let jw = i32::try_from(display_width(joiner)).unwrap_or(0);
+    pieces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let w = i32::try_from(display_width(p)).unwrap_or(0);
+            let span = CellSpan {
+                start: x,
+                end: x + w - 1,
+                value: values.get(i).cloned().unwrap_or_default(),
+            };
+            x += w + jw;
+            span
+        })
+        .collect()
+}
+
+/// Where a value's piece sits in CHARACTERS of the unmarked row (for a memo's band).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CharSpan {
+    pub value: String,
+    pub start: usize,
+    pub length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RadioRow {
+    pub text: String,
+    pub cells: Vec<CellSpan>,
+    pub chars: Vec<CharSpan>,
+    pub compact: bool,
+}
+
+/// Inputs of `New-RadioRow`.
+#[derive(Debug, Clone)]
+pub struct RadioSpec<'a> {
+    pub prefix: &'a str,
+    pub label: &'a str,
+    pub values: &'a [String],
+    pub current: &'a str,
+    /// The drawn text of each value, parallel to `values`.
+    pub texts: &'a [String],
+    pub label_width: usize,
+    pub max_width: usize,
+    pub hover: &'a str,
+    pub compact: bool,
+}
+
+fn pad_right(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n >= width {
+        s.to_owned()
+    } else {
+        format!("{s}{}", " ".repeat(width - n))
+    }
+}
+
+/// `New-RadioRow`: `label  ○ a ● [b] ○ c` with a click cell per value. The compact form drops the
+/// glyphs; a value whose label carries a space has no readable compact form.
+pub fn new_radio_row(spec: &RadioSpec<'_>, g: &Glyphs) -> RadioRow {
+    let label_part = pad_right(&theme::strip_ctl(spec.label), spec.label_width);
+    let text_of = |i: usize| theme::strip_ctl(spec.texts.get(i).map_or("", String::as_str));
+    let build = |compact: bool| {
+        let plain: Vec<String> = spec
+            .values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let t = text_of(i);
+                let cur = v.eq_ignore_ascii_case(spec.current);
+                match (compact, cur) {
+                    (true, true) => format!("[{t}]"),
+                    (true, false) => t,
+                    (false, true) => format!("{} [{t}]", g.on),
+                    (false, false) => format!("{} {t}", g.off),
+                }
+            })
+            .collect();
+        let mut at = spec.prefix.chars().count() + label_part.chars().count();
+        let chars = plain
+            .iter()
+            .zip(spec.values)
+            .map(|(p, v)| {
+                let span = CharSpan {
+                    value: v.clone(),
+                    start: at,
+                    length: p.chars().count(),
+                };
+                at += p.chars().count() + 1;
+                span
+            })
+            .collect();
+        let pieces: Vec<String> = plain
+            .iter()
+            .zip(spec.values)
+            .map(|(p, v)| {
+                if !spec.hover.is_empty() && v.eq_ignore_ascii_case(spec.hover) {
+                    theme::add_hover_span(p)
+                } else {
+                    p.clone()
+                }
+            })
+            .collect();
+        let cells = measure_cell_spans(&pieces, " ", display_width(&format!("{}{label_part}", spec.prefix)), spec.values);
+        RadioRow {
+            text: format!("{}{label_part}{}", spec.prefix, pieces.join(" ")),
+            cells,
+            chars,
+            compact,
+        }
+    };
+    let readable = (0..spec.values.len()).all(|i| !text_of(i).contains(' '));
+    if spec.compact && readable {
+        return build(true);
+    }
+    let full = build(false);
+    if spec.max_width == 0 || display_width(&full.text) <= spec.max_width || !readable {
+        return full;
+    }
+    build(true)
+}
+
+/// A launch-shaped row in the row map: its index, name, frame line and option cells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowHit {
+    pub index: usize,
+    pub name: String,
+    pub y: i32,
+    pub cells: Vec<CellSpan>,
+}
+
+/// A list-shaped row map (picker, project screen): rows one per line from `first_row_y`, or at
+/// the explicit `row_ys` when separators break the list up.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListMap {
+    pub first_row_y: i32,
+    pub row_count: i32,
+    pub start: i32,
+    pub row_ys: Vec<i32>,
+}
+
+/// The project screen's action row.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActionHit {
+    pub y: i32,
+    pub cells: Vec<CellSpan>,
+}
+
+/// Where everything landed, filled by the code that drew it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RowMap {
+    pub rows: Vec<RowHit>,
+    pub list: Option<ListMap>,
+    pub action: Option<ActionHit>,
+    pub footer_y: Option<i32>,
+    pub footer: Vec<FooterSpan>,
+    pub footer_lines: usize,
+}
+
+/// A finished frame: its lines and its row map.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Frame {
+    pub lines: Vec<String>,
+    pub map: RowMap,
+}
+
+/// A screen's body painter (`Add-LaunchColor`, `Add-PickerColor`), run after dim spans and before
+/// the hover band.
+pub type BodyPainter<'a> = &'a dyn Fn(&str, bool) -> String;
+
+/// `Format-FrameLine`, body lines: truncate, dim spans, the body painter, the hover band LAST.
+pub fn format_body_line(line: &str, width: usize, style: Style, painter: BodyPainter<'_>) -> String {
+    let l = limit_line(line, width, style.ascii);
+    let l = theme::add_dim_span_color(&l, style.color);
+    let l = painter(&l, style.color);
+    theme::add_hover_span_color(&l, style.color)
+}
+
+/// `Complete-PickerFrame` without the memo: appends the footer, records its spans, paints.
+pub fn complete_frame(
+    lines: &[String],
+    footer: &Footer,
+    width: usize,
+    style: Style,
+    painter: BodyPainter<'_>,
+    light: &FooterLight,
+    map: &mut RowMap,
+) -> Vec<String> {
+    let footer_index = lines.len();
+    let mut out_lines: Vec<String> = lines.iter().map(|l| format_body_line(l, width, style, painter)).collect();
+    let mut clickable = Vec::new();
+    for fl in &footer.lines {
+        let text = limit_line(&theme::add_dim_span_color(&fl.text, false), width, style.ascii);
+        let len = i32::try_from(text.chars().count()).unwrap_or(i32::MAX);
+        clickable.extend(fl.spans.iter().filter(|s| s.start >= 0 && s.end < len).cloned());
+        out_lines.push(add_hint_color(&text, &fl.spans, style.color, light));
+    }
+    map.footer_y = Some(i32::try_from(footer_index).unwrap_or(0));
+    map.footer = clickable;
+    map.footer_lines = footer.lines.len();
+    out_lines
+}
+
+/// `Get-TooSmallFrame`: the size line first, so the numbers survive any cut.
+pub fn too_small_frame(width: usize, height: usize, ascii: bool) -> Vec<String> {
+    let fw = frame_width(width);
+    let mut lines: Vec<String> = [
+        format!("  need {MIN_WIDTH}x{MIN_HEIGHT}, have {width}x{height}"),
+        "  terminal too small".into(),
+        String::new(),
+        "  resize the window, or press esc".into(),
+    ]
+    .iter()
+    .map(|l| limit_line(l, fw, ascii))
+    .collect();
+    lines.truncate(height.max(1));
+    lines
+}
+
+/// `Get-HeldSessionFrame`: the key hint placed first, the warning wrapped into what is left.
+pub fn held_session_frame(warning: &str, width: usize, height: usize, ascii: bool) -> Vec<String> {
+    let fw = frame_width(width);
+    let sets: [&[&str]; 3] = [
+        &["  enter continue anyway   esc back"],
+        &["  enter continue anyway", "  esc back"],
+        &["enter = go on", "esc = back"],
+    ];
+    let chosen = sets.iter().find(|s| s.iter().all(|l| display_width(l) <= fw)).unwrap_or(&sets[2]);
+    let hint: Vec<String> = chosen.iter().map(|l| limit_line(l, fw, ascii)).collect();
+    let warn: Vec<String> = split_text_lines(warning, fw.saturating_sub(2).max(1), 0, ascii)
+        .into_iter()
+        .map(|l| format!("  {l}"))
+        .collect();
+    let budget = height.max(1);
+    let full_len = 2 + warn.len() + hint.len();
+    if full_len <= budget {
+        let mut full = vec![String::new()];
+        full.extend(warn);
+        full.push(String::new());
+        full.extend(hint);
+        return full;
+    }
+    let Some(room) = budget.checked_sub(hint.len()).filter(|r| *r > 0) else {
+        return hint.into_iter().take(budget).collect();
+    };
+    let mut out: Vec<String> = warn.into_iter().take(room).collect();
+    out.extend(hint);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::glyphs;
+
+    fn launch_hints() -> Vec<Hint> {
+        vec![
+            Hint::plain("w/s", "row"),
+            Hint::plain("a/d", "value"),
+            Hint::key("enter", "next", "Enter"),
+            Hint::ch("u", "maintenance", 'u'),
+            Hint::key("esc", "quit", "Escape"),
+        ]
+    }
+
+    #[test]
+    fn footer_plain_text_and_spans() {
+        let f = new_hint_footer(&launch_hints(), &glyphs(true), 0, true);
+        let l = f.lines.first().unwrap();
+        assert_eq!(
+            l.text,
+            "  w/s row  :  a/d value  :  [enter] next  :  [u] maintenance  :  [esc] quit"
+        );
+        let u = l.spans.iter().find(|s| s.ch == Some('u')).unwrap();
+        assert_eq!(l.text.chars().skip(u.key_start).take(3).collect::<String>(), "[u]");
+        assert_eq!(l.spans.first().map(|s| s.start), Some(-1), "arrows are not clickable");
+    }
+
+    #[test]
+    fn footer_wraps_without_splitting_hints() {
+        let f = new_hint_footer(&launch_hints(), &glyphs(true), 50, true);
+        assert!(f.lines.len() >= 2);
+        assert!(f.lines.iter().all(|l| display_width(&l.text) <= 50));
+        assert_eq!(f.lines.last().unwrap().spans.last().unwrap().line, f.lines.len() - 1);
+    }
+
+    #[test]
+    fn hint_color_strips_back_to_plain() {
+        let f = new_hint_footer(&launch_hints(), &glyphs(false), 0, false);
+        let l = f.lines.first().unwrap();
+        let light = FooterLight {
+            hover: footer_hover(&f, 1),
+            selected: Vec::new(),
+        };
+        let painted = add_hint_color(&l.text, &l.spans, true, &light);
+        assert_eq!(theme::remove_ansi_color(&painted), l.text);
+        assert!(painted.contains(&format!("{}{} u ", theme::ACCENT_BG, theme::ACCENT_FG)));
+    }
+
+    #[test]
+    fn radio_row_full_compact_and_unreadable() {
+        let g = glyphs(true);
+        let vals: Vec<String> = ["on", "off"].map(String::from).to_vec();
+        let spec = RadioSpec {
+            prefix: "   ",
+            label: "remote",
+            values: &vals,
+            current: "on",
+            texts: &vals,
+            label_width: 12,
+            max_width: 0,
+            hover: "",
+            compact: false,
+        };
+        let r = new_radio_row(&spec, &g);
+        assert_eq!(r.text, "   remote      * [on] - off");
+        assert_eq!(r.cells.first().map(|c| (c.start, c.end)), Some((15, 20)));
+        let c = new_radio_row(
+            &RadioSpec {
+                compact: true,
+                ..spec.clone()
+            },
+            &g,
+        );
+        assert_eq!(c.text, "   remote      [on] off");
+        let spaced: Vec<String> = ["stop server", "on"].map(String::from).to_vec();
+        let u = new_radio_row(
+            &RadioSpec {
+                values: &spaced,
+                texts: &spaced,
+                compact: true,
+                ..spec
+            },
+            &g,
+        );
+        assert!(!u.compact, "a spaced label has no readable compact form");
+    }
+
+    #[test]
+    fn too_small_keeps_size_line_first() {
+        let f = too_small_frame(40, 2, true);
+        assert_eq!(f, ["  need 50x16, have 40x2", "  terminal too small"]);
+    }
+
+    #[test]
+    fn held_frame_keeps_hint_when_short() {
+        let f = held_session_frame("another claude holds this session and the words go on", 60, 3, true);
+        assert_eq!(f.last().map(String::as_str), Some("  enter continue anyway   esc back"));
+        assert_eq!(f.len(), 2, "no blank lines when the full frame does not fit");
+    }
+}

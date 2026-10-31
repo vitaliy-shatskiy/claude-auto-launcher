@@ -18,3 +18,6 @@ tests/preview-reference.local.txt
 # CLAUDE_AUTO_CONFIG can point anywhere and config.example.json is one careless copy away.
 config.json
 *.local.json
+
+# Rust build output
+/target/

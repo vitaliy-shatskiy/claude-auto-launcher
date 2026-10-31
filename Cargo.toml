@@ -1,0 +1,69 @@
+[package]
+name = "claude-auto-rs"
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.99"
+description = "claude-auto launcher, Rust port (renamed to claude-auto at cut-over)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "claude-auto-rs"
+path = "src/main.rs"
+
+[lib]
+name = "claude_auto"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+unicode-general-category = "1"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+] }
+
+[lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+redundant_imports = "warn"
+trivial_numeric_casts = "warn"
+ambiguous_negative_literals = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "warn"
+unnecessary_safety_comment = "warn"
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"
+map_err_ignore = "warn"
+clone_on_ref_ptr = "warn"
+string_slice = "warn"
+mod_module_files = "warn"
+redundant_clone = "warn"
