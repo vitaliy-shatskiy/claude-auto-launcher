@@ -691,9 +691,9 @@ mod tests {
     fn memo_repaint_equals_a_rebuild() {
         let owned = golden_sessions();
         let s: Vec<&Session> = owned.iter().collect();
-        for (w, h) in [(120, 30), (80, 30), (80, 24)] {
+        for (w, h, ascii) in [(120, 30, false), (80, 30, true), (80, 24, false), (198, 24, true)] {
             let base = PickerView {
-                style: Style { color: true, ascii: false },
+                style: Style { color: true, ascii },
                 ..view(&s, 1, w, h)
             };
             let mut memo = Memo::default();
@@ -709,6 +709,50 @@ mod tests {
                 let repainted = picker_frame(&v, &mut memo);
                 let rebuilt = picker_frame(&v, &mut Memo::default());
                 assert_eq!(repainted, rebuilt, "{w}x{h} hover {hr}/{hv}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_size_fits_with_its_headroom_row() {
+        let owned: Vec<Session> = (0..40)
+            .map(|i| Session {
+                session_id: format!("s{i}"),
+                project: format!("project-{i}"),
+                last_user: "words ".repeat(30),
+                last_assistant: "reply ".repeat(60),
+                modified_ms: GOLDEN_NOW - i * 60_000,
+                prompt_count: 2,
+                ..Session::default()
+            })
+            .collect();
+        let s: Vec<&Session> = owned.iter().collect();
+        for w in [50, 60, 80, 99, 100, 120, 198] {
+            for h in [16, 20, 24, 29, 30, 40] {
+                for (scope, ascii) in [(PickerScope::None, false), (PickerScope::Project, true)] {
+                    let v = PickerView {
+                        scope,
+                        style: Style { color: false, ascii },
+                        ..view(&s, 39, w, h)
+                    };
+                    let f = picker_frame(&v, &mut Memo::default());
+                    assert!(f.lines.len() < h, "{w}x{h}: {} lines leave the headroom row", f.lines.len());
+                    assert!(
+                        f.lines.iter().all(|l| crate::layout::display_width(l) < w),
+                        "{w}x{h}: a line past column {w}"
+                    );
+                    assert!(f.lines[0].contains("sessions"), "{w}x{h}: a real render, not the stub");
+                    if w < 100 {
+                        let list = f.map.list.unwrap_or_default();
+                        let preview = if h < 30 { 2 } else { 6 };
+                        let want = h - 3 - f.map.footer_lines - preview;
+                        assert_eq!(
+                            usize::try_from(list.row_count).unwrap(),
+                            want,
+                            "{w}x{h}: the list takes what the preview gave up"
+                        );
+                    }
+                }
             }
         }
     }
