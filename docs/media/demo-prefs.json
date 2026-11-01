@@ -1,0 +1,9 @@
+{
+  "Version": 2,
+  "Account": "main",
+  "Profiles": {
+    "main": { "Model": "opus1m", "Effort": "xhigh", "Advisor": "opus", "Permission": "auto" },
+    "team": { "Model": "sonnet1m", "Effort": "high", "Advisor": "off", "Permission": "acceptEdits" },
+    "night": { "Model": "fable", "Effort": "max", "Advisor": "opus", "Permission": "plan" }
+  }
+}

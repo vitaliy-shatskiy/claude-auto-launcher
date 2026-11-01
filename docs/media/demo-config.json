@@ -1,0 +1,13 @@
+{
+  "accounts": [
+    { "key": "main",  "root": "~/.claude",       "label": "main account",  "tint": "Green" },
+    { "key": "team",  "root": "~/.claude-team",  "label": "team account",  "tint": "Magenta" },
+    { "key": "night", "root": "~/.claude-night", "label": "night account", "tint": "Cyan" }
+  ],
+  "sharing": false,
+  "remote": false,
+  "riderMcp": "off",
+  "extraMcpConfigs": [],
+  "launchHooks": [],
+  "maintenanceActions": []
+}
