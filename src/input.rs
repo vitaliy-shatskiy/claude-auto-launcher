@@ -184,10 +184,19 @@ const ALT_PRESSED: u32 = 0x0001 | 0x0002;
 const CTRL_PRESSED: u32 = 0x0004 | 0x0008;
 
 /// `ConvertTo-ClaudeInputEvent` for a `KEY_EVENT` record: key-ups and bare modifiers are nothing.
+/// A char-only record (vk 0) of a control key gets that key's vk: psmux writes a key that shares
+/// one input batch with SGR mouse text that way, and the screens match Enter, Tab, Esc by vk.
 pub fn key_from_record(down: bool, code: u16, unicode: u16, control_state: u32) -> Option<KeyPress> {
     if !down || matches!(code, vk::SHIFT | vk::CONTROL | vk::MENU) {
         return None;
     }
+    let code = match (code, unicode) {
+        (0, 13) => vk::ENTER,
+        (0, 9) => vk::TAB,
+        (0, 8) => vk::BACKSPACE,
+        (0, 27) => vk::ESCAPE,
+        _ => code,
+    };
     Some(KeyPress {
         ch: char::from_u32(u32::from(unicode)).unwrap_or('\0'),
         vk: code,

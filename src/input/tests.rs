@@ -114,6 +114,19 @@ fn key_names_round_trip() {
 }
 
 #[test]
+fn a_char_only_control_key_gets_its_virtual_key() {
+    // psmux, batching a key with SGR mouse text, writes the key-down as vk 0 + the char.
+    for (ch, code) in [(13, vk::ENTER), (9, vk::TAB), (8, vk::BACKSPACE), (27, vk::ESCAPE)] {
+        let k = key_from_record(true, 0, ch, 0).expect("a press");
+        assert!(k.is(code), "char {ch} -> vk {code}");
+    }
+    let report_byte = key_from_record(true, 0, u16::from(b'M'), 0).expect("a char");
+    assert_eq!((report_byte.vk, report_byte.ch), (0, 'M'), "mouse report text stays text");
+    let ctrl_m = key_from_record(true, 0x4D, 13, 0x0008).expect("ctrl+m");
+    assert_eq!(ctrl_m.vk, 0x4D, "a real vk is never rewritten");
+}
+
+#[test]
 fn key_up_and_bare_modifiers_are_not_presses() {
     assert_eq!(key_from_record(false, 0x41, 97, 0), None);
     assert_eq!(key_from_record(true, vk::SHIFT, 0, SHIFT_PRESSED), None);
