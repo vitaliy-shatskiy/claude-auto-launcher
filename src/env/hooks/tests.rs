@@ -15,11 +15,22 @@ fn hooks_run_in_order_and_a_failure_is_one_line() {
     let missing = dir.join("missing.ps1").to_string_lossy().into_owned();
     let mut env = ChildEnv::default();
     env.set("CLAUDE_CONFIG_DIR", r"C:\fixture-root");
-    let lines: Vec<String> = run(&singles(&[&one, &two, &missing, &four, &three]), &env, &Timings::default())
+    let tm = Timings::on(std::time::Instant::now());
+    let lines: Vec<String> = run(&singles(&[&one, &two, &missing, &four, &three]), &env, &tm)
         .into_iter()
         .map(|n| n.text)
         .collect();
     std::fs::remove_dir_all(&dir).unwrap();
+    let exits: Vec<(String, Option<i32>)> = tm.take_unlogged().into_iter().map(|r| (r.name, r.exit)).collect();
+    for (name, exit) in [
+        ("hooks:one.ps1", Some(0)),
+        ("hooks:two.ps1", Some(3)),
+        ("hooks:missing.ps1", None),
+        ("hooks:four.hook", None),
+        ("hooks:three.ps1", Some(0)),
+    ] {
+        assert!(exits.contains(&(name.to_owned(), exit)), "{name} {exit:?} in {exits:?}");
+    }
     assert!(lines.contains(&"one ran".to_owned()), "hook stdout is printed verbatim: {lines:?}");
     assert!(
         lines.contains(&r"acct=C:\fixture-root".to_owned()),

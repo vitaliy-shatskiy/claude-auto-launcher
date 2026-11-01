@@ -221,4 +221,27 @@ mod tests {
         assert_eq!(v.as_object().unwrap().keys().next().map(String::as_str), Some("ts"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn a_hook_timing_record_carries_its_exit_code() {
+        let dir = std::env::temp_dir().join(format!("claude-auto-rs-log-exit-{}", new_run_id()));
+        let t0 = std::time::Instant::now();
+        let l = Logger {
+            root: dir.clone(),
+            run_id: "abc".into(),
+            enabled: true,
+            timings: crate::timing::Timings::on(t0),
+        };
+        l.timings.add(&["hooks", "two.ps1"], None, t0, t0, Some(2));
+        l.timings.add(&["mcp"], None, t0, t0, None);
+        l.write_timings();
+        let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let recs: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0]["name"], "hooks:two.ps1");
+        assert_eq!(recs[0]["exit"], 2);
+        assert!(recs[1].get("exit").is_none(), "a span without an exit code logs none");
+    }
 }

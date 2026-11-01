@@ -221,7 +221,7 @@ impl Timings {
         }
     }
 
-    /// Every span of the run, in start order.
+    /// Every span of the run, in record order (`add` pushes a span after it ended).
     pub fn spans(&self) -> Vec<Span> {
         self.0.as_ref().map_or_else(Vec::new, |i| i.borrow().spans.clone())
     }
