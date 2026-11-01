@@ -79,10 +79,19 @@ fn unlogged_spans_are_handed_once_with_parent_names() {
     let c = t.begin_at(&["config"], at(o, 1));
     t.end_at(c, at(o, 3));
     let got = t.take_unlogged();
-    assert_eq!(got, vec![("config".to_owned(), Some("process".to_owned()), 2.0, 1.0)]);
+    assert_eq!(got, vec![rec("config", Some("process"), 2.0, 1.0)]);
     assert_eq!(t.take_unlogged(), Vec::new());
     t.end_at(root, at(o, 4));
-    assert_eq!(t.take_unlogged(), vec![("process".to_owned(), None, 4.0, 0.0)]);
+    assert_eq!(t.take_unlogged(), vec![rec("process", None, 4.0, 0.0)]);
+}
+
+fn rec(name: &str, parent: Option<&str>, ms: f64, start_ms: f64) -> TimingRecord {
+    TimingRecord {
+        name: name.into(),
+        parent: parent.map(str::to_owned),
+        ms,
+        start_ms,
+    }
 }
 
 #[test]

@@ -155,9 +155,8 @@ impl Timings {
             .map(|(_, d)| d.div_ceil(1000))
     }
 
-    /// The ended spans not yet handed to the log, as `(name, parent name, ms, start ms)`;
-    /// marks them handed.
-    pub fn take_unlogged(&self) -> Vec<(String, Option<String>, f64, f64)> {
+    /// The ended spans not yet handed to the log; marks them handed.
+    pub fn take_unlogged(&self) -> Vec<TimingRecord> {
         let Some(i) = &self.0 else { return Vec::new() };
         let mut i = i.borrow_mut();
         let names: Vec<String> = i.spans.iter().map(|s| s.name.clone()).collect();
@@ -165,11 +164,27 @@ impl Timings {
         for s in i.spans.iter_mut().filter(|s| !s.logged) {
             if let Some(d) = s.dur_us {
                 s.logged = true;
-                out.push((s.name.clone(), s.parent.and_then(|p| names.get(p).cloned()), ms(d), ms(s.start_us)));
+                out.push(TimingRecord {
+                    name: s.name.clone(),
+                    parent: s.parent.and_then(|p| names.get(p).cloned()),
+                    ms: ms(d),
+                    start_ms: ms(s.start_us),
+                });
             }
         }
         out
     }
+}
+
+/// One ended span as the run log's `timing` record carries it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimingRecord {
+    pub name: String,
+    /// The enclosing span's name; `None` for a root span.
+    pub parent: Option<String>,
+    pub ms: f64,
+    /// Start, in ms from the process start.
+    pub start_ms: f64,
 }
 
 /// Ends its span on drop.
