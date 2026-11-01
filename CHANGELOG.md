@@ -4,7 +4,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- `claude-auto-rs`: the launcher rewritten in Rust (`src/`, `cargo build --release`), under test
+  beside the PowerShell launcher, which stays the default until the cut-over. Same screens, same
+  config, prefs, projects and model caches; its sessions cache is its own file until the cut-over.
+  The multi-account MCP mirror runs inside it, so a launch needs no Node.
+- CI: a Windows job for the Rust crate (`cargo fmt --check`, `clippy -D warnings`, `cargo test`, all
+  `--locked`, cargo cached) beside the PowerShell suites.
+
 ### Changed
+
+- `claude-auto-rs`: launch hooks get the console's stdin, as the PowerShell launcher gave them. The
+  companion server, its build and the pairing QR start with the chosen account's environment
+  (`CLAUDE_CONFIG_DIR`, project secrets), as the session does. A console whose input cannot be
+  re-armed after a typed path ends with its own message instead of `scripted keys exhausted`. A
+  release-channel check whose request fails prints `update check skipped: <reason>` (a remembered
+  failure stays silent for five minutes).
+- `claude-auto-rs` internals: the four modules over 500 lines split along their seams, the mirror and
+  sharing tests in their modules' folders, typed errors in the companion and sharing paths, the IP Helper calls made
+  inside the one function that owns their buffer, no busy wait while an ESC sequence is peeked, and
+  the unused `anyhow` dependency dropped.
 
 - Project screen: scratch directories are no longer listed as projects. A directory under the temp
   folder or under a profile's `jobs\<id>\tmp` (what a headless `claude -p` run in a temporary cwd
