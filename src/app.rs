@@ -528,7 +528,8 @@ fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool) -> Result<
         projects::remove_stale_preview_cache(&tmp);
         tmp.join(format!("claude-auto-projects-preview-{}.json", std::process::id()))
     });
-    let roots: Vec<String> = run.cfg.accounts.iter().map(|a| a.root.clone()).collect();
+    let account_roots: Vec<String> = run.cfg.accounts.iter().map(|a| a.root.clone()).collect();
+    let roots = projects::launcher_profile_roots(&run.ctx.home, var("CLAUDE_CONFIG_DIR").as_deref(), &account_roots);
     let project_list = projects::project_registry(cache.as_deref(), &roots);
     let project_source = projects::set_launch_start_project(&mut state, &run.ctx.cwd, &project_list);
     let preselect = state.project.clone();

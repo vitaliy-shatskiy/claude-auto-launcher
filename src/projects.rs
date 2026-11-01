@@ -77,6 +77,16 @@ pub fn project_registry(cache_path: Option<&Path>, profile_roots: &[String]) -> 
     })
 }
 
+/// The profile roots the launcher hands `project_registry` (`Get-ProjectProfileRoots` plus the
+/// roster, claude-auto.ps1): `~\.claude`, the `CLAUDE_CONFIG_DIR` this process started with, then
+/// every account root.
+pub fn launcher_profile_roots(home: &Path, config_dir: Option<&str>, account_roots: &[String]) -> Vec<String> {
+    let mut roots = vec![home.join(".claude").to_string_lossy().into_owned()];
+    roots.extend(config_dir.filter(|d| !d.is_empty()).map(str::to_owned));
+    roots.extend(account_roots.iter().filter(|r| !r.is_empty()).cloned());
+    roots
+}
+
 /// The launch context the start rule is re-applied with on a tab switch (`LaunchState::start`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartContext {
@@ -174,6 +184,23 @@ mod tests {
         let mut g = state();
         assert_eq!(set_launch_start_project(&mut g, &repo, &ps), "cwd");
         assert_eq!((g.project.as_str(), g.project_slug.as_str()), (repo.to_str().unwrap(), ""));
+    }
+
+    #[test]
+    fn launcher_profile_roots_add_the_default_root_and_config_dir() {
+        let roster = vec![r"C:\h\.claude-acct2".to_owned(), String::new()];
+        let roots = launcher_profile_roots(Path::new(r"C:\h"), Some(r"D:\cfg\.claude-x"), &roster);
+        assert_eq!(roots, [r"C:\h\.claude", r"D:\cfg\.claude-x", r"C:\h\.claude-acct2"]);
+        let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
+        assert!(
+            paths::is_scratch_path(r"D:\cfg\.claude-x\jobs\76c3aa80\tmp\w1", &[], &refs),
+            "a job tmp under CLAUDE_CONFIG_DIR is scratch"
+        );
+        assert_eq!(
+            launcher_profile_roots(Path::new(r"C:\h"), Some(""), &[]),
+            [r"C:\h\.claude"],
+            "an empty CLAUDE_CONFIG_DIR adds nothing"
+        );
     }
 
     #[test]
