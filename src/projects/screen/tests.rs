@@ -195,6 +195,20 @@ fn the_filter_owns_the_keys_and_parks_on_its_match() {
 }
 
 #[test]
+fn the_filter_keeps_short_name_and_bracket_chars() {
+    let t = Tree::new("screen-odd");
+    let odd = t.dir(r"RUNNER~1\app (x86)+c@home");
+    let cwd = t.dir("cwd");
+    let projects = vec![proj("O", &odd, "odd")];
+    let mut ks: Vec<String> = vec!["/".into()];
+    ks.extend(odd.chars().map(String::from));
+    ks.extend(["Enter".into(), "Enter".into()]);
+    let refs: Vec<&str> = ks.iter().map(String::as_str).collect();
+    let picked = drive_with(&projects, &cwd, "new", keys(&refs), "").0;
+    assert_eq!(picked.map(|p| p.path), Some(odd), "a path with ~, brackets, + and @ as the filter");
+}
+
+#[test]
 fn a_cwd_that_is_a_project_runs_there_and_parks_first() {
     let f = fx();
     let p = drive_with(&f.projects, &f.beta, "new", keys(&["Enter"]), "").0.unwrap();

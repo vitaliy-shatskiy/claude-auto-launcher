@@ -49,9 +49,6 @@ impl std::fmt::Debug for ProjectScreen<'_> {
     }
 }
 
-/// Filter characters besides letters and digits: a pasted path keeps its separators and colon.
-const FILTER_EXTRA: [char; 7] = [' ', '-', '.', '_', '\\', '/', ':'];
-
 impl<'a> ProjectScreen<'a> {
     pub(crate) fn new(projects: &'a [Project], cwd: &str, initial_action: &str, style: Style, clock: &'a dyn Fn() -> i64) -> Self {
         let mut hotkeys = vec!['/'];
@@ -134,7 +131,8 @@ impl<'a> ProjectScreen<'a> {
             self.cursor.index = self.park();
             return;
         }
-        if key.ch != '\0' && (key.ch.is_alphanumeric() || FILTER_EXTRA.contains(&key.ch)) {
+        // Any printable char: a Windows folder name may hold `~` (8.3 names), brackets, `+`, `@`.
+        if key.ch != '\0' && !key.ch.is_control() {
             self.filter.push(key.ch);
             self.cursor.index = self.park();
         }
