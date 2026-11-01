@@ -458,10 +458,11 @@ fn wheel_ctrl_c_and_an_uppercase_hotkey() {
         ch: 'C',
         ..KeyPress::default()
     };
-    assert!(
-        drive_with(&f.projects, &f.cwd, "new", vec![Event::Key(upper_c), key("Escape")], "")
-            .0
-            .is_none()
+    let picked = drive_with(&f.projects, &f.cwd, "new", vec![Event::Key(upper_c), key("Escape")], "").0;
+    assert_eq!(
+        picked.map(|p| p.action),
+        Some("continue".to_owned()),
+        "Caps Lock's 'C' (psmux drops the flag) is still the continue hotkey"
     );
 }
 

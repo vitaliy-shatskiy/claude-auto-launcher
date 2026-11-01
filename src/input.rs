@@ -423,17 +423,19 @@ pub fn layout_char(hotkey: char) -> Option<char> {
 }
 
 /// `Test-ClaudeHotkey`: does this press mean the Latin hotkey on ANY layout? The character
-/// itself, the virtual key, or the Cyrillic letter on that key. A modifier never is; an uppercase
-/// character is not unless Caps Lock is on (a mouse report's byte carries no Caps Lock).
+/// itself, the virtual key, or the Cyrillic letter on that key. Ctrl and Alt never are. Case never
+/// matters: psmux drops the Caps Lock flag, a Latin letter then arrives as a bare uppercase char
+/// (vk 0, no flags) and a Cyrillic one as Shift + the letter.
 pub fn is_hotkey(key: &KeyPress, hotkey: char) -> bool {
     if key.ch == hotkey {
         return true;
     }
-    if key.shift || key.ctrl || key.alt {
+    if key.ctrl || key.alt {
         return false;
     }
-    if !key.caps_lock && key.ch.is_uppercase() {
-        return false;
+    let lower = key.ch.to_lowercase().next().unwrap_or(key.ch);
+    if lower == hotkey {
+        return true;
     }
     let code = if hotkey == '/' {
         Some(vk::OEM2)
@@ -445,7 +447,20 @@ pub fn is_hotkey(key: &KeyPress, hotkey: char) -> bool {
     if code.is_some_and(|c| key.vk == c) {
         return true;
     }
-    layout_char(hotkey).is_some_and(|c| key.ch == c)
+    layout_char(hotkey).is_some_and(|c| lower == c)
+}
+
+/// The strict form for screens whose hotkeys run something heavy (maintenance actions): an
+/// uppercase char or a Shift is never the hotkey, because a split mouse report's text (`M`, an X10
+/// byte) arrives exactly like Shift + a letter. Caps Lock still counts when its flag survived.
+pub fn is_hotkey_exact(key: &KeyPress, hotkey: char) -> bool {
+    if key.ch == hotkey {
+        return true;
+    }
+    if key.shift || (!key.caps_lock && key.ch.is_uppercase()) {
+        return false;
+    }
+    is_hotkey(key, hotkey)
 }
 
 #[cfg(test)]

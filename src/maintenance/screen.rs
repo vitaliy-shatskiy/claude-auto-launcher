@@ -15,7 +15,7 @@ use crate::frame::{
     FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
     too_small_frame,
 };
-use crate::input::{KeyPress, is_hotkey};
+use crate::input::{KeyPress, is_hotkey_exact};
 use crate::layout::{new_box, split_output_lines};
 use crate::theme::{glyphs, strip_ctl};
 use crate::ui::Term;
@@ -326,10 +326,10 @@ impl Screen for MaintScreen<'_> {
         let armed_at = self.pending_at.take();
         let now = term.record_time();
         let too_fast = matches!((now, armed_at), (Some(n), Some(a)) if n.checked_sub(a).is_none_or(|d| d < CONFIRM_MIN_MS));
-        if was_pending.is_some_and(|p| !is_hotkey(key, p)) {
+        if was_pending.is_some_and(|p| !is_hotkey_exact(key, p)) {
             self.status.clear();
         }
-        if let Some(c) = BUILT_IN.into_iter().find(|c| is_hotkey(key, *c)) {
+        if let Some(c) = BUILT_IN.into_iter().find(|c| is_hotkey_exact(key, *c)) {
             let confirmed = was_pending == Some(c) && !too_fast;
             self.built_in(c, term, confirmed, now);
             return true;
@@ -337,7 +337,7 @@ impl Screen for MaintScreen<'_> {
         let actions = self.actions;
         let hit = actions.iter().find_map(|a| {
             let c = a.key.chars().next()?;
-            (!BUILT_IN.contains(&c) && is_hotkey(key, c)).then_some((a, c))
+            (!BUILT_IN.contains(&c) && is_hotkey_exact(key, c)).then_some((a, c))
         });
         if let Some((a, c)) = hit {
             let confirmed = was_pending == Some(c) && !too_fast;

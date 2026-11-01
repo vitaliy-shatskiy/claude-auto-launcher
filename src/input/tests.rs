@@ -77,21 +77,38 @@ fn hotkey_on_cyrillic_layout_and_guards() {
         shift: true,
         ..KeyPress::default()
     };
-    assert!(!is_hotkey(&shifted_m, 'm'), "an SGR final byte is never a hotkey");
-    let upper_u = KeyPress {
+    assert!(is_hotkey(&shifted_m, 'm'), "case never matters");
+    let caps_u = KeyPress {
         ch: 'U',
         vk: 0x55,
+        caps_lock: true,
         ..KeyPress::default()
     };
-    assert!(!is_hotkey(&upper_u, 'u'));
-    let caps_u = KeyPress {
-        caps_lock: true,
-        ..upper_u
+    assert!(is_hotkey(&caps_u, 'u'));
+    let ctrl_r = KeyPress {
+        ch: '\u{12}',
+        vk: 0x52,
+        ctrl: true,
+        ..KeyPress::default()
     };
-    assert!(is_hotkey(&caps_u, 'u'), "Caps Lock lifts the case guard");
+    assert!(!is_hotkey(&ctrl_r, 'r'), "Ctrl is never a hotkey");
     assert!(is_hotkey(&KeyPress::named(vk::OEM2), '/'));
     assert!(is_hotkey(&KeyPress::char('.'), '/'), "slash is '.' on both Cyrillic layouts");
     assert!(is_hotkey(&KeyPress::named(0x31), '1'));
+}
+
+/// What psmux delivers with Caps Lock on: the flag is gone.
+#[test]
+fn caps_lock_through_psmux_is_still_the_hotkey() {
+    assert!(is_hotkey(&KeyPress::char('R'), 'r'), "Latin: vk 0, 'R', no flags");
+    let cyrillic = KeyPress {
+        ch: '\u{041A}',
+        vk: 0x52,
+        shift: true,
+        ..KeyPress::default()
+    };
+    assert!(is_hotkey(&cyrillic, 'r'), "Cyrillic: Shift + K on the R key");
+    assert!(is_hotkey(&KeyPress::char('\u{041A}'), 'r'), "Cyrillic, vk 0");
 }
 
 #[test]
