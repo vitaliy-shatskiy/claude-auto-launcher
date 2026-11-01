@@ -13,8 +13,8 @@ cargo test --locked
 All three exit `0`. CI runs the same three on Windows. Try a screen change in preview mode first
 (README, [Preview mode](README.md#preview-mode)): it needs no real Claude and writes nothing.
 
-`tests\check-clean.ps1` is the privacy scan. It reads an optional pattern list from
-`CLAUDE_AUTO_CLEAN_PATTERNS`. Without one it only checks the current Windows username. It scans the
+`cargo run --example privacy_scan` is the privacy scan (`examples/privacy_scan.rs`, not in the
+release exe). It reads an optional pattern list from `CLAUDE_AUTO_CLEAN_PATTERNS` or `--patterns`. Without one it only checks the current Windows username. It scans the
 git-tracked worktree, never commit history or authorship. Exit `0` clean · `1` a hit · `2` could not
 run, which is not a pass.
 

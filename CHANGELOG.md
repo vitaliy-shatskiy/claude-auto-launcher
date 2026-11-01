@@ -16,6 +16,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   (`sharing/claude-mirror-mcp.mjs`, `tests/Test-Mirror.mjs`) and the PowerShell CI job. The Rust
   launcher `claude-auto-rs` is the only launcher. The last commit with the PowerShell code is
   `7348f59`.
+- `tests/check-clean.ps1`: the privacy scan is `examples/privacy_scan.rs` now
+  (`cargo run --example privacy_scan`, same contract, case-insensitive, a hit names the pattern's
+  line number instead of its text). The repository holds no PowerShell.
 
 ### Added
 

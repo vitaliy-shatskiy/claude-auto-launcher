@@ -1,6 +1,7 @@
 ## The launcher's gates: fmt, clippy -D warnings, tests, all --locked.
-## The privacy scan (tests/check-clean.ps1) does not run here: its value is the private pattern list
-## supplied out of band, and with none it degrades to the runner's own username and proves nothing.
+## The privacy scan (examples/privacy_scan.rs) does not run here, only its unit tests in `cargo test`:
+## its value is the private pattern list supplied out of band, and with none it degrades to the
+## runner's own username and proves nothing.
 name: tests
 
 on:
