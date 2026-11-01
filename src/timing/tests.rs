@@ -145,14 +145,28 @@ fn scratch(name: &str) -> std::path::PathBuf {
 #[test]
 fn debug_is_the_lone_flag_or_the_variable() {
     let a = |s: &[&str]| s.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
-    assert!(debug_requested(&a(&["--launcher-debug"]), None));
+    assert_eq!(debug_mode(&a(&["--launcher-debug"]), None), DebugMode::Quiet);
     assert!(is_debug_flag(&a(&["--launcher-debug"])));
-    assert!(debug_requested(&[], Some("1")));
-    assert!(!debug_requested(&a(&["--launcher-debug", "-p", "x"]), None));
-    assert!(!debug_requested(&a(&["--debug"]), None));
-    assert!(!debug_requested(&[], Some("0")));
+    assert_eq!(debug_mode(&[], Some("1")), DebugMode::Quiet);
+    assert_eq!(debug_mode(&a(&["--launcher-debug", "-p", "x"]), None), DebugMode::Off);
+    assert_eq!(debug_mode(&a(&["--debug"]), None), DebugMode::Off);
+    assert_eq!(debug_mode(&[], Some("0")), DebugMode::Off);
     // The variable turns debug on but never takes an argument away.
-    assert!(debug_requested(&a(&["--debug"]), Some("1")) && !is_debug_flag(&a(&["--debug"])));
+    assert!(debug_mode(&a(&["--debug"]), Some("1")) == DebugMode::Quiet && !is_debug_flag(&a(&["--debug"])));
+}
+
+#[test]
+fn the_footer_is_opt_in_by_its_own_value() {
+    let flag = vec!["--launcher-debug".to_owned()];
+    assert_eq!(debug_mode(&[], Some("footer")), DebugMode::Footer);
+    assert_eq!(debug_mode(&flag, Some("footer")), DebugMode::Footer);
+    assert_eq!(debug_mode(&[], Some("Footer")), DebugMode::Off, "the value is exact, as `1` is");
+    let o = Instant::now();
+    assert!(!Timings::on(o).shows_footer());
+    assert!(!Timings::default().shows_footer());
+    let footer = Timings::new(DebugMode::Footer, o);
+    assert!(footer.is_on() && footer.shows_footer());
+    assert!(!Timings::new(DebugMode::Off, o).is_on());
 }
 
 #[test]

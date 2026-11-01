@@ -29,7 +29,20 @@ fn f12_on_the_held_session_warning_shows_the_timings_then_redraws_it() {
     assert_eq!(frames.len(), 3, "warning, timings, warning again");
     assert!(frames[1].iter().any(|l| l.contains("timings of this run")));
     assert!(frames[2].iter().any(|l| l.contains("enter")));
-    assert!(frames[2].last().is_some_and(|l| l.starts_with("  load ")));
+    assert_eq!(frames[2], frames[0], "the warning is drawn again as it was");
+}
+
+fn held_frames(timings: Timings) -> Vec<Vec<String>> {
+    let keys = crate::ui::parse_preview_keys("Escape").unwrap();
+    let mut t = crate::ui::PreviewTerm::new((80, 24), keys, true).with_logger(Logger::silent(timings));
+    let style = crate::frame::Style { color: false, ascii: true };
+    assert_eq!(screens::confirm_held(&mut t, Some("held by pid 1"), style), Ok(false));
+    t.frames.unwrap()
+}
+
+#[test]
+fn debug_mode_draws_the_held_warning_exactly_as_off() {
+    assert_eq!(held_frames(Timings::on(Instant::now())), held_frames(Timings::default()));
 }
 
 #[test]

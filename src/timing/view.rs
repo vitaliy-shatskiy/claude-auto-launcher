@@ -1,4 +1,5 @@
-//! What debug mode shows: the footer line under every screen and the F12 timings screen.
+//! What debug mode shows: the F12 timings screen, and the footer line under every screen when
+//! `CLAUDE_AUTO_DEBUG=footer` asks for it.
 
 use super::{Span, Timings, ms};
 use crate::frame::frame_width;
@@ -23,14 +24,19 @@ pub fn footer_text(load: Option<u64>, paint: Option<u64>, key: Option<u64>, widt
     .unwrap_or_else(|| limit_line(&format!("{l}/{p}/{k} ms"), fw, ascii))
 }
 
-/// Debug on: the screen draws one row shorter, the footer owns the last row.
+/// Footer mode: the screen draws one row shorter, the footer owns the last row.
 pub fn body_size(t: &Timings, size: (usize, usize)) -> (usize, usize) {
-    if t.is_on() { (size.0, size.1.saturating_sub(1)) } else { size }
+    if t.shows_footer() {
+        (size.0, size.1.saturating_sub(1))
+    } else {
+        size
+    }
 }
 
-/// Debug on: `lines` cut or padded to the body height, then the dim footer line. Off: untouched.
+/// Footer mode: `lines` cut or padded to the body height, then the dim footer line. Otherwise
+/// untouched, debug on or off.
 pub fn with_footer(t: &Timings, mut lines: Vec<String>, screen: &str, size: (usize, usize)) -> Vec<String> {
-    if !t.is_on() {
+    if !t.shows_footer() {
         return lines;
     }
     let body = size.1.saturating_sub(1);

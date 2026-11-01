@@ -147,29 +147,51 @@ fn timings_without_a_log_prints_no_records_and_exits_zero() {
 }
 
 #[test]
-fn preview_in_debug_mode_shows_the_footer_and_the_timings_screen() {
+fn preview_in_debug_mode_shows_the_timings_screen_and_the_footer_only_on_request() {
     let d = scratch("debug-preview");
     let config = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
         .join("config-four.json");
-    let run = |debug: bool| {
+    let run = |flag: bool, env: Option<&str>| {
         let mut c = launcher(&d);
         c.env("CLAUDE_AUTO_CONFIG", &config)
             .env("CLAUDE_AUTO_PREVIEW", "1")
             .env("CLAUDE_AUTO_PREVIEW_KEYS", "F12,Escape,Escape");
-        if debug {
+        if flag {
             c.arg("--launcher-debug");
+        }
+        if let Some(v) = env {
+            c.env("CLAUDE_AUTO_DEBUG", v);
         }
         text(&c.output().unwrap())
     };
-    let on = run(true);
-    assert!(on.contains("  load "), "{on}");
-    assert!(on.contains("last key->frame"), "{on}");
+    let on = run(true, None);
     assert!(on.contains("timings of this run"), "{on}");
     assert!(on.contains("screen:launch"), "{on}");
-    let off = run(false);
+    assert!(!on.contains("last key->frame"), "plain debug draws no footer: {on}");
+    let footer = run(false, Some("footer"));
+    assert!(footer.contains("  load "), "{footer}");
+    assert!(footer.contains("last key->frame"), "{footer}");
+    assert!(footer.contains("timings of this run"), "{footer}");
+    let off = run(false, None);
     assert!(!off.contains("last key->frame") && !off.contains("timings of this run"), "{off}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_run_that_never_starts_claude_still_logs_its_timings() {
+    let d = scratch("debug-no-claude");
+    let o = launcher(&d).env("CLAUDE_AUTO_DEBUG", "1").args(["-p", "x"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(1), "no claude on PATH: {}", text(&o));
+    let logs = d.join("home").join(".claude").join("launcher-logs");
+    let file = std::fs::read_dir(&logs).unwrap().next().unwrap().unwrap().path();
+    let log = std::fs::read_to_string(file).unwrap();
+    let timing = |name: &str| {
+        log.lines()
+            .any(|l| l.contains("\"stage\":\"timing\"") && l.contains(&format!("\"name\":\"{name}\"")))
+    };
+    assert!(timing("process") && timing("prepare"), "{log}");
     std::fs::remove_dir_all(&d).unwrap();
 }
 

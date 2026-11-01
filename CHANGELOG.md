@@ -12,9 +12,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   The multi-account MCP mirror runs inside it, so a launch needs no Node.
 - CI: a Windows job for the Rust crate (`cargo fmt --check`, `clippy -D warnings`, `cargo test`, all
   `--locked`, cargo cached) beside the PowerShell suites.
-- `claude-auto-rs`: debug mode (`--launcher-debug` or `CLAUDE_AUTO_DEBUG=1`): a timing footer on every
-  screen, F12 for the timings of the run, `timing` records in the run log, and
-  `claude-auto-rs --launcher-timings [--days N]` for count, p50, p95 and max per span.
+- `claude-auto-rs`: debug mode (`--launcher-debug` or `CLAUDE_AUTO_DEBUG=1`): nothing on screen
+  (a timing footer only with `CLAUDE_AUTO_DEBUG=footer`), F12 for the timings of the run,
+  `timing` records in the run log, and `claude-auto-rs --launcher-timings [--days N]` for count, p50, p95 and max per span.
 
 ### Changed
 

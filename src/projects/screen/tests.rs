@@ -114,6 +114,34 @@ fn drive_with(ps: &[Project], cwd: &str, initial: &str, events: Vec<Event>, answ
     (out, t)
 }
 
+fn project_frames(f: &Fx, timings: crate::timing::Timings) -> Vec<Vec<String>> {
+    let mut t = Script {
+        inner: PreviewTerm::new((80, 24), VecDeque::new(), true).with_logger(crate::log::Logger::silent(timings)),
+        q: keys(&["s", "Enter"]).into(),
+        answer: String::new(),
+        asked: 0,
+    };
+    let c = clock;
+    let out = run_screen(
+        &mut t,
+        &f.projects,
+        Path::new(&f.cwd),
+        "new",
+        Style { color: false, ascii: true },
+        &c,
+    )
+    .unwrap();
+    assert!(out.is_some());
+    t.inner.frames.unwrap()
+}
+
+#[test]
+fn debug_mode_draws_the_project_screen_exactly_as_off() {
+    let f = fx();
+    let on = crate::timing::Timings::on(std::time::Instant::now());
+    assert_eq!(project_frames(&f, on), project_frames(&f, crate::timing::Timings::default()));
+}
+
 fn drive(f: &Fx, ks: &[&str]) -> Option<ProjectChoice> {
     drive_with(&f.projects, &f.cwd, "new", keys(ks), "").0
 }

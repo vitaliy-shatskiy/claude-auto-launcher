@@ -356,13 +356,24 @@ fn go(
     exit_code: i32,
     size: (usize, usize),
 ) -> (Log, String, T, Result<Option<()>, UiStop>) {
+    go_timed(events, actions, clock, exit_code, size, crate::timing::Timings::default())
+}
+
+fn go_timed(
+    events: Vec<Event>,
+    actions: &[MaintenanceAction],
+    clock: Vec<Option<u64>>,
+    exit_code: i32,
+    size: (usize, usize),
+    timings: crate::timing::Timings,
+) -> (Log, String, T, Result<Option<()>, UiStop>) {
     let log = Rc::new(RefCell::new(Log::default()));
     let mut ops = FakeOps {
         log: Rc::clone(&log),
         exit_code,
     };
     let mut t = T {
-        inner: PreviewTerm::new(size, VecDeque::new(), true),
+        inner: PreviewTerm::new(size, VecDeque::new(), true).with_logger(crate::log::Logger::silent(timings)),
         q: events.into(),
         clock,
         now: None,
@@ -447,6 +458,16 @@ fn hovering_buttons_paints_three_distinct_frames() {
         "the hovered button gets the accent cap"
     );
     assert!(!t.frames[0].contains(crate::theme::ACCENT_BG));
+}
+
+#[test]
+fn debug_mode_draws_the_maintenance_screen_exactly_as_off() {
+    let ev = || vec![key('i'), key('i'), esc()];
+    let on = crate::timing::Timings::on(std::time::Instant::now());
+    let (_, _, t_on, _) = go_timed(ev(), &reindex(), vec![], 0, (100, 24), on);
+    let (_, _, t_off, _) = go(ev(), &reindex(), vec![], 0, (100, 24));
+    assert!(t_off.frames.len() > 1, "the screen painted before and after the command");
+    assert_eq!(t_on.frames, t_off.frames);
 }
 
 #[test]

@@ -209,9 +209,9 @@ Rust launcher only. `claude-auto-rs --launcher-debug` (the only argument, like
 `--launcher-version`) or `CLAUDE_AUTO_DEBUG=1` times each step of the run. `--debug` stays
 claude's own flag and passes through.
 
-- Every screen gets one dim bottom line: `load <n> ms · paint <n> ms · last key->frame <n> ms`
-  (the screen's data load, its first paint, the last key to its frame). The screen draws one row
-  shorter, so nothing is covered.
+- Nothing changes on screen. `CLAUDE_AUTO_DEBUG=footer` adds one dim bottom line:
+  `load <n> ms · paint <n> ms · last key->frame <n> ms` (the screen's data load, its first paint,
+  the last key to its frame). The screen then draws one row shorter, so nothing is covered.
 - F12 opens the timings of this run as a tree, slowest first within each level. Esc goes back.
 - Each span lands in the run log as a `timing` record (`name`, `parent`, `ms`, `startMs`).
 - `claude-auto-rs --launcher-timings [--days N]` prints count, p50, p95 and max per span name from the logs

@@ -1,5 +1,6 @@
-//! Debug timings (`--debug`, `CLAUDE_AUTO_DEBUG=1`): named spans with parent/child nesting, held
-//! in memory for the footer line, the F12 screen and the run log. Off is `None`: every call
+//! Debug timings (`--launcher-debug`, `CLAUDE_AUTO_DEBUG=1`): named spans with parent/child
+//! nesting, held in memory for the F12 screen, the run log and the opt-in footer line
+//! (`CLAUDE_AUTO_DEBUG=footer`). Off is `None`: every call
 //! returns before reading the clock, so the off path costs no syscall and no I/O.
 
 pub mod summary;
@@ -33,6 +34,8 @@ struct Inner {
     open: Vec<usize>,
     color: bool,
     ascii: bool,
+    /// `CLAUDE_AUTO_DEBUG=footer`: the screens give their last row to the footer line.
+    footer: bool,
 }
 
 /// The run's span recorder, shared by handle (cheap to clone). `Default` is off.
@@ -57,17 +60,33 @@ pub fn ms(us: u64) -> f64 {
 impl Timings {
     /// A recording run whose clock starts at `origin`.
     pub fn on(origin: Instant) -> Self {
+        Self::new(DebugMode::Quiet, origin)
+    }
+
+    /// The recorder `mode` asks for: off, recording, or recording with the footer line.
+    pub fn new(mode: DebugMode, origin: Instant) -> Self {
+        let footer = match mode {
+            DebugMode::Off => return Self::default(),
+            DebugMode::Quiet => false,
+            DebugMode::Footer => true,
+        };
         Self(Some(Rc::new(RefCell::new(Inner {
             origin,
             spans: Vec::new(),
             open: Vec::new(),
             color: false,
             ascii: false,
+            footer,
         }))))
     }
 
     pub fn is_on(&self) -> bool {
         self.0.is_some()
+    }
+
+    /// Only `CLAUDE_AUTO_DEBUG=footer` draws the footer line: plain debug leaves every screen as is.
+    pub fn shows_footer(&self) -> bool {
+        self.0.as_ref().is_some_and(|i| i.borrow().footer)
     }
 
     /// The footer's colour and glyph decisions, known once the UI has a style.
@@ -250,10 +269,25 @@ impl Drop for Scope<'_> {
 /// The launcher's own switch, only as the sole argument (like `--launcher-version`).
 pub const DEBUG_FLAG: &str = "--launcher-debug";
 
-/// `--launcher-debug` as the only argument, or `CLAUDE_AUTO_DEBUG=1`. claude's own `--debug`
-/// is never read here.
-pub fn debug_requested(args: &[String], env: Option<&str>) -> bool {
-    env == Some("1") || is_debug_flag(args)
+/// What debug mode puts on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugMode {
+    Off,
+    /// Spans to the run log and F12, nothing else on screen.
+    Quiet,
+    /// Quiet plus the footer line on the last row (`CLAUDE_AUTO_DEBUG=footer`).
+    Footer,
+}
+
+/// `CLAUDE_AUTO_DEBUG=footer`, then `CLAUDE_AUTO_DEBUG=1` or `--launcher-debug` as the only
+/// argument. claude's own `--debug` is never read here.
+pub fn debug_mode(args: &[String], env: Option<&str>) -> DebugMode {
+    match env {
+        Some("footer") => DebugMode::Footer,
+        Some("1") => DebugMode::Quiet,
+        _ if is_debug_flag(args) => DebugMode::Quiet,
+        _ => DebugMode::Off,
+    }
 }
 
 /// `args` is exactly `--launcher-debug`: the one argument the launcher takes away.

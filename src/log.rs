@@ -60,6 +60,19 @@ impl Logger {
     }
 }
 
+#[cfg(test)]
+impl Logger {
+    /// Writes nothing, records into `timings`: a screen test's logger.
+    pub(crate) fn silent(timings: crate::timing::Timings) -> Self {
+        Self {
+            root: PathBuf::new(),
+            run_id: String::new(),
+            enabled: false,
+            timings,
+        }
+    }
+}
+
 /// Six tries with a growing pause cover the sharing-violation window of a concurrent launcher.
 fn append_with_retry(file: &Path, bytes: &[u8]) -> bool {
     for i in 0..6u64 {

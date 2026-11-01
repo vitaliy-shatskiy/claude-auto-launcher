@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::timing::DebugMode;
 
 fn at(origin: Instant, ms: u64) -> Instant {
     origin + Duration::from_millis(ms)
@@ -9,7 +10,7 @@ fn at(origin: Instant, ms: u64) -> Instant {
 #[test]
 fn the_footer_reads_the_key_span_of_its_own_screen() {
     let o = Instant::now();
-    let t = Timings::on(o);
+    let t = Timings::new(DebugMode::Footer, o);
     let own = t.begin_at(&["key", "launch"], at(o, 0));
     t.end_at(own, at(o, 7));
     let other = t.begin_at(&["key", "maintenance"], at(o, 10));
@@ -75,10 +76,14 @@ fn footer_below_the_minimum_width_falls_back_to_numbers_and_never_overflows() {
 }
 
 #[test]
-fn with_footer_owns_the_last_row_only_when_on() {
+fn with_footer_owns_the_last_row_only_in_footer_mode() {
     let lines: Vec<String> = (0..30).map(|i| format!("row {i}")).collect();
     assert_eq!(with_footer(&Timings::default(), lines.clone(), "launch", (80, 24)), lines);
-    let t = Timings::on(Instant::now());
+    let quiet = Timings::on(Instant::now());
+    assert_eq!(with_footer(&quiet, lines.clone(), "launch", (80, 24)), lines);
+    assert_eq!(body_size(&quiet, (80, 24)), (80, 24), "plain debug keeps the whole body");
+    let t = Timings::new(DebugMode::Footer, Instant::now());
+    assert_eq!(body_size(&t, (80, 24)), (80, 23));
     let out = with_footer(&t, lines, "launch", (80, 24));
     assert_eq!(out.len(), 24);
     assert_eq!(out[22], "row 22");
