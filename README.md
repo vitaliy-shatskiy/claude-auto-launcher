@@ -122,7 +122,8 @@ version and exits.
 
 <details><summary><b>The project screen and the session picker</b> (golden frames <code>project-100x30.txt</code> and <code>picker-100x30.txt</code> from <code>tests/fixtures/wide-frames/</code>, sample data)</summary>
 
-```n╭─ project ─ 4 known ─────────────────────────────────────────────────────────────────────────────╮
+```
+╭─ project ─ 4 known ─────────────────────────────────────────────────────────────────────────────╮
 │   current directory                                                        C:\Users\sample\here │
 │                                                                                                 │
 │ ❯ alpha                                             C:\Users\sample\Desktop\Projects\alpha 4 min│
@@ -146,7 +147,7 @@ version and exits.
 │                                       │          reply words                                    │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
   w/s move  ┊  [/] filter  ┊  [enter] open  ┊  [f] fork  ┊  [esc] back
-```n
+```
 </details>
 
 ## Usage
