@@ -150,19 +150,18 @@ pub(crate) fn volatile_only_difference(name: &str, a: &Path, b: &Path) -> bool {
 }
 
 /// Moves an existing `.pre-relink` aside under its own write time and keeps the newest three.
-fn rotate_backup(backup: &Path, dst: &Path) -> Result<(), String> {
-    let stamp = utc_stamp(mtime(backup).ok_or("the backup has no write time")?);
+fn rotate_backup(backup: &Path, dst: &Path) -> std::io::Result<()> {
+    let stamp = utc_stamp(mtime(backup).ok_or_else(|| std::io::Error::other("the backup has no write time"))?);
     let mut rotated = with_suffix(backup, &format!(".{stamp}"));
     let mut n = 1;
     while rotated.exists() {
         rotated = with_suffix(backup, &format!(".{stamp}-{n}"));
         n += 1;
     }
-    std::fs::rename(backup, &rotated).map_err(|e| e.to_string())?;
+    std::fs::rename(backup, &rotated)?;
     let prefix = format!("{}.", leaf(backup)).to_lowercase();
-    let dir = dst.parent().ok_or("no parent directory")?;
-    let mut olds: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)
-        .map_err(|e| e.to_string())?
+    let dir = dst.parent().ok_or_else(|| std::io::Error::other("no parent directory"))?;
+    let mut olds: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)?
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()) && e.file_name().to_string_lossy().to_lowercase().starts_with(&prefix))
         .filter_map(|e| Some((mtime(&e.path())?, e.path())))
@@ -393,7 +392,7 @@ pub(crate) fn protect_junction(path: &Path, root: &Path, icacls: &mut Icacls<'_>
 
 /// `Repair-SharedJunction`: a missing junction is created (and shielded); a real directory in its
 /// place is reported, never merged. A missing canonical directory is put back silently first.
-pub(crate) fn repair_junction(name: &str, work: &Path, root: &Path, icacls: &mut Icacls<'_>) -> Result<Vec<Note>, String> {
+pub(crate) fn repair_junction(name: &str, work: &Path, root: &Path, icacls: &mut Icacls<'_>) -> std::io::Result<Vec<Note>> {
     let w = work.join(name);
     let p = root.join(name);
     if !root.exists() {
@@ -403,7 +402,7 @@ pub(crate) fn repair_junction(name: &str, work: &Path, root: &Path, icacls: &mut
         if !work.is_dir() {
             return Ok(Vec::new());
         }
-        std::fs::create_dir(&w).map_err(|e| e.to_string())?;
+        std::fs::create_dir(&w)?;
     }
     let root_name = leaf(root);
     if let Ok(md) = std::fs::symlink_metadata(&p) {
@@ -415,7 +414,7 @@ pub(crate) fn repair_junction(name: &str, work: &Path, root: &Path, icacls: &mut
         }
         return Ok(Vec::new());
     }
-    win_fs::create_junction(&p, &w).map_err(|e| e.to_string())?;
+    win_fs::create_junction(&p, &w)?;
     let mut notes = protect_junction(&p, root, icacls);
     notes.push(Note::new(
         format!("  junction created and shielded: {root_name} {name} -> work"),
@@ -426,17 +425,17 @@ pub(crate) fn repair_junction(name: &str, work: &Path, root: &Path, icacls: &mut
 
 /// `New-ClaudeProfileRoot`: the root exists and holds a hardlink of each shared file the work root
 /// has. Idempotent; `Ok(true)` = the root was created now.
-pub(crate) fn new_profile_root(root: &Path, work: &Path, files: &[&str], notes: &mut Vec<Note>) -> Result<bool, String> {
+pub(crate) fn new_profile_root(root: &Path, work: &Path, files: &[&str], notes: &mut Vec<Note>) -> std::io::Result<bool> {
     let created = !root.exists();
     if created {
-        std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(root)?;
     }
     for name in files {
         let (w, t) = (work.join(name), root.join(name));
         if !w.exists() || t.exists() {
             continue;
         }
-        std::fs::hard_link(&w, &t).map_err(|e| e.to_string())?;
+        std::fs::hard_link(&w, &t)?;
         notes.push(Note::new(format!("  linked {name} into {}", leaf(root)), Fg::Yellow));
     }
     if created {
