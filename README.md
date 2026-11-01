@@ -40,7 +40,7 @@ CLI's releases.
   or newer CLI may accept different flags.
 - To build it: Rust through `rustup` with the MSVC host toolchain. `rust-toolchain.toml` pins the
   version (1.99.1) and the `clippy` and `rustfmt` components.
-- Node.js or PowerShell 7, only for `.js`/`.mjs` or `.ps1` launch hooks.
+- Node.js or PowerShell 7, only for `.js`/`.mjs` or `.ps1` launch hooks and for `maintenanceActions` scripts (always run through `pwsh -File`).
 
 ## Install
 
