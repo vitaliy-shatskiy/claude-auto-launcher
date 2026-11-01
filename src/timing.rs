@@ -20,6 +20,8 @@ pub struct Span {
     pub dur_us: Option<u64>,
     /// Closed by the end of an enclosing span, not by its own end (an early return).
     pub aborted: bool,
+    /// Dropped by [`Timings::discard`]: never shown, never logged.
+    discarded: bool,
     logged: bool,
 }
 
@@ -104,6 +106,7 @@ impl Timings {
             start_us,
             dur_us: None,
             aborted: false,
+            discarded: false,
             logged: false,
         });
         i.open.push(id);
@@ -135,6 +138,37 @@ impl Timings {
         }
     }
 
+    /// Drops a span that measured nothing meaningful: it is never shown or logged, and its
+    /// children move up to its parent.
+    pub fn discard(&self, id: SpanId) {
+        let Some(i) = &self.0 else { return };
+        let mut i = i.borrow_mut();
+        let Some(parent) = i.spans.get(id.0).map(|s| s.parent) else {
+            return;
+        };
+        for s in i.spans.iter_mut().filter(|s| s.parent == Some(id.0)) {
+            s.parent = parent;
+        }
+        if let Some(s) = i.spans.get_mut(id.0) {
+            s.discarded = true;
+            s.logged = true;
+        }
+        i.open.retain(|o| *o != id.0);
+    }
+
+    /// Ends a key span at its screen's next frame, or discards it when a nested screen ran in
+    /// between: that frame then measures the nested screen, not the key.
+    pub fn end_key(&self, id: SpanId) {
+        if self.0.is_none() || id == NONE {
+            return;
+        }
+        let nested = self
+            .0
+            .as_ref()
+            .is_some_and(|i| i.borrow().spans.iter().skip(id.0 + 1).any(|s| s.name.starts_with("screen:")));
+        if nested { self.discard(id) } else { self.end(id) }
+    }
+
     /// A span that ends when the guard drops.
     pub fn scope(&self, parts: &[&str]) -> Scope<'_> {
         Scope {
@@ -153,13 +187,13 @@ impl Timings {
         self.0.as_ref().map_or(0, |i| micros(i.borrow().origin, Instant::now()))
     }
 
-    /// The duration of the last ended span whose name starts with `prefix`, in whole ms rounded
-    /// up, so a phase that ran reads as at least 1.
-    pub fn latest_ms(&self, prefix: &str) -> Option<u64> {
+    /// The duration of the last span named `name` that ended by itself, in whole ms rounded up,
+    /// so a phase that ran reads as at least 1.
+    pub fn latest_ms(&self, name: &str) -> Option<u64> {
         let i = self.0.as_ref()?.borrow();
         i.spans
             .iter()
-            .filter(|s| s.name.starts_with(prefix))
+            .filter(|s| s.name == name && !s.aborted && !s.discarded)
             .filter_map(|s| s.dur_us.map(|d| (s.start_us.saturating_add(d), d)))
             .max_by_key(|(end, _)| *end)
             .map(|(_, d)| d.div_ceil(1000))

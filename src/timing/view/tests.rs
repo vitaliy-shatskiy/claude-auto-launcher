@@ -5,6 +5,19 @@ use super::*;
 fn at(origin: Instant, ms: u64) -> Instant {
     origin + Duration::from_millis(ms)
 }
+
+#[test]
+fn the_footer_reads_the_key_span_of_its_own_screen() {
+    let o = Instant::now();
+    let t = Timings::on(o);
+    let own = t.begin_at(&["key", "launch"], at(o, 0));
+    t.end_at(own, at(o, 7));
+    let other = t.begin_at(&["key", "maintenance"], at(o, 10));
+    t.end_at(other, at(o, 12));
+    let lines = with_footer(&t, vec![], "launch", (100, 5));
+    assert!(lines[4].ends_with("last key->frame 7 ms"), "{}", lines[4]);
+}
+
 #[test]
 fn tree_lists_children_under_their_parent_slowest_first() {
     let o = Instant::now();

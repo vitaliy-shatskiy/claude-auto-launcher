@@ -229,3 +229,96 @@ fn twin_window_has_a_lower_bound() {
     assert!(!is_twin(Some(1600), Some(1000)));
     assert!(!is_twin(None, Some(1)));
 }
+
+fn timed(events: Vec<Event>) -> Events {
+    let mut t = term(events);
+    let logger = crate::log::Logger {
+        root: std::path::PathBuf::new(),
+        run_id: String::new(),
+        enabled: false,
+        timings: crate::timing::Timings::on(Instant::now()),
+    };
+    t.inner = PreviewTerm::new((80, 24), std::collections::VecDeque::default(), true).with_logger(logger);
+    t
+}
+
+fn logged(t: &Events) -> Vec<crate::timing::TimingRecord> {
+    t.inner.logger().timings.take_unlogged()
+}
+
+#[test]
+fn a_key_that_ends_its_screen_leaves_no_key_span() {
+    let mut s = List {
+        c: Cursor::at(0),
+        n: 3,
+        acts: 0,
+    };
+    let mut t = timed(vec![
+        Event::Key(KeyPress::named(vk::DOWN)),
+        Event::Key(KeyPress::named(vk::DOWN)),
+        Event::Key(KeyPress::named(vk::ENTER)),
+    ]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(2)));
+    let recs = logged(&t);
+    assert_eq!(recs.iter().filter(|r| r.name == "key:list").count(), 2, "{recs:?}");
+    assert!(recs.iter().all(|r| !r.aborted), "{recs:?}");
+}
+
+/// Opens a nested `List` on `u`, as the launch screen opens maintenance.
+struct Outer {
+    c: Cursor,
+}
+
+impl Screen for Outer {
+    type Output = i32;
+    fn name(&self) -> &'static str {
+        "outer"
+    }
+    fn cursor(&mut self) -> &mut Cursor {
+        &mut self.c
+    }
+    fn draw(&mut self, _size: (usize, usize)) -> Frame {
+        Frame {
+            lines: vec![String::new(); 3],
+            map: RowMap::default(),
+        }
+    }
+    fn rows(&self) -> Option<i32> {
+        Some(3)
+    }
+    fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
+        if key.ch != 'u' {
+            return false;
+        }
+        let mut inner = List {
+            c: Cursor::at(0),
+            n: 3,
+            acts: 0,
+        };
+        run(&mut inner, term).is_ok()
+    }
+}
+
+#[test]
+fn a_key_that_opens_a_nested_screen_is_dropped_and_the_footer_reads_its_own_screen() {
+    let mut s = Outer { c: Cursor::at(0) };
+    let mut t = timed(vec![
+        Event::Key(KeyPress::char('u')),
+        Event::Key(KeyPress::named(vk::DOWN)),
+        Event::Key(KeyPress::named(vk::ESCAPE)),
+        Event::Key(KeyPress::named(vk::DOWN)),
+        Event::Key(KeyPress::named(vk::ESCAPE)),
+    ]);
+    assert_eq!(run(&mut s, &mut t), Ok(None));
+    let timings = t.inner.logger().timings.clone();
+    assert!(timings.latest_ms("key:outer").is_some());
+    let recs = logged(&t);
+    let keys: Vec<&str> = recs
+        .iter()
+        .filter(|r| r.name.starts_with("key:"))
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(keys, ["key:list", "key:outer"], "the u key spanned the nested screen: {recs:?}");
+    let nested = recs.iter().find(|r| r.name == "screen:list").unwrap();
+    assert_eq!(nested.parent.as_deref(), Some("screen:outer"));
+}

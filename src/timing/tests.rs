@@ -63,8 +63,8 @@ fn latest_ms_takes_the_last_ended_match_rounded_up() {
     t.end_at(short, at(o, 1) + Duration::from_micros(300));
     assert_eq!(t.latest_ms("paint:launch"), Some(1));
     assert_eq!(t.latest_ms("key:launch"), Some(7));
-    assert!(t.latest_ms("key:").is_some_and(|v| v >= 1));
-    assert_eq!(t.latest_ms("load:"), None);
+    assert!(t.latest_ms("key:picker").is_some_and(|v| v >= 1));
+    assert_eq!(t.latest_ms("key:"), None, "names match exactly, never by prefix");
 }
 
 #[test]
@@ -89,6 +89,26 @@ fn rec(name: &str, parent: Option<&str>, ms: f64, start_ms: f64) -> TimingRecord
         start_ms,
         aborted: false,
     }
+}
+
+#[test]
+fn end_key_drops_a_key_span_that_a_nested_screen_ran_inside() {
+    let o = Instant::now();
+    let t = Timings::on(o);
+    let screen = t.begin_at(&["screen", "launch"], at(o, 0));
+    let key = t.begin_at(&["key", "launch"], at(o, 1));
+    let nested = t.begin_at(&["screen", "maintenance"], at(o, 2));
+    t.end_at(nested, at(o, 900));
+    t.end_key(key);
+    t.end_at(screen, at(o, 1000));
+    assert_eq!(t.latest_ms("key:launch"), None);
+    let recs = t.take_unlogged();
+    assert!(recs.iter().all(|r| r.name != "key:launch"), "{recs:?}");
+    let m = recs.iter().find(|r| r.name == "screen:maintenance").unwrap();
+    assert_eq!(m.parent.as_deref(), Some("screen:launch"));
+    let plain = t.begin_at(&["key", "launch"], at(o, 1001));
+    t.end_key(plain);
+    assert!(t.latest_ms("key:launch").is_some());
 }
 
 #[test]

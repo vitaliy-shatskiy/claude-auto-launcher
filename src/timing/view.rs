@@ -40,7 +40,7 @@ pub fn with_footer(t: &Timings, mut lines: Vec<String>, screen: &str, size: (usi
     let text = footer_text(
         t.latest_ms(&format!("load:{screen}")),
         t.latest_ms(&format!("paint:{screen}")),
-        t.latest_ms("key:"),
+        t.latest_ms(&format!("key:{screen}")),
         size.0,
         ascii,
     );
@@ -61,7 +61,11 @@ pub fn tree_lines(spans: &[Span], now_us: u64) -> Vec<String> {
 
 fn walk(spans: &[Span], parent: Option<usize>, depth: usize, now_us: u64, out: &mut Vec<String>) {
     let dur = |s: &Span| s.dur_us.unwrap_or_else(|| now_us.saturating_sub(s.start_us));
-    let mut kids: Vec<(usize, &Span)> = spans.iter().enumerate().filter(|(_, s)| s.parent == parent).collect();
+    let mut kids: Vec<(usize, &Span)> = spans
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.parent == parent && !s.discarded)
+        .collect();
     kids.sort_by_key(|(_, s)| std::cmp::Reverse(dur(s)));
     for (i, s) in kids {
         let open = if s.dur_us.is_none() {

@@ -203,14 +203,16 @@ pub fn run<S: Screen>(screen: &mut S, term: &mut dyn Term) -> Result<Option<S::O
     let span = tm.begin(&["screen", screen.name()]);
     let mut key_span = None;
     let r = run_loop(screen, term, &tm, &mut key_span);
+    // The key ended the screen: no frame of this screen followed it, so it measured nothing.
     if let Some(k) = key_span {
-        tm.end(k);
+        tm.discard(k);
     }
     tm.end(span);
     r
 }
 
-/// `key_span`: the open input-to-frame span, ended by the next frame or by the screen's end.
+/// `key_span`: the open input-to-frame span, ended by this screen's next frame; dropped when a
+/// nested screen ran first or the screen ended.
 fn run_loop<S: Screen>(
     screen: &mut S,
     term: &mut dyn Term,
@@ -241,8 +243,11 @@ fn run_loop<S: Screen>(
             let f = screen.draw(view::body_size(tm, size));
             term.paint(&view::with_footer(tm, f.lines, screen.name(), size));
             map = Some(f.map);
-            for s in [first_paint.take(), key_span.take()].into_iter().flatten() {
-                tm.end(s);
+            if let Some(p) = first_paint.take() {
+                tm.end(p);
+            }
+            if let Some(k) = key_span.take() {
+                tm.end_key(k);
             }
         }
         need_draw = true;
