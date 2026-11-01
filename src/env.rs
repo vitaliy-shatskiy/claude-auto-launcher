@@ -207,9 +207,23 @@ static CATALOG: OnceLock<Option<models::Catalog>> = OnceLock::new();
 /// installed claude.exe, cached per binary. `None` keeps the static row labels.
 pub fn model_family_labels(preview: bool) -> Option<BTreeMap<String, String>> {
     let home = home();
-    let cat = CATALOG
-        .get_or_init(|| models::load(&models::bin_path(&home), &home.join(r".claude\claude-auto-models.json"), preview).map(|c| c.0));
+    let cat = CATALOG.get_or_init(|| {
+        let loaded = models::load(&models::bin_path(&home), &home.join(r".claude\claude-auto-models.json"), preview);
+        print(&catalog_note(loaded.as_ref()).into_iter().collect::<Vec<_>>());
+        loaded.map(|c| c.0)
+    });
     cat.as_ref().map(|c| models::family_labels(Some(c)).into_iter().collect())
+}
+
+/// The line `claude-auto.ps1` prints after a catalog rescan; a cache hit says nothing.
+fn catalog_note(loaded: Option<&(models::Catalog, models::Source)>) -> Option<Note> {
+    match loaded {
+        Some((c, models::Source::Binary)) => Some(Note::new(
+            format!("  model catalog re-read from claude.exe ({} models)", c.names.len()),
+            Fg::DarkGray,
+        )),
+        Some((_, models::Source::Cache)) | None => None,
+    }
 }
 
 /// `Get-FriendlyModelName`: a raw `--model` value to the label the model row shows for it.
@@ -399,6 +413,19 @@ mod tests {
         assert!(!personal.join("settings.json.pre-relink").exists());
         assert!(!home.join(".claude-shared").exists(), "preview: no profile root is created");
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn only_a_catalog_rescan_prints_its_line() {
+        let mut cat = models::Catalog::default();
+        cat.names.insert("claude-opus-5-5".into(), "Opus 5.5".into());
+        cat.names.insert("claude-haiku-5-5".into(), "Haiku 5.5".into());
+        assert_eq!(
+            catalog_note(Some(&(cat.clone(), models::Source::Binary))),
+            Some(Note::new("  model catalog re-read from claude.exe (2 models)", Fg::DarkGray))
+        );
+        assert_eq!(catalog_note(Some(&(cat, models::Source::Cache))), None, "a cache hit is silent");
+        assert_eq!(catalog_note(None), None);
     }
 
     #[test]
