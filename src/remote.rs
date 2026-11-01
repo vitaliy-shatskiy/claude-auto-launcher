@@ -382,7 +382,7 @@ pub fn launch_via_crc(req: &CrcLaunch<'_>) -> Option<i32> {
     }
     let mut argv = vec!["--".to_owned()];
     argv.extend(req.argv.iter().cloned());
-    match crate::invocation::run_child(&crc, &argv, req.child) {
+    match crate::invocation::run_child(&crc, &argv, req.child, None) {
         Ok(code) => Some(code),
         Err(e) => {
             out::line(&format!("  crc could not be started: {e}"), Fg::Red);

@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use super::{Activation, Hit, Term, UiStop, hit_at};
 use crate::frame::{Frame, RowMap};
 use crate::input::{Event, KeyPress, MouseEvent, is_hotkey, synthetic_key, vk};
+use crate::timing::{SpanId, Timings, view};
 
 /// What a handler asks the loop to do next.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,7 +199,26 @@ fn finish<S: Screen>(term: &dyn Term, screen: &mut S, entered: Instant, r: Optio
 /// Runs a screen to its end. `Err` when a scripted key source ran out (`KeysExhausted`) or the
 /// console input could not be re-armed after a typed line (`ConsoleLost`).
 pub fn run<S: Screen>(screen: &mut S, term: &mut dyn Term) -> Result<Option<S::Output>, UiStop> {
+    let tm = term.logger().timings.clone();
+    let span = tm.begin(&["screen", screen.name()]);
+    let mut key_span = None;
+    let r = run_loop(screen, term, &tm, &mut key_span);
+    if let Some(k) = key_span {
+        tm.end(k);
+    }
+    tm.end(span);
+    r
+}
+
+/// `key_span`: the open input-to-frame span, ended by the next frame or by the screen's end.
+fn run_loop<S: Screen>(
+    screen: &mut S,
+    term: &mut dyn Term,
+    tm: &Timings,
+    key_span: &mut Option<SpanId>,
+) -> Result<Option<S::Output>, UiStop> {
     let entered = Instant::now();
+    let mut first_paint = Some(tm.begin(&["paint", screen.name()]));
     screen.before();
     log_screen(term, screen, "enter", entered);
     let mut need_draw = true;
@@ -218,9 +238,12 @@ pub fn run<S: Screen>(screen: &mut S, term: &mut dyn Term) -> Result<Option<S::O
         screen.before();
         if need_draw {
             size = term.size();
-            let f = screen.draw(size);
-            term.paint(&f.lines);
+            let f = screen.draw(view::body_size(tm, size));
+            term.paint(&view::with_footer(tm, f.lines, screen.name(), size));
             map = Some(f.map);
+            for s in [first_paint.take(), key_span.take()].into_iter().flatten() {
+                tm.end(s);
+            }
         }
         need_draw = true;
         let pending = term.input_pending();
@@ -233,10 +256,17 @@ pub fn run<S: Screen>(screen: &mut S, term: &mut dyn Term) -> Result<Option<S::O
         let ev = term.wait(size)?;
         let key = match ev {
             Event::Resize => continue,
+            Event::Key(k) if tm.is_on() && k.is(vk::F12) => {
+                view::show_timings(term, tm)?;
+                continue;
+            }
             Event::Key(k) => {
                 // A key is a gesture of its own and disarms every twin guard.
                 g.disarm();
                 *term.last_activation() = None;
+                if tm.is_on() {
+                    *key_span = Some(tm.begin(&["key", screen.name()]));
+                }
                 k
             }
             Event::Mouse(m) => match mouse(screen, term, &m, map.as_ref(), &mut g) {

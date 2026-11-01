@@ -180,11 +180,14 @@ pub fn update_before_launch(version: &mut VersionInfo) {
 
 /// `Invoke-MaintenanceScreen`, opened by `u` from the launch screen and returning to it.
 pub fn run_screen(term: &mut dyn Term, actions: &[MaintenanceAction], style: Style) -> Result<(), UiStop> {
+    let tm = term.logger().timings.clone();
+    let load = tm.begin(&["load", "maintenance"]);
     let preview = is_preview();
     let mut ops = RealOps {
         install: Install::from_env(preview),
         preview,
     };
     let mut s = MaintScreen::new(&mut ops, actions, style);
+    tm.end(load);
     crate::ui::screen_loop::run(&mut s, term).map(|_| ())
 }

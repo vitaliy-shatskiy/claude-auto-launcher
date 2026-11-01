@@ -79,6 +79,8 @@ fn clock_now() -> Clock {
 /// `Invoke-SessionPicker` over paged, snapshotted lists: the file list is taken once per scope
 /// and every page skips over THAT list. `Ok(None)` = Esc.
 pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option<PickedSession>, UiStop> {
+    let tm = term.logger().timings.clone();
+    let load = tm.begin(&["load", "picker"]);
     let root = req.sessions_root.clone();
     let cache_file = cache_path(&root);
     let mut cache = SessionCache::new(req.preview);
@@ -90,6 +92,7 @@ pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option
     let slugs: Vec<String> = req.project_slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
     let first = fetch(0, &slugs);
     let mut screen = PickerScreen::new(first, Some(&mut fetch), PAGE_SIZE, &slugs, req.project_name, req.style, clock_now());
+    tm.end(load);
     let picked = crate::ui::screen_loop::run(&mut screen, term)?;
     Ok(picked.map(|p| PickedSession {
         session_id: p.session.session_id,

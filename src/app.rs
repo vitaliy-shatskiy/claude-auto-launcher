@@ -17,6 +17,7 @@ use crate::log::{self, Logger};
 use crate::log_data;
 use crate::out::{self, Fg};
 use crate::prefs;
+use crate::timing::{self, SpanId, Timings};
 use crate::types::ChildEnv;
 use crate::{env, invocation, remote, sys};
 
@@ -68,6 +69,8 @@ struct Run {
     cfg: Config,
     roster: Roster,
     logger: Logger,
+    /// Debug mode's root span: process start to the spawn of claude.
+    process: SpanId,
 }
 
 /// The whole launcher. Returns the process exit code.
@@ -78,19 +81,33 @@ pub fn run(args: Vec<String>) -> i32 {
     }
     let preview = var("CLAUDE_AUTO_PREVIEW").as_deref() == Some("1");
     let started = Instant::now();
+    let debug = timing::debug_requested(&args, var("CLAUDE_AUTO_DEBUG").as_deref());
+    let args = if debug && args.len() == 1 && args.first().is_some_and(|a| a == "--debug") {
+        Vec::new()
+    } else {
+        args
+    };
+    let timings = if debug { Timings::on(started) } else { Timings::default() };
+    let process = timings.begin_at(&["process"], started);
     let ctx = PathCtx::from_env();
-    let cfg = config::read_config(&config::config_path(&ctx, var("CLAUDE_AUTO_CONFIG").as_deref()), &ctx);
+    let cfg = {
+        let _s = timings.scope(&["config"]);
+        config::read_config(&config::config_path(&ctx, var("CLAUDE_AUTO_CONFIG").as_deref()), &ctx)
+    };
     let canonical = cfg.canonical().map(|a| (a.key.clone(), a.root.clone()));
     let roster = Roster::new(&cfg.accounts, cfg.remote, canonical.as_ref().map(|(k, _)| k.as_str()));
     for w in &cfg.warnings {
         out::line(&format!("  config: {w}"), Fg::DarkYellow);
     }
     let log_root = PathBuf::from(canonical.map_or_else(String::new, |(_, r)| r)).join("launcher-logs");
+    if let Some(days) = timing::summary::parse_args(&args) {
+        return print_timings(&log_root, days);
+    }
     let logger = Logger {
         root: log_root,
         run_id: log::new_run_id(),
         enabled: !preview,
-        timings: crate::timing::Timings::default(),
+        timings,
     };
     let run = Run {
         args,
@@ -100,8 +117,29 @@ pub fn run(args: Vec<String>) -> i32 {
         cfg,
         roster,
         logger,
+        process,
     };
-    launch(&run)
+    let code = launch(&run);
+    // Every path but the spawn ends here; the spawn path ended and wrote these already.
+    run.logger.timings.end(run.process);
+    run.logger.write_timings();
+    code
+}
+
+/// `--timings [--days N]`: the table, then exit without the UI.
+fn print_timings(log_root: &Path, days: Result<u32, String>) -> i32 {
+    let days = match days {
+        Ok(d) => d,
+        Err(e) => {
+            out::err_line(&format!("claude-auto: {e}"));
+            return 1;
+        }
+    };
+    let today = sys::local_now().map_or((1970, 1, 1), |t| (i64::from(t.year), i64::from(t.month), i64::from(t.day)));
+    for l in timing::summary::report(&timing::summary::log_files(log_root, today, days)) {
+        out::line(&l, Fg::Plain);
+    }
+    0
 }
 
 fn ms(run: &Run) -> u64 {
@@ -160,7 +198,10 @@ fn launch(run: &Run) -> i32 {
     let mut stop_server = false;
     let mut ui: Option<UiOutcome> = None;
     if use_ui {
-        match run_ui(run, input_redirected, output_redirected) {
+        let ui_span = run.logger.timings.begin(&["ui"]);
+        let ended = run_ui(run, input_redirected, output_redirected);
+        run.logger.timings.end(ui_span);
+        match ended {
             Ok(UiEnd::Launch(o)) => ui = Some(*o),
             Ok(UiEnd::Cancelled) => {
                 run.logger.write("cancelled", log_data! { "ms" => ms(run) });
@@ -235,6 +276,8 @@ fn launch(run: &Run) -> i32 {
         }
     }
 
+    let tm = &run.logger.timings;
+    let prep = tm.begin(&["prepare"]);
     if let Err(e) = env::set_profile(&run.cfg, &choice, run.preview, &mut child) {
         out::line(&format!("  {e}"), Fg::Red);
         return 1;
@@ -249,15 +292,28 @@ fn launch(run: &Run) -> i32 {
         );
     }
     if !run.preview {
+        let _s = tm.scope(&["secrets"]);
         let cwd = std::env::current_dir().unwrap_or_else(|_| run.ctx.cwd.clone());
         env::import_project_secrets(&cwd, &run.cfg.secrets_root, &mut child);
     }
-    env::repair_shared_profiles(&run.cfg, run.preview);
+    {
+        let _s = tm.scope(&["sharing"]);
+        env::repair_shared_profiles(&run.cfg, run.preview);
+    }
     if !run.preview {
+        let _s = tm.scope(&["hooks"]);
         env::run_launch_hooks_with_env(&run.cfg.launch_hooks, &child);
     }
-    let mcp = env::mcp_config_paths(&run.cfg, run.preview);
-    let claude = match invocation::resolve_claude() {
+    let mcp = {
+        let _s = tm.scope(&["mcp"]);
+        env::mcp_config_paths(&run.cfg, run.preview)
+    };
+    let resolved = {
+        let _s = tm.scope(&["resolve claude"]);
+        invocation::resolve_claude()
+    };
+    tm.end(prep);
+    let claude = match resolved {
         Ok(p) => p,
         Err(msg) => {
             out::line(&format!("  {msg}"), Fg::Red);
@@ -327,6 +383,8 @@ fn launch(run: &Run) -> i32 {
                 },
             );
         }
+        tm.end(run.process);
+        run.logger.write_timings();
         if let Some(code) = remote::launch_via_crc(&req) {
             run.logger
                 .write("exit", log_data! { "via" => "crc", "code" => code, "ms" => ms(run) });
@@ -344,7 +402,8 @@ fn launch(run: &Run) -> i32 {
             "remote" => remote_on, "mcpConfigs" => mcp, "argv" => argv, "ms" => ms(run),
         },
     );
-    let code = match invocation::run_child(&claude, &argv, &child) {
+    tm.end(run.process);
+    let code = match invocation::run_child(&claude, &argv, &child, Some(&run.logger)) {
         Ok(c) => c,
         Err(e) => {
             out::line(&format!("  claude could not be started: {e}"), Fg::Red);

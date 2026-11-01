@@ -40,6 +40,7 @@ fn launcher(dir: &Path) -> Command {
         .env_remove("CLAUDE_AUTO_PREVIEW")
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CLAUDE_AUTO_LAUNCHED")
+        .env_remove("CLAUDE_AUTO_DEBUG")
         .current_dir(dir);
     c
 }
@@ -77,6 +78,79 @@ fn arguments_pass_through_verbatim_with_exit_code_and_marker() {
     );
     assert!(out.contains("MARK [1]"), "CLAUDE_AUTO_LAUNCHED=1 for the child: {out}");
     assert!(out.contains("-> work account"), "{out}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+fn timing_records(d: &Path) -> Vec<serde_json::Value> {
+    let logs = d.join("home").join(".claude").join("launcher-logs");
+    let Ok(entries) = std::fs::read_dir(&logs) else { return Vec::new() };
+    entries
+        .flatten()
+        .flat_map(|e| {
+            std::fs::read_to_string(e.path())
+                .unwrap()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(&l).ok())
+        .filter(|v| v["stage"] == "timing")
+        .collect()
+}
+
+#[test]
+fn debug_off_logs_no_timing_records_and_debug_on_logs_spans() {
+    let d = scratch("timing-log");
+    fake_claude(&d);
+    let o = launcher(&d).args(["-p", "x"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(7), "{}", text(&o));
+    assert_eq!(timing_records(&d), Vec::<serde_json::Value>::new());
+    let o = launcher(&d).env("CLAUDE_AUTO_DEBUG", "1").args(["-p", "x"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(7), "{}", text(&o));
+    let recs = timing_records(&d);
+    let names: Vec<&str> = recs.iter().filter_map(|r| r["name"].as_str()).collect();
+    for n in ["config", "process", "spawn"] {
+        assert!(names.contains(&n), "{n} in {names:?}");
+    }
+    let config = recs.iter().find(|r| r["name"] == "config").unwrap();
+    assert_eq!(config["parent"], "process");
+    assert!(config["ms"].is_f64() && config["startMs"].is_f64(), "{config}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn timings_without_a_log_prints_no_records_and_exits_zero() {
+    let d = scratch("timings-empty");
+    let o = launcher(&d).args(["--timings", "--days", "3"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(text(&o).trim_end(), "no timing records");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn preview_in_debug_mode_shows_the_footer_and_the_timings_screen() {
+    let d = scratch("debug-preview");
+    let config = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("config-four.json");
+    let run = |debug: bool| {
+        let mut c = launcher(&d);
+        c.env("CLAUDE_AUTO_CONFIG", &config)
+            .env("CLAUDE_AUTO_PREVIEW", "1")
+            .env("CLAUDE_AUTO_PREVIEW_KEYS", "F12,Escape,Escape");
+        if debug {
+            c.arg("--debug");
+        }
+        text(&c.output().unwrap())
+    };
+    let on = run(true);
+    assert!(on.contains("  load "), "{on}");
+    assert!(on.contains("last key->frame"), "{on}");
+    assert!(on.contains("timings of this run"), "{on}");
+    assert!(on.contains("screen:launch"), "{on}");
+    let off = run(false);
+    assert!(!off.contains("last key->frame") && !off.contains("timings of this run"), "{off}");
     std::fs::remove_dir_all(&d).unwrap();
 }
 

@@ -11,6 +11,7 @@ use crate::launch::launch_mode;
 use crate::launch::screen::{LaunchScreen, LaunchView};
 use crate::out;
 use crate::prefs;
+use crate::timing::view;
 use crate::types::VersionInfo;
 use crate::ui::{ConsoleTerm, PreviewTerm, Term, UiStop, parse_preview_keys, parse_preview_size};
 use crate::{env, maintenance, projects, sessions, sys, theme};
@@ -24,14 +25,23 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         color: theme::color_supported(var("NO_COLOR").as_deref(), var("TERM").as_deref()),
         ascii: theme::ascii_required(var("CLAUDE_AUTO_ASCII").as_deref(), sys::output_code_page()),
     };
+    let tm = &run.logger.timings;
+    tm.set_style(style.color, style.ascii);
+    let load = tm.begin(&["load", "launch"]);
     let mut version: VersionInfo = maintenance::read_version();
     if !run.preview && var("CLAUDE_AUTO_NO_UPDATE").as_deref() != Some("1") {
+        let _s = tm.scope(&["update check"]);
         maintenance::update_before_launch(&mut version);
     }
     let mut roster = run.roster.clone();
-    if let Some(labels) = env::model_family_labels(run.preview) {
+    let labels = {
+        let _s = tm.scope(&["model catalog"]);
+        env::model_family_labels(run.preview)
+    };
+    if let Some(labels) = labels {
         roster.set_model_labels(&labels);
     }
+    let accounts = tm.begin(&["accounts"]);
     let canonical_root = run.cfg.canonical().map(|a| a.root.clone()).unwrap_or_default();
     let settings = |root: &str| Path::new(root).join("settings.json");
     let rate_dir = var("CLAUDE_AUTO_RATE_LIMITS_DIR").map_or_else(|| run.ctx.home.join(".claude").join("rate-limits"), PathBuf::from);
@@ -48,17 +58,16 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             .collect(),
         style,
     };
-
+    tm.end(accounts);
+    let console = tm.begin(&["console"]);
     let mut term: Box<dyn Term> = if run.preview {
         let keys = parse_preview_keys(&var("CLAUDE_AUTO_PREVIEW_KEYS").unwrap_or_default()).map_err(|e| {
             out::err_line(&e);
             UiStop::KeysExhausted
         })?;
-        Box::new(PreviewTerm::new(
-            parse_preview_size(var("CLAUDE_AUTO_PREVIEW_SIZE").as_deref()),
-            keys,
-            false,
-        ))
+        Box::new(
+            PreviewTerm::new(parse_preview_size(var("CLAUDE_AUTO_PREVIEW_SIZE").as_deref()), keys, false).with_logger(run.logger.clone()),
+        )
     } else {
         let mouse = var("CLAUDE_AUTO_NO_MOUSE").as_deref() != Some("1");
         let trace = (var("CLAUDE_AUTO_INPUT_TRACE").as_deref() == Some("1")).then(|| trace_path(&run.ctx));
@@ -69,9 +78,14 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         Box::new(ConsoleTerm::open(alt, Some(input), run.logger.clone()))
     };
 
+    tm.end(console);
+    let prefs_span = tm.begin(&["prefs"]);
     let prefs_file = prefs::read_prefs(&prefs::prefs_path(&run.ctx, var("CLAUDE_AUTO_PREFS").as_deref()));
     let mut state = roster.new_state();
     let merged = prefs::merge_prefs(&mut state, &prefs_file, &roster, now_ms());
+    tm.end(prefs_span);
+    tm.end(load);
+    let load = tm.begin(&["load", "project"]);
     let cache = run.preview.then(|| {
         let tmp = std::env::temp_dir();
         projects::remove_stale_preview_cache(&tmp);
@@ -82,6 +96,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let project_list = projects::project_registry(cache.as_deref(), &roots);
     let project_source = projects::set_launch_start_project(&mut state, &run.ctx.cwd, &project_list);
     let preselect = state.project.clone();
+    tm.end(load);
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
     let mut chosen_how: Option<String>;
     let actions = run.cfg.maintenance_actions.clone();
@@ -120,7 +135,10 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         }
         let sessions_root = sessions::sessions_root(&run.cfg, &state.account);
         if mode.is_some_and(|m| m.attaches_newest) {
-            let holder = sessions::continue_session_holder(&held_dirs, &slugs, &sessions_root);
+            let holder = {
+                let _s = tm.scope(&["held check"]);
+                sessions::continue_session_holder(&held_dirs, &slugs, &sessions_root)
+            };
             if confirm_held(term.as_mut(), holder.as_deref(), style)? {
                 break launch_end(state, None, false, view, merged.restored, project_source, preselect, chosen_how);
             }
@@ -147,6 +165,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             let holder = if picked.fork {
                 None
             } else {
+                let _s = tm.scope(&["held check"]);
                 sessions::session_holder(&held_dirs, &picked.session_id)
             };
             if confirm_held(term.as_mut(), holder.as_deref(), style)? {
@@ -216,10 +235,13 @@ fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Resu
     let Some(h) = holder else { return Ok(true) };
     let warning = sessions::held_warning(h);
     let mut dirty = true;
+    let tm = term.logger().timings.clone();
     loop {
         let size = term.size();
         if dirty {
-            term.paint(&frame::held_session_frame(&warning, size.0, size.1, style.ascii));
+            let (w, h) = view::body_size(&tm, size);
+            let lines = frame::held_session_frame(&warning, w, h, style.ascii);
+            term.paint(&view::with_footer(&tm, lines, "held", size));
             dirty = false;
         }
         match term.wait(size)? {

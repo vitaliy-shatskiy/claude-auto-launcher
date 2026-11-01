@@ -13,21 +13,21 @@ fn at(origin: Instant, ms: u64) -> Instant {
 #[test]
 fn spans_nest_under_the_innermost_open_span_in_start_order() {
     let t = Timings::on(Instant::now());
-    let a = t.begin(&["a"]);
-    let b = t.begin(&["b", "x"]);
-    t.end(b);
-    let c = t.begin(&["c"]);
-    t.end(c);
-    t.end(a);
-    let d = t.begin(&["d"]);
-    t.end(d);
-    let s = t.spans();
-    let names: Vec<&str> = s.iter().map(|s| s.name.as_str()).collect();
+    let outer = t.begin(&["a"]);
+    let first = t.begin(&["b", "x"]);
+    t.end(first);
+    let second = t.begin(&["c"]);
+    t.end(second);
+    t.end(outer);
+    let after = t.begin(&["d"]);
+    t.end(after);
+    let spans = t.spans();
+    let names: Vec<&str> = spans.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["a", "b:x", "c", "d"]);
-    let parents: Vec<Option<usize>> = s.iter().map(|s| s.parent).collect();
+    let parents: Vec<Option<usize>> = spans.iter().map(|s| s.parent).collect();
     assert_eq!(parents, [None, Some(0), Some(0), None]);
-    assert!(s.iter().all(|s| s.dur_us.is_some()));
-    assert!(s.windows(2).all(|w| w[0].start_us <= w[1].start_us));
+    assert!(spans.iter().all(|s| s.dur_us.is_some()));
+    assert!(spans.windows(2).all(|w| w[0].start_us <= w[1].start_us));
 }
 
 #[test]
@@ -50,9 +50,9 @@ fn the_off_recorder_records_nothing() {
     let id = t.begin(&["a"]);
     t.end(id);
     assert!(!t.is_on());
-    assert!(t.spans().is_empty());
+    assert_eq!(t.spans(), Vec::new());
     assert_eq!(t.latest_ms("a"), None);
-    assert!(t.take_unlogged().is_empty());
+    assert_eq!(t.take_unlogged(), Vec::new());
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn unlogged_spans_are_handed_once_with_parent_names() {
     t.end_at(c, at(o, 3));
     let got = t.take_unlogged();
     assert_eq!(got, vec![("config".to_owned(), Some("process".to_owned()), 2.0, 1.0)]);
-    assert!(t.take_unlogged().is_empty());
+    assert_eq!(t.take_unlogged(), Vec::new());
     t.end_at(root, at(o, 4));
     assert_eq!(t.take_unlogged(), vec![("process".to_owned(), None, 4.0, 0.0)]);
 }
@@ -89,16 +89,15 @@ fn unlogged_spans_are_handed_once_with_parent_names() {
 fn tree_lists_children_under_their_parent_slowest_first() {
     let o = Instant::now();
     let t = Timings::on(o);
-    let a = t.begin_at(&["a"], at(o, 0));
-    let b = t.begin_at(&["b"], at(o, 0));
-    t.end_at(b, at(o, 2));
-    let c = t.begin_at(&["c"], at(o, 2));
-    let c1 = t.begin_at(&["c1"], at(o, 2));
-    t.end_at(c1, at(o, 3));
-    t.end_at(c, at(o, 7));
-    t.end_at(a, at(o, 10));
-    let open = t.begin_at(&["z"], at(o, 10));
-    let _ = open;
+    let top = t.begin_at(&["a"], at(o, 0));
+    let fast = t.begin_at(&["b"], at(o, 0));
+    t.end_at(fast, at(o, 2));
+    let slow = t.begin_at(&["c"], at(o, 2));
+    let inner = t.begin_at(&["c1"], at(o, 2));
+    t.end_at(inner, at(o, 3));
+    t.end_at(slow, at(o, 7));
+    t.end_at(top, at(o, 10));
+    t.begin_at(&["z"], at(o, 10));
     assert_eq!(
         tree_lines(&t.spans(), 30_000),
         [
@@ -169,9 +168,10 @@ fn scratch(name: &str) -> std::path::PathBuf {
 fn summary_math_over_a_fixture_log() {
     let d = scratch("fixture");
     let mut text = String::from("{\"stage\":\"start\",\"ms\":999}\r\nnot json\r\n");
-    for v in [7, 3, 20, 1, 15, 9, 2, 18, 11, 5, 14, 4, 19, 6, 13, 10, 8, 17, 12, 16] {
-        text.push_str(&format!("{{\"stage\":\"timing\",\"name\":\"paint:launch\",\"ms\":{v}}}\r\n"));
-    }
+    text.extend(
+        [7, 3, 20, 1, 15, 9, 2, 18, 11, 5, 14, 4, 19, 6, 13, 10, 8, 17, 12, 16]
+            .map(|v| format!("{{\"stage\":\"timing\",\"name\":\"paint:launch\",\"ms\":{v}}}\r\n")),
+    );
     text.push_str("{\"stage\":\"timing\",\"name\":\"config\",\"ms\":3.5}\r\n");
     let f = d.join("claude-auto-2026-11-01.jsonl");
     std::fs::write(&f, text).unwrap();
