@@ -186,6 +186,7 @@ fn launch(run: &Run) -> i32 {
     let input_redirected = !std::io::stdin().is_terminal();
     let output_redirected = !std::io::stdout().is_terminal();
     if !run.preview {
+        let _s = run.logger.timings.scope(&["start log"]);
         log_start(run, input_redirected, output_redirected);
     }
     let mut use_ui = run.preview || (!input_redirected && run.args.is_empty());
