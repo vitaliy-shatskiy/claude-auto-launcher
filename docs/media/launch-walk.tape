@@ -8,11 +8,16 @@ Output docs/media/launch-walk.gif
 Output docs/media/launch-walk.mp4
 Set Shell "pwsh"
 Set FontFamily "Cascadia Mono"
-Set FontSize 16
-Set Width 1080
-Set Height 400
-Set Padding 20
-Set Theme "Builtin Dark"
+Set FontSize 22
+Set Width 1472
+Set Height 592
+Set Padding 24
+Set Margin 40
+Set MarginFill "target/vhs/backdrop-launch-walk.png"
+Set WindowBar Colorful
+Set WindowBarSize 44
+Set BorderRadius 10
+Set Theme "GitHub Dark"
 Set Framerate 24
 Set TypingSpeed 60ms
 

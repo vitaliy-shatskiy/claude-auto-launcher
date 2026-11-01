@@ -1,20 +1,35 @@
 <div align="center">
-  <h1>claude-auto</h1>
-  <h3>Pick the account, model, effort and project. Then Claude Code starts.</h3>
-  <p>A keyboard-first launcher for Claude Code on Windows: one screen of remembered choices per account, one native <code>.exe</code>.</p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/hero-dark.svg">
+    <img alt="claude-auto: pick the account, model and project, then Claude Code starts. The flow: account tabs with five-hour usage, the launch rows, the project screen, then the claude command" src="docs/media/hero-light.svg" width="100%">
+  </picture>
+
+  <p><b>Pick the account, model, effort and project. Then Claude Code starts.</b><br>
+  A keyboard-first launcher for Claude Code on Windows: one screen of remembered choices per account, one native <code>.exe</code>.</p>
+
   <p>
     <a href="https://github.com/vitaliy-shatskiy/claude-auto-launcher/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/vitaliy-shatskiy/claude-auto-launcher/actions/workflows/ci.yml/badge.svg"></a>
     <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-3DA639"></a>
     <img alt="platform: Windows" src="https://img.shields.io/badge/platform-Windows-0078D4">
     <img alt="Rust 1.99" src="https://img.shields.io/badge/Rust-1.99-B7410E">
   </p>
-  <p><a href="#features">Features</a> · <a href="#install">Install</a> · <a href="#usage">Usage</a> · <a href="#configuration">Configuration</a> · <a href="#development">Development</a></p>
-  <img alt="The launch screen: account tabs with five-hour usage, then model Opus, effort xhigh, advisor opus and permission auto picked for the main account" src="docs/media/launch-screen.png" width="100%">
+
+  <p><a href="#quick-start">Quick start</a> · <a href="#what-you-get">What you get</a> · <a href="#usage">Usage</a> · <a href="#configuration">Configuration</a> · <a href="#development">Development</a></p>
 </div>
+
+<br>
+
+<p align="center">
+  <img alt="The launch screen: account tabs with five-hour usage, then model Opus, effort xhigh, advisor opus and permission auto picked for the main account" src="docs/media/launch-screen.png" width="100%">
+  <br>
+  <sub>The launch screen on three demo accounts: each tab carries its five-hour usage and brings back its own choices.</sub>
+</p>
 
 > [!IMPORTANT]
 > Unofficial and unaffiliated with Anthropic. It runs the `claude` CLI you already have. Bugs in the
 > CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
+
+## Quick start
 
 ```
 git clone https://github.com/vitaliy-shatskiy/claude-auto-launcher.git
@@ -22,33 +37,61 @@ cd claude-auto-launcher
 cargo build --release --locked
 ```
 
-## Features
+Copy `target\release\claude-auto-rs.exe` to a folder on your PATH and run `claude-auto-rs`. Details
+and requirements under [Install](#install).
 
-- **Several Claude accounts, one launcher.** A tab per account, each tab carrying its five-hour
-  usage. Each account remembers its own model, effort, advisor and permission choice.
-- **Honest defaults.** `default` on a row shows what it resolves to in that account's
-  `settings.json`, and the model names come out of the installed `claude.exe`, so they follow the
-  CLI's releases.
-- **Projects and sessions.** Known projects with their last use, a typed path, a new git worktree,
-  continue the last session, or resume and fork any earlier one from a picker with a preview of
-  its last exchange.
-- **Safe mode.** One row starts a session without CLAUDE.md, skills, plugins, hooks and MCP.
-- **Multi-account sharing** (opt-in). Settings, skills, agents, hooks and projects linked from one
-  account into the others, and MCP servers mirrored, repaired on every launch.
-- **Per-project secrets.** Files in a secrets folder become the session's environment variables, so
-  no token sits in a config file.
-- **Launch hooks and maintenance.** Scripts run beside each launch, plus a maintenance screen for
-  update, doctor, MCP list and your own actions.
-- **Keyboard and mouse.** Every screen works from the keyboard; hover, click and the wheel work too.
-- **One file, no runtime.** Written in Rust, nothing installed outside your user profile.
+## What you get
 
-```mermaid
-flowchart LR
-  A[account] --> B[model · effort · advisor · permission · mode]
-  B -- enter --> C[project]
-  C -- new · continue · worktree --> E[claude]
-  C -- resume --> D[session picker] --> E
-```
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-accounts-dark.svg"><img alt="" src="docs/media/feature-accounts-light.svg" width="48" height="48"></picture><br>
+      <b>Several accounts, one launcher</b><br>
+      A tab per account with its five-hour usage. Each account remembers its own model, effort, advisor and permission.
+    </td>
+    <td width="50%" valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-rows-dark.svg"><img alt="" src="docs/media/feature-rows-light.svg" width="48" height="48"></picture><br>
+      <b>Honest defaults</b><br>
+      <code>default</code> shows what it resolves to in that account's <code>settings.json</code>. Model names come out of the installed <code>claude.exe</code>.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-projects-dark.svg"><img alt="" src="docs/media/feature-projects-light.svg" width="48" height="48"></picture><br>
+      <b>Projects and sessions</b><br>
+      Known projects, a typed path or a new git worktree. Continue the last session, or resume and fork one from a picker with a preview.
+    </td>
+    <td valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-safe-dark.svg"><img alt="" src="docs/media/feature-safe-light.svg" width="48" height="48"></picture><br>
+      <b>Safe mode</b><br>
+      One row starts a session without CLAUDE.md, skills, plugins, hooks and MCP.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-sharing-dark.svg"><img alt="" src="docs/media/feature-sharing-light.svg" width="48" height="48"></picture><br>
+      <b>Multi-account sharing</b> (opt-in)<br>
+      Settings, skills, agents, hooks and projects linked from one account into the others, MCP servers mirrored, repaired on every launch.
+    </td>
+    <td valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-secrets-dark.svg"><img alt="" src="docs/media/feature-secrets-light.svg" width="48" height="48"></picture><br>
+      <b>Per-project secrets</b><br>
+      Files in a secrets folder become the session's environment variables, so no token sits in a config file.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-hooks-dark.svg"><img alt="" src="docs/media/feature-hooks-light.svg" width="48" height="48"></picture><br>
+      <b>Launch hooks and maintenance</b><br>
+      Scripts run beside each launch. A maintenance screen for update, doctor, MCP list and your own actions.
+    </td>
+    <td valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-keys-dark.svg"><img alt="" src="docs/media/feature-keys-light.svg" width="48" height="48"></picture><br>
+      <b>Keyboard and mouse, one file</b><br>
+      Every screen works from the keyboard, and hover, click and the wheel work too. Rust, one <code>.exe</code>, no runtime.
+    </td>
+  </tr>
+</table>
 
 ## Install
 
@@ -81,6 +124,8 @@ Every argument goes to `claude` untouched, except the launcher's own `--launcher
 
 <div align="center">
   <a href="docs/media/launch-walk.mp4"><img alt="A keyboard walk: switching between three accounts brings back each one's model, effort, advisor and permission, then the model, effort and advisor rows are stepped" src="docs/media/launch-walk.gif" width="100%"></a>
+  <br>
+  <sub>Switching accounts brings back each one's choices, then the model, effort and advisor rows are stepped.</sub>
 </div>
 
 | Screen | Keys |

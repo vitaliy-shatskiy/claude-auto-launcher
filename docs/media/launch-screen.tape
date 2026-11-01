@@ -5,20 +5,25 @@
 Output target/vhs/launch-screen.gif
 Set Shell "pwsh"
 Set FontFamily "Cascadia Mono"
-Set FontSize 16
-Set Width 1080
-Set Height 400
-Set Padding 20
-Set Theme "Builtin Dark"
+Set FontSize 32
+Set Width 2092
+Set Height 912
+Set Padding 36
+Set Margin 56
+Set MarginFill "target/vhs/backdrop-launch-screen.png"
+Set WindowBar Colorful
+Set WindowBarSize 64
+Set BorderRadius 14
+Set Theme "GitHub Dark"
 Set TypingSpeed 40ms
 
 Hide
-Type ". ./docs/media/demo-setup.ps1; $env:CLAUDE_AUTO_PREVIEW = '1'; $env:CLAUDE_AUTO_PREVIEW_SIZE = '100x20'; $env:CLAUDE_AUTO_PREVIEW_KEYS = 'Escape'; Clear-Host"
+Type ". ./docs/media/demo-setup.ps1; $env:CLAUDE_AUTO_PREVIEW = '1'; $env:CLAUDE_AUTO_PREVIEW_SIZE = '100x20'; $env:CLAUDE_AUTO_PREVIEW_KEYS = 'Escape'; function shot { Clear-Host; claude-auto-rs; function global:prompt { [char]27 + '[?25l' } }; Clear-Host"
 Enter
 Sleep 2s
 Show
 
-Type "claude-auto"
+Type "shot"
 Sleep 300ms
 Enter
 Sleep 2s
