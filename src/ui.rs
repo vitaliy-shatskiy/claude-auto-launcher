@@ -37,24 +37,32 @@ pub struct Activation {
     pub queued: bool,
 }
 
-/// A scripted key source ran out: how a finite preview ends.
+/// Why a screen stopped without an answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Exhausted;
+pub enum UiStop {
+    /// A scripted key source ran out: how a finite preview ends.
+    KeysExhausted,
+    /// The console input could not be re-armed after a typed line (`read_line`).
+    ConsoleLost,
+}
 
-impl std::fmt::Display for Exhausted {
+impl std::fmt::Display for UiStop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("scripted keys exhausted")
+        f.write_str(match self {
+            Self::KeysExhausted => "scripted keys exhausted",
+            Self::ConsoleLost => "the console input could not be re-armed after a typed line",
+        })
     }
 }
 
-impl std::error::Error for Exhausted {}
+impl std::error::Error for UiStop {}
 
 /// What a screen needs from the terminal. The console and the preview implement it.
 pub trait Term {
     fn size(&mut self) -> (usize, usize);
     fn paint(&mut self, lines: &[String]);
     /// `Wait-KeyOrResize`: the next event; `Resize` when the size moved from `size`.
-    fn wait(&mut self, size: (usize, usize)) -> Result<Event, Exhausted>;
+    fn wait(&mut self, size: (usize, usize)) -> Result<Event, UiStop>;
     fn window_top(&mut self) -> i32;
     /// One non-blocking look: is another record already waiting?
     fn input_pending(&mut self) -> bool;
@@ -141,12 +149,14 @@ impl Term for ConsoleTerm {
         }
     }
 
-    fn wait(&mut self, size: (usize, usize)) -> Result<Event, Exhausted> {
+    fn wait(&mut self, size: (usize, usize)) -> Result<Event, UiStop> {
         loop {
             if self.size() != size {
                 return Ok(Event::Resize);
             }
-            let Some(input) = self.input.as_mut() else { return Err(Exhausted) };
+            let Some(input) = self.input.as_mut() else {
+                return Err(UiStop::ConsoleLost);
+            };
             if let Some(ev) = input.read_event(60) {
                 return Ok(ev);
             }
@@ -251,8 +261,8 @@ impl Term for PreviewTerm {
         }
     }
 
-    fn wait(&mut self, _size: (usize, usize)) -> Result<Event, Exhausted> {
-        self.keys.pop_front().map(Event::Key).ok_or(Exhausted)
+    fn wait(&mut self, _size: (usize, usize)) -> Result<Event, UiStop> {
+        self.keys.pop_front().map(Event::Key).ok_or(UiStop::KeysExhausted)
     }
 
     fn window_top(&mut self) -> i32 {
@@ -401,6 +411,19 @@ mod tests {
             ch: None,
             line,
         }
+    }
+
+    #[test]
+    fn a_console_without_armed_input_ends_as_lost_not_as_exhausted_keys() {
+        let logger = Logger {
+            root: std::path::PathBuf::new(),
+            run_id: String::new(),
+            enabled: false,
+        };
+        let mut t = ConsoleTerm::open(false, None, logger);
+        let size = t.size();
+        assert_eq!(t.wait(size), Err(UiStop::ConsoleLost));
+        assert_ne!(UiStop::ConsoleLost.to_string(), UiStop::KeysExhausted.to_string());
     }
 
     #[test]

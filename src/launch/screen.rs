@@ -326,8 +326,8 @@ mod tests {
         fn paint(&mut self, lines: &[String]) {
             self.inner.paint(lines);
         }
-        fn wait(&mut self, _s: (usize, usize)) -> Result<Event, crate::ui::Exhausted> {
-            self.q.pop_front().ok_or(crate::ui::Exhausted)
+        fn wait(&mut self, _s: (usize, usize)) -> Result<Event, crate::ui::UiStop> {
+            self.q.pop_front().ok_or(crate::ui::UiStop::KeysExhausted)
         }
         fn window_top(&mut self) -> i32 {
             0

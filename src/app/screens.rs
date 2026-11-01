@@ -12,14 +12,14 @@ use crate::launch::screen::{LaunchScreen, LaunchView};
 use crate::out;
 use crate::prefs;
 use crate::types::VersionInfo;
-use crate::ui::{ConsoleTerm, Exhausted, PreviewTerm, Term, parse_preview_keys, parse_preview_size};
+use crate::ui::{ConsoleTerm, PreviewTerm, Term, UiStop, parse_preview_keys, parse_preview_size};
 use crate::{env, maintenance, projects, sessions, sys, theme};
 
 use super::{Run, UiEnd, UiOutcome, now_ms, var};
 
 /// The UI: launch screen, project screen, held-session warning, picker - until a launch.
 #[expect(clippy::too_many_lines, reason = "the screen sequence reads top to bottom as in claude-auto.ps1")]
-pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool) -> Result<UiEnd, Exhausted> {
+pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool) -> Result<UiEnd, UiStop> {
     let style = Style {
         color: theme::color_supported(var("NO_COLOR").as_deref(), var("TERM").as_deref()),
         ascii: theme::ascii_required(var("CLAUDE_AUTO_ASCII").as_deref(), sys::output_code_page()),
@@ -52,7 +52,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let mut term: Box<dyn Term> = if run.preview {
         let keys = parse_preview_keys(&var("CLAUDE_AUTO_PREVIEW_KEYS").unwrap_or_default()).map_err(|e| {
             out::err_line(&e);
-            Exhausted
+            UiStop::KeysExhausted
         })?;
         Box::new(PreviewTerm::new(
             parse_preview_size(var("CLAUDE_AUTO_PREVIEW_SIZE").as_deref()),
@@ -212,7 +212,7 @@ fn trace_path(ctx: &PathCtx) -> PathBuf {
 }
 
 /// `Confirm-HeldSession`: Enter = go on, Esc/Ctrl+C = back; nothing held = go on.
-fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Result<bool, Exhausted> {
+fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Result<bool, UiStop> {
     let Some(h) = holder else { return Ok(true) };
     let warning = sessions::held_warning(h);
     let mut dirty = true;

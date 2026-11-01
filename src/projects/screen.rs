@@ -13,7 +13,7 @@ use crate::frame::{Frame, Style};
 use crate::input::{KeyPress, vk};
 use crate::launch::LAUNCH_MODES;
 use crate::ui::screen_loop::{Cursor, Flow, Screen, run};
-use crate::ui::{Exhausted, Hit, Term};
+use crate::ui::{Hit, Term, UiStop};
 
 /// What one loop run ends with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,7 +296,7 @@ pub(crate) fn run_screen(
     initial_action: &str,
     style: Style,
     clock: &dyn Fn() -> i64,
-) -> Result<Option<ProjectChoice>, Exhausted> {
+) -> Result<Option<ProjectChoice>, UiStop> {
     let cwd = cwd.to_string_lossy();
     let mut screen = ProjectScreen::new(projects, &cwd, initial_action, style, clock);
     loop {

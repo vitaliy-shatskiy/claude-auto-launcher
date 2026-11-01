@@ -107,6 +107,14 @@ fn ms(run: &Run) -> u64 {
     u64::try_from(run.started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+/// The error log's `type`: `Exhausted` stays the name earlier logs used for a finished preview.
+fn ui_stop_type(e: crate::ui::UiStop) -> &'static str {
+    match e {
+        crate::ui::UiStop::KeysExhausted => "Exhausted",
+        crate::ui::UiStop::ConsoleLost => "ConsoleLost",
+    }
+}
+
 fn log_start(run: &Run, input_redirected: bool, output_redirected: bool) {
     log::prune(&run.logger.root, 14);
     let env_names = [
@@ -172,7 +180,7 @@ fn launch(run: &Run) -> i32 {
             Err(e) => {
                 run.logger.write(
                     "error",
-                    log_data! { "where" => "ui", "type" => "Exhausted", "message" => e.to_string() },
+                    log_data! { "where" => "ui", "type" => ui_stop_type(e), "message" => e.to_string() },
                 );
                 out::err_line(&format!("claude-auto: {e}"));
                 return 1;

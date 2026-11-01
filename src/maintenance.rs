@@ -14,7 +14,7 @@ use crate::config::{MaintenanceAction, PathCtx};
 use crate::frame::Style;
 use crate::out::{self, Fg};
 use crate::types::VersionInfo;
-use crate::ui::{Exhausted, Term};
+use crate::ui::{Term, UiStop};
 use install::{Install, InstallInfo, Pruned};
 use screen::{MaintScreen, Ops, ScriptRun};
 
@@ -138,7 +138,13 @@ pub fn update_before_launch(version: &mut VersionInfo) {
     let claude_dir = home.join(".claude");
     let channel = release::auto_updates_channel(&claude_dir.join("settings.json"));
     let cache = claude_dir.join("claude-auto-update.json");
-    let remote = release::remote_version(&channel, &cache, now_ms(), &mut |url| win::https_get(url, 5000));
+    let remote = match release::remote_version(&channel, &cache, now_ms(), &mut |url| win::https_get(url, 5000)) {
+        Ok(r) => r,
+        Err(e) => {
+            out::line(&format!("  update check skipped: {e}"), Fg::DarkYellow);
+            return;
+        }
+    };
     if release::update_available(version.installed.as_deref(), remote.as_deref()) {
         out::line(
             &format!(
@@ -171,7 +177,7 @@ pub fn update_before_launch(version: &mut VersionInfo) {
 }
 
 /// `Invoke-MaintenanceScreen`, opened by `u` from the launch screen and returning to it.
-pub fn run_screen(term: &mut dyn Term, actions: &[MaintenanceAction], style: Style) -> Result<(), Exhausted> {
+pub fn run_screen(term: &mut dyn Term, actions: &[MaintenanceAction], style: Style) -> Result<(), UiStop> {
     let preview = is_preview();
     let mut ops = RealOps {
         install: Install::from_env(preview),

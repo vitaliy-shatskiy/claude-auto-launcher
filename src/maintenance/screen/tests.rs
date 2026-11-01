@@ -6,7 +6,7 @@ use super::*;
 use crate::input::{Event, MouseEvent, vk};
 use crate::layout::display_width;
 use crate::ui::screen_loop::run;
-use crate::ui::{Activation, Exhausted, PreviewTerm};
+use crate::ui::{Activation, PreviewTerm, UiStop};
 
 const BIN: &str = r"C:\Users\sample-user\.local\bin\claude.exe";
 
@@ -300,11 +300,11 @@ impl Term for T {
     fn paint(&mut self, lines: &[String]) {
         self.frames.push(lines.join("\n"));
     }
-    fn wait(&mut self, _s: (usize, usize)) -> Result<Event, Exhausted> {
+    fn wait(&mut self, _s: (usize, usize)) -> Result<Event, UiStop> {
         if !self.clock.is_empty() {
             self.now = self.clock.remove(0);
         }
-        self.q.pop_front().ok_or(Exhausted)
+        self.q.pop_front().ok_or(UiStop::KeysExhausted)
     }
     fn window_top(&mut self) -> i32 {
         0
@@ -355,7 +355,7 @@ fn go(
     clock: Vec<Option<u64>>,
     exit_code: i32,
     size: (usize, usize),
-) -> (Log, String, T, Result<Option<()>, Exhausted>) {
+) -> (Log, String, T, Result<Option<()>, UiStop>) {
     let log = Rc::new(RefCell::new(Log::default()));
     let mut ops = FakeOps {
         log: Rc::clone(&log),
@@ -416,7 +416,7 @@ fn clicking_esc_back_leaves_and_one_column_past_a_hint_does_not() {
     assert_eq!(d.line, 0, "doctor sits on the first footer line");
     assert_eq!(
         go(vec![click(d.end + 1, fy(d.line), false)], &reindex(), vec![], 0, (100, 24)).3,
-        Err(Exhausted)
+        Err(UiStop::KeysExhausted)
     );
 }
 

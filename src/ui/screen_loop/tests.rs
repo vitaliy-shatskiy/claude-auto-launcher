@@ -81,8 +81,8 @@ impl Term for Events {
     fn paint(&mut self, lines: &[String]) {
         self.inner.paint(lines);
     }
-    fn wait(&mut self, _s: (usize, usize)) -> Result<Event, Exhausted> {
-        self.q.pop_front().ok_or(Exhausted)
+    fn wait(&mut self, _s: (usize, usize)) -> Result<Event, UiStop> {
+        self.q.pop_front().ok_or(UiStop::KeysExhausted)
     }
     fn window_top(&mut self) -> i32 {
         0
@@ -219,7 +219,7 @@ fn exhausted_script_is_an_error() {
         n: 3,
         acts: 0,
     };
-    assert_eq!(run(&mut s, &mut term(Vec::new())), Err(Exhausted));
+    assert_eq!(run(&mut s, &mut term(Vec::new())), Err(UiStop::KeysExhausted));
 }
 
 #[test]

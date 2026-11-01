@@ -14,7 +14,7 @@ use std::time::SystemTime;
 
 use crate::frame::Style;
 use crate::launch::LaunchState;
-use crate::ui::{Exhausted, Term};
+use crate::ui::{Term, UiStop};
 
 pub use paths::project_key;
 pub(crate) use registry::path_from_transcript;
@@ -150,7 +150,7 @@ pub fn remove_stale_preview_cache(dir: &Path) {
 
 /// `Invoke-ProjectScreen`: where the session runs and what it does there. `None` = Escape, back to
 /// the launch screen. The cursor opens on the current directory and the action field on `new`.
-pub fn run_project_screen(term: &mut dyn Term, projects: &[Project], cwd: &Path, style: Style) -> Result<Option<ProjectChoice>, Exhausted> {
+pub fn run_project_screen(term: &mut dyn Term, projects: &[Project], cwd: &Path, style: Style) -> Result<Option<ProjectChoice>, UiStop> {
     let clock = || registry::unix_ms(SystemTime::now());
     screen::run_screen(term, projects, cwd, "new", style, &clock)
 }

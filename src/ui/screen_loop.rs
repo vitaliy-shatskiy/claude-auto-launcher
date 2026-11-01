@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 
-use super::{Activation, Exhausted, Hit, Term, hit_at};
+use super::{Activation, Hit, Term, UiStop, hit_at};
 use crate::frame::{Frame, RowMap};
 use crate::input::{Event, KeyPress, MouseEvent, is_hotkey, synthetic_key, vk};
 
@@ -196,7 +196,7 @@ fn finish<S: Screen>(term: &dyn Term, screen: &mut S, entered: Instant, r: Optio
 }
 
 /// Runs a screen to its end. `Err` only when a scripted key source ran out.
-pub fn run<S: Screen>(screen: &mut S, term: &mut dyn Term) -> Result<Option<S::Output>, Exhausted> {
+pub fn run<S: Screen>(screen: &mut S, term: &mut dyn Term) -> Result<Option<S::Output>, UiStop> {
     let entered = Instant::now();
     screen.before();
     log_screen(term, screen, "enter", entered);

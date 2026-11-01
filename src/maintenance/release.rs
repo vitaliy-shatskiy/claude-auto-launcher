@@ -26,14 +26,27 @@ pub(crate) fn auto_updates_channel(settings: &Path) -> String {
         .unwrap_or_else(|| "latest".into())
 }
 
+/// A fresh request to the release channel failed; the text says why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FetchFailed(pub(crate) String);
+
+impl std::fmt::Display for FetchFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FetchFailed {}
+
 /// `Get-RemoteClaudeVersion`: the channel's version or `None`. A hit younger than 30 minutes
-/// answers without a request; a failure younger than 5 minutes answers `None` without one.
+/// answers without a request; a failure younger than 5 minutes answers `None` without one. A
+/// fresh failed request is remembered too, and returned as `Err` so the launch can say why.
 pub(crate) fn remote_version(
     channel: &str,
     cache: &Path,
     now_ms: i64,
     fetch: &mut dyn FnMut(&str) -> Result<String, String>,
-) -> Option<String> {
+) -> Result<Option<String>, FetchFailed> {
     let cached = std::fs::read_to_string(cache)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok());
@@ -47,13 +60,14 @@ pub(crate) fn remote_version(
             let age = now_ms - at;
             let version = c.get("Version").and_then(Value::as_str).filter(|v| !v.is_empty());
             match version {
-                Some(v) if (0..TTL_MS).contains(&age) => return Some(v.to_owned()),
-                None if (0..FAILURE_TTL_MS).contains(&age) => return None,
+                Some(v) if (0..TTL_MS).contains(&age) => return Ok(Some(v.to_owned())),
+                None if (0..FAILURE_TTL_MS).contains(&age) => return Ok(None),
                 _ => {}
             }
         }
     }
-    let version = fetch(&format!("{RELEASE_ENDPOINT}/{channel}")).ok().and_then(|body| {
+    let fetched = fetch(&format!("{RELEASE_ENDPOINT}/{channel}"));
+    let version = fetched.as_ref().ok().and_then(|body| {
         CHANNEL_BODY
             .captures(body.trim())
             .and_then(|c| c.get(1))
@@ -61,7 +75,7 @@ pub(crate) fn remote_version(
     });
     let record = json!({ "Channel": channel, "Version": version, "CheckedAtMs": now_ms });
     write_atomic(cache, &record.to_string());
-    version
+    fetched.map(|_| version).map_err(FetchFailed)
 }
 
 /// `Test-ClaudeUpdateAvailable`: both parse as versions and `remote` is strictly newer. An
@@ -109,16 +123,16 @@ mod tests {
             Ok("2.1.280\n".into())
         };
         assert_eq!(
-            remote_version("latest", &upd, t0, &mut fetch).as_deref(),
+            remote_version("latest", &upd, t0, &mut fetch).unwrap().as_deref(),
             Some("2.1.280"),
             "trimmed"
         );
         assert_eq!(
-            remote_version("latest", &upd, t0 + 10 * 60_000, &mut fetch).as_deref(),
+            remote_version("latest", &upd, t0 + 10 * 60_000, &mut fetch).unwrap().as_deref(),
             Some("2.1.280")
         );
-        remote_version("stable", &upd, t0 + 10 * 60_000, &mut fetch);
-        remote_version("latest", &upd, t0 + 60 * 60_000, &mut fetch);
+        remote_version("stable", &upd, t0 + 10 * 60_000, &mut fetch).unwrap();
+        remote_version("latest", &upd, t0 + 60 * 60_000, &mut fetch).unwrap();
         assert_eq!(
             calls,
             vec![
@@ -136,23 +150,27 @@ mod tests {
         let upd = t.0.join("update-cache.json");
         let t0 = 1_000_000_000_000;
         let mut failing = |_: &str| -> Result<String, String> { Err("no network".into()) };
-        assert_eq!(remote_version("latest", &upd, t0, &mut failing), None, "a failed fetch yields None");
+        assert_eq!(
+            remote_version("latest", &upd, t0, &mut failing),
+            Err(FetchFailed("no network".into())),
+            "a fresh failed fetch is an error the launch prints"
+        );
         let mut boom = |_: &str| -> Result<String, String> { panic!("must not be called") };
         assert_eq!(
             remote_version("latest", &upd, t0 + 2 * 60_000, &mut boom),
-            None,
+            Ok(None),
             "a failure is remembered"
         );
         let mut ok = |_: &str| -> Result<String, String> { Ok("2.1.280".into()) };
         assert_eq!(
-            remote_version("latest", &upd, t0 + 10 * 60_000, &mut ok).as_deref(),
+            remote_version("latest", &upd, t0 + 10 * 60_000, &mut ok).unwrap().as_deref(),
             Some("2.1.280")
         );
         let mut garbage = |_: &str| -> Result<String, String> { Ok("<html>maintenance</html>".into()) };
-        assert_eq!(remote_version("latest", &upd, t0 + 100 * 60_000, &mut garbage), None);
+        assert_eq!(remote_version("latest", &upd, t0 + 100 * 60_000, &mut garbage), Ok(None));
         std::fs::write(&upd, "{not json").unwrap();
         assert_eq!(
-            remote_version("latest", &upd, t0 + 200 * 60_000, &mut ok).as_deref(),
+            remote_version("latest", &upd, t0 + 200 * 60_000, &mut ok).unwrap().as_deref(),
             Some("2.1.280"),
             "a corrupt cache is rewritten"
         );

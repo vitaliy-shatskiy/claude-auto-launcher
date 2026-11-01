@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{Config, PathCtx};
 use crate::frame::Style;
-use crate::ui::{Exhausted, Term};
+use crate::ui::{Term, UiStop};
 
 use self::frame::Clock;
 use self::listing::{Scope, SessionCache, cache_path, session_files};
@@ -78,7 +78,7 @@ fn clock_now() -> Clock {
 
 /// `Invoke-SessionPicker` over paged, snapshotted lists: the file list is taken once per scope
 /// and every page skips over THAT list. `Ok(None)` = Esc.
-pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option<PickedSession>, Exhausted> {
+pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option<PickedSession>, UiStop> {
     let root = req.sessions_root.clone();
     let cache_file = cache_path(&root);
     let mut cache = SessionCache::new(req.preview);
