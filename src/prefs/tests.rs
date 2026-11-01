@@ -66,9 +66,8 @@ fn future_version_and_corrupt_files_read_empty() {
 #[test]
 fn save_keeps_other_profiles_and_previous_answer_for_default() {
     let r = four();
-    let prev = parse_prefs(
-        r#"{"Version":2,"Account":"work","Profiles":{"work":{"Model":"fable","Effort":"default"},"low":{"Model":"haiku"}}}"#,
-    );
+    let prev =
+        parse_prefs(r#"{"Version":2,"Account":"work","Profiles":{"work":{"Model":"fable","Effort":"default"},"low":{"Model":"haiku"}}}"#);
     let mut s = r.new_state();
     s.remote = "stop server".into();
     let d = build_prefs_data(&prev, &s, 5, &r);
