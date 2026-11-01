@@ -82,11 +82,7 @@ pub fn run(args: Vec<String>) -> i32 {
     let preview = var("CLAUDE_AUTO_PREVIEW").as_deref() == Some("1");
     let started = Instant::now();
     let debug = timing::debug_requested(&args, var("CLAUDE_AUTO_DEBUG").as_deref());
-    let args = if debug && args.len() == 1 && args.first().is_some_and(|a| a == "--debug") {
-        Vec::new()
-    } else {
-        args
-    };
+    let args = if timing::is_debug_flag(&args) { Vec::new() } else { args };
     let timings = if debug { Timings::on(started) } else { Timings::default() };
     let process = timings.begin_at(&["process"], started);
     let ctx = PathCtx::from_env();

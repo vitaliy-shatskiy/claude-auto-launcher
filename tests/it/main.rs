@@ -119,9 +119,26 @@ fn debug_off_logs_no_timing_records_and_debug_on_logs_spans() {
 }
 
 #[test]
+fn claudes_own_debug_flag_alone_passes_through() {
+    let d = scratch("debug-pass");
+    fake_claude(&d);
+    for debug_env in [false, true] {
+        let mut c = launcher(&d);
+        if debug_env {
+            c.env("CLAUDE_AUTO_DEBUG", "1");
+        }
+        let o = c.arg("--debug").output().unwrap();
+        let out = text(&o);
+        assert_eq!(o.status.code(), Some(7), "{out}");
+        assert!(out.contains("ARGV --debug"), "debug env {debug_env}: {out}");
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
 fn timings_without_a_log_prints_no_records_and_exits_zero() {
     let d = scratch("timings-empty");
-    let o = launcher(&d).args(["--timings", "--days", "3"]).output().unwrap();
+    let o = launcher(&d).args(["--launcher-timings", "--days", "3"]).output().unwrap();
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(text(&o).trim_end(), "no timing records");
     std::fs::remove_dir_all(&d).unwrap();
@@ -140,7 +157,7 @@ fn preview_in_debug_mode_shows_the_footer_and_the_timings_screen() {
             .env("CLAUDE_AUTO_PREVIEW", "1")
             .env("CLAUDE_AUTO_PREVIEW_KEYS", "F12,Escape,Escape");
         if debug {
-            c.arg("--debug");
+            c.arg("--launcher-debug");
         }
         text(&c.output().unwrap())
     };

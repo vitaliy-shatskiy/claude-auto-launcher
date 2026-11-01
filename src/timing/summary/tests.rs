@@ -80,9 +80,9 @@ fn log_files_walk_back_across_a_month_end() {
 #[test]
 fn timings_arguments_parse_strictly() {
     let a = |s: &[&str]| s.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
-    assert_eq!(parse_args(&a(&["--timings"])), Some(Ok(1)));
-    assert_eq!(parse_args(&a(&["--timings", "--days", "7"])), Some(Ok(7)));
-    assert!(matches!(parse_args(&a(&["--timings", "--days", "0"])), Some(Err(_))));
-    assert!(matches!(parse_args(&a(&["--timings", "x"])), Some(Err(_))));
-    assert_eq!(parse_args(&a(&["-p", "--timings"])), None);
+    assert_eq!(parse_args(&a(&["--launcher-timings"])), Some(Ok(1)));
+    assert_eq!(parse_args(&a(&["--launcher-timings", "--days", "7"])), Some(Ok(7)));
+    assert!(matches!(parse_args(&a(&["--launcher-timings", "--days", "0"])), Some(Err(_))));
+    assert!(matches!(parse_args(&a(&["--launcher-timings", "x"])), Some(Err(_))));
+    assert_eq!(parse_args(&a(&["-p", "--launcher-timings"])), None);
 }

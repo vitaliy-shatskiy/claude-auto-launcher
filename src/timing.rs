@@ -200,10 +200,18 @@ impl Drop for Scope<'_> {
     }
 }
 
-/// `--debug` as the only argument, or `CLAUDE_AUTO_DEBUG=1`. A `--debug` among other arguments
-/// is claude's own flag and passes through untouched.
+/// The launcher's own switch, only as the sole argument (like `--launcher-version`).
+pub const DEBUG_FLAG: &str = "--launcher-debug";
+
+/// `--launcher-debug` as the only argument, or `CLAUDE_AUTO_DEBUG=1`. claude's own `--debug`
+/// is never read here.
 pub fn debug_requested(args: &[String], env: Option<&str>) -> bool {
-    env == Some("1") || (args.len() == 1 && args.first().is_some_and(|a| a == "--debug"))
+    env == Some("1") || is_debug_flag(args)
+}
+
+/// `args` is exactly `--launcher-debug`: the one argument the launcher takes away.
+pub fn is_debug_flag(args: &[String]) -> bool {
+    args.len() == 1 && args.first().is_some_and(|a| a == DEBUG_FLAG)
 }
 
 #[cfg(test)]

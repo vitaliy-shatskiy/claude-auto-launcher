@@ -102,10 +102,14 @@ fn scratch(name: &str) -> std::path::PathBuf {
 #[test]
 fn debug_is_the_lone_flag_or_the_variable() {
     let a = |s: &[&str]| s.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
-    assert!(debug_requested(&a(&["--debug"]), None));
+    assert!(debug_requested(&a(&["--launcher-debug"]), None));
+    assert!(is_debug_flag(&a(&["--launcher-debug"])));
     assert!(debug_requested(&[], Some("1")));
-    assert!(!debug_requested(&a(&["--debug", "-p", "x"]), None));
+    assert!(!debug_requested(&a(&["--launcher-debug", "-p", "x"]), None));
+    assert!(!debug_requested(&a(&["--debug"]), None));
     assert!(!debug_requested(&[], Some("0")));
+    // The variable turns debug on but never takes an argument away.
+    assert!(debug_requested(&a(&["--debug"]), Some("1")) && !is_debug_flag(&a(&["--debug"])));
 }
 
 #[test]

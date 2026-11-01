@@ -1,4 +1,4 @@
-//! `--timings [--days N]`: count, p50, p95 and max per span name over the `timing` records of the
+//! `--launcher-timings [--days N]`: count, p50, p95 and max per span name over the `timing` records of the
 //! run logs, today and the `N - 1` days before it.
 
 use std::path::{Path, PathBuf};
@@ -101,10 +101,10 @@ pub fn log_files(root: &Path, today: (i64, i64, i64), days: u32) -> Vec<PathBuf>
         .collect()
 }
 
-/// `--timings` alone or `--timings --days N` (1 to 366); `None` = not this command.
+/// `--launcher-timings` alone or `--launcher-timings --days N` (1 to 366); `None` = not this command.
 pub fn parse_args(args: &[String]) -> Option<Result<u32, String>> {
     let (first, rest) = args.split_first()?;
-    if first != "--timings" {
+    if first != "--launcher-timings" {
         return None;
     }
     Some(match rest {
@@ -114,7 +114,7 @@ pub fn parse_args(args: &[String]) -> Option<Result<u32, String>> {
             .ok()
             .filter(|n| (1..=366).contains(n))
             .ok_or_else(|| format!("--days takes a number from 1 to 366, got '{n}'")),
-        _ => Err("usage: claude-auto-rs --timings [--days N]".into()),
+        _ => Err("usage: claude-auto-rs --launcher-timings [--days N]".into()),
     })
 }
 
