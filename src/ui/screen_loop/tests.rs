@@ -230,6 +230,133 @@ fn twin_window_has_a_lower_bound() {
     assert!(!is_twin(None, Some(1)));
 }
 
+/// Records with their read stamp and the paint count at which each one sits in the queue: a
+/// record is pending once that many frames were painted (a slow handler or first draw).
+struct Clocked {
+    inner: PreviewTerm,
+    q: std::collections::VecDeque<(Event, u64, usize)>,
+    now: u64,
+    paints: usize,
+}
+
+impl Term for Clocked {
+    fn size(&mut self) -> (usize, usize) {
+        (80, 24)
+    }
+    fn paint(&mut self, lines: &[String]) {
+        self.paints += 1;
+        self.inner.paint(lines);
+    }
+    fn wait(&mut self, _s: (usize, usize)) -> Result<Event, UiStop> {
+        let (ev, at, _) = self.q.pop_front().ok_or(UiStop::KeysExhausted)?;
+        self.now = at;
+        Ok(ev)
+    }
+    fn window_top(&mut self) -> i32 {
+        0
+    }
+    fn input_pending(&mut self) -> bool {
+        self.q.front().is_some_and(|e| self.paints >= e.2)
+    }
+    fn record_time(&self) -> Option<u64> {
+        Some(self.now)
+    }
+    fn last_activation(&mut self) -> &mut Option<Activation> {
+        self.inner.last_activation()
+    }
+    fn drain(&mut self) {}
+    fn logger(&self) -> &crate::log::Logger {
+        self.inner.logger()
+    }
+    fn read_line(&mut self, _prompt: &str) -> String {
+        String::new()
+    }
+}
+
+fn clocked(q: Vec<(Event, u64, usize)>) -> Clocked {
+    Clocked {
+        inner: PreviewTerm::new((80, 24), std::collections::VecDeque::default(), true),
+        q: q.into(),
+        now: 0,
+        paints: 0,
+    }
+}
+
+fn enter_at(at: u64) -> (Event, u64, usize) {
+    (Event::Key(KeyPress::named(vk::ENTER)), at, 0)
+}
+
+fn row_one() -> List {
+    List {
+        c: Cursor::at(1),
+        n: 3,
+        acts: 0,
+    }
+}
+
+/// CS-224 a: the twin queued during a handler slower than the window is read late. It is still
+/// the twin, because it was waiting when the loop was ready again.
+#[test]
+fn cs224a_twin_queued_during_a_slow_activation_is_dropped() {
+    let mut s = row_one();
+    let mut t = clocked(vec![(click(5, 2), 1000, 0), (click(5, 2), 1700, 2), enter_at(9000)]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 1, "the twin read 700 ms late acted again");
+}
+
+/// The control: a second press that arrives after the frame is up is a new gesture.
+#[test]
+fn cs224a_a_press_after_the_redraw_acts_again() {
+    let mut s = row_one();
+    let mut t = clocked(vec![(click(5, 2), 1000, 0), (click(5, 2), 1700, 3), enter_at(9000)]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 2);
+}
+
+fn carried_activation(t: &mut Clocked) {
+    *t.last_activation() = Some(Activation {
+        x: 5,
+        y: 2,
+        at: Some(1000),
+        queued: false,
+    });
+}
+
+/// CS-224 a across screens: the previous screen's twin is already queued when this screen opens.
+#[test]
+fn cs224a_twin_queued_before_the_next_screen_opens_is_dropped() {
+    let mut s = row_one();
+    let mut t = clocked(vec![(click(5, 2), 1700, 0), enter_at(9000)]);
+    carried_activation(&mut t);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 0);
+}
+
+/// CS-224 a across screens: the twin lands while the next screen's first frame is drawn.
+#[test]
+fn cs224a_twin_queued_during_the_next_screens_first_draw_is_dropped() {
+    let mut s = row_one();
+    let mut t = clocked(vec![(click(5, 2), 1700, 1), enter_at(9000)]);
+    carried_activation(&mut t);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 0, "the twin read after a slow first draw acted on the new screen");
+}
+
+/// CS-224 b: every later record of one gesture is dropped, not only the first twin.
+#[test]
+fn cs224b_third_and_fourth_records_of_one_gesture_are_dropped() {
+    let mut s = row_one();
+    let mut t = clocked(vec![
+        (click(5, 2), 1000, 0),
+        (click(5, 2), 1700, 2),
+        (click(5, 2), 1710, 2),
+        (click(5, 2), 1720, 2),
+        enter_at(9000),
+    ]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 1);
+}
+
 fn timed(events: Vec<Event>) -> Events {
     let mut t = term(events);
     let logger = crate::log::Logger {
