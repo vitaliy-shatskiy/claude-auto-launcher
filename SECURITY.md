@@ -9,8 +9,6 @@ Please do not open a public issue for anything exploitable. Expect a first reply
 
 Worth knowing before you run it, and the places a vulnerability would matter:
 
-- **PATH.** `install.ps1` appends this folder to `HKCU\Environment`, read and written raw so an
-  existing `%VAR%` entry is not expanded and rewritten.
 - **`~/.claude/`.** Reads `settings.json`, writes `claude-auto-prefs.json`, `launcher-logs/*.jsonl`
   (14-day retention), and the `claude-auto-*.json` caches (full list in the README, "Files it
   writes"). The logs record the launcher's own argument vector and working directory: a prompt

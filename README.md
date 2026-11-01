@@ -7,9 +7,8 @@
     <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-3DA639"></a>
     <img alt="platform: Windows" src="https://img.shields.io/badge/platform-Windows-0078D4">
     <img alt="Rust 1.99" src="https://img.shields.io/badge/Rust-1.99-B7410E">
-    <img alt="PowerShell 7" src="https://img.shields.io/badge/PowerShell-7-5391FE">
   </p>
-  <p><a href="#install">Install</a> · <a href="#the-screens">Screens</a> · <a href="#configuration">Configuration</a> · <a href="#troubleshooting">Troubleshooting</a> · <a href="#development">Development</a> · <a href="PORTING.md">Porting record</a></p>
+  <p><a href="#install">Install</a> · <a href="#the-screens">Screens</a> · <a href="#configuration">Configuration</a> · <a href="#troubleshooting">Troubleshooting</a> · <a href="#development">Development</a></p>
 </div>
 
 > [!IMPORTANT]
@@ -19,27 +18,15 @@
 ```
 git clone https://github.com/vitaliy-shatskiy/claude-auto-launcher.git
 cd claude-auto-launcher
-pwsh -File install.ps1
+cargo build --release --locked
 ```
 
 ## What it is
 
 A Windows launcher for Claude Code: an account picker, remembered model, effort, advisor and
 permission choices per account, a project picker, a session-resume picker and a maintenance screen.
-Everything machine-specific lives in one config file.
-
-Two launchers live side by side in this repo:
-
-| | PowerShell launcher | Rust launcher |
-|---|---|---|
-| Status | **current default** | new, under test |
-| Command | `claude-auto` | `claude-auto-rs` |
-| Code | `claude-auto.ps1`, `claude-auto/`, `install.ps1`, `claude-auto.cmd` | `src/`, crate `claude-auto-rs` |
-| Tests | `tests/Test-*.ps1`, `tests/checkpoint.ps1` | `cargo test` (unit tests beside the code, `tests/it/`) |
-| Needs | PowerShell 7, compiles a small C# input shim on first run | one `.exe`, no runtime |
-
-Both show the same screens and read the same config and prefs files. When the Rust launcher has
-passed its test it replaces the PowerShell one: see [Cut-over](#cut-over).
+Everything machine-specific lives in one config file. One `.exe` (`claude-auto-rs`), written in
+Rust, no runtime.
 
 The bracketed value on each row is what `default` resolves to in the account's own `settings.json`
 (`model`, `effortLevel`, `advisorModel`, `permissions.defaultMode`). A key that file does not set
@@ -51,44 +38,21 @@ CLI's releases.
 - Windows.
 - Claude Code (`claude` on PATH). The launch-screen rows were built against `2.1.263`. A much older
   or newer CLI may accept different flags.
-- PowerShell launcher: PowerShell 7 (`pwsh`), required. Typed in a Windows PowerShell 5.1 window the
-  launcher re-execs itself under `pwsh`. With no `pwsh` on the machine it refuses and says so.
-- Rust launcher, to build it: Rust through `rustup` with the MSVC host toolchain.
-  `rust-toolchain.toml` pins the version (1.99.1) and the `clippy` and `rustfmt` components.
-- Node.js, only for: the MCP mirror of multi-account `sharing` under the PowerShell launcher (the
-  Rust launcher has it built in), `.js`/`.mjs` launch hooks, and `Test-Mirror.ps1`, which exits `2`
-  (could not run) without it.
+- To build it: Rust through `rustup` with the MSVC host toolchain. `rust-toolchain.toml` pins the
+  version (1.99.1) and the `clippy` and `rustfmt` components.
+- Node.js or PowerShell 7, only for `.js`/`.mjs` or `.ps1` launch hooks.
 
 ## Install
-
-### PowerShell launcher (current)
-
-```
-pwsh -File install.ps1
-```
-
-`install.ps1` is safe to run again: it never overwrites `~/.claude/claude-auto.json` once it
-exists, and only adds this folder to the user PATH if it is missing there. It reads and writes
-`HKCU\Environment` raw, so an existing `%USERPROFILE%\...` entry keeps its `%VAR%` form. Anything
-it cannot read leaves PATH untouched and tells you to add the folder by hand.
-
-On a machine whose execution policy is Restricted (the Windows default on a client SKU with no
-policy set in any scope) `pwsh -File install.ps1` refuses to run. Either
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or run
-`pwsh -ExecutionPolicy Bypass -File install.ps1`.
-
-### Rust launcher (under test)
 
 ```
 cargo build --release --locked
 ```
 
-The binary is `target\release\claude-auto-rs.exe`. There is no installer yet: put that folder on
-your PATH, or copy the file to a folder that is. It reads the same `~/.claude/claude-auto.json`, so
-both launchers can be used on the same machine at once.
+The binary is `target\release\claude-auto-rs.exe`. Copy it to a folder on your PATH (or put that
+folder on PATH). There is no installer: no config file means one `work` account on `~/.claude`
+(see [Configuration](#configuration)).
 
-`claude-auto-rs --launcher-version` (or `claude-auto --launcher-version`) prints the launcher's own
-version and exits.
+`claude-auto-rs --launcher-version` prints the launcher's own version and exits.
 
 ## The screens
 
@@ -168,7 +132,7 @@ shows the screens, then runs `claude` with those arguments added. The one except
 | `CLAUDE_AUTO_ASCII=1` | forces ASCII box drawing (otherwise auto-detected from the console code page) |
 | `CLAUDE_AUTO_PREVIEW=1` | drives the whole UI and prints the `claude` command it would run, without running it. The maintenance screen is the one exception |
 | `CLAUDE_AUTO_PREVIEW_KEYS` | a key script for a preview run, e.g. `Enter,r,Enter` |
-| `CLAUDE_AUTO_PREVIEW_SIZE` | Rust only: the preview's terminal size, e.g. `100x30` (default `78x24`) |
+| `CLAUDE_AUTO_PREVIEW_SIZE` | the preview's terminal size, e.g. `100x30` (default `78x24`) |
 | `CLAUDE_AUTO_PROJECTS_ROOT` | the projects directory the project screen and the picker read, instead of `~/.claude/projects` (a test seam) |
 | `CLAUDE_AUTO_RATE_LIMITS_DIR` | where the usage records are read, instead of `~/.claude/rate-limits` (a test seam) |
 | `CLAUDE_NO_ROAM=1` | never routes a session through the companion server, even with `remote: true` |
@@ -205,7 +169,7 @@ arguments and the command line.
 
 ### Debug mode
 
-Rust launcher only. `claude-auto-rs --launcher-debug` (the only argument, like
+`claude-auto-rs --launcher-debug` (the only argument, like
 `--launcher-version`) or `CLAUDE_AUTO_DEBUG=1` times each step of the run. `--debug` stays
 claude's own flag and passes through.
 
@@ -258,10 +222,10 @@ overriding the earlier: `shared/`, `<slug>/org/` (opted in with a junction, neve
 <details><summary><b>Files it writes</b></summary>
 
 - `~/.claude/claude-auto-prefs.json` - remembered account, model, effort, advisor, permission and
-  remote choices. Shared by both launchers.
+  remote choices.
 - `~/.claude/launcher-logs/*.jsonl` - one file per day, 14-day retention. Records each launch: the
   working directory, the launcher's own argument vector, the launcher version (`psVersion`, which
-  reads `rust <version>` for the Rust launcher), the terminal it came out of, and the choices made.
+  reads `rust <version>`), the terminal it came out of, and the choices made.
   **A prompt passed positionally (`claude-auto "fix the build"`) lands there in plain text.** Local
   only, nothing is sent anywhere.
 - `~/.claude/claude-auto-hash-cache.json` - the maintenance screen's version-check cache.
@@ -269,15 +233,12 @@ overriding the earlier: `shared/`, `<slug>/org/` (opted in with a junction, neve
   binary's path, size and mtime.
 - `~/.claude/claude-auto-update.json` - the release channel's last answer (30 minutes, a failure 5).
 - `~/.claude/claude-auto-projects.json` - the project screen's registry cache.
-- `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (one file, every
-  account reads the same session list). The Rust launcher writes `claude-auto-rs-sessions.json`
-  instead while both launchers run.
+- `~/.claude/claude-auto-rs-sessions.json` - the session picker's summary cache (one file, every
+  account reads the same session list).
 - `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day.
 - `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan.
 - `%TEMP%\claude-remote-server-<pid>.log` (plus `.err`, `.build`) - the companion server's output,
   one set per launcher that started it (`remote: true` only), not swept.
-- `claude-auto\ConsoleInput.dll` - PowerShell launcher only: compiled from `ConsoleInput.cs` into
-  this clone on first run (gitignored).
 - `<file>.pre-relink`, and `<file>.pre-relink.<yyyyMMdd-HHmmss>` for the three before it, beside a
   shared file a sharing repair just replaced (see [Multi-account sharing](#multi-account-sharing)).
 
@@ -311,13 +272,11 @@ accounts are one person's on one machine. The canonical definition wins in both 
 server is added, one defined differently is replaced, a server only the target has is kept.
 `CLAUDE_AUTO_MIRROR_SECRETS=0` compares and copies servers without those two fields and keeps the
 target's own ones. `CLAUDE_AUTO_MIRROR_EXCLUDE=name1,name2` never touches those servers. The
-PowerShell launcher runs the mirror as `sharing/claude-mirror-mcp.mjs` under Node. The Rust
-launcher has it built in.
+mirror is built into the launcher: no Node needed.
 
 ## Troubleshooting
 
-**`claude-auto` is not recognised.** `install.ps1` writes PATH into `HKCU\Environment`, which only a
-*new* terminal reads. Open one.
+**`claude-auto-rs` is not recognised.** A PATH change reaches only a *new* terminal. Open one.
 
 **The maintenance screen says an update succeeded and the version did not change.** On Windows
 `claude update` can report success while the running binary is untouched, usually a file lock on the
@@ -336,9 +295,6 @@ mouse reports as VT text rather than as console records. The launcher decodes th
 wrong, `CLAUDE_AUTO_NO_MOUSE=1` disables mouse input and `CLAUDE_AUTO_INPUT_TRACE=1` logs every raw
 input record for a bug report.
 
-**It launched a bare `claude` with none of the screens.** A PowerShell module failed to load. Run
-`pwsh -File claude-auto.ps1` directly and read the error it prints before the fallback.
-
 **A preview run ends with `claude-auto: scripted keys exhausted` and exit 1.** The key script in
 `CLAUDE_AUTO_PREVIEW_KEYS` ran out before a launch or a quit. Add the missing keys.
 
@@ -346,8 +302,8 @@ input record for a bug report.
 
 Nothing is installed outside your own user profile, and there is no uninstaller.
 
-1. Remove this folder (and the Rust binary's folder, if you added it) from PATH: `sysdm.cpl` ->
-   Advanced -> Environment Variables -> user `Path`.
+1. Delete `claude-auto-rs.exe` from the folder you copied it to, or remove the folder you added to
+   PATH: `sysdm.cpl` -> Advanced -> Environment Variables -> user `Path`.
 2. Delete the clone.
 3. Optional, to remove the state too: the `claude-auto-*.json` files, `launcher-logs/` and
    `claude-auto-logs/` under `~/.claude` (full list under **Files it writes**).
@@ -356,8 +312,6 @@ Nothing is installed outside your own user profile, and there is no uninstaller.
    `icacls <path> /L /remove:d "<user>"`, then remove the junction.
 
 ## Development
-
-<details open><summary><b>Rust launcher</b></summary>
 
 ```
 cargo build --release --locked
@@ -375,56 +329,14 @@ cargo clippy --all-targets --locked -- -D warnings
   against the golden files in `tests/fixtures/wide-frames/`. `tests/it/` runs the built binary end to
   end against a fake home and a fake `claude`: preview frames, argument pass-through, the launch
   marker, `--mcp-config` placement and `--launcher-version`.
-- Module map and the behaviour differences from the PowerShell launcher: [PORTING.md](PORTING.md).
+- `tests\check-clean.ps1` is the privacy scan: it greps the git-tracked worktree for the current
+  Windows username plus an optional private pattern list (`CLAUDE_AUTO_CLEAN_PATTERNS`, one regex per
+  line). It never reads commit history or authorship.
+- The launcher began as a PowerShell script and was ported to Rust: [PORTING.md](PORTING.md).
 
-</details>
-
-<details><summary><b>PowerShell launcher</b></summary>
-
-```
-pwsh -File tests\checkpoint.ps1
-```
-
-19 checks: 15 unit suites (`Theme`, `Layout`, `Sessions`, `Projects`, `Ui`, `Maintenance`, `Remote`,
-`Prefs`, `Env`, `Config`, `Input`, `Install`, `Mirror`, `Tools`, `LaunchModes`), the privacy scan
-and three launcher-level checks. Every exit code is read on its own line, and **`2` means the check
-could not run, never a pass**.
-
-Any suite runs alone: `pwsh -File tests\Test-Ui.ps1`. `Test-Input.ps1 -Live` adds the console-mode
-and mouse assertions, which self-spawn a hidden child console. The checkpoint always passes `-Live`.
-`Test-Mirror.ps1` needs Node.js and exits `2` without it.
-
-`check-clean.ps1` is the privacy scan: it greps the git-tracked worktree for the current Windows
-username plus an optional private pattern list (`CLAUDE_AUTO_CLEAN_PATTERNS`, one regex per line).
-It never reads commit history or authorship.
-
-On a fresh clone the regression, droplist and preview rows report `2 DID NOT RUN` (correctly, not a
-pass) until you record their machine-local references once (gitignored):
-
-```
-pwsh -File tests\check-regression.ps1 -Record   # also fixes the droplist row
-pwsh -File tests\check-preview.ps1 -Record
-```
-
-</details>
-
-**CI** (`.github/workflows/ci.yml`, Windows runners): one job runs the PowerShell unit suites, one
-runs the Rust gates (`fmt --check`, `clippy -D warnings`, `test`, all `--locked`). The regression,
-droplist, preview and privacy rows need a machine-local reference or a private pattern list, so CI
-does not run them.
-
-## Cut-over
-
-When the Rust launcher has passed its test, it replaces the PowerShell one:
-
-- The binary is renamed from `claude-auto-rs` to `claude-auto`.
-- The sessions cache `claude-auto-rs-sessions.json` is renamed to `claude-auto-sessions.json`.
-- `sharing/claude-mirror-mcp.mjs` goes once nothing calls it: the Rust launcher has the mirror
-  built in.
-- The PowerShell launcher (`claude-auto.ps1`, `claude-auto/`, `claude-auto.cmd`, `install.ps1`) and
-  its tests (`tests/*.ps1`, `tests/Test-Mirror.mjs`) are retired.
-
-Details: [PORTING.md](PORTING.md#cut-over).
+**CI** (`.github/workflows/ci.yml`, a Windows runner) runs the gates (`fmt --check`,
+`clippy -D warnings`, `test`, all `--locked`). The privacy scan needs a private pattern list, so CI
+does not run it.
 
 ## Contributing, security, licence
 

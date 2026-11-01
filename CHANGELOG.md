@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Removed
+
+- The PowerShell launcher (`claude-auto.ps1`, `claude-auto/`, `claude-auto.cmd`, `install.ps1`),
+  its tests (`tests/*.ps1` except the privacy scan `check-clean.ps1`), the Node MCP mirror
+  (`sharing/claude-mirror-mcp.mjs`, `tests/Test-Mirror.mjs`) and the PowerShell CI job. The Rust
+  launcher `claude-auto-rs` is the only launcher. The last commit with the PowerShell code is
+  `7348f59`.
+
 ### Added
 
 - `claude-auto-rs`: the launcher rewritten in Rust (`src/`, `cargo build --release`), under test
