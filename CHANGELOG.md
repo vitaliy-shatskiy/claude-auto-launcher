@@ -20,6 +20,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 - `claude-auto-rs`: launch hooks run at the same time, not one after another. The session still
   starts only after every hook has ended, and their lines print in config order.
+- `launchHooks`: an entry may be an array of paths, run in order as one chain beside the other
+  entries (`["a.ps1", ["b.ps1", "c.ps1"]]`). A plain string is one hook, as before.
 - `claude-auto-rs`: launch hooks get the console's stdin, as the PowerShell launcher gave them. The
   companion server, its build and the pairing QR start with the chosen account's environment
   (`CLAUDE_CONFIG_DIR`, project secrets), as the session does. A console whose input cannot be
