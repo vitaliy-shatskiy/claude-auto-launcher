@@ -69,13 +69,10 @@ fn arguments_pass_through_verbatim_with_exit_code_and_marker() {
     let out = text(&o);
     assert_eq!(o.status.code(), Some(7), "the child's exit code: {out}");
     let mcp = d.join("home").join(".claude").join("mcp-shared.json");
-    assert!(
-        out.contains(&format!(
-            "ARGV --resume abc -p \"x y\" --launcher-version --mcp-config {}",
-            mcp.display()
-        )),
-        "{out}"
-    );
+    // Rust quotes a batch-file argument that holds `~`, so a short temp path (RUNNER~1) arrives quoted.
+    let head = "ARGV --resume abc -p \"x y\" --launcher-version --mcp-config ";
+    let (plain, quoted) = (format!("{head}{}", mcp.display()), format!("{head}\"{}\"", mcp.display()));
+    assert!(out.contains(&plain) || out.contains(&quoted), "{out}");
     assert!(out.contains("MARK [1]"), "CLAUDE_AUTO_LAUNCHED=1 for the child: {out}");
     assert!(out.contains("-> work account"), "{out}");
     std::fs::remove_dir_all(&d).unwrap();
