@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::System::Console::{KEY_EVENT, MOUSE_EVENT, WINDOW_BUFFER_SIZE_EVENT};
 
-use super::{Event, KeyPress, VtOutcome, decode_csi, decode_x10, key_from_record, mouse_from_record, vt_key};
+use super::{AfterEsc, EscSource, Event, KeyPress, VtOutcome, after_esc, esc_wait_ms, key_from_record, mouse_from_record};
 use crate::sys::{self, Handle, RawRecord};
 
 const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
@@ -218,31 +218,6 @@ impl ConsoleInput {
         }
     }
 
-    fn read_key_down(&mut self) -> Option<u16> {
-        for _ in 0..16 {
-            let rec = self.read_raw(0)?;
-            if let Some(c) = Self::key_down_char(&rec) {
-                return Some(c);
-            }
-        }
-        None
-    }
-
-    /// Up to `want` key-down chars, counting downs (the queue interleaves releases).
-    fn read_downs(&mut self, want: usize, max_records: usize, timeout_ms: u32) -> Vec<u32> {
-        let mut out = Vec::new();
-        for _ in 0..max_records {
-            if out.len() >= want {
-                break;
-            }
-            let Some(rec) = self.read_raw(timeout_ms) else { break };
-            if let Some(c) = Self::key_down_char(&rec) {
-                out.push(u32::from(c));
-            }
-        }
-        out
-    }
-
     /// Takes the mouse off the console and asks the terminal for any-motion SGR reports. One-way,
     /// and never when real `MOUSE_EVENT` records arrived or the output is redirected.
     fn switch_to_text(&mut self) {
@@ -262,42 +237,6 @@ impl ConsoleInput {
         }
     }
 
-    /// `Skip-ClaudeVtSequence`, called with the ESC consumed. `None` = a real Escape.
-    fn skip_vt(&mut self) -> Option<VtOutcome> {
-        let next = self.peek_key_char(5)?;
-        if next != u16::from(b'[') && next != u16::from(b'O') {
-            return None;
-        }
-        self.read_key_down();
-        if next == u16::from(b'O') {
-            let fin = self.read_downs(1, 24, 4);
-            let seq: String = std::iter::once('O').chain(fin.iter().filter_map(|c| char::from_u32(*c))).collect();
-            return Some(vt_key(&seq).map_or(VtOutcome::Swallow, VtOutcome::Key));
-        }
-        if self.peek_key_char(5) == Some(u16::from(b'M')) {
-            let bytes = self.read_downs(4, 24, 4);
-            let decoded = decode_x10(&bytes);
-            self.switch_to_text();
-            return Some(decoded.map_or(VtOutcome::Swallow, VtOutcome::Mouse));
-        }
-        let mut seq = String::from("[");
-        for _ in 0..64 {
-            let Some(rec) = self.read_raw(2) else { break };
-            let Some(c) = Self::key_down_char(&rec) else { continue };
-            let ch = char::from_u32(u32::from(c)).unwrap_or('\0');
-            seq.push(ch);
-            if (0x40..=0x7E).contains(&c) {
-                break;
-            }
-        }
-        let out = decode_csi(&seq);
-        if let VtOutcome::Mouse(_) = out {
-            // After the report is decoded: the switch flushes the queue.
-            self.switch_to_text();
-        }
-        Some(out)
-    }
-
     /// `Read-ClaudeInputEvent`: one event within `timeout_ms`, or `None`.
     pub fn read_event(&mut self, timeout_ms: u32) -> Option<Event> {
         if self.closed {
@@ -308,11 +247,17 @@ impl ConsoleInput {
         if t == KEY_EVENT {
             let (down, code, ch, cks) = sys::key_fields(&rec);
             if down && ch == 27 {
-                match self.skip_vt() {
-                    None => {}
-                    Some(VtOutcome::Swallow) => return None,
-                    Some(VtOutcome::Mouse(m)) => return Some(Event::Mouse(m)),
-                    Some(VtOutcome::Key(k)) => return Some(Event::Key(k)),
+                let wait = esc_wait_ms(self.text_mouse || self.vt_motion);
+                match after_esc(self, wait) {
+                    AfterEsc::Sequence(VtOutcome::Swallow) => return None,
+                    AfterEsc::Sequence(VtOutcome::Mouse(m)) => return Some(Event::Mouse(m)),
+                    AfterEsc::Sequence(VtOutcome::Key(k)) => return Some(Event::Key(k)),
+                    AfterEsc::Alone if self.trace.path.is_some() => {
+                        let at = self.epoch.elapsed().as_millis();
+                        self.trace
+                            .add(format!("ESC alone at {at} ms: no key-down within {wait} ms, Escape"));
+                    }
+                    AfterEsc::Alone | AfterEsc::Followed => {}
                 }
             }
             return key_from_record(down, code, ch, cks).map(Event::Key);
@@ -325,6 +270,27 @@ impl ConsoleInput {
             return Some(Event::Resize);
         }
         None
+    }
+}
+
+impl EscSource for ConsoleInput {
+    fn peek_down(&mut self, timeout_ms: u64) -> Option<u16> {
+        self.peek_key_char(timeout_ms)
+    }
+
+    /// Reads past releases (the queue interleaves them), at most sixteen records.
+    fn take_down(&mut self, timeout_ms: u32) -> Option<u16> {
+        for _ in 0..16 {
+            let rec = self.read_raw(timeout_ms)?;
+            if let Some(c) = Self::key_down_char(&rec) {
+                return Some(c);
+            }
+        }
+        None
+    }
+
+    fn mouse_report(&mut self) {
+        self.switch_to_text();
     }
 }
 

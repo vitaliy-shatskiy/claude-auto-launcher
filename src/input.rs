@@ -263,6 +263,69 @@ pub enum VtOutcome {
     Swallow,
 }
 
+/// How long an ESC waits for the `[` or `O` of a sequence before it is a real Escape. While mouse
+/// reports arrive as text, a report split across two writes must not turn into Escape, so the
+/// wait there is longer, still under what a person notices on an Esc press.
+pub const fn esc_wait_ms(text_mouse: bool) -> u64 {
+    if text_mouse { 40 } else { 5 }
+}
+
+/// The key-down chars after an ESC: the console queue, or a scripted timeline in tests.
+pub trait EscSource {
+    /// The next key-down char within `timeout_ms`, left queued.
+    fn peek_down(&mut self, timeout_ms: u64) -> Option<u16>;
+    /// Takes the next key-down char within `timeout_ms`.
+    fn take_down(&mut self, timeout_ms: u32) -> Option<u16>;
+    /// A mouse report arrived as text.
+    fn mouse_report(&mut self);
+}
+
+/// What followed an ESC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterEsc {
+    Sequence(VtOutcome),
+    /// No key-down within the wait: a real Escape, or a report whose tail came later still.
+    Alone,
+    /// Another key came first: a real Escape.
+    Followed,
+}
+
+/// `Skip-ClaudeVtSequence`, called with the ESC consumed.
+pub fn after_esc(src: &mut impl EscSource, wait_ms: u64) -> AfterEsc {
+    let Some(next) = src.peek_down(wait_ms) else {
+        return AfterEsc::Alone;
+    };
+    if next != u16::from(b'[') && next != u16::from(b'O') {
+        return AfterEsc::Followed;
+    }
+    src.take_down(0);
+    if next == u16::from(b'O') {
+        let fin = src.take_down(4).and_then(|c| char::from_u32(u32::from(c)));
+        let seq: String = std::iter::once('O').chain(fin).collect();
+        return AfterEsc::Sequence(vt_key(&seq).map_or(VtOutcome::Swallow, VtOutcome::Key));
+    }
+    // The same wait as the `[`: a report split right after it must not leak its tail as keys.
+    if src.peek_down(wait_ms) == Some(u16::from(b'M')) {
+        let bytes: Vec<u32> = std::iter::from_fn(|| src.take_down(4)).take(4).map(u32::from).collect();
+        src.mouse_report();
+        return AfterEsc::Sequence(decode_x10(&bytes).map_or(VtOutcome::Swallow, VtOutcome::Mouse));
+    }
+    let mut seq = String::from("[");
+    for _ in 0..64 {
+        let Some(c) = src.take_down(2) else { break };
+        seq.push(char::from_u32(u32::from(c)).unwrap_or('\0'));
+        if (0x40..=0x7E).contains(&c) {
+            break;
+        }
+    }
+    let out = decode_csi(&seq);
+    if let VtOutcome::Mouse(_) = out {
+        // After the report is decoded: the console's switch flushes the queue.
+        src.mouse_report();
+    }
+    AfterEsc::Sequence(out)
+}
+
 /// `ConvertFrom-ClaudeVtKey`: a cursor key spelled as VT text (`[A`, `OA`, `[1~`, `[4~`).
 pub fn vt_key(seq: &str) -> Option<KeyPress> {
     let code = match seq {

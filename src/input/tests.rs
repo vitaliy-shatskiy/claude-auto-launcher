@@ -126,6 +126,134 @@ fn a_char_only_control_key_gets_its_virtual_key() {
     assert_eq!(ctrl_m.vk, 0x4D, "a real vk is never rewritten");
 }
 
+/// Key-downs that arrive at virtual milliseconds after the ESC; a peek or take waits up to its
+/// timeout on that clock.
+struct Timeline {
+    keys: std::collections::VecDeque<(u16, u64)>,
+    now: u64,
+    reports: usize,
+}
+
+impl Timeline {
+    fn new(chunks: &[(&str, u64)]) -> Self {
+        let keys = chunks
+            .iter()
+            .flat_map(|(text, at)| text.encode_utf16().map(move |c| (c, *at)))
+            .collect();
+        Self { keys, now: 0, reports: 0 }
+    }
+
+    fn left(&self) -> Vec<u16> {
+        self.keys.iter().map(|(c, _)| *c).collect()
+    }
+}
+
+impl EscSource for Timeline {
+    fn peek_down(&mut self, timeout_ms: u64) -> Option<u16> {
+        match self.keys.front() {
+            Some(&(c, at)) if at <= self.now + timeout_ms => {
+                self.now = self.now.max(at);
+                Some(c)
+            }
+            _ => {
+                self.now += timeout_ms;
+                None
+            }
+        }
+    }
+
+    fn take_down(&mut self, timeout_ms: u32) -> Option<u16> {
+        let c = self.peek_down(u64::from(timeout_ms))?;
+        self.keys.pop_front();
+        Some(c)
+    }
+
+    fn mouse_report(&mut self) {
+        self.reports += 1;
+    }
+}
+
+#[test]
+fn a_report_split_after_its_esc_is_mouse_not_escape_in_text_mouse_mode() {
+    let mut tl = Timeline::new(&[("[<35;10;5M", 20)]);
+    let AfterEsc::Sequence(VtOutcome::Mouse(m)) = after_esc(&mut tl, esc_wait_ms(true)) else {
+        panic!("a split report became Escape")
+    };
+    assert_eq!((m.x, m.y, m.is_move), (9, 4, true));
+    assert!(tl.left().is_empty(), "no tail char leaks as a key");
+    assert_eq!(tl.reports, 1);
+}
+
+#[test]
+fn a_report_split_after_its_bracket_is_mouse_not_typed_keys_in_text_mouse_mode() {
+    let mut tl = Timeline::new(&[("[", 0), ("<35;10;5M", 20)]);
+    let AfterEsc::Sequence(VtOutcome::Mouse(m)) = after_esc(&mut tl, esc_wait_ms(true)) else {
+        panic!("a report split after its [ was not a mouse event")
+    };
+    assert_eq!((m.x, m.y, m.is_move), (9, 4, true));
+    assert!(tl.left().is_empty(), "no tail char leaks as a key");
+}
+
+#[test]
+fn esc_o_a_is_up() {
+    let mut tl = Timeline::new(&[("OA", 0)]);
+    assert_eq!(
+        after_esc(&mut tl, esc_wait_ms(true)),
+        AfterEsc::Sequence(VtOutcome::Key(KeyPress::named(vk::UP)))
+    );
+    assert_eq!(tl.left(), Vec::<u16>::new(), "the final byte is consumed");
+}
+
+#[test]
+fn an_x10_report_after_esc_is_mouse() {
+    // `ESC [ M` then button, column, row bytes, each 32 + value.
+    let mut tl = Timeline::new(&[("[M u#", 0)]);
+    let AfterEsc::Sequence(VtOutcome::Mouse(m)) = after_esc(&mut tl, esc_wait_ms(false)) else {
+        panic!("an X10 report was not a mouse event")
+    };
+    assert_eq!((m.x, m.y, m.left), (84, 2, true));
+    assert_eq!(tl.left(), Vec::<u16>::new(), "all four report bytes are consumed");
+    assert_eq!(tl.reports, 1);
+}
+
+#[test]
+fn a_lone_esc_is_escape_and_waits_less_than_a_person_notices() {
+    for text_mouse in [false, true] {
+        assert_eq!(after_esc(&mut Timeline::new(&[]), esc_wait_ms(text_mouse)), AfterEsc::Alone);
+        assert!(esc_wait_ms(text_mouse) < 50);
+    }
+    assert_eq!(after_esc(&mut Timeline::new(&[("x", 200)]), esc_wait_ms(true)), AfterEsc::Alone);
+}
+
+#[test]
+fn esc_then_another_key_is_escape() {
+    let mut tl = Timeline::new(&[("\u{1b}[<35;1;1M", 1)]);
+    assert_eq!(after_esc(&mut tl, esc_wait_ms(true)), AfterEsc::Followed);
+    assert_eq!(tl.left().len(), 10, "the next report stays queued");
+}
+
+#[test]
+fn esc_bracket_a_is_up_in_both_modes() {
+    for text_mouse in [false, true] {
+        let mut tl = Timeline::new(&[("[A", 0)]);
+        assert_eq!(
+            after_esc(&mut tl, esc_wait_ms(text_mouse)),
+            AfterEsc::Sequence(VtOutcome::Key(KeyPress::named(vk::UP)))
+        );
+    }
+}
+
+#[test]
+fn an_enter_right_after_a_report_stays_queued_for_its_own_read() {
+    let mut tl = Timeline::new(&[("[<35;10;5M\r", 0)]);
+    assert!(matches!(
+        after_esc(&mut tl, esc_wait_ms(true)),
+        AfterEsc::Sequence(VtOutcome::Mouse(_))
+    ));
+    assert_eq!(tl.left(), vec![13]);
+    assert!(key_from_record(true, 0, 13, 0).expect("a press").is(vk::ENTER));
+}
+
 #[test]
 fn key_up_and_bare_modifiers_are_not_presses() {
     assert_eq!(key_from_record(false, 0x41, 97, 0), None);
