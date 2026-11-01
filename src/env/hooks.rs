@@ -125,4 +125,50 @@ mod tests {
         assert!(lines.contains(&"three ran".to_owned()), "later hooks still run");
         assert!(run(&[], &env).is_empty(), "an empty list prints nothing");
     }
+
+    /// Points this process's stdin at `file` until dropped: what `Stdio::inherit` hands a child.
+    struct StdinSwap(windows_sys::Win32::Foundation::HANDLE);
+
+    impl StdinSwap {
+        #[expect(unsafe_code, reason = "GetStdHandle/SetStdHandle FFI")]
+        fn to(file: &std::fs::File) -> Self {
+            use std::os::windows::io::AsRawHandle as _;
+            use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE, SetStdHandle};
+            // SAFETY: reads the process's current stdin handle.
+            let old = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+            // SAFETY: `file` outlives the swap, which restores `old` on drop.
+            assert_ne!(unsafe { SetStdHandle(STD_INPUT_HANDLE, file.as_raw_handle()) }, 0);
+            Self(old)
+        }
+    }
+
+    impl Drop for StdinSwap {
+        #[expect(unsafe_code, reason = "SetStdHandle FFI")]
+        fn drop(&mut self) {
+            use windows_sys::Win32::System::Console::{STD_INPUT_HANDLE, SetStdHandle};
+            // SAFETY: puts back the handle `to` read.
+            unsafe { SetStdHandle(STD_INPUT_HANDLE, self.0) };
+        }
+    }
+
+    #[test]
+    fn a_hook_reads_the_launchers_stdin() {
+        let dir = std::env::temp_dir().join(format!("claude-auto-rs-hook-stdin-{}", crate::log::new_run_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.txt");
+        std::fs::write(&input, "typed-into-the-console\n").unwrap();
+        let hook = dir.join("reads.ps1");
+        std::fs::write(&hook, "$l = [Console]::In.ReadLine(); Write-Output \"got=$l\"").unwrap();
+        let file = std::fs::File::open(&input).unwrap();
+        let lines: Vec<String> = {
+            let _swap = StdinSwap::to(&file);
+            run(&[hook.to_string_lossy().into_owned()], &ChildEnv::default())
+                .into_iter()
+                .map(|n| n.text)
+                .collect()
+        };
+        drop(file);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(lines, vec!["got=typed-into-the-console".to_owned()], "the hook got the line piped in");
+    }
 }

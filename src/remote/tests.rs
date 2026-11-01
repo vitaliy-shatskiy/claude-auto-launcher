@@ -169,3 +169,18 @@ fn a_stale_dist_is_rebuilt_and_a_fresh_one_is_not() {
     assert!(has_build_script(&d).unwrap());
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+#[test]
+fn the_server_build_gets_the_sessions_environment() {
+    let d = std::env::temp_dir().join(format!("claude-auto-rs-npm-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&d).unwrap();
+    let npm = d.join("npm.cmd");
+    std::fs::write(&npm, "@echo cfg=%CLAUDE_CONFIG_DIR% args=%*\r\n").unwrap();
+    let log = d.join("build.log");
+    let mut child = ChildEnv::default();
+    child.set("CLAUDE_CONFIG_DIR", r"C:\fixture-account");
+    assert!(run_build(&npm, &d, &log, &child).unwrap(), "the fake npm exits 0");
+    let text = std::fs::read_to_string(&log).unwrap();
+    std::fs::remove_dir_all(&d).unwrap();
+    assert_eq!(text.trim(), r"cfg=C:\fixture-account args=run build --silent", "{text}");
+}

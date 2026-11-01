@@ -236,6 +236,22 @@ fn has_build_script(server: &Path) -> Result<bool, ServerError> {
     Ok(pkg.pointer("/scripts/build").and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
 }
 
+/// `npm run build` in `server` with the session's environment, its output in `build_log`.
+fn run_build(npm: &Path, server: &Path, build_log: &Path, child: &ChildEnv) -> Result<bool, ServerError> {
+    let f = File::create(build_log)?;
+    let f2 = f.try_clone()?;
+    let mut build = Command::new(npm);
+    child.apply(&mut build);
+    Ok(build
+        .args(["run", "build", "--silent"])
+        .current_dir(server)
+        .stdin(Stdio::null())
+        .stdout(f)
+        .stderr(f2)
+        .status()?
+        .success())
+}
+
 /// `dist` when the production build is current or rebuilds cleanly, `tsx` otherwise: a broken
 /// build must never leave the phone without a server.
 fn server_mode(server: &Path, log: &Path, child: &ChildEnv) -> &'static str {
@@ -248,18 +264,7 @@ fn server_mode(server: &Path, log: &Path, child: &ChildEnv) -> &'static str {
         }
         let build_log = with_suffix(log, ".build");
         let npm = on_path("npm").ok_or(ServerError::NotOnPath("npm"))?;
-        let f = File::create(&build_log)?;
-        let f2 = f.try_clone()?;
-        let mut build = Command::new(npm);
-        child.apply(&mut build);
-        let ok = build
-            .args(["run", "build", "--silent"])
-            .current_dir(server)
-            .stdin(Stdio::null())
-            .stdout(f)
-            .stderr(f2)
-            .status()?
-            .success();
+        let ok = run_build(&npm, server, &build_log, child)?;
         if ok && server.join("dist").join("index.js").exists() {
             return Ok("dist");
         }
