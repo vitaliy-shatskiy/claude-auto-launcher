@@ -122,11 +122,11 @@ Every argument goes to `claude` untouched, except the launcher's own `--launcher
 
 ### Keys
 
-<div align="center">
+<p align="center">
   <a href="docs/media/launch-walk.mp4"><img alt="A keyboard walk: switching between three accounts brings back each one's model, effort, advisor and permission, then the model, effort and advisor rows are stepped" src="docs/media/launch-walk.gif" width="100%"></a>
   <br>
   <sub>Switching accounts brings back each one's choices, then the model, effort and advisor rows are stepped.</sub>
-</div>
+</p>
 
 | Screen | Keys |
 |---|---|
