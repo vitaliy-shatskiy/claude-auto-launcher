@@ -1,8 +1,6 @@
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::layout::display_width;
-use crate::timing::Timings;
 
 fn at(origin: Instant, ms: u64) -> Instant {
     origin + Duration::from_millis(ms)
