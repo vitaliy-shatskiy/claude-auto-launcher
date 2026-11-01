@@ -203,6 +203,21 @@ $env:NO_COLOR = '1'
 It prints each frame, then a summary ending in `--- preview, nothing launched ---` with the launch
 arguments and the command line.
 
+### Debug mode
+
+Rust launcher only. `claude-auto-rs --debug` (the only argument; `--debug` among other arguments
+stays claude's own flag) or `CLAUDE_AUTO_DEBUG=1` times each step of the run:
+
+- Every screen gets one dim bottom line: `load <n> ms · paint <n> ms · last key->frame <n> ms`
+  (the screen's data load, its first paint, the last key to its frame). The screen draws one row
+  shorter, so nothing is covered.
+- F12 opens the timings of this run as a tree, slowest first within each level. Esc goes back.
+- Each span lands in the run log as a `timing` record (`name`, `parent`, `ms`, `startMs`).
+- `claude-auto-rs --timings [--days N]` prints count, p50, p95 and max per span name from the logs
+  of today (or the last `N` days), then exits.
+
+Off, nothing changes and nothing extra is read or written.
+
 ## Configuration
 
 `~/.claude/claude-auto.json` (or `CLAUDE_AUTO_CONFIG`). No file = one account, `work` ->

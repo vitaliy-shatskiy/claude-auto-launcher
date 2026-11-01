@@ -63,6 +63,7 @@ drives the built binary end to end.
 | `env.rs`, `env/*` | `Env.ps1`: profile, project directory, default labels, sharing repair, secrets, launch hooks, MCP config, model catalog, rate limits. `sharing/claude-mirror-mcp.mjs`. Submodules: `sharing`, `mirror`, `secrets`, `hooks`, `mcp`, `models`, `limits`, `win_fs` |
 | `maintenance.rs`, `maintenance/*` | `Maintenance.ps1`, `Ui.ps1` `Invoke-MaintenanceScreen`, `ConvertTo-StatusText`, `Invoke-ClaudeCommandText`, `Screens.ps1` `Get-MaintenanceFrame`, the update-check block of `claude-auto.ps1`. Submodules: `install`, `release`, `screen`, `win` |
 | `remote.rs`, `remote/*` | `Remote.ps1`, the crc block of `claude-auto.ps1` |
+| `timing.rs`, `timing/*` | none: debug mode is new in the Rust port. Submodules: `view` (footer, F12 screen), `summary` (`--timings`) |
 
 Ported under another name or not needed:
 
