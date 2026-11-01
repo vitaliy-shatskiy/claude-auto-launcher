@@ -44,8 +44,8 @@ impl std::fmt::Display for FetchFailed {
 
 impl std::error::Error for FetchFailed {}
 
-/// A `GetLastError` code after a failed WinHTTP call, in words. `FormatMessageW` cannot render
-/// WinHTTP's own codes (they live in winhttp.dll), so the common ones are named here.
+/// A `GetLastError` code after a failed `WinHTTP` call, in words. `FormatMessageW` cannot render
+/// `WinHTTP`'s own codes (they live in `winhttp.dll`), so the common ones are named here.
 pub(crate) fn winhttp_failure(code: u32) -> FetchFailed {
     use windows_sys::Win32::Networking::WinHttp as w;
     let words = match code {
