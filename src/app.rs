@@ -299,7 +299,7 @@ fn launch(run: &Run) -> i32 {
     }
     if !run.preview {
         let _s = tm.scope(&["hooks"]);
-        env::run_launch_hooks_with_env(&run.cfg.launch_hooks, &child);
+        env::run_launch_hooks_with_env(&run.cfg.launch_hooks, &child, tm);
     }
     let mcp = {
         let _s = tm.scope(&["mcp"]);

@@ -88,6 +88,7 @@ fn rec(name: &str, parent: Option<&str>, ms: f64, start_ms: f64) -> TimingRecord
         ms,
         start_ms,
         aborted: false,
+        exit: None,
     }
 }
 

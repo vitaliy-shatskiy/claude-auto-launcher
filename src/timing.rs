@@ -21,6 +21,8 @@ pub struct Span {
     pub dur_us: Option<u64>,
     /// Closed by the end of an enclosing span, not by its own end (an early return).
     pub aborted: bool,
+    /// A launch hook's exit code; `None` for every other span and a hook that never ended.
+    pub exit: Option<i32>,
     /// Dropped by [`Timings::discard`]: never shown, never logged.
     discarded: bool,
     logged: bool,
@@ -125,10 +127,33 @@ impl Timings {
             start_us,
             dur_us: None,
             aborted: false,
+            exit: None,
             discarded: false,
             logged: false,
         });
         i.open.push(id);
+        SpanId(id)
+    }
+
+    /// A span measured on another thread, closed already: under `parent`, or else under the
+    /// innermost open span. `exit` is a hook's exit code.
+    pub fn add(&self, parts: &[&str], parent: Option<SpanId>, start: Instant, end: Instant, exit: Option<i32>) -> SpanId {
+        let Some(i) = &self.0 else { return NONE };
+        let mut i = i.borrow_mut();
+        let start_us = micros(i.origin, start);
+        let dur_us = micros(i.origin, end).saturating_sub(start_us);
+        let parent = parent.filter(|p| *p != NONE).map(|p| p.0).or_else(|| i.open.last().copied());
+        let id = i.spans.len();
+        i.spans.push(Span {
+            name: parts.join(":"),
+            parent,
+            start_us,
+            dur_us: Some(dur_us),
+            aborted: false,
+            exit,
+            discarded: false,
+            logged: false,
+        });
         SpanId(id)
     }
 
@@ -233,6 +258,7 @@ impl Timings {
                     ms: ms(d),
                     start_ms: ms(s.start_us),
                     aborted: s.aborted,
+                    exit: s.exit,
                 });
             }
         }
@@ -251,6 +277,8 @@ pub struct TimingRecord {
     pub start_ms: f64,
     /// Ended by an enclosing span (an early return), not by itself.
     pub aborted: bool,
+    /// A launch hook's exit code.
+    pub exit: Option<i32>,
 }
 
 /// Ends its span on drop.

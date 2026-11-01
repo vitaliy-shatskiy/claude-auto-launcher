@@ -60,6 +60,16 @@ fn a_bad_byte_in_one_line_keeps_the_rest_of_the_day() {
 }
 
 #[test]
+fn hook_spans_list_right_under_hooks() {
+    let recs: Vec<(String, f64)> = ["mcp", "hooks:chain:b.ps1+c.ps1", "hooks:a.ps1", "hooks", "hook"]
+        .iter()
+        .map(|n| ((*n).to_owned(), 1.0))
+        .collect();
+    let names: Vec<String> = summarize(&recs).into_iter().map(|r| r.name).collect();
+    assert_eq!(names, ["hook", "hooks", "hooks:a.ps1", "hooks:chain:b.ps1+c.ps1", "mcp"]);
+}
+
+#[test]
 fn percentile_is_nearest_rank() {
     let v = [1.0, 2.0, 3.0, 4.0];
     assert_eq!(percentile(&v, 50), 2.0);

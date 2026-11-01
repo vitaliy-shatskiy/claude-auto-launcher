@@ -55,6 +55,9 @@ impl Logger {
             if r.aborted {
                 data.insert("aborted".into(), Value::Bool(true));
             }
+            if let Some(code) = r.exit {
+                data.insert("exit".into(), code.into());
+            }
             self.write("timing", data);
         }
     }
