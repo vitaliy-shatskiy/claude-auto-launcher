@@ -114,6 +114,8 @@ fn debug_off_logs_no_timing_records_and_debug_on_logs_spans() {
     }
     let config = recs.iter().find(|r| r["name"] == "config").unwrap();
     assert_eq!(config["parent"], "process");
+    let spawn = recs.iter().find(|r| r["name"] == "spawn").unwrap();
+    assert_eq!(spawn["parent"], "process", "the spawn is inside the run's root span");
     assert!(config["ms"].is_f64() && config["startMs"].is_f64(), "{config}");
     std::fs::remove_dir_all(&d).unwrap();
 }

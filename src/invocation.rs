@@ -76,21 +76,29 @@ pub fn resolve_claude() -> Result<PathBuf, &'static str> {
 
 /// Runs the child in this console and waits. `CLAUDE_AUTO_LAUNCHED=1` is set for the child only,
 /// so a bare `claude` typed later in the same terminal is never marked.
-/// `logger` (debug mode): times the spawn and writes the run's timings before the wait.
-pub fn run_child(exe: &Path, argv: &[String], env: &ChildEnv, logger: Option<&crate::log::Logger>) -> std::io::Result<i32> {
+/// `timed` (debug mode): the spawn is timed inside the run's root span, which ends right after
+/// it, and the run's timings are written before the wait.
+pub fn run_child(
+    exe: &Path,
+    argv: &[String],
+    env: &ChildEnv,
+    timed: Option<(&crate::log::Logger, crate::timing::SpanId)>,
+) -> std::io::Result<i32> {
     let mut cmd = Command::new(exe);
     cmd.args(argv);
     env.apply(&mut cmd);
     cmd.env("CLAUDE_AUTO_LAUNCHED", "1");
     // Ctrl+C belongs to the child while it runs; this process only waits for it.
     crate::sys::ignore_ctrl_c();
-    let spawn = logger.map(|l| l.timings.begin(&["spawn"]));
-    let mut running = cmd.spawn()?;
-    if let Some((l, s)) = logger.zip(spawn) {
+    let spawn = timed.map(|(l, _)| l.timings.begin(&["spawn"]));
+    let spawned = cmd.spawn();
+    if let Some(((l, root), s)) = timed.zip(spawn) {
         l.timings.end(s);
+        l.timings.end(root);
         // The run's timings reach the log before the session, which may run for hours.
         l.write_timings();
     }
+    let mut running = spawned?;
     let status = running.wait()?;
     Ok(status.code().unwrap_or(1))
 }

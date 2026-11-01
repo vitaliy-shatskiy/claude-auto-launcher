@@ -399,8 +399,7 @@ fn launch(run: &Run) -> i32 {
             "remote" => remote_on, "mcpConfigs" => mcp, "argv" => argv, "ms" => ms(run),
         },
     );
-    tm.end(run.process);
-    let code = match invocation::run_child(&claude, &argv, &child, Some(&run.logger)) {
+    let code = match invocation::run_child(&claude, &argv, &child, Some((&run.logger, run.process))) {
         Ok(c) => c,
         Err(e) => {
             out::line(&format!("  claude could not be started: {e}"), Fg::Red);
