@@ -1,11 +1,6 @@
-## Two jobs: the Rust launcher's gates (fmt, clippy -D warnings, tests, all --locked) and the
-## PowerShell launcher's unit suites.
-## PowerShell: unit suites only. The other four checkpoint rows cannot run here and must not be faked green:
-##   regression / droplist / preview - need `tests\*-reference.local.txt`, recorded per machine and
-##     gitignored, and a real `claude` on PATH.
-##   check-clean - its whole value is the private pattern list supplied out of band; with none it
-##     degrades to the runner's own username and proves nothing.
-## Test-Input runs WITHOUT -Live: the live half needs a real console, and a runner has none.
+## The launcher's gates: fmt, clippy -D warnings, tests, all --locked.
+## The privacy scan (tests/check-clean.ps1) does not run here: its value is the private pattern list
+## supplied out of band, and with none it degrades to the runner's own username and proves nothing.
 name: tests
 
 on:
@@ -37,23 +32,3 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
-
-  tests:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Run test suites
-        shell: pwsh
-        run: |
-          $suites = 'Theme','Layout','Sessions','Ui','Maintenance','Remote','Prefs','Env','Config','Input','Install','Mirror','Projects','LaunchModes'
-          $bad = 0
-          foreach ($n in $suites) {
-            & pwsh -NoProfile -File "tests\Test-$n.ps1"
-            # 0 pass - 1 failed assertion - 2 could not run, which is NOT a pass.
-            $code = $LASTEXITCODE
-            $verdict = switch ($code) { 0 { 'pass' } 1 { 'FAIL' } 2 { 'DID NOT RUN' } default { "UNKNOWN($code)" } }
-            "{0,-18} {1}  {2}" -f "Test-$n", $code, $verdict
-            if ($code -ne 0) { $bad++ }
-          }
-          if ($bad) { throw "$bad of $($suites.Count) suites did not pass" }
-          "all $($suites.Count) suites pass"

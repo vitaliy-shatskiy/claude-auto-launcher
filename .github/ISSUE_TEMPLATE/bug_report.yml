@@ -8,22 +8,12 @@ body:
       label: What happened
       description: What you did, what you expected, what you got. A screenshot of the console helps.
     validations: { required: true }
-  - type: dropdown
-    id: launcher
-    attributes:
-      label: Launcher
-      options:
-        - PowerShell (claude-auto)
-        - Rust (claude-auto-rs)
-    validations: { required: true }
   - type: textarea
     id: versions
     attributes:
       label: Versions
-      description: Output of the commands below (the launcher line for the one you use).
+      description: Output of the commands below.
       value: |
-        $PSVersionTable.PSVersion
-        claude-auto --launcher-version
         claude-auto-rs --launcher-version
         claude --version
         git -C <this clone> rev-parse --short HEAD
@@ -39,7 +29,7 @@ body:
     id: checkpoint
     attributes:
       label: Test result
-      description: "`pwsh -File tests\\checkpoint.ps1` (PowerShell) or `cargo test --locked` (Rust): paste the result. Skip if the bug stops it from running."
+      description: "`cargo test --locked`: paste the result. Skip if the bug stops it from running."
       render: shell
   - type: checkboxes
     id: features
