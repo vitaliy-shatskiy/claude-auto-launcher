@@ -321,14 +321,24 @@ fn launch(run: &Run) -> i32 {
     let launch_argv: Vec<String> = match &ui {
         Some(o) => {
             let available = o.view.limits.get(&o.state.account).and_then(|l| l.available_models.as_deref());
-            let default_model = o
-                .view
-                .labels_by_account
-                .get(&o.state.account)
-                .and_then(|l| l.get("Model"))
-                .cloned()
-                .unwrap_or_default();
-            launch_args(&run.roster, &o.state, o.resume_id.as_deref(), o.fork, available, &default_model)
+            let resolved = |row: &str| {
+                o.view
+                    .labels_by_account
+                    .get(&o.state.account)
+                    .and_then(|l| l.get(row))
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let (default_model, default_advisor) = (resolved("Model"), resolved("Advisor"));
+            launch_args(
+                &run.roster,
+                &o.state,
+                o.resume_id.as_deref(),
+                o.fork,
+                available,
+                &default_model,
+                &default_advisor,
+            )
         }
         None => run.args.clone(),
     };

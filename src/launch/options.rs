@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::{LaunchState, Roster, RowDef, RowName};
+use super::{LaunchState, Roster, RowDef, RowName, UNAVAILABLE_DEFAULT_ADVISOR};
 use crate::theme;
 use crate::types::DefaultLabels;
 
@@ -91,7 +91,8 @@ impl<'a> OptionText<'a> {
 static FAMILY_WORD: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
     HIDEABLE_FAMILIES
         .iter()
-        .map(|f| (*f, theme::re(&format!(r"(?i)\b{f}\b"))))
+        // Word start only: raw settings ids glue a version on (`fable5`, `fable_1m`).
+        .map(|f| (*f, theme::re(&format!(r"(?i)(?:^|[^a-z0-9]){f}"))))
         .collect()
 });
 
@@ -101,15 +102,16 @@ pub fn default_model_unavailable(label: &str, available: Option<&[String]>) -> b
     FAMILY_WORD.iter().any(|(f, re)| hidden.contains(f) && re.is_match(label))
 }
 
-/// `Get-HonestDefaultLabel`.
+/// `Get-HonestDefaultLabel`: an unavailable default names the pin the launch passes instead.
 pub fn honest_default_label(roster: &Roster, label: &str, available: Option<&[String]>, row: RowName) -> String {
     if !default_model_unavailable(label, available) {
         return label.to_owned();
     }
-    if row != RowName::Model {
-        return "default (plan default)".into();
-    }
-    let (_, runs) = roster.unavailable_default_model();
+    let runs = if row == RowName::Model {
+        roster.unavailable_default_model().1
+    } else {
+        UNAVAILABLE_DEFAULT_ADVISOR.to_owned()
+    };
     if label.starts_with("default (") {
         format!("default ({runs})")
     } else {

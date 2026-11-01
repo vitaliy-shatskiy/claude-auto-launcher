@@ -2,7 +2,7 @@
 //! (`Get-LaunchArgs`). Pure.
 
 use super::options::default_model_unavailable;
-use super::{LaunchState, Roster, RowName};
+use super::{LaunchState, Roster, RowName, UNAVAILABLE_DEFAULT_ADVISOR};
 
 /// One launch mode (`LaunchModes.ps1`): the project screen's action field values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +83,8 @@ pub fn launch_mode_table_errors(modes: &[LaunchMode], reserved: &[char]) -> Vec<
 }
 
 /// `Get-LaunchArgs`: a default state yields NOTHING. `available`/`default_model`: the one
-/// exception, the CS-231 pin when the account lacks the default model's family.
+/// exception, the CS-231 pin when the account lacks the default model's family; `default_advisor`
+/// (the raw `advisorModel`) gets the same pin on the advisor row (CS-1044).
 pub fn launch_args(
     roster: &Roster,
     state: &LaunchState,
@@ -91,6 +92,7 @@ pub fn launch_args(
     fork: bool,
     available: Option<&[String]>,
     default_model: &str,
+    default_advisor: &str,
 ) -> Vec<String> {
     let mut a = Vec::new();
     let model_row = roster.row(RowName::Model);
@@ -110,8 +112,13 @@ pub fn launch_args(
     if !state.effort.eq_ignore_ascii_case("default") {
         a.extend(["--effort".to_owned(), state.effort.clone()]);
     }
-    if ["fable", "opus"].iter().any(|v| v.eq_ignore_ascii_case(&state.advisor)) {
-        a.extend(["--advisor".to_owned(), state.advisor.clone()]);
+    let advisor = if state.advisor.eq_ignore_ascii_case("default") && default_model_unavailable(default_advisor, available) {
+        UNAVAILABLE_DEFAULT_ADVISOR
+    } else {
+        state.advisor.as_str()
+    };
+    if ["fable", "opus"].iter().any(|v| v.eq_ignore_ascii_case(advisor)) {
+        a.extend(["--advisor".to_owned(), advisor.to_owned()]);
     }
     if !state.permission.eq_ignore_ascii_case("default") {
         let mode = if state.permission.eq_ignore_ascii_case("bypass") {

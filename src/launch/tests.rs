@@ -25,7 +25,7 @@ pub(crate) fn four() -> Roster {
 fn args(r: &Roster, f: impl FnOnce(&mut LaunchState)) -> String {
     let mut s = r.new_state();
     f(&mut s);
-    launch_args(r, &s, None, false, None, "").join(" ")
+    launch_args(r, &s, None, false, None, "", "").join(" ")
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn resume_carries_id_and_fork() {
     let mut s = r.new_state();
     s.action = "resume".into();
     assert_eq!(
-        launch_args(&r, &s, Some("abc123"), true, None, "").join(" "),
+        launch_args(&r, &s, Some("abc123"), true, None, "", "").join(" "),
         "--resume abc123 --fork-session"
     );
 }
@@ -82,16 +82,16 @@ fn default_pins_opus_when_account_lacks_fable() {
     let s = r.new_state();
     let none: Vec<String> = Vec::new();
     assert_eq!(
-        launch_args(&r, &s, None, false, Some(&none), "Fable 5.1[1M]").join(" "),
+        launch_args(&r, &s, None, false, Some(&none), "Fable 5.1[1M]", "").join(" "),
         "--model opus[1m]"
     );
     assert_eq!(
-        launch_args(&r, &s, None, false, None, "Fable 5.1[1M]").join(" "),
+        launch_args(&r, &s, None, false, None, "Fable 5.1[1M]", "").join(" "),
         "",
         "no information pins nothing"
     );
     let fable = vec!["fable".to_owned()];
-    assert_eq!(launch_args(&r, &s, None, false, Some(&fable), "Fable 5.1[1M]").join(" "), "");
+    assert_eq!(launch_args(&r, &s, None, false, Some(&fable), "Fable 5.1[1M]", "").join(" "), "");
 }
 
 #[test]
@@ -145,7 +145,48 @@ fn honest_label_names_the_pin() {
     );
     assert_eq!(
         honest_default_label(&r, "fable", Some(&[]), RowName::Advisor),
-        "default (plan default)"
+        "opus",
+        "CS-1044: the advisor pin, bare like the label came in"
+    );
+    assert_eq!(
+        honest_default_label(&r, "default (fable)", Some(&[]), RowName::Advisor),
+        "default (opus)"
+    );
+}
+
+#[test]
+fn family_match_catches_non_canonical_settings_ids() {
+    for id in [
+        "fable",
+        "fable5",
+        "fable_1m",
+        "claude-fable-5-1[1m]",
+        "default (fable5)",
+        "Fable 5.1[1M]",
+    ] {
+        assert!(default_model_unavailable(id, Some(&[])), "{id} names fable (CS-232a)");
+    }
+    assert!(!default_model_unavailable("opus", Some(&[])));
+    assert!(!default_model_unavailable("fable5", Some(&["fable".to_owned()])));
+    assert!(!default_model_unavailable("fable5", None), "no information hides nothing");
+}
+
+#[test]
+fn default_advisor_pins_opus_when_account_lacks_fable() {
+    let r = four();
+    let s = r.new_state();
+    let none: Vec<String> = Vec::new();
+    let run = |avail: Option<&[String]>, adv: &str| launch_args(&r, &s, None, false, avail, "", adv).join(" ");
+    assert_eq!(run(Some(&none), "fable5"), "--advisor opus");
+    assert_eq!(run(None, "fable"), "", "no information pins nothing");
+    assert_eq!(run(Some(&["fable".to_owned()]), "fable"), "");
+    assert_eq!(run(Some(&none), "opus"), "");
+    let mut off = r.new_state();
+    off.advisor = "off".into();
+    assert_eq!(
+        launch_args(&r, &off, None, false, Some(&none), "", "fable").join(" "),
+        "",
+        "off stays off"
     );
 }
 

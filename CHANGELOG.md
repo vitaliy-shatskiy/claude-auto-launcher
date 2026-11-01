@@ -45,7 +45,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   model belongs to (today Fable on one Team account), the `default` model launches with the
   `Opus[1M]` option's own `--model opus[1m]` and the row names that option's label; an account that
   has the model, or one the widget never reported, still passes no `--model`. A widget record older
-  than 30 minutes counts as unreported. The advisor row keeps `default (plan default)`.
+  than 30 minutes counts as unreported. The advisor row does the same: a `default` whose
+  `advisorModel` names Fable on such an account launches with `--advisor opus` and reads
+  `default (opus)` (or folds into the `opus` option), never `default (plan default)`. The family
+  match reads raw settings ids too (`fable5`, `fable_1m`).
 - Session picker: with `sharing` on, one session list for every account, read from the projects
   directory the project screen lists, so one summary cache serves all accounts. With `sharing` off
   each account still lists its own sessions.

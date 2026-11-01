@@ -139,6 +139,9 @@ fn base_rows() -> Vec<RowDef> {
 /// The model row key a 'default' launch pins on an account lacking the default's family (CS-231).
 const UNAVAILABLE_DEFAULT_KEY: &str = "opus1m";
 
+/// The advisor row value a 'default' launch pins there for the same reason (CS-1044).
+const UNAVAILABLE_DEFAULT_ADVISOR: &str = "opus";
+
 /// The account roster and the rows it shapes (`Set-LaunchRoster`).
 #[derive(Debug, Clone)]
 pub struct Roster {
