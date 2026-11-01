@@ -1,4 +1,6 @@
-## Unit suites only. The other four checkpoint rows cannot run here and must not be faked green:
+## Two jobs: the Rust launcher's gates (fmt, clippy -D warnings, tests, all --locked) and the
+## PowerShell launcher's unit suites.
+## PowerShell: unit suites only. The other four checkpoint rows cannot run here and must not be faked green:
 ##   regression / droplist / preview - need `tests\*-reference.local.txt`, recorded per machine and
 ##     gitignored, and a real `claude` on PATH.
 ##   check-clean - its whole value is the private pattern list supplied out of band; with none it
@@ -16,6 +18,26 @@ permissions:
   contents: read
 
 jobs:
+  rust:
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v5
+      # The version comes from rust-toolchain.toml only (with clippy and rustfmt).
+      - name: Install the pinned toolchain
+        shell: pwsh
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --locked
+
   tests:
     runs-on: windows-latest
     steps:
