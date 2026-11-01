@@ -3,7 +3,7 @@
 
 use std::os::windows::process::CommandExt as _;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::{CREATE_NO_WINDOW, Note};
 use crate::out::Fg;
@@ -42,13 +42,10 @@ fn run_one(hook: &str, env: &ChildEnv) -> Vec<Note> {
             "  hook {leaf}: unsupported extension '{ext}' (use .ps1, .js, .mjs or .cmd)"
         ));
     };
-    for (k, v) in &env.vars {
-        match v {
-            Some(val) => cmd.env(k, val),
-            None => cmd.env_remove(k),
-        };
-    }
-    let out = match cmd.creation_flags(CREATE_NO_WINDOW).output() {
+    env.apply(&mut cmd);
+    // The console's stdin, as PowerShell gave its hooks: `output()` alone would hand them a
+    // closed stream.
+    let out = match cmd.creation_flags(CREATE_NO_WINDOW).stdin(Stdio::inherit()).output() {
         Ok(o) => o,
         Err(e) => {
             return warn(format!(

@@ -48,6 +48,16 @@ impl ChildEnv {
         self.vars.push((name.to_owned(), None));
     }
 
+    /// Applies the table to a command, in order: the one place a child gets the session env.
+    pub fn apply(&self, cmd: &mut std::process::Command) {
+        for (k, v) in &self.vars {
+            match v {
+                Some(val) => cmd.env(k, val),
+                None => cmd.env_remove(k),
+            };
+        }
+    }
+
     /// The value the child will see for `name`: this table first, then the launcher's own.
     pub fn effective(&self, name: &str) -> Option<String> {
         match self.vars.iter().rev().find(|(n, _)| n.eq_ignore_ascii_case(name)) {

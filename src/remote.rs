@@ -25,6 +25,46 @@ pub struct CrcLaunch<'a> {
 }
 
 const DEFAULT_PORT: u16 = 8791;
+
+/// Why the companion server could not be built or started.
+#[derive(Debug)]
+enum ServerError {
+    NotOnPath(&'static str),
+    Io(std::io::Error),
+    Json(serde_json::Error),
+}
+
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotOnPath(tool) => write!(f, "{tool} is not on PATH"),
+            Self::Io(e) => e.fmt(f),
+            Self::Json(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ServerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotOnPath(_) => None,
+            Self::Io(e) => Some(e),
+            Self::Json(e) => Some(e),
+        }
+    }
+}
+
+impl From<std::io::Error> for ServerError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<serde_json::Error> for ServerError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Json(e)
+    }
+}
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
@@ -190,16 +230,16 @@ fn dist_stale(server: &Path) -> bool {
     }
 }
 
-fn has_build_script(server: &Path) -> Result<bool, String> {
-    let text = std::fs::read_to_string(server.join("package.json")).map_err(|e| e.to_string())?;
-    let pkg: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+fn has_build_script(server: &Path) -> Result<bool, ServerError> {
+    let text = std::fs::read_to_string(server.join("package.json"))?;
+    let pkg: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))?;
     Ok(pkg.pointer("/scripts/build").and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
 }
 
 /// `dist` when the production build is current or rebuilds cleanly, `tsx` otherwise: a broken
 /// build must never leave the phone without a server.
-fn server_mode(server: &Path, log: &Path) -> &'static str {
-    let attempt = || -> Result<&'static str, String> {
+fn server_mode(server: &Path, log: &Path, child: &ChildEnv) -> &'static str {
+    let attempt = || -> Result<&'static str, ServerError> {
         if !has_build_script(server)? {
             return Ok("tsx");
         }
@@ -207,17 +247,18 @@ fn server_mode(server: &Path, log: &Path) -> &'static str {
             return Ok("dist");
         }
         let build_log = with_suffix(log, ".build");
-        let npm = on_path("npm").ok_or("npm is not on PATH")?;
-        let f = File::create(&build_log).map_err(|e| e.to_string())?;
-        let f2 = f.try_clone().map_err(|e| e.to_string())?;
-        let ok = Command::new(npm)
+        let npm = on_path("npm").ok_or(ServerError::NotOnPath("npm"))?;
+        let f = File::create(&build_log)?;
+        let f2 = f.try_clone()?;
+        let mut build = Command::new(npm);
+        child.apply(&mut build);
+        let ok = build
             .args(["run", "build", "--silent"])
             .current_dir(server)
             .stdin(Stdio::null())
             .stdout(f)
             .stderr(f2)
-            .status()
-            .map_err(|e| e.to_string())?
+            .status()?
             .success();
         if ok && server.join("dist").join("index.js").exists() {
             return Ok("dist");
@@ -236,7 +277,7 @@ fn server_mode(server: &Path, log: &Path) -> &'static str {
 
 /// `Start-CompanionServer`: reports what actually happened, not what was intended. `Err` when
 /// node itself could not be started.
-fn start_companion_server(root: &Path, port: u16, log: &Path) -> Result<String, String> {
+fn start_companion_server(root: &Path, port: u16, log: &Path, child: &ChildEnv) -> Result<String, ServerError> {
     let server = root.join("server");
     if !server.join("package.json").exists() {
         return Ok(format!("no checkout at {}", root.display()));
@@ -244,25 +285,26 @@ fn start_companion_server(root: &Path, port: u16, log: &Path) -> Result<String, 
     if win::listener_pid(port).is_some() {
         return Ok(format!("already listening on {port}"));
     }
-    let mode = server_mode(&server, log);
+    let mode = server_mode(&server, log, child);
     let args: &[&str] = if mode == "dist" {
         &["dist/index.js"]
     } else {
         &["--import", "tsx", "src/index.ts"]
     };
-    let node = on_path("node").ok_or("node is not on PATH")?;
-    let stdout = File::create(log).map_err(|e| e.to_string())?;
-    let stderr = File::create(with_suffix(log, ".err")).map_err(|e| e.to_string())?;
+    let node = on_path("node").ok_or(ServerError::NotOnPath("node"))?;
+    let stdout = File::create(log)?;
+    let stderr = File::create(with_suffix(log, ".err"))?;
     // Detached and windowless: the server outlives this launcher and never sees its Ctrl+C.
-    Command::new(node)
+    let mut server_cmd = Command::new(node);
+    child.apply(&mut server_cmd);
+    server_cmd
         .args(args)
         .current_dir(&server)
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr)
         .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .spawn()?;
     for _ in 0..24 {
         std::thread::sleep(Duration::from_millis(250));
         if win::listener_pid(port).is_some() {
@@ -273,13 +315,11 @@ fn start_companion_server(root: &Path, port: u16, log: &Path) -> Result<String, 
 }
 
 /// `Show-PairingQr`: `npm run pair` prints the code; only a code that verified gets the pause.
-fn show_pairing_qr(root: &Path) {
-    let run = on_path("npm").ok_or_else(|| "npm is not on PATH".to_owned()).and_then(|npm| {
-        Command::new(npm)
-            .args(["run", "pair", "--silent"])
-            .current_dir(root.join("server"))
-            .status()
-            .map_err(|e| e.to_string())
+fn show_pairing_qr(root: &Path, child: &ChildEnv) {
+    let run = on_path("npm").ok_or(ServerError::NotOnPath("npm")).and_then(|npm| {
+        let mut pair = Command::new(npm);
+        child.apply(&mut pair);
+        Ok(pair.args(["run", "pair", "--silent"]).current_dir(root.join("server")).status()?)
     });
     match run {
         Ok(s) if s.success() => {
@@ -317,7 +357,7 @@ pub fn launch_via_crc(req: &CrcLaunch<'_>) -> Option<i32> {
         Fg::DarkGray,
     );
     let root = live_root();
-    match start_companion_server(&root, live_port(), &log_path(std::process::id())) {
+    match start_companion_server(&root, live_port(), &log_path(std::process::id()), req.child) {
         Ok(state) if state.contains("(dist)") => {
             out::line(&format!("  companion server: {state} (serves all profiles)"), Fg::DarkGray);
             print_tailnet();
@@ -333,7 +373,7 @@ pub fn launch_via_crc(req: &CrcLaunch<'_>) -> Option<i32> {
         Err(e) => out::line(&format!("  companion server not started: {e}"), Fg::DarkYellow),
     }
     if req.show_qr {
-        show_pairing_qr(&root);
+        show_pairing_qr(&root, req.child);
     }
     let mut argv = vec!["--".to_owned()];
     argv.extend(req.argv.iter().cloned());

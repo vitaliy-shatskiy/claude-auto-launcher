@@ -79,12 +79,7 @@ pub fn resolve_claude() -> Result<PathBuf, &'static str> {
 pub fn run_child(exe: &Path, argv: &[String], env: &ChildEnv) -> std::io::Result<i32> {
     let mut cmd = Command::new(exe);
     cmd.args(argv);
-    for (k, v) in &env.vars {
-        match v {
-            Some(val) => cmd.env(k, val),
-            None => cmd.env_remove(k),
-        };
-    }
+    env.apply(&mut cmd);
     cmd.env("CLAUDE_AUTO_LAUNCHED", "1");
     // Ctrl+C belongs to the child while it runs; this process only waits for it.
     crate::sys::ignore_ctrl_c();
