@@ -20,5 +20,6 @@ pub mod remote;
 pub mod sessions;
 pub(crate) mod sys;
 pub mod theme;
+pub mod timing;
 pub mod types;
 pub mod ui;

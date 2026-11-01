@@ -16,6 +16,8 @@ pub struct Logger {
     pub run_id: String,
     /// Preview writes nothing anywhere.
     pub enabled: bool,
+    /// Debug mode's spans; off by default.
+    pub timings: crate::timing::Timings,
 }
 
 impl Logger {
@@ -44,6 +46,16 @@ impl Logger {
             .root
             .join(format!("claude-auto-{:04}-{:02}-{:02}.jsonl", now.year, now.month, now.day));
         append_with_retry(&file, line.as_bytes())
+    }
+
+    /// Debug mode: one `timing` record per ended span not written yet. Off: no record, no I/O.
+    pub fn write_timings(&self) {
+        for (name, parent, ms, start) in self.timings.take_unlogged() {
+            self.write(
+                "timing",
+                crate::log_data! { "name" => name, "parent" => parent, "ms" => ms, "startMs" => start },
+            );
+        }
     }
 }
 
@@ -168,6 +180,7 @@ mod tests {
             root: std::env::temp_dir().join("claude-auto-rs-never"),
             run_id: "x".into(),
             enabled: false,
+            timings: crate::timing::Timings::default(),
         };
         assert!(!l.write("start", Map::new()));
         assert!(!l.root.exists());
@@ -180,6 +193,7 @@ mod tests {
             root: dir.clone(),
             run_id: "abc".into(),
             enabled: true,
+            timings: crate::timing::Timings::default(),
         };
         assert!(l.write("exit", log_data! { "code" => 3 }));
         let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();

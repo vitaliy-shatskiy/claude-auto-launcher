@@ -19,6 +19,7 @@ fn a_console_without_armed_input_ends_as_lost_not_as_exhausted_keys() {
         root: std::path::PathBuf::new(),
         run_id: String::new(),
         enabled: false,
+        timings: crate::timing::Timings::default(),
     };
     let mut t = ConsoleTerm::open(false, None, logger);
     let size = t.size();

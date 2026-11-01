@@ -240,8 +240,16 @@ impl PreviewTerm {
                 root: std::path::PathBuf::new(),
                 run_id: String::new(),
                 enabled: false,
+                timings: crate::timing::Timings::default(),
             },
         }
+    }
+
+    /// The run's logger, so a preview in debug mode shares the run's timings.
+    #[must_use]
+    pub fn with_logger(mut self, logger: Logger) -> Self {
+        self.logger = logger;
+        self
     }
 }
 

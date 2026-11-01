@@ -23,6 +23,7 @@ pub mod vk {
     pub const DOWN: u16 = 40;
     pub const INSERT: u16 = 45;
     pub const DELETE: u16 = 46;
+    pub const F12: u16 = 123;
     pub const C: u16 = 0x43;
     pub const R: u16 = 0x52;
     pub const OEM2: u16 = 191;

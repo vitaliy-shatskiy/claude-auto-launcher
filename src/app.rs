@@ -90,6 +90,7 @@ pub fn run(args: Vec<String>) -> i32 {
         root: log_root,
         run_id: log::new_run_id(),
         enabled: !preview,
+        timings: crate::timing::Timings::default(),
     };
     let run = Run {
         args,
