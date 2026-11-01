@@ -94,6 +94,8 @@ Ported under another name or not needed:
   and with QuickEdit kept, instead of `[Console]::ReadKey`.
 - The log's parent chain records pid and name. The command line (WMI in PowerShell) is not read.
 - The `start` log record carries `psVersion: "rust <version>"` and `moduleMs: 0`.
+- `frame_bytes` (`Write-Frame`) writes no line feed after the last line: a frame as tall as the
+  window then scrolls nothing.
 - Column arithmetic of footers and cells counts Unicode scalars, PowerShell UTF-16 code units. They
   differ only for characters outside the BMP.
 - VT text mouse: inside psmux/tmux (`TMUX` set, stdout a console, mouse on) `?1003h ?1006h` is

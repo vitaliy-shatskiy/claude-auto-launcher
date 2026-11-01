@@ -29,7 +29,14 @@ fn a_console_without_armed_input_ends_as_lost_not_as_exhausted_keys() {
 
 #[test]
 fn frame_write_homes_erases_each_line_and_below() {
-    assert_eq!(frame_bytes(&["a".into(), "b".into()]), "\x1b[Ha\x1b[K\nb\x1b[K\n\x1b[J");
+    assert_eq!(frame_bytes(&["a".into(), "b".into()]), "\x1b[Ha\x1b[K\nb\x1b[K\x1b[J");
+}
+
+#[test]
+fn a_full_height_frame_feeds_no_line_on_the_bottom_row() {
+    // A line feed on the bottom row scrolls the buffer: the top row is lost on every paint.
+    let rows: Vec<String> = (0..24).map(|i| format!("row {i}")).collect();
+    assert_eq!(frame_bytes(&rows).matches('\n').count(), 23);
 }
 
 #[test]

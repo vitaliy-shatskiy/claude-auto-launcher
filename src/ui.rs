@@ -17,11 +17,15 @@ pub const ENTER_ALT: &str = "\x1b[?1049h\x1b[?25l\x1b]0;claude-auto\x07";
 pub const EXIT_ALT: &str = "\x1b[?25h\x1b[?1049l";
 
 /// `Write-Frame`: home, each line then erase-to-end, then erase below. No clear, no flicker.
+/// No line feed after the last line: on the bottom row it scrolls the buffer by one.
 pub fn frame_bytes(lines: &[String]) -> String {
     let mut s = String::from("\x1b[H");
-    for l in lines {
+    for (i, l) in lines.iter().enumerate() {
+        if i > 0 {
+            s.push('\n');
+        }
         s.push_str(l);
-        s.push_str("\x1b[K\n");
+        s.push_str("\x1b[K");
     }
     s.push_str("\x1b[J");
     s
