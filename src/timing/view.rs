@@ -106,3 +106,6 @@ pub fn show_timings(term: &mut dyn Term, t: &Timings) -> Result<(), UiStop> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -127,3 +127,6 @@ pub fn report(files: &[PathBuf]) -> Vec<String> {
         .collect();
     table(&summarize(&records))
 }
+
+#[cfg(test)]
+mod tests;
