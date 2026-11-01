@@ -250,11 +250,14 @@ fn run_loop<S: Screen>(
             }
         }
         need_draw = true;
-        // The twin test runs at the ready point, not at read time: a record already waiting once a
+        // The twin test runs at the ready point, not at read time: a press already waiting once a
         // fresh activation's handler and frame are done is its twin, however slow they were.
-        let pending = term.input_pending();
-        if let Some(a) = term.last_activation().as_mut() {
-            a.queued = pending && (g.settle || a.queued);
+        // Only a press arms or keeps the mark: psmux motion would keep it alive forever.
+        if term.last_activation().is_some() {
+            let press = term.press_pending();
+            if let Some(a) = term.last_activation().as_mut() {
+                a.queued = press && (g.settle || a.queued);
+            }
         }
         g.settle = false;
         let ev = term.wait(size)?;

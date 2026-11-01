@@ -117,3 +117,46 @@ fn preview_keys_and_size() {
     assert_eq!(parse_preview_size(Some("120x30")), (120, 30));
     assert_eq!(parse_preview_size(None), (78, 24));
 }
+
+fn console_mouse(buttons: u32, flags: u32) -> Peeked {
+    Peeked::Mouse(crate::input::mouse_from_record(5, 2, buttons, flags))
+}
+
+fn typed(s: &str) -> Vec<Peeked> {
+    s.chars().map(Peeked::KeyDown).collect()
+}
+
+#[test]
+fn a_waiting_console_button_press_is_a_press() {
+    assert!(press_waiting(&[console_mouse(0, 0x1), console_mouse(1, 0)]));
+    assert!(press_waiting(&[console_mouse(1, 0x2)]), "the double-click record");
+}
+
+#[test]
+fn motion_wheel_release_and_keys_are_no_press() {
+    assert!(!press_waiting(&[
+        console_mouse(0, 0x1),
+        console_mouse(1, 0x1),
+        console_mouse(0, 0),
+        console_mouse(0x0078_0000, 0x4),
+        Peeked::KeyDown('s'),
+        Peeked::Other,
+    ]));
+    assert!(!press_waiting(&[]));
+}
+
+#[test]
+fn a_text_mouse_press_counts_and_its_motion_does_not() {
+    assert!(
+        press_waiting(&typed("\x1b[<35;6;3M\x1b[<0;6;3M")),
+        "SGR press after a motion report"
+    );
+    assert!(
+        !press_waiting(&typed("\x1b[<35;6;3M\x1b[<32;7;3M\x1b[<0;6;3m")),
+        "SGR motion and release"
+    );
+    assert!(!press_waiting(&typed("\x1b[<64;6;3M")), "SGR wheel");
+    assert!(press_waiting(&typed("\x1b[M &#")), "X10 press");
+    assert!(!press_waiting(&typed("\x1b[M#&#")), "X10 release");
+    assert!(!press_waiting(&typed("sw\x1b[A")), "keys and a cursor key");
+}

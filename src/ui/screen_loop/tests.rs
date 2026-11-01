@@ -258,6 +258,10 @@ impl Term for Clocked {
     fn input_pending(&mut self) -> bool {
         self.q.front().is_some_and(|e| self.paints >= e.2)
     }
+    fn press_pending(&mut self) -> bool {
+        let press = |e: &Event| matches!(e, Event::Mouse(m) if m.left && !m.is_move);
+        self.q.iter().any(|e| self.paints >= e.2 && press(&e.0))
+    }
     fn record_time(&self) -> Option<u64> {
         Some(self.now)
     }
@@ -351,6 +355,61 @@ fn cs224b_third_and_fourth_records_of_one_gesture_are_dropped() {
         (click(5, 2), 1700, 2),
         (click(5, 2), 1710, 2),
         (click(5, 2), 1720, 2),
+        enter_at(9000),
+    ]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 1);
+}
+
+fn hover(x: i32, y: i32) -> Event {
+    Event::Mouse(MouseEvent {
+        x,
+        y,
+        is_move: true,
+        ..MouseEvent::default()
+    })
+}
+
+/// Type-ahead keys after a carried activation, motion queued too: every key runs.
+#[test]
+fn type_ahead_keys_after_a_carried_activation_all_run() {
+    let mut s = row_one();
+    let k = |key: KeyPress| (Event::Key(key), 1700, 0);
+    let mut t = clocked(vec![
+        (hover(5, 2), 1690, 0),
+        k(KeyPress::named(vk::DOWN)),
+        k(KeyPress::named(vk::UP)),
+        k(KeyPress::named(vk::UP)),
+        k(KeyPress::named(vk::ENTER)),
+    ]);
+    carried_activation(&mut t);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(0)));
+}
+
+/// Motion records keep the queue full (psmux); a real press on the same cell after the redraw
+/// still acts, because only a waiting button press marks the twin.
+#[test]
+fn a_real_click_behind_queued_motion_acts() {
+    let mut s = row_one();
+    let mut t = clocked(vec![
+        (click(5, 2), 1000, 0),
+        (hover(5, 2), 1600, 2),
+        (hover(5, 3), 1650, 2),
+        (click(5, 2), 1700, 3),
+        enter_at(9000),
+    ]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 2, "motion records armed the twin mark");
+}
+
+/// The true twin, queued behind motion during the slow handler, is still dropped.
+#[test]
+fn a_twin_queued_behind_motion_during_the_handler_is_dropped() {
+    let mut s = row_one();
+    let mut t = clocked(vec![
+        (click(5, 2), 1000, 0),
+        (hover(5, 2), 1600, 2),
+        (click(5, 2), 1700, 2),
         enter_at(9000),
     ]);
     assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
