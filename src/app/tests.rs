@@ -14,6 +14,25 @@ fn prefixes_are_shortest_unique() {
 }
 
 #[test]
+fn f12_on_the_held_session_warning_shows_the_timings_then_redraws_it() {
+    let logger = Logger {
+        root: PathBuf::new(),
+        run_id: String::new(),
+        enabled: false,
+        timings: Timings::on(Instant::now()),
+    };
+    let keys = crate::ui::parse_preview_keys("F12,Escape,Enter").unwrap();
+    let mut t = crate::ui::PreviewTerm::new((80, 24), keys, true).with_logger(logger);
+    let style = crate::frame::Style { color: false, ascii: true };
+    assert_eq!(screens::confirm_held(&mut t, Some("held by pid 1"), style), Ok(true));
+    let frames = t.frames.unwrap();
+    assert_eq!(frames.len(), 3, "warning, timings, warning again");
+    assert!(frames[1].iter().any(|l| l.contains("timings of this run")));
+    assert!(frames[2].iter().any(|l| l.contains("enter")));
+    assert!(frames[2].last().is_some_and(|l| l.starts_with("  load ")));
+}
+
+#[test]
 fn answers_resolve_by_full_key_or_longest_prefix() {
     let p = account_prefixes(&["work", "personal"]);
     assert_eq!(resolve_account_answer(" Personal ", &p, "work"), "personal");

@@ -231,7 +231,7 @@ fn trace_path(ctx: &PathCtx) -> PathBuf {
 }
 
 /// `Confirm-HeldSession`: Enter = go on, Esc/Ctrl+C = back; nothing held = go on.
-fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Result<bool, UiStop> {
+pub(super) fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Result<bool, UiStop> {
     let Some(h) = holder else { return Ok(true) };
     let warning = sessions::held_warning(h);
     let mut dirty = true;
@@ -246,6 +246,10 @@ fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Resu
         }
         match term.wait(size)? {
             Event::Resize => dirty = true,
+            Event::Key(k) if tm.is_on() && k.is(vk::F12) => {
+                view::show_timings(term, &tm)?;
+                dirty = true;
+            }
             Event::Key(k) if k.is(vk::ENTER) => return Ok(true),
             Event::Key(k) if k.is(vk::ESCAPE) || k.is_ctrl(vk::C) => return Ok(false),
             Event::Key(_) | Event::Mouse(_) => {}
