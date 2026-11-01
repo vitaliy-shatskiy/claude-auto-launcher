@@ -62,7 +62,7 @@ cargo build --release --locked
 The binary is `target\release\claude-auto-rs.exe`. Copy it to a folder on your PATH. There is no
 installer. With no config file the launcher runs one `work` account on `~/.claude`.
 
-The launch screen was built against Claude Code `2.1.263`. A much older or newer CLI may accept
+The launch screen is tested against Claude Code `2.1.316`. A much older or newer CLI may accept
 different flags. Node.js or PowerShell 7 is needed only for `.js`/`.mjs` or `.ps1` launch hooks and
 for `maintenanceActions` scripts (always run through `pwsh -File`).
 
@@ -133,7 +133,7 @@ action opens at `new` every launch. `CLAUDE_AUTO_NO_MOUSE=1` turns the mouse off
 ### Preview mode
 
 Preview mode drives the screens from a key script and prints the command it would run. Nothing is
-launched, no real Claude is needed and nothing is written. Point every file it reads at throwaway
+launched, no real Claude is needed and nothing is written outside one projects cache in `%TEMP%`. Point every file it reads at throwaway
 copies:
 
 ```powershell
@@ -282,6 +282,7 @@ needed.
 - `~/.claude/claude-auto-projects.json` - the project screen's registry cache.
 - `~/.claude/claude-auto-rs-sessions.json` - the session picker's summary cache.
 - `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day.
+- `%TEMP%\claude-auto-projects-preview-<pid>.json` - the project cache of a preview run, swept after a day.
 - `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan.
 - `%TEMP%\claude-remote-server-<pid>.log` (plus `.err`, `.build`) - the companion server's output,
   one set per launcher that started it (`remote: true` only), not swept.
