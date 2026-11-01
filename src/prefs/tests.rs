@@ -122,7 +122,7 @@ fn save_writes_nothing_while_another_handle_denies_reading_the_file() {
 }
 
 #[test]
-fn save_writes_nothing_while_the_file_is_held_with_share_mode_zero() {
+fn an_exclusively_held_file_reads_unreadable_and_keeps_every_profile() {
     let t = Tmp::new("exclusive");
     let path = t.prefs();
     let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
