@@ -1,6 +1,6 @@
 //! claude-auto: picks the Claude account and launch options, then starts `claude` with the
 //! caller's arguments passed through untouched. Rust port of the PowerShell launcher; the module
-//! map and the phase B contract live in PORTING.md.
+//! map and the porting record live in PORTING.md.
 
 pub mod app;
 pub mod config;

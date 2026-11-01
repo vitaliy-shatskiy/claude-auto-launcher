@@ -1,40 +1,20 @@
-# claude-auto-launcher
+<div align="center">
+  <img alt="The claude-auto launch screen: account tabs, then model, effort, advisor, permission and mode rows, each a row of options with the default bracketed" src="docs/media/launch-screen.png" width="100%">
+  <sub>Fig 1 · The launch screen of <code>claude-auto-rs</code> in preview mode on the four-account test fixture. Generator: <a href="docs/media/README.md">docs/media</a>.</sub>
+  <h3>A Windows launcher for Claude Code: pick the account, model, effort and project, then start the session.</h3>
+  <p>
+    <a href="https://github.com/vitaliy-shatskiy/claude-auto-launcher/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/vitaliy-shatskiy/claude-auto-launcher/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-3DA639"></a>
+    <img alt="platform: Windows" src="https://img.shields.io/badge/platform-Windows-0078D4">
+    <img alt="Rust 1.99" src="https://img.shields.io/badge/Rust-1.99-B7410E">
+    <img alt="PowerShell 7" src="https://img.shields.io/badge/PowerShell-7-5391FE">
+  </p>
+  <p><a href="#install">Install</a> · <a href="#the-screens">Screens</a> · <a href="#configuration">Configuration</a> · <a href="#troubleshooting">Troubleshooting</a> · <a href="#development">Development</a> · <a href="PORTING.md">Porting record</a></p>
+</div>
 
-[![tests](https://github.com/vitaliy-shatskiy/claude-auto-launcher/actions/workflows/ci.yml/badge.svg)](https://github.com/vitaliy-shatskiy/claude-auto-launcher/actions/workflows/ci.yml)
-[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
-A Windows PowerShell launcher for Claude Code: an account picker, remembered model/effort/advisor/
-permission choices per account, a project picker, a session-resume picker, and a maintenance screen,
-all driven by one config file so nothing here is hardcoded to a particular machine.
-
-Unofficial and unaffiliated with Anthropic. It runs the `claude` CLI you already have; bugs in the
-CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
-
-```
-╭────────────────────────────────────────────────────────────────────────────╮
-│ ✻ claude-auto                                                              │
-╰────────────────────────────────────────────────────────────────────────────╯
-
- ❯ account     [work]
-   model       ‹ Sonnet 5.5 ›
-   effort      ○ low ○ medium ● [high] ○ xhigh ○ max ○ ultracode
-   advisor     ● [default] ○ fable ○ opus ○ off
-   permission  ○ plan ● [auto] ○ acceptEdits ○ bypass
-   mode        ● [normal] ○ safe
-
-  ──────────────────────────────────────────────────────────────────────────
-  w/s row  ┊  a/d value  ┊   enter  next  ┊   u  maintenance  ┊   esc  quit
-```
-
-The bracketed values above are what `default` resolves to in the reader's own `settings.json` (`model`, `effortLevel`, `advisorModel`, `permissions.defaultMode`) and differ per machine; a key that file does not set reads `default`, as the advisor row does here. The model names come out of the installed `claude.exe` itself, so they follow the CLI's releases.
-
-## Requirements
-
-- PowerShell 7 (`pwsh`) - required, not preferred. Typed in a Windows PowerShell 5.1 window the launcher re-execs itself under `pwsh`; with no `pwsh` on the machine at all it refuses and says so. It used to carry on there and start a session with no account choice, no sharing repair and no MCP configuration - several modules do not even parse under 5.1
-- Claude Code (`claude` on PATH) - the launch-screen rows (model/effort/advisor/permission values) were built against `2.1.263`; a much older or newer CLI may accept different flags
-- Node.js - only for two things: the MCP mirror used by multi-account `sharing`, and `Test-Mirror.ps1`, which exits `2` (could not run) without it. The launcher itself does not need it
-
-## Install
+> [!IMPORTANT]
+> Unofficial and unaffiliated with Anthropic. It runs the `claude` CLI you already have. Bugs in the
+> CLI itself belong [upstream](https://github.com/anthropics/claude-code/issues).
 
 ```
 git clone https://github.com/vitaliy-shatskiy/claude-auto-launcher.git
@@ -42,150 +22,280 @@ cd claude-auto-launcher
 pwsh -File install.ps1
 ```
 
-`install.ps1` is safe to run again: it never overwrites `~/.claude/claude-auto.json` once it exists,
-and only adds this folder to the user PATH if it is missing there. It reads and writes
-`HKCU\Environment` raw, so an existing `%USERPROFILE%\...` entry keeps its `%VAR%` form; anything it
-cannot read leaves PATH untouched and tells you to add the folder by hand.
+## What it is
 
-On a machine whose execution policy is Restricted — the Windows default on a client SKU with no
-policy set in any scope — `pwsh -File install.ps1` refuses to run. Either
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or run it as
+A Windows launcher for Claude Code: an account picker, remembered model, effort, advisor and
+permission choices per account, a project picker, a session-resume picker and a maintenance screen.
+Everything machine-specific lives in one config file.
+
+Two launchers live side by side in this repo:
+
+| | PowerShell launcher | Rust launcher |
+|---|---|---|
+| Status | **current default** | new, under test |
+| Command | `claude-auto` | `claude-auto-rs` |
+| Code | `claude-auto.ps1`, `claude-auto/`, `install.ps1`, `claude-auto.cmd` | `src/`, crate `claude-auto-rs` |
+| Tests | `tests/Test-*.ps1`, `tests/checkpoint.ps1` | `cargo test` (unit tests beside the code, `tests/it/`) |
+| Needs | PowerShell 7, compiles a small C# input shim on first run | one `.exe`, no runtime |
+
+Both show the same screens and read the same config and prefs files. When the Rust launcher has
+passed its test it replaces the PowerShell one: see [Cut-over](#cut-over).
+
+The bracketed value on each row is what `default` resolves to in the account's own `settings.json`
+(`model`, `effortLevel`, `advisorModel`, `permissions.defaultMode`). A key that file does not set
+reads `default`. The model names come out of the installed `claude.exe` itself, so they follow the
+CLI's releases.
+
+## Requirements
+
+- Windows.
+- Claude Code (`claude` on PATH). The launch-screen rows were built against `2.1.263`. A much older
+  or newer CLI may accept different flags.
+- PowerShell launcher: PowerShell 7 (`pwsh`), required. Typed in a Windows PowerShell 5.1 window the
+  launcher re-execs itself under `pwsh`. With no `pwsh` on the machine it refuses and says so.
+- Rust launcher, to build it: Rust through `rustup` with the MSVC host toolchain.
+  `rust-toolchain.toml` pins the version (1.99.1) and the `clippy` and `rustfmt` components.
+- Node.js, only for: the MCP mirror of multi-account `sharing` under the PowerShell launcher (the
+  Rust launcher has it built in), `.js`/`.mjs` launch hooks, and `Test-Mirror.ps1`, which exits `2`
+  (could not run) without it.
+
+## Install
+
+### PowerShell launcher (current)
+
+```
+pwsh -File install.ps1
+```
+
+`install.ps1` is safe to run again: it never overwrites `~/.claude/claude-auto.json` once it
+exists, and only adds this folder to the user PATH if it is missing there. It reads and writes
+`HKCU\Environment` raw, so an existing `%USERPROFILE%\...` entry keeps its `%VAR%` form. Anything
+it cannot read leaves PATH untouched and tells you to add the folder by hand.
+
+On a machine whose execution policy is Restricted (the Windows default on a client SKU with no
+policy set in any scope) `pwsh -File install.ps1` refuses to run. Either
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or run
 `pwsh -ExecutionPolicy Bypass -File install.ps1`.
 
-## Uninstall
+### Rust launcher (under test)
 
-Nothing is installed outside your own user profile, and there is no uninstaller.
+```
+cargo build --release --locked
+```
 
-1. Remove this folder from PATH: `sysdm.cpl` → Advanced → Environment Variables → user `Path`.
-2. Delete the clone.
-3. Optional, if you want the state gone too: `~/.claude/claude-auto.json`,
-   `claude-auto-prefs.json`, `claude-auto-hash-cache.json`, `claude-auto-sessions.json`,
-   `launcher-logs/` and `claude-auto-logs/` (full list under **Files it writes**).
-4. **Only if you ever set `sharing: true`**: the junctions it created under each secondary account
-   root carry two `icacls` deny ACEs, so a plain delete fails. Lift them first —
-   `icacls <path> /L /remove:d "<user>"` — then remove the junction.
+The binary is `target\release\claude-auto-rs.exe`. There is no installer yet: put that folder on
+your PATH, or copy the file to a folder that is. It reads the same `~/.claude/claude-auto.json`, so
+both launchers can be used on the same machine at once.
+
+`claude-auto-rs --launcher-version` (or `claude-auto --launcher-version`) prints the launcher's own
+version and exits.
+
+## The screens
+
+- **Launch screen** - rows for account (a tab strip carrying each account's five-hour usage %),
+  model, effort, advisor, permission and mode (`safe` disables CLAUDE.md, skills, plugins, hooks and
+  MCP for that session). Each row shows what `default` resolves to for the current account and
+  folds the option it equals into that cell. A Claude Code release the channel serves but the
+  machine has not downloaded yet is installed before the screen draws. With `remote: true` a Remote
+  row appears too. Arrows move and change, `enter` moves on to the project screen, `u` opens
+  maintenance, `esc` quits.
+- **Project screen** - which directory the session runs in, and what it does there. Row 0 is the
+  current directory. Known projects (from `~/.claude/projects`) follow. Scratch directories
+  (anything under the temp folder or a profile's `jobs\<id>\tmp`) are left out and counted in the
+  title (`10 known ─ 19 hidden`), and a filter that matches one lists it. A typed path row,
+  `+ enter a path...`, sits last. Under the list sits an `action` radio row,
+  `○ new ○ continue ● [resume] ○ worktree`: left/right (or `a`/`d`) step it, `enter` does what it
+  says on the highlighted row. The hotkeys fire straight away: `c` continues, `r` resumes (opens the
+  session picker, scoped to that project), `t` starts it in a new git worktree (`-w`). `/` filters,
+  `esc` goes back. The action opens at `new` every launch.
+- **Session picker** (resume on the project screen) - a list with a last-exchange preview, scoped
+  to the chosen project. `/` filters, `enter` opens, `f` forks, `tab` widens to every project and
+  back, `esc` returns to the launch screen. Headless sessions (`claude -p`, the SDKs) are left out
+  and counted in the title.
+- **Maintenance** (`u`) - `u` update, `r` rename swap, `d` doctor, `m` mcp list, `p` prune, plus one
+  hotkey per configured `maintenanceActions[]` entry, `esc` back. **Not covered by preview mode**:
+  its actions run against your real Claude Code install even during a preview run.
+- **The mouse** - moving the pointer highlights what sits under it and moves nothing else. A left
+  click selects, and a click on the row that already carries the cursor runs or opens it, as `enter`
+  would. A click on an option value sets it, a click on a footer button presses its key. The wheel
+  scrolls. `CLAUDE_AUTO_NO_MOUSE=1` turns all of it off.
+
+<details><summary><b>The project screen and the session picker</b> (golden frames <code>project-100x30.txt</code> and <code>picker-100x30.txt</code> from <code>tests/fixtures/wide-frames/</code>, sample data)</summary>
+
+```n╭─ project ─ 4 known ─────────────────────────────────────────────────────────────────────────────╮
+│   current directory                                                        C:\Users\sample\here │
+│                                                                                                 │
+│ ❯ alpha                                             C:\Users\sample\Desktop\Projects\alpha 4 min│
+│   beta-service                       C:\Users\sample\Desktop\Projects\workspace\beta-service 8 h│
+│   ⌂ gamma                           C:\Users\sample\Desktop\Projects\gamma.worktrees\feature 3 d│
+│   delta                                                                        D:\src\delta 23 d│
+│                                                                                                 │
+│   + enter a path...                                                                             │
+│   action  ● [new] ○ continue ○ resume ○ worktree                                                │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+  w/s move  ┊  a/d action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
+  [/] filter  ┊  [esc] back
+
+╭─ resume ─ 5 sessions ───────────────────────────────────────────────────────────────────────────╮
+│   project-1  snippet 1 about t… 7 min │ project-2                                               │
+│ ❯ project-2  snippet 2 about … 14 min │ 16 Sep 11:46  ─  6 msgs  ─  4 KB                        │
+│   ⌂ feature  snippet 3 about … 21 min │ ─────────────────────────────────────────────────────── │
+│   project-4  snippet 4 about … 28 min │ you › snippet 2 about the thing that was asked          │
+│   project-5  snippet 5 about … 35 min │ claude › reply words reply words reply words reply      │
+│                                       │          words reply words reply words reply words      │
+│                                       │          reply words                                    │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+  w/s move  ┊  [/] filter  ┊  [enter] open  ┊  [f] fork  ┊  [esc] back
+```n
+</details>
+
+## Usage
+
+Every argument is passed through to `claude` untouched: `claude-auto --model opus "fix the build"`
+shows the screens, then runs `claude` with those arguments added. The one exception is
+`--launcher-version` alone. `--version` belongs to the CLI.
+
+<details><summary><b>Environment switches</b></summary>
+
+| Variable | Effect |
+|---|---|
+| `CLAUDE_AUTO_CONFIG` | path to the config file, instead of `~/.claude/claude-auto.json` |
+| `CLAUDE_AUTO_PREFS` | path to the remembered-choices file, instead of `~/.claude/claude-auto-prefs.json` |
+| `CLAUDE_AUTO_NO_MOUSE=1` | never arms mouse input |
+| `CLAUDE_AUTO_NO_UPDATE=1` | skips the release-channel check and the update it would run before the launch screen |
+| `CLAUDE_AUTO_INPUT_TRACE=1` | logs every raw input record to `~/.claude/claude-auto-logs/input-<date>-<pid>.log` |
+| `CLAUDE_AUTO_ASCII=1` | forces ASCII box drawing (otherwise auto-detected from the console code page) |
+| `CLAUDE_AUTO_PREVIEW=1` | drives the whole UI and prints the `claude` command it would run, without running it. The maintenance screen is the one exception |
+| `CLAUDE_AUTO_PREVIEW_KEYS` | a key script for a preview run, e.g. `Enter,r,Enter` |
+| `CLAUDE_AUTO_PREVIEW_SIZE` | Rust only: the preview's terminal size, e.g. `100x30` (default `78x24`) |
+| `CLAUDE_AUTO_PROJECTS_ROOT` | the projects directory the project screen and the picker read, instead of `~/.claude/projects` (a test seam) |
+| `CLAUDE_AUTO_RATE_LIMITS_DIR` | where the usage records are read, instead of `~/.claude/rate-limits` (a test seam) |
+| `CLAUDE_NO_ROAM=1` | never routes a session through the companion server, even with `remote: true` |
+| `CLAUDE_REMOTE_ROOT` | path to the (unpublished) `remote-control-claude-code` checkout |
+| `CLAUDE_AUTO_MIRROR_EXCLUDE`, `CLAUDE_AUTO_MIRROR_SECRETS=0` | the MCP mirror's exclude list and credential opt-out (see [Multi-account sharing](#multi-account-sharing)) |
+| `NO_COLOR`, `TERM=dumb` | disable colour output |
+
+The session the launcher starts carries `CLAUDE_AUTO_LAUNCHED=1`, so a SessionStart hook can tell a
+launcher start from one by hand.
+
+</details>
+
+### Preview mode
+
+Preview mode drives the UI from a key script and prints the command it would run. Nothing is
+launched, and no real Claude is needed. Point every file it reads at throwaway copies:
+
+```powershell
+$t = Join-Path $env:TEMP 'claude-auto-demo'
+New-Item -ItemType Directory -Force (Join-Path $t '.claude') | Out-Null
+$env:USERPROFILE = $t
+$env:CLAUDE_AUTO_PREFS = Join-Path $t 'prefs.json'
+$env:CLAUDE_AUTO_PROJECTS_ROOT = Join-Path $t 'projects'
+$env:CLAUDE_AUTO_CONFIG = (Resolve-Path tests\fixtures\config-four.json).Path
+$env:CLAUDE_AUTO_PREVIEW = '1'
+$env:CLAUDE_AUTO_PREVIEW_KEYS = 'Enter,Enter'
+$env:CLAUDE_AUTO_PREVIEW_SIZE = '100x30'
+$env:NO_COLOR = '1'
+.\target\release\claude-auto-rs.exe
+```
+
+It prints each frame, then a summary ending in `--- preview, nothing launched ---` with the launch
+arguments and the command line.
 
 ## Configuration
 
-`~/.claude/claude-auto.json` (or `CLAUDE_AUTO_CONFIG`). No file = one account, `work` -> `~/.claude`,
-sharing and remote off. Every validation failure falls back to the default for that key and prints a warning at launch; nothing throws. An unrecognized top-level key (a typo, e.g. `account` for `accounts`) also warns, naming it. Windows path values must use `~/...` or forward slashes, or double every backslash (`C:\\Users\\me\\.claude`) - JSON reads a single backslash as an escape character, and an unescaped one fails the whole file with no other hint.
+`~/.claude/claude-auto.json` (or `CLAUDE_AUTO_CONFIG`). No file = one account, `work` ->
+`~/.claude`, sharing and remote off. Every validation failure falls back to the default for that key
+and prints a warning at launch. Nothing throws. An unrecognised top-level key (a typo, e.g.
+`account` for `accounts`) also warns, naming it. Windows path values must use `~/...` or forward
+slashes, or double every backslash (`C:\\Users\\me\\.claude`): JSON reads a single backslash as an
+escape character, and an unescaped one fails the whole file.
+
+See `config.example.json` for a two-account example (sharing off, `launchHooks` and
+`maintenanceActions` empty). Example values: `"launchHooks": ["~/scripts/after-launch.ps1"]`,
+`"maintenanceActions": [{ "key": "i", "label": "reindex", "script": "~/scripts/reindex.ps1", "confirmTwice": true }]`.
+
+<details><summary><b>All config keys</b></summary>
 
 | key | type | default | notes |
 |---|---|---|---|
-| `accounts[]` | `{key, root, label, tint, hidden, archived}` | one `work` account | key 1-8 chars, unique (a shared first letter is fine: the no-UI prompt advertises the shortest unique prefix); root absolute, exactly one must resolve to `~/.claude` (the canonical account); tint one of Green/Magenta/Cyan/Blue/Yellow/Red; hidden omits it from the tab strip and the no-UI prompt's text, though it stays typeable there; archived makes the launcher ignore it entirely (no tab, no prompt entry, no relink or junction, no limits, not restored from prefs) and is refused with a warning on the canonical account, while its key still counts for uniqueness. Breaking any one of these rules discards the WHOLE roster, not just the offending account - the warning names the culprit and its value, but every account falls back to the single default `work` account |
-| `sharing` | bool | `false` | forced off with fewer than two accounts; see Multi-account sharing below before turning it on |
-| `remote` | bool | `false` | **the companion it needs is not published** — `crc.cmd` on PATH plus a `remote-control-claude-code` checkout (`CLAUDE_REMOTE_ROOT`), neither of which you can obtain, so leave this off unless you have written your own. Adds a Remote row to the launch screen and a second prompt in the no-UI fallback |
+| `accounts[]` | `{key, root, label, tint, hidden, archived}` | one `work` account | key 1-8 chars, unique (a shared first letter is fine: the no-UI prompt advertises the shortest unique prefix). root absolute, exactly one must resolve to `~/.claude` (the canonical account). tint one of Green/Magenta/Cyan/Blue/Yellow/Red. hidden omits it from the tab strip and the no-UI prompt's text, though it stays typeable there. archived makes the launcher ignore it entirely (no tab, no prompt entry, no relink or junction, no limits, not restored from prefs) and is refused with a warning on the canonical account, while its key still counts for uniqueness. Breaking any one of these rules discards the WHOLE roster: the warning names the culprit and its value, and every account falls back to the single default `work` account |
+| `sharing` | bool | `false` | forced off with fewer than two accounts. Read [Multi-account sharing](#multi-account-sharing) before turning it on |
+| `remote` | bool | `false` | **the companion it needs is not published**: `crc.cmd` on PATH plus a `remote-control-claude-code` checkout (`CLAUDE_REMOTE_ROOT`). Leave it off unless you have written your own. Adds a Remote row to the launch screen and a second prompt in the no-UI fallback |
 | `riderMcp` | `auto`\|`on`\|`off` | `auto` | `auto` scans for Rider's MCP port only while Rider is running |
-| `extraMcpConfigs[]` | paths | `["~/.claude/mcp-shared.json"]` | must be absolute; a relative entry is skipped with a warning |
-| `secretsRoot` | path | `~/.claude-secrets` | must be absolute; see Secrets below |
-| `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice, each best-effort; must be absolute |
-| `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p`; `script` is required, must be absolute, and an entry failing either check is skipped with a warning |
+| `extraMcpConfigs[]` | paths | `["~/.claude/mcp-shared.json"]` | must be absolute. A relative entry is skipped with a warning |
+| `secretsRoot` | path | `~/.claude-secrets` | must be absolute. See [Secrets](#secrets) |
+| `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice with the chosen project as the working directory, each best-effort. Must be absolute |
+| `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p`. `script` is required and must be absolute. An entry failing either check is skipped with a warning |
 
-See `config.example.json` for a two-account example (sharing off; `launchHooks`/`maintenanceActions`
-are empty there so a fresh clone never warns about a script nobody has - example values:
-`"launchHooks": ["~/scripts/after-launch.ps1"]`,
-`"maintenanceActions": [{ "key": "i", "label": "reindex", "script": "~/scripts/reindex.ps1", "confirmTwice": true }]`).
-
-Since the project screen, `launchHooks[]` runs with the CHOSEN PROJECT as the working directory, not
-the folder the launcher itself started in - the `cd` now happens before secrets and launch hooks so
-a project's own secrets load correctly, and a hook script that reads its cwd sees the project, not
-the launch directory.
+</details>
 
 ### Secrets
 
-`secretsRoot` is a directory of per-project subdirectories whose FILES become environment variables (file name = variable name, content = value), so a token never sits in a config file. `.md` files and empty files are skipped. Three tiers apply in order, each later one overriding the earlier: `shared/`, `<slug>/org/` (opted in with a junction, never automatic), then `<slug>/` for the current working directory.
+`secretsRoot` is a directory of per-project subdirectories whose FILES become environment variables
+of the launched session (file name = variable name, content = value), so a token never sits in a
+config file. `.md` files and empty files are skipped. Three tiers apply in order, each later one
+overriding the earlier: `shared/`, `<slug>/org/` (opted in with a junction, never automatic), then
+`<slug>/` for the chosen project.
 
-## What each screen does
+<details><summary><b>Files it writes</b></summary>
 
-- **Launch screen** - rows for account (a tab strip carrying each account's five-hour usage %), model, effort, advisor, permission and mode (`safe` disables CLAUDE.md, skills, plugins, hooks and MCP for that session). Each row shows what `default` resolves to for the current account in the default's place and folds the option it equals into that cell (`low medium [high] xhigh max`); the model names are read out of the installed `claude.exe`, and a release the channel serves but the machine has not downloaded yet is installed before the screen draws. With `remote: true` a Remote row appears too. Arrows move and change, enter moves on to the project screen, `u` opens maintenance, esc quits.
-- **Project screen** - which directory the session runs in, and what it does there. Row 0 is the current directory (the cursor opens there); known projects (from `~/.claude/projects`) follow after a blank line - scratch directories (anything under the temp folder or a profile's `jobs\<id>\tmp`) are left out and counted in the title (`10 known ─ 19 hidden`), and a filter that matches one lists it; a typed path row, `+ enter a path...`, sits last behind its own blank line. The remembered project (or `-Initial`) still preselects its row, and typing a filter parks the cursor on the first match - Enter launches it. Under the list sits an `action` radio row, `○ new ○ continue ● [resume] ○ worktree` (just the words and brackets below 50 columns): left/right (or `a`/`d`), or a click on a value, step it from any row, and `enter` (the footer calls it `run`) does whatever it says on the highlighted row. The field is an indicator, not a stop - up/down stay in the list - so the whole screen is four arrows and Enter. The hotkeys still fire straight away and set the field with them: `c` continues, `r` resumes (opens the session picker below, scoped to that project), `t` starts it in a new git worktree (`-w`) - each lights its footer button; `new` lights none. `/` filters, `esc` goes back to the launch screen. The field opens at `new` every launch - an action describes one launch, so nothing remembers it.
-- **Maintenance** (`u`) - `u` update, `r` rename swap, `d` doctor, `m` mcp list, `p` prune, plus one hotkey per configured `maintenanceActions[]` entry, `esc` back. **Not covered by `CLAUDE_AUTO_PREVIEW`** - unlike every other screen, its actions run against your real Claude Code install even during a preview run; `tests\preview.ps1` never presses one of these keys.
-- **Session picker** (reached by choosing resume on the project screen) - a list with a last-exchange preview, scoped to the chosen project by default; `/` filters, `enter` opens, `f` forks, `tab` widens to every project and back, `esc` cancels and returns to the launch screen (not the project screen - cancelling a resume is a change of mind about launching at all).
-- **The mouse** - moving the pointer HIGHLIGHTS whatever sits under it (a row, an action or option value, a footer button) and moves nothing else: the cursor `❯`, the chosen action and the picker's preview stay where a click or a key put them. A left click selects - on the session picker that is also what loads the preview - and a click on the row that already carries the cursor runs or opens it, exactly as `enter` would. A click on an action or option value sets it; a click on a footer button presses its key. A double-click means nothing of its own: it is a select followed by a run. The wheel scrolls, and `CLAUDE_AUTO_NO_MOUSE=1` turns all of it off.
-
-## Arguments and environment switches
-
-Every argument is passed through to `claude` untouched. The one exception is
-`claude-auto --launcher-version`, which prints the launcher's own version and exits - `--version`
-belongs to the CLI.
-
-- `CLAUDE_AUTO_CONFIG` - path to the config file, instead of `~/.claude/claude-auto.json`
-- `CLAUDE_AUTO_PREFS` - path to the remembered-choices file, instead of `~/.claude/claude-auto-prefs.json` (the test harness points this at a throwaway file so driving the preview seam never touches the real one)
-- `CLAUDE_AUTO_NO_MOUSE=1` - never arms mouse input
-- `CLAUDE_AUTO_NO_UPDATE=1` - skips the release-channel check and the update it would run before the launch screen
-- `CLAUDE_AUTO_INPUT_TRACE=1` - logs every raw input record to `~/.claude/claude-auto-logs/input-<date>-<pid>.log`
-- `CLAUDE_AUTO_ASCII=1` - forces ASCII box-drawing (otherwise auto-detected from the console code page)
-- `CLAUDE_AUTO_PREVIEW=1` - drives the whole UI and prints the `claude` command it would run, without running it. What the test suite uses. The maintenance screen is the one exception: its actions hit your real install even here
-- `CLAUDE_AUTO_PREVIEW_KEYS` - a key script fed to a preview run, so the seam can be driven headlessly
-- `CLAUDE_NO_ROAM=1` - never routes a session through the companion server, even with `remote: true`
-- `CLAUDE_REMOTE_ROOT` - path to the (unpublished) `remote-control-claude-code` checkout
-- `CLAUDE_AUTO_MIRROR_EXCLUDE` / `CLAUDE_AUTO_MIRROR_SECRETS=0` - the MCP mirror's exclude list and credential opt-out (see Multi-account sharing)
-- `NO_COLOR` / `TERM=dumb` - disable colour output
-
-## Files it writes
-
-- `~/.claude/claude-auto-prefs.json` - remembered account, model/effort/advisor/permission/remote
-- `~/.claude/launcher-logs/*.jsonl` - one file per day, 14-day retention. Records each launch: the working directory, the launcher's own argument vector, the PowerShell version, which terminal it came out of, and the choices made. **A prompt passed positionally (`claude-auto "fix the build"`) lands there in plain text.** Local only — nothing is sent anywhere
-- `~/.claude/claude-auto-hash-cache.json` - the maintenance screen's version-check cache
-- `~/.claude/claude-auto-models.json` - the model catalog read out of `claude.exe`, keyed on the binary's path, size and mtime
-- `~/.claude/claude-auto-update.json` - the release channel's last answer (30 minutes; a failure 5)
-- `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (one file; every account reads the same session list)
-- `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day
-- `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan
-- `%TEMP%\claude-remote-server-<pid>.log` (plus `.err`, `.build`) - the companion server's output, one set per launcher that started it (`remote: true` only), not swept
-- `claude-auto\ConsoleInput.dll` - compiled from `ConsoleInput.cs` into this clone on first run (gitignored)
+- `~/.claude/claude-auto-prefs.json` - remembered account, model, effort, advisor, permission and
+  remote choices. Shared by both launchers.
+- `~/.claude/launcher-logs/*.jsonl` - one file per day, 14-day retention. Records each launch: the
+  working directory, the launcher's own argument vector, the launcher version (`psVersion`, which
+  reads `rust <version>` for the Rust launcher), the terminal it came out of, and the choices made.
+  **A prompt passed positionally (`claude-auto "fix the build"`) lands there in plain text.** Local
+  only, nothing is sent anywhere.
+- `~/.claude/claude-auto-hash-cache.json` - the maintenance screen's version-check cache.
+- `~/.claude/claude-auto-models.json` - the model catalog read out of `claude.exe`, keyed on the
+  binary's path, size and mtime.
+- `~/.claude/claude-auto-update.json` - the release channel's last answer (30 minutes, a failure 5).
+- `~/.claude/claude-auto-projects.json` - the project screen's registry cache.
+- `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (one file, every
+  account reads the same session list). The Rust launcher writes `claude-auto-rs-sessions.json`
+  instead while both launchers run.
+- `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day.
+- `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan.
+- `%TEMP%\claude-remote-server-<pid>.log` (plus `.err`, `.build`) - the companion server's output,
+  one set per launcher that started it (`remote: true` only), not swept.
+- `claude-auto\ConsoleInput.dll` - PowerShell launcher only: compiled from `ConsoleInput.cs` into
+  this clone on first run (gitignored).
 - `<file>.pre-relink`, and `<file>.pre-relink.<yyyyMMdd-HHmmss>` for the three before it, beside a
-  shared file a sharing repair just replaced (see Multi-account sharing)
+  shared file a sharing repair just replaced (see [Multi-account sharing](#multi-account-sharing)).
 
-The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer; nothing in this repo writes that file.
+The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer. Nothing in this
+repo writes that file.
 
-## Tests
-
-```
-pwsh -File tests\checkpoint.ps1
-```
-
-18 checks: 14 unit suites (`Theme`, `Layout`, `Sessions`, `Projects`, `Ui`, `Maintenance`, `Remote`,
-`Prefs`, `Env`, `Config`, `Input`, `Install`, `Mirror`, `Tools`), a privacy scan, and three
-launcher-level checks.
-Every exit code is read on its own line, and **`2` means the check could not run — never a pass**.
-
-Any suite runs alone: `pwsh -File tests\Test-Ui.ps1`. `Test-Input.ps1 -Live` adds the console-mode
-and mouse assertions, which self-spawn a hidden child console; the checkpoint always passes `-Live`.
-`Test-Mirror.ps1` needs Node.js and exits `2` without it, so the checkpoint can never be green on a
-machine with no `node`.
-
-`check-clean.ps1` is the privacy scan: it greps the git-tracked worktree for the current Windows
-username plus an optional private pattern list (`CLAUDE_AUTO_CLEAN_PATTERNS`, one regex per line).
-It never reads commit history or commit authorship.
-
-On a fresh clone `tests\reference-output.local.txt` does not exist yet (it is gitignored), so the
-checkpoint reports BOTH `regression 2 DID NOT RUN` and `droplist 2 DID NOT RUN` - correctly, not a
-pass - until you record one (droplist reads the same reference file, so recording it fixes both rows):
-
-```
-pwsh -File tests\check-regression.ps1 -Record
-```
-
-`check-preview` similarly needs its own recorded reference (`tests\preview-reference.local.txt`,
-also gitignored) before it reports anything but `2 DID NOT RUN`:
-
-```
-pwsh -File tests\check-preview.ps1 -Record
-```
+</details>
 
 ## Multi-account sharing
 
-`sharing: true` (two or more accounts; OFF in `config.example.json` on purpose) hardlinks `settings.json` and `statusline.js`, symlinks `CLAUDE.md` (a hardlink would load it twice under the home tree, and a copy equal to the canonical one is replaced, saved as `CLAUDE.md.pre-symlink.<yyyyMMdd-HHmmss>`), and junctions `projects`, `plugins`, `hooks`, `agents`, `skills`, `rules`, `sessions`, `file-history`, `session-env`, `tasks` and `shell-snapshots` from every secondary account's root back to the canonical (`~/.claude`) one, repaired on every launch. The repair links from whichever copy is NEWEST anywhere, so a newer secondary copy can REPLACE the canonical one - the losing copy survives as `<file>.pre-relink`, and an earlier one as `<file>.pre-relink.<yyyyMMdd-HHmmss>`, the newest three kept and older ones deleted. Enabling it also CREATES every secondary account's root directory on the next launch, and each junction it creates gets two `icacls` deny ACEs, so removing one later needs `icacls <path> /L /remove:d "<user>"` before a plain delete will work. Turn it on only once you accept those effects under directories the launcher itself now owns and ACL-locks.
+`sharing: true` (two or more accounts, OFF in `config.example.json` on purpose) hardlinks
+`settings.json` and `statusline.js`, symlinks `CLAUDE.md` (a hardlink would load it twice under the
+home tree, and a copy equal to the canonical one is replaced, saved as
+`CLAUDE.md.pre-symlink.<yyyyMMdd-HHmmss>`), and junctions `projects`, `plugins`, `hooks`, `agents`,
+`skills`, `rules`, `sessions`, `file-history`, `session-env`, `tasks` and `shell-snapshots` from
+every secondary account's root back to the canonical (`~/.claude`) one, repaired on every launch.
+
+Before you turn it on:
+
+- The repair links from whichever copy is NEWEST anywhere, so a newer secondary copy can REPLACE the
+  canonical one. The losing copy survives as `<file>.pre-relink`, an earlier one as
+  `<file>.pre-relink.<yyyyMMdd-HHmmss>`, the newest three kept and older ones deleted.
+- Enabling it CREATES every secondary account's root directory on the next launch.
+- Each junction it creates gets two `icacls` deny ACEs, so removing one later needs
+  `icacls <path> /L /remove:d "<user>"` before a plain delete works.
 
 The MCP mirror that `sharing` runs copies user- and project-scoped server definitions from the
 canonical account into the others verbatim, secrets included: a server's `env` and `headers` fields,
 where it keeps its token, land in every account's `.claude.json`. That is the default because the
-accounts are one person's on one machine and should not differ. The canonical definition wins in
-both scopes: a missing server is added, one defined differently is replaced, a server only the
-target has is kept. `CLAUDE_AUTO_MIRROR_SECRETS=0` compares and copies servers without those two
-fields and keeps the target's own ones; `CLAUDE_AUTO_MIRROR_EXCLUDE=name1,name2` never touches
-those servers.
+accounts are one person's on one machine. The canonical definition wins in both scopes: a missing
+server is added, one defined differently is replaced, a server only the target has is kept.
+`CLAUDE_AUTO_MIRROR_SECRETS=0` compares and copies servers without those two fields and keeps the
+target's own ones. `CLAUDE_AUTO_MIRROR_EXCLUDE=name1,name2` never touches those servers. The
+PowerShell launcher runs the mirror as `sharing/claude-mirror-mcp.mjs` under Node. The Rust
+launcher has it built in.
 
 ## Troubleshooting
 
@@ -193,28 +303,115 @@ those servers.
 *new* terminal reads. Open one.
 
 **The maintenance screen says an update succeeded and the version did not change.** On Windows
-`claude update` can report success while the running binary is untouched — usually a file lock on the
+`claude update` can report success while the running binary is untouched, usually a file lock on the
 in-use executable. That is what `r` (rename swap) is for: it renames the running binary aside and
 installs the new build in its place.
 
 **The whole roster collapsed to one `work` account.** Any single invalid account discards the entire
-roster by design; the warning at launch names the culprit and its value. The usual cause is a
+roster by design. The warning at launch names the culprit and its value. The usual cause is a
 Windows path in JSON: `"C:\Users\me\.claude"` is invalid JSON escaping. Write `~/...`, forward
 slashes, or `C:\\Users\\me\\.claude`.
 
 **The box drawing is mojibake.** Set `CLAUDE_AUTO_ASCII=1`, or switch the console to UTF-8.
 
 **Arrows or the mouse behave oddly in an embedded terminal.** Some terminals (Rider's, for one) send
-mouse reports as VT text rather than as console records; the launcher decodes them, but if it goes
-wrong, `CLAUDE_AUTO_NO_MOUSE=1` disables mouse input entirely and
-`CLAUDE_AUTO_INPUT_TRACE=1` logs every raw input record for a bug report.
+mouse reports as VT text rather than as console records. The launcher decodes them, but if it goes
+wrong, `CLAUDE_AUTO_NO_MOUSE=1` disables mouse input and `CLAUDE_AUTO_INPUT_TRACE=1` logs every raw
+input record for a bug report.
 
-**It launched a bare `claude` with none of the screens.** A module failed to load. Run
+**It launched a bare `claude` with none of the screens.** A PowerShell module failed to load. Run
 `pwsh -File claude-auto.ps1` directly and read the error it prints before the fallback.
+
+**A preview run ends with `claude-auto: scripted keys exhausted` and exit 1.** The key script in
+`CLAUDE_AUTO_PREVIEW_KEYS` ran out before a launch or a quit. Add the missing keys.
+
+## Uninstall
+
+Nothing is installed outside your own user profile, and there is no uninstaller.
+
+1. Remove this folder (and the Rust binary's folder, if you added it) from PATH: `sysdm.cpl` ->
+   Advanced -> Environment Variables -> user `Path`.
+2. Delete the clone.
+3. Optional, to remove the state too: the `claude-auto-*.json` files, `launcher-logs/` and
+   `claude-auto-logs/` under `~/.claude` (full list under **Files it writes**).
+4. **Only if you ever set `sharing: true`**: the junctions it created under each secondary account
+   root carry two `icacls` deny ACEs, so a plain delete fails. Lift them first with
+   `icacls <path> /L /remove:d "<user>"`, then remove the junction.
+
+## Development
+
+<details open><summary><b>Rust launcher</b></summary>
+
+```
+cargo build --release --locked
+cargo test --locked
+cargo fmt --all --check
+cargo clippy --all-targets --locked -- -D warnings
+```
+
+- The toolchain is pinned in `rust-toolchain.toml` (1.99.1, with `clippy` and `rustfmt`), edition
+  2024. One package: a library (`src/lib.rs`) and the binary (`src/main.rs`).
+- Lints live in `Cargo.toml` `[lints]`: clippy pedantic, `unwrap`/`expect` denied, `unsafe_code`
+  denied outside the FFI modules. A local override is `#[expect(lint, reason = "...")]` on the
+  smallest item, never `#[allow]`.
+- Unit tests sit beside the code (`src/<module>/tests.rs`), and the screen tests compare frames
+  against the golden files in `tests/fixtures/wide-frames/`. `tests/it/` runs the built binary end to
+  end against a fake home and a fake `claude`: preview frames, argument pass-through, the launch
+  marker, `--mcp-config` placement and `--launcher-version`.
+- Module map and the behaviour differences from the PowerShell launcher: [PORTING.md](PORTING.md).
+
+</details>
+
+<details><summary><b>PowerShell launcher</b></summary>
+
+```
+pwsh -File tests\checkpoint.ps1
+```
+
+19 checks: 15 unit suites (`Theme`, `Layout`, `Sessions`, `Projects`, `Ui`, `Maintenance`, `Remote`,
+`Prefs`, `Env`, `Config`, `Input`, `Install`, `Mirror`, `Tools`, `LaunchModes`), the privacy scan
+and three launcher-level checks. Every exit code is read on its own line, and **`2` means the check
+could not run, never a pass**.
+
+Any suite runs alone: `pwsh -File tests\Test-Ui.ps1`. `Test-Input.ps1 -Live` adds the console-mode
+and mouse assertions, which self-spawn a hidden child console. The checkpoint always passes `-Live`.
+`Test-Mirror.ps1` needs Node.js and exits `2` without it.
+
+`check-clean.ps1` is the privacy scan: it greps the git-tracked worktree for the current Windows
+username plus an optional private pattern list (`CLAUDE_AUTO_CLEAN_PATTERNS`, one regex per line).
+It never reads commit history or authorship.
+
+On a fresh clone the regression, droplist and preview rows report `2 DID NOT RUN` (correctly, not a
+pass) until you record their machine-local references once (gitignored):
+
+```
+pwsh -File tests\check-regression.ps1 -Record   # also fixes the droplist row
+pwsh -File tests\check-preview.ps1 -Record
+```
+
+</details>
+
+**CI** (`.github/workflows/ci.yml`, Windows runners): one job runs the PowerShell unit suites, one
+runs the Rust gates (`fmt --check`, `clippy -D warnings`, `test`, all `--locked`). The regression,
+droplist, preview and privacy rows need a machine-local reference or a private pattern list, so CI
+does not run them.
+
+## Cut-over
+
+When the Rust launcher has passed its test, it replaces the PowerShell one:
+
+- The binary is renamed from `claude-auto-rs` to `claude-auto`.
+- The sessions cache `claude-auto-rs-sessions.json` is renamed to `claude-auto-sessions.json`.
+- `sharing/claude-mirror-mcp.mjs` goes once nothing calls it: the Rust launcher has the mirror
+  built in.
+- The PowerShell launcher (`claude-auto.ps1`, `claude-auto/`, `claude-auto.cmd`, `install.ps1`) and
+  its tests (`tests/*.ps1`, `tests/Test-Mirror.mjs`) are retired.
+
+Details: [PORTING.md](PORTING.md#cut-over).
 
 ## Contributing, security, licence
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) — how to run the suite and what a PR needs.
-- [SECURITY.md](SECURITY.md) — what this touches on your machine, and how to report a hole privately.
+- [CONTRIBUTING.md](CONTRIBUTING.md) - the gates and what a PR needs.
+- [SECURITY.md](SECURITY.md) - what this touches on your machine, and how to report a hole privately.
 - [CHANGELOG.md](CHANGELOG.md).
 - [MIT](LICENSE).

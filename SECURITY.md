@@ -12,8 +12,9 @@ Worth knowing before you run it, and the places a vulnerability would matter:
 - **PATH.** `install.ps1` appends this folder to `HKCU\Environment`, read and written raw so an
   existing `%VAR%` entry is not expanded and rewritten.
 - **`~/.claude/`.** Reads `settings.json`, writes `claude-auto-prefs.json`, `launcher-logs/*.jsonl`
-  (14-day retention), and two caches. The logs record the launcher's own argument vector and working
-  directory — a prompt passed positionally lands there in plain text.
+  (14-day retention), and the `claude-auto-*.json` caches (full list in the README, "Files it
+  writes"). The logs record the launcher's own argument vector and working directory: a prompt
+  passed positionally lands there in plain text.
 - **Environment variables from files.** With `secretsRoot` configured, every file under it becomes an
   environment variable in the launched session. Anything readable there reaches the child process.
 - **Your Claude Code install.** The maintenance screen updates, renames and prunes binaries under

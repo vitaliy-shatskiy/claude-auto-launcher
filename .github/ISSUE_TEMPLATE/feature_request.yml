@@ -6,7 +6,7 @@ body:
     id: problem
     attributes:
       label: The problem
-      description: What you are doing today and why it is awkward. Not the solution — the problem.
+      description: What you are doing today and why it is awkward. The problem, not the solution.
     validations: { required: true }
   - type: textarea
     id: idea
