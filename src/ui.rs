@@ -7,7 +7,9 @@ use std::collections::VecDeque;
 
 use crate::frame::{FooterSpan, RowMap};
 use crate::input::console::ConsoleInput;
-use crate::input::{Event, KeyPress};
+use windows_sys::Win32::System::Console::{KEY_EVENT, MOUSE_EVENT};
+
+use crate::input::{Event, KeyPress, MouseEvent, VtOutcome, decode_csi, decode_x10, mouse_from_record};
 use crate::log::Logger;
 use crate::out;
 use crate::sys::{self, Handle};
@@ -41,6 +43,40 @@ pub struct Activation {
     pub queued: bool,
 }
 
+/// One waiting input record, decoded only as far as the twin test needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Peeked {
+    Mouse(MouseEvent),
+    KeyDown(char),
+    Other,
+}
+
+fn is_press(m: &MouseEvent) -> bool {
+    m.left && !m.is_move && m.wheel == 0
+}
+
+/// Is a mouse button press waiting? A console mouse record counts when it is a left press; in
+/// text-mouse mode the key records spell SGR (`ESC [ <`) or X10 (`ESC [ M`) reports, and one
+/// counts when it decodes to a press. Motion, wheel, releases and keys never count.
+pub fn press_waiting(recs: &[Peeked]) -> bool {
+    if recs.iter().any(|r| matches!(r, Peeked::Mouse(m) if is_press(m))) {
+        return true;
+    }
+    let text: Vec<char> = recs
+        .iter()
+        .filter_map(|r| if let Peeked::KeyDown(c) = r { Some(*c) } else { None })
+        .collect();
+    text.split(|c| *c == '\x1b').any(|seq| match seq {
+        ['[', 'M', b, x, y, ..] => decode_x10(&['M', *b, *x, *y].map(u32::from)).is_some_and(|m| is_press(&m)),
+        ['[', '<', ..] => {
+            let end = seq.iter().position(|c| *c == 'M' || *c == 'm').map_or(seq.len(), |i| i + 1);
+            let s: String = seq.iter().take(end).collect();
+            matches!(decode_csi(&s), VtOutcome::Mouse(m) if is_press(&m))
+        }
+        _ => false,
+    })
+}
+
 /// Why a screen stopped without an answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiStop {
@@ -70,6 +106,11 @@ pub trait Term {
     fn window_top(&mut self) -> i32;
     /// One non-blocking look: is another record already waiting?
     fn input_pending(&mut self) -> bool;
+    /// One non-blocking look: is a mouse button press among the waiting records? Only a press
+    /// marks a twin: motion (psmux streams it) and keys never do.
+    fn press_pending(&mut self) -> bool {
+        self.input_pending()
+    }
     /// When the terminal delivered the record being handled (monotonic ms), if known.
     fn record_time(&self) -> Option<u64>;
     fn last_activation(&mut self) -> &mut Option<Activation>;
@@ -90,6 +131,8 @@ pub struct ConsoleTerm {
     activation: Option<Activation>,
     logger: Logger,
     vt_restore: Option<(Handle, u32)>,
+    /// A second CONIN$ handle onto the same queue, for peeking without consuming.
+    peek: Option<Handle>,
 }
 
 const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
@@ -113,6 +156,7 @@ impl ConsoleTerm {
             activation: None,
             logger,
             vt_restore,
+            peek: Handle::open_console("CONIN$"),
         }
     }
 
@@ -181,6 +225,28 @@ impl Term for ConsoleTerm {
 
     fn input_pending(&mut self) -> bool {
         self.input.as_ref().is_some_and(ConsoleInput::pending)
+    }
+
+    fn press_pending(&mut self) -> bool {
+        if !self.input_pending() {
+            return false;
+        }
+        let Some(h) = self.peek.as_ref() else { return false };
+        let recs: Vec<Peeked> = sys::peek_records(h, 128)
+            .iter()
+            .map(|r| match u32::from(r.EventType) {
+                MOUSE_EVENT => {
+                    let (x, y, buttons, flags) = sys::mouse_fields(r);
+                    Peeked::Mouse(mouse_from_record(x, y, buttons, flags))
+                }
+                KEY_EVENT => match sys::key_fields(r) {
+                    (true, _, ch, _) => char::from_u32(u32::from(ch)).map_or(Peeked::Other, Peeked::KeyDown),
+                    _ => Peeked::Other,
+                },
+                _ => Peeked::Other,
+            })
+            .collect();
+        press_waiting(&recs)
     }
 
     fn record_time(&self) -> Option<u64> {

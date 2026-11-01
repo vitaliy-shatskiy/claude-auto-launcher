@@ -174,6 +174,8 @@ struct Guards {
     footer_y: i32,
     footer_index: i32,
     footer_at: Option<u64>,
+    /// An activation is fresh: the next ready point marks whether its twin already waits.
+    settle: bool,
 }
 
 impl Guards {
@@ -229,12 +231,9 @@ fn run_loop<S: Screen>(
         acted_row: -1,
         footer_y: -1,
         footer_index: -1,
+        settle: true,
         ..Guards::default()
     };
-    let pending = term.input_pending();
-    if let Some(a) = term.last_activation().as_mut() {
-        a.queued = pending;
-    }
     let mut size = term.size();
     loop {
         screen.before();
@@ -251,13 +250,16 @@ fn run_loop<S: Screen>(
             }
         }
         need_draw = true;
-        let pending = term.input_pending();
-        if let Some(a) = term.last_activation().as_mut()
-            && a.queued
-            && !pending
-        {
-            a.queued = false;
+        // The twin test runs at the ready point, not at read time: a press already waiting once a
+        // fresh activation's handler and frame are done is its twin, however slow they were.
+        // Only a press arms or keeps the mark: psmux motion would keep it alive forever.
+        if term.last_activation().is_some() {
+            let press = term.press_pending();
+            if let Some(a) = term.last_activation().as_mut() {
+                a.queued = press && (g.settle || a.queued);
+            }
         }
+        g.settle = false;
         let ev = term.wait(size)?;
         let key = match ev {
             Event::Resize => continue,
@@ -359,6 +361,7 @@ fn mouse<S: Screen>(screen: &mut S, term: &mut dyn Term, m: &MouseEvent, map: Op
             at: now,
             queued: false,
         });
+        g.settle = true;
         if let Some(flow) = screen.activate(&hit) {
             g.acted = true;
             g.acted_row = r;
