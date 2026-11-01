@@ -480,5 +480,4 @@ pub(crate) fn repair_all(work: &Path, secondary: &[PathBuf], set: SharedSet<'_>,
 }
 
 #[cfg(test)]
-#[path = "sharing_tests.rs"]
 mod tests;

@@ -340,5 +340,4 @@ pub(crate) fn run(work_file: &Path, personal_file: &Path, fs: &mut dyn MirrorFs,
 }
 
 #[cfg(test)]
-#[path = "mirror_tests.rs"]
 mod tests;

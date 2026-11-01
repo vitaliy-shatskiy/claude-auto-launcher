@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::DefaultLabels;
 
 pub(crate) fn four() -> Roster {
     let acct = |k: &str, t: &str, hidden: bool| Account {
