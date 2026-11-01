@@ -18,9 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - `claude-auto-rs`: launch hooks get the console's stdin, as the PowerShell launcher gave them. The
   companion server, its build and the pairing QR start with the chosen account's environment
   (`CLAUDE_CONFIG_DIR`, project secrets), as the session does. A console whose input cannot be
-  re-armed after a typed path ends with its own message instead of `scripted keys exhausted`. A
-  release-channel check whose request fails prints `update check skipped: <reason>` (a remembered
-  failure stays silent for five minutes).
+  re-armed after a typed path ends with its own message instead of `scripted keys exhausted`. An
+  offline launch passes the release-channel check silently. Any other failed request prints
+  `update check skipped: <reason>` with the reason in words (a remembered failure stays silent for
+  five minutes).
 - `claude-auto-rs` internals: the four modules over 500 lines split along their seams, the mirror and
   sharing tests in their modules' folders, typed errors in the companion and sharing paths, the IP Helper calls made
   inside the one function that owns their buffer, no busy wait while an ESC sequence is peeked, and

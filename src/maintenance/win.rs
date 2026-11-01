@@ -7,6 +7,7 @@ use std::io::Read as _;
 use std::path::Path;
 use std::ptr;
 
+use super::release::{FetchFailed, winhttp_failure};
 use windows_sys::Win32::Networking::WinHttp::{
     INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER,
     WINHTTP_QUERY_STATUS_CODE, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReadData,
@@ -78,10 +79,10 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 /// An HTTPS GET of `url` with `timeout_ms` on every phase; the body as text, or why it failed.
-pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, String> {
-    let rest = url.strip_prefix("https://").ok_or("only https URLs")?;
+pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, FetchFailed> {
+    let rest = url.strip_prefix("https://").ok_or_else(|| FetchFailed::Reason("only https URLs".into()))?;
     let (host, path) = rest.split_once('/').map_or((rest, "/".to_owned()), |(h, p)| (h, format!("/{p}")));
-    let last = || std::io::Error::last_os_error().to_string();
+    let last = || winhttp_failure(std::io::Error::last_os_error().raw_os_error().map_or(0, i32::cast_unsigned));
     let agent = wide("claude-auto");
     // SAFETY: valid UTF-16 agent string; no proxy strings with the automatic proxy type.
     let session = Net(unsafe { WinHttpOpen(agent.as_ptr(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, ptr::null(), ptr::null(), 0) });
@@ -139,7 +140,7 @@ pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, String> {
         return Err(last());
     }
     if status != 200 {
-        return Err(format!("HTTP {status}"));
+        return Err(FetchFailed::Reason(format!("the release channel answered HTTP {status}")));
     }
     let mut body = Vec::new();
     let mut chunk = vec![0u8; 8192];
@@ -155,7 +156,7 @@ pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, String> {
         }
         body.extend_from_slice(chunk.get(..read as usize).unwrap_or_default());
         if body.len() > 64 * 1024 {
-            return Err("response too large".into());
+            return Err(FetchFailed::Reason("the release channel answer is too large".into()));
         }
     }
     Ok(String::from_utf8_lossy(&body).into_owned())

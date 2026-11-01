@@ -141,7 +141,9 @@ pub fn update_before_launch(version: &mut VersionInfo) {
     let remote = match release::remote_version(&channel, &cache, now_ms(), &mut |url| win::https_get(url, 5000)) {
         Ok(r) => r,
         Err(e) => {
-            out::line(&format!("  update check skipped: {e}"), Fg::DarkYellow);
+            if let Some(line) = release::skipped_line(&e) {
+                out::line(&line, Fg::DarkYellow);
+            }
             return;
         }
     };
