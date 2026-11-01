@@ -4,7 +4,7 @@ Every image in the README is drawn by a script here. Redraw one only when what i
 
 | File | Generator | Source of truth |
 |---|---|---|
-| `launch-screen.png` | `launch-screen.tape` ([VHS](https://github.com/charmbracelet/vhs)) | the real `claude-auto-rs` binary in preview mode on the demo home |
+| `launch-screen.png` | `launch-screen.tape` ([VHS](https://github.com/charmbracelet/vhs)) | the real `claude-auto` binary in preview mode on the demo home |
 | `launch-walk.gif`, `launch-walk.mp4` | `launch-walk.tape` (VHS) | the real binary, run interactively on the demo home, quit with `esc` before a launch |
 
 The demo home comes from `demo-setup.ps1`: a throwaway `USERPROFILE` under `%TEMP%\claude-auto-demo`,

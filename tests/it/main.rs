@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const EXE: &str = env!("CARGO_BIN_EXE_claude-auto-rs");
+const EXE: &str = env!("CARGO_BIN_EXE_claude-auto");
 
 fn scratch(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("claude-auto-rs-it-{name}-{}", std::process::id()));

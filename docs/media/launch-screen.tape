@@ -18,7 +18,7 @@ Enter
 Sleep 2s
 Show
 
-Type "claude-auto-rs"
+Type "claude-auto"
 Sleep 300ms
 Enter
 Sleep 2s

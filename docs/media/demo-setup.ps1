@@ -35,8 +35,8 @@ $env:CLAUDE_NO_ROAM = '1'
 Remove-Item Env:NO_COLOR, Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
 
 $targetDir = $env:CARGO_TARGET_DIR ?? 'target'
-$script:demoExe = @('release', 'debug') | ForEach-Object { Join-Path -Path $targetDir -ChildPath $_ -AdditionalChildPath 'claude-auto-rs.exe' } |
+$script:demoExe = @('release', 'debug') | ForEach-Object { Join-Path -Path $targetDir -ChildPath $_ -AdditionalChildPath 'claude-auto.exe' } |
     Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 function Invoke-ClaudeAuto { & $script:demoExe @args }
-Set-Alias -Name claude-auto-rs -Value Invoke-ClaudeAuto
+Set-Alias -Name claude-auto -Value Invoke-ClaudeAuto
 function prompt { '> ' }

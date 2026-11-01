@@ -59,7 +59,7 @@ toolchain. `rust-toolchain.toml` pins the version and the `clippy` and `rustfmt`
 cargo build --release --locked
 ```
 
-The binary is `target\release\claude-auto-rs.exe`. Copy it to a folder on your PATH. There is no
+The binary is `target\release\claude-auto.exe`. Copy it to a folder on your PATH. There is no
 installer. With no config file the launcher runs one `work` account on `~/.claude`.
 
 The launch screen is tested against Claude Code `2.1.316`. A much older or newer CLI may accept
@@ -69,9 +69,9 @@ for `maintenanceActions` scripts (always run through `pwsh -File`).
 ## Usage
 
 ```
-claude-auto-rs                              # the screens, then claude
-claude-auto-rs --model opus "fix the build" # the screens, then claude with these arguments added
-claude-auto-rs --launcher-version           # the launcher's own version
+claude-auto                              # the screens, then claude
+claude-auto --model opus "fix the build" # the screens, then claude with these arguments added
+claude-auto --launcher-version           # the launcher's own version
 ```
 
 Every argument goes to `claude` untouched, except the launcher's own `--launcher-version`,
@@ -146,7 +146,7 @@ $env:CLAUDE_AUTO_CONFIG = (Resolve-Path docs\media\demo-config.json).Path
 $env:CLAUDE_AUTO_PREVIEW = '1'
 $env:CLAUDE_AUTO_PREVIEW_KEYS = 'Enter,Enter'
 $env:CLAUDE_AUTO_PREVIEW_SIZE = '100x30'
-.\target\release\claude-auto-rs.exe
+.\target\release\claude-auto.exe
 ```
 
 It prints each frame, then a summary ending in `--- preview, nothing launched ---` with the launch
@@ -181,7 +181,7 @@ launcher start from one by hand.
 
 <details><summary><b>Debug mode</b></summary>
 
-`claude-auto-rs --launcher-debug` (the only argument) or `CLAUDE_AUTO_DEBUG=1` times each step of
+`claude-auto --launcher-debug` (the only argument) or `CLAUDE_AUTO_DEBUG=1` times each step of
 the run. `--debug` stays claude's own flag and passes through.
 
 - Nothing changes on screen. `CLAUDE_AUTO_DEBUG=footer` adds one dim bottom line:
@@ -189,7 +189,7 @@ the run. `--debug` stays claude's own flag and passes through.
   nothing is covered.
 - F12 opens the timings of this run as a tree, slowest first within each level. Esc goes back.
 - Each span lands in the run log as a `timing` record (`name`, `parent`, `ms`, `startMs`).
-- `claude-auto-rs --launcher-timings [--days N]` prints count, p50, p95 and max per span name from
+- `claude-auto --launcher-timings [--days N]` prints count, p50, p95 and max per span name from
   the logs of today (or the last `N` days), then exits.
 
 Off, nothing changes and nothing extra is read or written.
@@ -273,7 +273,7 @@ needed.
 - `~/.claude/launcher-logs/*.jsonl` - one file per day, 14-day retention. Records each launch: the
   working directory, the launcher's own argument vector, the launcher version (`psVersion`, which
   reads `rust <version>`), the terminal it came out of, and the choices made.
-  **A prompt passed positionally (`claude-auto-rs "fix the build"`) lands there in plain text.**
+  **A prompt passed positionally (`claude-auto "fix the build"`) lands there in plain text.**
   Local only, nothing is sent anywhere.
 - `~/.claude/claude-auto-hash-cache.json` - the maintenance screen's version-check cache.
 - `~/.claude/claude-auto-models.json` - the model catalog read out of `claude.exe`, keyed on the
@@ -295,7 +295,7 @@ The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer
 
 <details><summary><b>Troubleshooting</b></summary>
 
-**`claude-auto-rs` is not recognised.** A PATH change reaches only a *new* terminal. Open one.
+**`claude-auto` is not recognised.** A PATH change reaches only a *new* terminal. Open one.
 
 **The maintenance screen says an update succeeded and the version did not change.** On Windows
 `claude update` can report success while the running binary is untouched, usually a file lock on the
@@ -319,7 +319,7 @@ input record for a bug report.
 
 Nothing is installed outside your own user profile, and there is no uninstaller.
 
-1. Delete `claude-auto-rs.exe`, or remove the folder you added to PATH.
+1. Delete `claude-auto.exe`, or remove the folder you added to PATH.
 2. Delete the clone.
 3. Optional, to remove the state too: the `claude-auto-*.json` files, `launcher-logs/` and
    `claude-auto-logs/` under `~/.claude` (full list under **Files it writes**).

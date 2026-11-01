@@ -114,7 +114,7 @@ pub fn parse_args(args: &[String]) -> Option<Result<u32, String>> {
             .ok()
             .filter(|n| (1..=366).contains(n))
             .ok_or_else(|| format!("--days takes a number from 1 to 366, got '{n}'")),
-        _ => Err("usage: claude-auto-rs --launcher-timings [--days N]".into()),
+        _ => Err("usage: claude-auto --launcher-timings [--days N]".into()),
     })
 }
 

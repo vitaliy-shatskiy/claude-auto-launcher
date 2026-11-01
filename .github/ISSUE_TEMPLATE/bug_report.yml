@@ -14,7 +14,7 @@ body:
       label: Versions
       description: Output of the commands below.
       value: |
-        claude-auto-rs --launcher-version
+        claude-auto --launcher-version
         claude --version
         git -C <this clone> rev-parse --short HEAD
       render: shell

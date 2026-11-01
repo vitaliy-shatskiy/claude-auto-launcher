@@ -4,6 +4,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Changed
+
+- The binary is `claude-auto.exe` (was `claude-auto-rs.exe`). Rename the old file on PATH, or delete it after
+  copying the new one. Cache and temp file names keep their old prefix.
+
 ### Removed
 
 - The PowerShell launcher (`claude-auto.ps1`, `claude-auto/`, `claude-auto.cmd`, `install.ps1`),
