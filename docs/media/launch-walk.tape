@@ -21,16 +21,13 @@ Set Theme "GitHub Dark"
 Set Framerate 24
 Set TypingSpeed 60ms
 
+# The typing stays hidden, so the first frame (the poster GitHub shows) is the launch screen.
 Hide
-Type ". ./docs/media/demo-setup.ps1; Clear-Host"
+Type ". ./docs/media/demo-setup.ps1; Clear-Host; claude-auto"
 Enter
-Sleep 2s
+Sleep 3s
 Show
-
-Type "claude-auto"
-Sleep 400ms
-Enter
-Sleep 2s
+Sleep 1.5s
 
 # Accounts: each tab restores its own model, effort, advisor and permission.
 Right

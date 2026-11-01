@@ -37,7 +37,7 @@ cd claude-auto-launcher
 cargo build --release --locked
 ```
 
-Copy `target\release\claude-auto-rs.exe` to a folder on your PATH and run `claude-auto-rs`. Details
+Copy `target\release\claude-auto.exe` to a folder on your PATH and run `claude-auto`. Details
 and requirements under [Install](#install).
 
 ## What you get

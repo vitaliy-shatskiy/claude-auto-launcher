@@ -50,7 +50,7 @@ function heroLeft(p) {
 <text x="${L}" y="270" font-family="${SANS}" font-size="21" fill="${p.muted}">One screen of remembered choices per account,</text>
 <text x="${L}" y="300" font-family="${SANS}" font-size="21" fill="${p.muted}">then Claude Code starts. One native .exe.</text>
 <rect x="${L}" y="326" width="236" height="44" rx="8" fill="${p.chip}" stroke="${p.nodeLine}"/>
-<text x="${L + 18}" y="355" font-family="${MONO}" font-size="20" fill="${p.muted}">&gt; <tspan fill="${p.text}">claude-auto-rs</tspan><tspan fill="${p.accent}">▌</tspan></text>`;
+<text x="${L + 18}" y="355" font-family="${MONO}" font-size="20" fill="${p.muted}">&gt; <tspan fill="${p.text}">claude-auto</tspan><tspan fill="${p.accent}">▌</tspan></text>`;
 }
 
 // One box per screen, top to bottom; `edge` labels the keys that move to the next box.

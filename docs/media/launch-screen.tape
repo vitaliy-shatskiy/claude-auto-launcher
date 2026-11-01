@@ -18,7 +18,7 @@ Set Theme "GitHub Dark"
 Set TypingSpeed 40ms
 
 Hide
-Type ". ./docs/media/demo-setup.ps1; $env:CLAUDE_AUTO_PREVIEW = '1'; $env:CLAUDE_AUTO_PREVIEW_SIZE = '100x20'; $env:CLAUDE_AUTO_PREVIEW_KEYS = 'Escape'; function shot { Clear-Host; claude-auto-rs; function global:prompt { [char]27 + '[?25l' } }; Clear-Host"
+Type ". ./docs/media/demo-setup.ps1; $env:CLAUDE_AUTO_PREVIEW = '1'; $env:CLAUDE_AUTO_PREVIEW_SIZE = '100x20'; $env:CLAUDE_AUTO_PREVIEW_KEYS = 'Escape'; function shot { Clear-Host; claude-auto; function global:prompt { [char]27 + '[?25l' } }; Clear-Host"
 Enter
 Sleep 2s
 Show
