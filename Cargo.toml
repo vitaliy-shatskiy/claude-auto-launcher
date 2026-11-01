@@ -16,7 +16,6 @@ name = "claude_auto"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
