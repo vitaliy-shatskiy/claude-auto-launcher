@@ -80,7 +80,9 @@ fn wide(s: &str) -> Vec<u16> {
 
 /// An HTTPS GET of `url` with `timeout_ms` on every phase; the body as text, or why it failed.
 pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, FetchFailed> {
-    let rest = url.strip_prefix("https://").ok_or_else(|| FetchFailed::Reason("only https URLs".into()))?;
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| FetchFailed::Reason("only https URLs".into()))?;
     let (host, path) = rest.split_once('/').map_or((rest, "/".to_owned()), |(h, p)| (h, format!("/{p}")));
     let last = || winhttp_failure(std::io::Error::last_os_error().raw_os_error().map_or(0, i32::cast_unsigned));
     let agent = wide("claude-auto");

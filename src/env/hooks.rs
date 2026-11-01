@@ -169,6 +169,10 @@ mod tests {
         };
         drop(file);
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(lines, vec!["got=typed-into-the-console".to_owned()], "the hook got the line piped in");
+        assert_eq!(
+            lines,
+            vec!["got=typed-into-the-console".to_owned()],
+            "the hook got the line piped in"
+        );
     }
 }
