@@ -304,7 +304,8 @@ pub fn after_esc(src: &mut impl EscSource, wait_ms: u64) -> AfterEsc {
         let seq: String = std::iter::once('O').chain(fin).collect();
         return AfterEsc::Sequence(vt_key(&seq).map_or(VtOutcome::Swallow, VtOutcome::Key));
     }
-    if src.peek_down(5) == Some(u16::from(b'M')) {
+    // The same wait as the `[`: a report split right after it must not leak its tail as keys.
+    if src.peek_down(wait_ms) == Some(u16::from(b'M')) {
         let bytes: Vec<u32> = std::iter::from_fn(|| src.take_down(4)).take(4).map(u32::from).collect();
         src.mouse_report();
         return AfterEsc::Sequence(decode_x10(&bytes).map_or(VtOutcome::Swallow, VtOutcome::Mouse));

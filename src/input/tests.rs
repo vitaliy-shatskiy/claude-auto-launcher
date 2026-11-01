@@ -185,6 +185,38 @@ fn a_report_split_after_its_esc_is_mouse_not_escape_in_text_mouse_mode() {
 }
 
 #[test]
+fn a_report_split_after_its_bracket_is_mouse_not_typed_keys_in_text_mouse_mode() {
+    let mut tl = Timeline::new(&[("[", 0), ("<35;10;5M", 20)]);
+    let AfterEsc::Sequence(VtOutcome::Mouse(m)) = after_esc(&mut tl, esc_wait_ms(true)) else {
+        panic!("a report split after its [ was not a mouse event")
+    };
+    assert_eq!((m.x, m.y, m.is_move), (9, 4, true));
+    assert!(tl.left().is_empty(), "no tail char leaks as a key");
+}
+
+#[test]
+fn esc_o_a_is_up() {
+    let mut tl = Timeline::new(&[("OA", 0)]);
+    assert_eq!(
+        after_esc(&mut tl, esc_wait_ms(true)),
+        AfterEsc::Sequence(VtOutcome::Key(KeyPress::named(vk::UP)))
+    );
+    assert_eq!(tl.left(), Vec::<u16>::new(), "the final byte is consumed");
+}
+
+#[test]
+fn an_x10_report_after_esc_is_mouse() {
+    // `ESC [ M` then button, column, row bytes, each 32 + value.
+    let mut tl = Timeline::new(&[("[M u#", 0)]);
+    let AfterEsc::Sequence(VtOutcome::Mouse(m)) = after_esc(&mut tl, esc_wait_ms(false)) else {
+        panic!("an X10 report was not a mouse event")
+    };
+    assert_eq!((m.x, m.y, m.left), (84, 2, true));
+    assert_eq!(tl.left(), Vec::<u16>::new(), "all four report bytes are consumed");
+    assert_eq!(tl.reports, 1);
+}
+
+#[test]
 fn a_lone_esc_is_escape_and_waits_less_than_a_person_notices() {
     for text_mouse in [false, true] {
         assert_eq!(after_esc(&mut Timeline::new(&[]), esc_wait_ms(text_mouse)), AfterEsc::Alone);
