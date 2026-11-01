@@ -195,7 +195,8 @@ fn finish<S: Screen>(term: &dyn Term, screen: &mut S, entered: Instant, r: Optio
     r
 }
 
-/// Runs a screen to its end. `Err` only when a scripted key source ran out.
+/// Runs a screen to its end. `Err` when a scripted key source ran out (`KeysExhausted`) or the
+/// console input could not be re-armed after a typed line (`ConsoleLost`).
 pub fn run<S: Screen>(screen: &mut S, term: &mut dyn Term) -> Result<Option<S::Output>, UiStop> {
     let entered = Instant::now();
     screen.before();

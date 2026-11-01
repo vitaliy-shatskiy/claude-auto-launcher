@@ -111,6 +111,13 @@ Ported under another name or not needed:
   as two blocks (stdout lines, then stderr lines), where PowerShell interleaved `2>&1`.
 - Arguments are read as UTF-8 with lossy conversion, so an unpaired surrogate in an argument becomes
   U+FFFD.
+- The pre-UI update check stays silent when the release channel cannot be reached at all (WinHTTP
+  timeout, name not resolved, cannot connect, connection reset). Any other failed request prints
+  `update check skipped: <reason>` with the reason in words (TLS, proxy, HTTP status). PowerShell
+  stayed silent on every failed request. A remembered failure is silent for five minutes in both.
+- A console whose input cannot be re-armed after a typed line (`read_line` in a prompt) ends the
+  run with `claude-auto: the console input could not be re-armed after a typed line`, exit 1, logged
+  as `ConsoleLost`. PowerShell had no such path.
 - The sessions cache is a separate file, `claude-auto-rs-sessions.json`, until cut-over. The prefs,
   projects, models and hash caches are shared with the PowerShell launcher in compatible formats.
 
