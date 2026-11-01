@@ -212,6 +212,9 @@ impl ConsoleInput {
             if start.elapsed() >= Duration::from_millis(timeout_ms) {
                 return None;
             }
+            // Sleep, not a wait on the handle: the ESC's own key-up keeps it signalled, so a wait
+            // would return at once and the loop would spin a core for the whole timeout.
+            std::thread::sleep(Duration::from_millis(1));
         }
     }
 
