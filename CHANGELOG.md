@@ -18,7 +18,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   `7348f59`.
 - `tests/check-clean.ps1`: the privacy scan is `examples/privacy_scan.rs` now
   (`cargo run --example privacy_scan`, same contract, case-insensitive, a hit names the pattern's
-  line number instead of its text). The repository holds no PowerShell.
+  line number instead of its text). No PowerShell tests remain.
 
 ### Added
 

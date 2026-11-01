@@ -1,7 +1,8 @@
 //! Privacy scan: no owner identifier may be in the tree. Patterns = the current Windows user name
 //! plus an optional private list (one regex per line, `#` comments; `--patterns <file>` or env
 //! `CLAUDE_AUTO_CLEAN_PATTERNS`). The private list never enters the repository - it IS the list of
-//! things that must not. Matching is case-insensitive. A hit names the pattern by its line number,
+//! things that must not. Each file's path and its text (UTF-8, or UTF-16 with a BOM) are matched,
+//! case-insensitively. A hit names the pattern by its line number,
 //! never its text, so the list does not leak into a log.
 //!
 //! A dev tool, not part of the release exe: `cargo run --example privacy_scan -- [--root <dir>]
@@ -91,6 +92,19 @@ fn skipped(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("dll") || e.eq_ignore_ascii_case("pdb"))
 }
 
+/// UTF-16 with a BOM is decoded as such: read as UTF-8 its NUL bytes split every word, a silent pass.
+fn decode(bytes: &[u8]) -> String {
+    fn utf16(rest: &[u8], unit: fn([u8; 2]) -> u16) -> String {
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| unit(*c)).collect();
+        String::from_utf16_lossy(&units)
+    }
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
 fn scan(root: &Path, patterns: &[Pattern]) -> Verdict {
     let files = match list_files(root) {
         Ok(f) => f,
@@ -102,6 +116,9 @@ fn scan(root: &Path, patterns: &[Pattern]) -> Verdict {
     let mut hits = Vec::new();
     let mut scanned = 0;
     for (rel, path) in &files {
+        if let Some(p) = patterns.iter().find(|p| p.re.is_match(rel)) {
+            hits.push(format!("{rel} (path)  {}", p.label));
+        }
         if skipped(path) {
             continue;
         }
@@ -111,7 +128,7 @@ fn scan(root: &Path, patterns: &[Pattern]) -> Verdict {
             return Verdict::CouldNotRun(format!("a listed path cannot be read: {rel}"));
         };
         scanned += 1;
-        for (n, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
+        for (n, line) in decode(&bytes).lines().enumerate() {
             if let Some(p) = patterns.iter().find(|p| p.re.is_match(line)) {
                 hits.push(format!("{rel}:{}  {}", n + 1, p.label));
             }
@@ -228,6 +245,28 @@ mod tests {
     fn hit_in_non_ascii_name_is_found() {
         let f = Fixture::new("utf", &[("\u{444}.txt", "plantedsecret")], "plantedsecret");
         assert!(matches!(f.scan(None), Verdict::Hit(_)));
+    }
+
+    #[test]
+    fn utf16_files_are_decoded() {
+        let f = Fixture::new("u16", &[("a.txt", "x")], "plantedsecret");
+        for (bom, be) in [([0xFF, 0xFE], false), ([0xFE, 0xFF], true)] {
+            let mut bytes = bom.to_vec();
+            for u in "one\r\nplantedsecret\r\n".encode_utf16() {
+                bytes.extend(if be { u.to_be_bytes() } else { u.to_le_bytes() });
+            }
+            std::fs::write(f.repo().join("a.txt"), bytes).unwrap();
+            assert_eq!(f.scan(None), Verdict::Hit(vec!["a.txt:2  pattern line 1".into()]), "be={be}");
+        }
+    }
+
+    #[test]
+    fn hit_in_file_path_is_found() {
+        let f = Fixture::new("path", &[("plantedsecret-notes.txt", "nothing")], "plantedsecret");
+        assert_eq!(
+            f.scan(None),
+            Verdict::Hit(vec!["plantedsecret-notes.txt (path)  pattern line 1".into()])
+        );
     }
 
     #[test]
