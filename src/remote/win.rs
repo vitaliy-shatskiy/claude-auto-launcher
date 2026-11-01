@@ -2,14 +2,11 @@
 //! line, stopping a process, and this machine's IPv4 addresses.
 #![expect(unsafe_code, reason = "IP Helper, ntdll and process FFI")]
 
-use std::ffi::c_void;
-
 use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessCommandLineInformation};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-use windows_sys::Win32::NetworkManagement::IpHelper::GetIpAddrTable;
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess};
 
-use crate::sys::{Family, sized_table, tcp_listeners, u32_at};
+use crate::sys::{Family, IpTable, sized_table, tcp_listeners, u32_at};
 
 struct Owned(HANDLE);
 
@@ -84,9 +81,7 @@ pub(crate) fn terminate(pid: u32) -> Result<(), String> {
 
 /// Every IPv4 address of this machine, in table order.
 pub(crate) fn ipv4_addresses() -> Vec<[u8; 4]> {
-    // SAFETY: `t` and `s` are the buffer and its size from `sized_table`.
-    let call = |t: *mut c_void, s: *mut u32| unsafe { GetIpAddrTable(t.cast(), s, 0) };
-    let Some(b) = sized_table(&call) else {
+    let Some(b) = sized_table(IpTable::Ipv4Addresses) else {
         return Vec::new();
     };
     let n = u32_at(&b, 0).unwrap_or(0) as usize;

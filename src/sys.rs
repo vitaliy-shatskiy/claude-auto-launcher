@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, INVALID_HANDLE_VALUE, WAIT_ABANDONED, WAIT_OBJECT_0};
-use windows_sys::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, TCP_TABLE_OWNER_PID_LISTENER};
+use windows_sys::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, GetIpAddrTable, TCP_TABLE_OWNER_PID_LISTENER};
 use windows_sys::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
 use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
 use windows_sys::Win32::System::Console::{
@@ -341,14 +341,38 @@ pub(crate) fn u32_at(b: &[u8], off: usize) -> Option<u32> {
     b.get(off..off + 4).and_then(|s| s.try_into().ok()).map(u32::from_ne_bytes)
 }
 
-/// Calls a size-negotiating IP Helper function until the buffer fits; the bytes it filled.
-pub(crate) fn sized_table(call: &dyn Fn(*mut c_void, *mut u32) -> u32) -> Option<Vec<u8>> {
+/// The size-negotiating IP Helper tables the launcher reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IpTable {
+    /// `GetExtendedTcpTable`, listeners with their owning pid.
+    TcpListeners(Family),
+    /// `GetIpAddrTable`.
+    Ipv4Addresses,
+}
+
+/// Calls the table's IP Helper function until the buffer fits; the bytes it filled. The call
+/// happens here, beside the buffer it writes, so the SAFETY proof is local.
+pub(crate) fn sized_table(table: IpTable) -> Option<Vec<u8>> {
     let mut want = 4096u32;
     for _ in 0..4 {
         // u64 words: the tables are read as 4-byte fields, and this keeps them aligned.
         let mut buf = vec![0u64; (want as usize).div_ceil(8)];
         let mut size = u32::try_from(buf.len() * 8).ok()?;
-        match call(buf.as_mut_ptr().cast(), &raw mut size) {
+        let (out, len) = (buf.as_mut_ptr().cast::<c_void>(), &raw mut size);
+        let rc = match table {
+            IpTable::TcpListeners(family) => {
+                let af = match family {
+                    Family::V4 => 2,
+                    Family::V6 => 23,
+                };
+                // SAFETY: `out` is `buf`, writable for `size` bytes, `len` points at `size`, both
+                // live across the call; the function writes no more than `*len` bytes.
+                unsafe { GetExtendedTcpTable(out, len, 0, af, TCP_TABLE_OWNER_PID_LISTENER, 0) }
+            }
+            // SAFETY: as above; MIB_IPADDRTABLE needs 4-byte alignment and `buf` is u64-aligned.
+            IpTable::Ipv4Addresses => unsafe { GetIpAddrTable(out.cast(), len, 0) },
+        };
+        match rc {
             0 => return Some(buf.iter().flat_map(|w| w.to_ne_bytes()).take(size as usize).collect()),
             ERROR_INSUFFICIENT_BUFFER => want = size.max(want * 2),
             _ => return None,
@@ -359,13 +383,7 @@ pub(crate) fn sized_table(call: &dyn Fn(*mut c_void, *mut u32) -> u32) -> Option
 
 /// `Get-NetTCPConnection -State Listen` for one family (`GetExtendedTcpTable`); empty on failure.
 pub(crate) fn tcp_listeners(family: Family) -> Vec<Listener> {
-    let af = match family {
-        Family::V4 => 2,
-        Family::V6 => 23,
-    };
-    // SAFETY: `t` and `s` are the buffer and its size from `sized_table`.
-    let call = |t: *mut c_void, s: *mut u32| unsafe { GetExtendedTcpTable(t, s, 0, af, TCP_TABLE_OWNER_PID_LISTENER, 0) };
-    let Some(b) = sized_table(&call) else {
+    let Some(b) = sized_table(IpTable::TcpListeners(family)) else {
         return Vec::new();
     };
     let n = u32_at(&b, 0).unwrap_or(0) as usize;
