@@ -46,6 +46,20 @@ fn summary_math_over_a_fixture_log() {
 }
 
 #[test]
+fn a_bad_byte_in_one_line_keeps_the_rest_of_the_day() {
+    let d = scratch("bad-byte");
+    let f = d.join("claude-auto-2026-11-01.jsonl");
+    let mut bytes = b"{\"stage\":\"timing\",\"name\":\"config\",\"ms\":1}\r\n".to_vec();
+    bytes.extend_from_slice(b"{\"stage\":\"start\",\"cwd\":\"\xff\"}\r\n");
+    bytes.extend_from_slice(b"{\"stage\":\"timing\",\"name\":\"config\",\"ms\":3}\r\n");
+    std::fs::write(&f, bytes).unwrap();
+    let table = report(&[f]);
+    assert_eq!(table.len(), 2, "{table:?}");
+    assert!(table[1].starts_with("config") && table[1].contains("     2  "), "{table:?}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
 fn percentile_is_nearest_rank() {
     let v = [1.0, 2.0, 3.0, 4.0];
     assert_eq!(percentile(&v, 50), 2.0);

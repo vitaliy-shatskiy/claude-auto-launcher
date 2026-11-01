@@ -122,7 +122,9 @@ pub fn parse_args(args: &[String]) -> Option<Result<u32, String>> {
 pub fn report(files: &[PathBuf]) -> Vec<String> {
     let records: Vec<(String, f64)> = files
         .iter()
-        .filter_map(|f| std::fs::read_to_string(f).ok())
+        // Lossy: one torn or foreign byte must not hide the whole day.
+        .filter_map(|f| std::fs::read(f).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .flat_map(|text| text.lines().filter_map(record).collect::<Vec<_>>())
         .collect();
     table(&summarize(&records))
