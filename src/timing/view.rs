@@ -64,7 +64,13 @@ fn walk(spans: &[Span], parent: Option<usize>, depth: usize, now_us: u64, out: &
     let mut kids: Vec<(usize, &Span)> = spans.iter().enumerate().filter(|(_, s)| s.parent == parent).collect();
     kids.sort_by_key(|(_, s)| std::cmp::Reverse(dur(s)));
     for (i, s) in kids {
-        let open = if s.dur_us.is_none() { " (open)" } else { "" };
+        let open = if s.dur_us.is_none() {
+            " (open)"
+        } else if s.aborted {
+            " (aborted)"
+        } else {
+            ""
+        };
         out.push(format!("{}{}  {:.2} ms{open}", "  ".repeat(depth), s.name, ms(dur(s))));
         walk(spans, Some(i), depth + 1, now_us, out);
     }

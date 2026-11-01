@@ -87,7 +87,30 @@ fn rec(name: &str, parent: Option<&str>, ms: f64, start_ms: f64) -> TimingRecord
         parent: parent.map(str::to_owned),
         ms,
         start_ms,
+        aborted: false,
     }
+}
+
+#[test]
+fn ending_a_span_closes_its_open_children_as_aborted_and_they_adopt_nothing() {
+    let o = Instant::now();
+    let t = Timings::on(o);
+    let ui = t.begin_at(&["ui"], at(o, 0));
+    let load = t.begin_at(&["load", "launch"], at(o, 1));
+    t.begin_at(&["console"], at(o, 2));
+    // An early return skips both ends; the enclosing span's end closes them.
+    t.end_at(ui, at(o, 5));
+    let later = t.begin_at(&["prepare"], at(o, 6));
+    t.end_at(later, at(o, 7));
+    t.end_at(load, at(o, 9));
+    let s = t.spans();
+    assert_eq!(s[3].parent, None, "a later span is not adopted by an abandoned one");
+    assert_eq!((s[1].dur_us, s[1].aborted), (Some(4000), true));
+    assert_eq!((s[2].dur_us, s[2].aborted), (Some(3000), true));
+    assert!(!s[0].aborted);
+    let logged = t.take_unlogged();
+    assert_eq!(logged.iter().filter(|r| r.aborted).count(), 2);
+    assert_eq!(logged.len(), 4);
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {

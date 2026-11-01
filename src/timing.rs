@@ -18,6 +18,8 @@ pub struct Span {
     pub start_us: u64,
     /// `None` while the span is open.
     pub dur_us: Option<u64>,
+    /// Closed by the end of an enclosing span, not by its own end (an early return).
+    pub aborted: bool,
     logged: bool,
 }
 
@@ -101,6 +103,7 @@ impl Timings {
             parent,
             start_us,
             dur_us: None,
+            aborted: false,
             logged: false,
         });
         i.open.push(id);
@@ -114,15 +117,22 @@ impl Timings {
         self.end_at(id, Instant::now());
     }
 
-    /// Closes a span; a second end of the same span keeps the first.
+    /// Closes a span and every span still open inside it (those marked aborted), so an early
+    /// return never leaves a span open to adopt later ones. A second end keeps the first.
     pub fn end_at(&self, id: SpanId, at: Instant) {
         let Some(i) = &self.0 else { return };
         let mut i = i.borrow_mut();
+        let Some(pos) = i.open.iter().position(|o| *o == id.0) else {
+            return;
+        };
         let now = micros(i.origin, at);
-        if let Some(s) = i.spans.get_mut(id.0).filter(|s| s.dur_us.is_none()) {
-            s.dur_us = Some(now.saturating_sub(s.start_us));
+        let closing: Vec<usize> = i.open.drain(pos..).collect();
+        for idx in closing {
+            if let Some(s) = i.spans.get_mut(idx) {
+                s.dur_us = Some(now.saturating_sub(s.start_us));
+                s.aborted = idx != id.0;
+            }
         }
-        i.open.retain(|o| *o != id.0);
     }
 
     /// A span that ends when the guard drops.
@@ -169,6 +179,7 @@ impl Timings {
                     parent: s.parent.and_then(|p| names.get(p).cloned()),
                     ms: ms(d),
                     start_ms: ms(s.start_us),
+                    aborted: s.aborted,
                 });
             }
         }
@@ -185,6 +196,8 @@ pub struct TimingRecord {
     pub ms: f64,
     /// Start, in ms from the process start.
     pub start_ms: f64,
+    /// Ended by an enclosing span (an early return), not by itself.
+    pub aborted: bool,
 }
 
 /// Ends its span on drop.

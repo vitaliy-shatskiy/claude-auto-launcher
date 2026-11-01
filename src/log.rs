@@ -51,10 +51,11 @@ impl Logger {
     /// Debug mode: one `timing` record per ended span not written yet. Off: no record, no I/O.
     pub fn write_timings(&self) {
         for r in self.timings.take_unlogged() {
-            self.write(
-                "timing",
-                crate::log_data! { "name" => r.name, "parent" => r.parent, "ms" => r.ms, "startMs" => r.start_ms },
-            );
+            let mut data = crate::log_data! { "name" => r.name, "parent" => r.parent, "ms" => r.ms, "startMs" => r.start_ms };
+            if r.aborted {
+                data.insert("aborted".into(), Value::Bool(true));
+            }
+            self.write("timing", data);
         }
     }
 }
