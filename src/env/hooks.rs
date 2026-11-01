@@ -1,5 +1,6 @@
-//! `Invoke-LaunchHooks`: config-listed scripts after the account choice, in order, each
-//! best-effort. A hook prints what it wants; a failure is one line; nothing stops the session.
+//! `Invoke-LaunchHooks`: config-listed scripts after the account choice, all at once, each
+//! best-effort, printed in config order. A hook prints what it wants; a failure is one line;
+//! nothing stops the session.
 
 use std::os::windows::process::CommandExt as _;
 use std::path::Path;
@@ -25,10 +26,7 @@ fn command_for(ext: &str, hook: &str) -> Option<Command> {
 
 /// One hook: its lines, or the one line that says why not.
 fn run_one(hook: &str, env: &ChildEnv) -> Vec<Note> {
-    let leaf = Path::new(hook)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let leaf = leaf(hook);
     let warn = |t: String| vec![Note::new(t, Fg::DarkYellow)];
     if !Path::new(hook).exists() {
         return warn(format!("  hook {leaf} not found at {hook}"));
@@ -73,9 +71,45 @@ fn run_one(hook: &str, env: &ChildEnv) -> Vec<Note> {
     }
 }
 
-/// Every hook in order; the environment the session will get is the hook's too.
-pub(crate) fn run(hooks: &[String], env: &ChildEnv) -> Vec<Note> {
-    hooks.iter().filter(|h| !h.is_empty()).flat_map(|h| run_one(h, env)).collect()
+/// Every hook; the environment the session will get is the hook's too.
+pub(crate) fn run(chains: &[Vec<String>], env: &ChildEnv) -> Vec<Note> {
+    run_with(chains, env, run_one)
+}
+
+/// `run` with the per-hook runner as a seam. Every chain starts at once on its own thread and
+/// runs its hooks in order (hooks that touch the same files share a chain), the phase returns
+/// only when all have ended, and the lines come out in config order.
+fn run_with<F>(chains: &[Vec<String>], env: &ChildEnv, one: F) -> Vec<Note>
+where
+    F: Fn(&str, &ChildEnv) -> Vec<Note> + Sync,
+{
+    let one = &one;
+    std::thread::scope(|s| {
+        let running: Vec<_> = chains
+            .iter()
+            .map(|chain| s.spawn(move || chain.iter().filter(|h| !h.is_empty()).flat_map(|h| guarded(h, env, one)).collect()))
+            .collect();
+        running
+            .into_iter()
+            .flat_map(|t| t.join().unwrap_or_else(|_| Vec::<Note>::new()))
+            .collect()
+    })
+}
+
+/// One hook on its own thread, so a panic is one line and the rest of its chain still runs.
+fn guarded<F>(hook: &str, env: &ChildEnv, one: &F) -> Vec<Note>
+where
+    F: Fn(&str, &ChildEnv) -> Vec<Note> + Sync,
+{
+    std::thread::scope(|s| s.spawn(|| one(hook, env)).join())
+        .unwrap_or_else(|_| vec![Note::new(format!("  hook {} failed: it panicked", leaf(hook)), Fg::DarkYellow)])
+}
+
+fn leaf(hook: &str) -> String {
+    Path::new(hook)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -98,7 +132,10 @@ mod tests {
         let missing = dir.join("missing.ps1").to_string_lossy().into_owned();
         let mut env = ChildEnv::default();
         env.set("CLAUDE_CONFIG_DIR", r"C:\fixture-root");
-        let lines: Vec<String> = run(&[one, two, missing, four, three], &env).into_iter().map(|n| n.text).collect();
+        let lines: Vec<String> = run(&singles(&[&one, &two, &missing, &four, &three]), &env)
+            .into_iter()
+            .map(|n| n.text)
+            .collect();
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(lines.contains(&"one ran".to_owned()), "hook stdout is printed verbatim: {lines:?}");
         assert!(
@@ -124,6 +161,115 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("four.hook") && l.contains("unsupported extension")));
         assert!(lines.contains(&"three ran".to_owned()), "later hooks still run");
         assert!(run(&[], &env).is_empty(), "an empty list prints nothing");
+    }
+
+    /// Two-party rendezvous: each fake hook checks in and waits for the other. Hooks run one
+    /// after another never meet, so the first gives up after the bound and says so.
+    #[derive(Default)]
+    struct Meet {
+        arrived: std::sync::Mutex<usize>,
+        cv: std::sync::Condvar,
+    }
+
+    impl Meet {
+        fn arrive(&self) -> bool {
+            let mut n = self.arrived.lock().unwrap();
+            *n += 1;
+            self.cv.notify_all();
+            let (n, _) = self
+                .cv
+                .wait_timeout_while(n, std::time::Duration::from_millis(250), |n| *n < 2)
+                .unwrap();
+            *n >= 2
+        }
+    }
+
+    fn note(t: &str) -> Vec<Note> {
+        vec![Note::new(t, Fg::DarkGray)]
+    }
+
+    /// Each path its own top-level entry, as a plain string in the config gives.
+    fn singles(hooks: &[&str]) -> Vec<Vec<String>> {
+        hooks.iter().map(|h| vec![(*h).to_owned()]).collect()
+    }
+
+    #[test]
+    fn a_chain_runs_in_order_while_other_entries_run_beside_it() {
+        // `c` meets `a`: the chain runs beside the other entry. `b` starts only after `a` ended.
+        let meet = Meet::default();
+        let events = std::sync::Mutex::new(Vec::<String>::new());
+        let chains = vec![vec!["a".to_owned(), "b".to_owned()], vec!["c".to_owned()]];
+        let notes = run_with(&chains, &ChildEnv::default(), |h, _| {
+            events.lock().unwrap().push(format!("start {h}"));
+            let outcome = if h == "b" {
+                "-"
+            } else if meet.arrive() {
+                "met"
+            } else {
+                "alone"
+            };
+            events.lock().unwrap().push(format!("end {h}"));
+            note(&format!("{h} {outcome}"))
+        });
+        let lines: Vec<String> = notes.into_iter().map(|n| n.text).collect();
+        assert_eq!(lines, ["a met", "b -", "c met"], "config order, flattened");
+        let ev = events.into_inner().unwrap();
+        let at = |e: &str| ev.iter().position(|x| x == e).unwrap();
+        assert!(at("end a") < at("start b"), "b waited for a: {ev:?}");
+    }
+
+    #[test]
+    fn hooks_run_at_the_same_time() {
+        let meet = Meet::default();
+        let hooks = singles(&["a.ps1", "b.ps1"]);
+        let lines: Vec<String> = run_with(&hooks, &ChildEnv::default(), |h, _| {
+            note(&format!("{h} {}", if meet.arrive() { "met" } else { "alone" }))
+        })
+        .into_iter()
+        .map(|n| n.text)
+        .collect();
+        assert_eq!(lines, ["a.ps1 met", "b.ps1 met"], "both hooks were running at once");
+    }
+
+    #[test]
+    fn output_keeps_config_order_whoever_finishes_first() {
+        // The first hook finishes only after the last has returned its lines.
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let done_tx = std::sync::Mutex::new(done_tx);
+        let done_rx = std::sync::Mutex::new(done_rx);
+        let hooks = singles(&["first.ps1", "", "last.ps1"]);
+        let notes = run_with(&hooks, &ChildEnv::default(), |h, _| {
+            if h == "first.ps1" {
+                let got = done_rx.lock().unwrap().recv_timeout(std::time::Duration::from_millis(250));
+                return note(if got.is_ok() { "first 1" } else { "first ran alone" })
+                    .into_iter()
+                    .chain(note("first 2"))
+                    .collect();
+            }
+            done_tx.lock().unwrap().send(()).unwrap();
+            note("last 1")
+        });
+        let lines: Vec<String> = notes.into_iter().map(|n| n.text).collect();
+        assert_eq!(lines, ["first 1", "first 2", "last 1"]);
+    }
+
+    #[test]
+    fn a_hook_that_panics_is_one_line_and_the_others_still_print() {
+        let hooks = vec![vec!["ok.ps1".to_owned()], vec!["boom.ps1".to_owned(), "after.ps1".to_owned()]];
+        let notes = run_with(&hooks, &ChildEnv::default(), |h, _| {
+            assert_ne!(h, "boom.ps1", "fake hook failure");
+            note(&format!("{h} ran"))
+        });
+        let lines: Vec<(String, Fg)> = notes.into_iter().map(|n| (n.text, n.fg)).collect();
+        assert_eq!(lines.first(), Some(&("ok.ps1 ran".to_owned(), Fg::DarkGray)));
+        assert_eq!(lines.get(1).map(|l| &l.1), Some(&Fg::DarkYellow));
+        assert!(
+            lines
+                .get(1)
+                .is_some_and(|l| l.0.contains("hook boom.ps1") && l.0.contains("failed"))
+        );
+        assert_eq!(lines.get(2), Some(&("after.ps1 ran".to_owned(), Fg::DarkGray)));
+        assert_eq!(lines.len(), 3);
     }
 
     /// Points this process's stdin at `file` until dropped: what `Stdio::inherit` hands a child.
@@ -162,7 +308,7 @@ mod tests {
         let file = std::fs::File::open(&input).unwrap();
         let lines: Vec<String> = {
             let _swap = StdinSwap::to(&file);
-            run(&[hook.to_string_lossy().into_owned()], &ChildEnv::default())
+            run(&[vec![hook.to_string_lossy().into_owned()]], &ChildEnv::default())
                 .into_iter()
                 .map(|n| n.text)
                 .collect()

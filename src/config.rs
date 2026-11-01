@@ -150,7 +150,8 @@ pub struct Config {
     pub rider_mcp: RiderMcp,
     pub extra_mcp_configs: Vec<String>,
     pub secrets_root: String,
-    pub launch_hooks: Vec<String>,
+    /// Top-level entries run at the same time; the paths inside one entry run in order.
+    pub launch_hooks: Vec<Vec<String>>,
     pub maintenance_actions: Vec<MaintenanceAction>,
     pub warnings: Vec<String>,
     pub path: String,
@@ -260,6 +261,39 @@ fn path_list(raw: &Value, name: &str, ctx: &PathCtx, warnings: &mut Vec<String>)
     out
 }
 
+/// `launchHooks`: a path is an entry of its own, an array of paths one entry run in order.
+fn hook_chains(raw: &Value, ctx: &PathCtx, warnings: &mut Vec<String>) -> Vec<Vec<String>> {
+    let Value::Array(items) = raw else {
+        return path_list(raw, "launchHooks", ctx, warnings).into_iter().map(|p| vec![p]).collect();
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let chain = match item {
+            Value::Array(chain) => {
+                let paths: Vec<Value> = chain
+                    .iter()
+                    .filter(|e| {
+                        let ok = e.is_string();
+                        if !ok {
+                            warnings.push(format!(
+                                "launchHooks: a hook chain holds only path strings, one level deep; {e} skipped"
+                            ));
+                        }
+                        ok
+                    })
+                    .cloned()
+                    .collect();
+                path_list(&Value::Array(paths), "launchHooks", ctx, warnings)
+            }
+            other => path_list(other, "launchHooks", ctx, warnings),
+        };
+        if !chain.is_empty() {
+            out.push(chain);
+        }
+    }
+    out
+}
+
 /// `Read-LauncherConfig` over text already read from `path`.
 pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
     let mut cfg = Config::defaults(ctx, path);
@@ -335,7 +369,7 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
         }
     }
     if let Some(v) = present("launchHooks") {
-        cfg.launch_hooks = path_list(v, "launchHooks", ctx, &mut cfg.warnings);
+        cfg.launch_hooks = hook_chains(v, ctx, &mut cfg.warnings);
     }
     if let Some(v) = present("maintenanceActions") {
         let (actions, w) = parse_actions(v, ctx);

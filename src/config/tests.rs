@@ -114,11 +114,46 @@ fn relative_hook_and_mcp_entries_are_skipped() {
         "x",
         &ctx(),
     );
-    assert_eq!(cfg.launch_hooks, [r"C:\abs.ps1"]);
+    assert_eq!(cfg.launch_hooks, [[r"C:\abs.ps1"]]);
     assert_eq!(cfg.extra_mcp_configs, [] as [std::string::String; 0]);
     assert!(
         cfg.warnings
             .contains(&"launchHooks: 'rel.ps1' is not an absolute path; skipped".to_owned())
+    );
+}
+
+#[test]
+fn a_nested_hook_array_is_one_chain_and_a_string_its_own_entry() {
+    let cfg = parse_config(
+        r#"{"launchHooks":["C:/cbm.ps1",["C:/sync.ps1","C:/commit.ps1"],"C:/chrome.ps1"]}"#,
+        "x",
+        &ctx(),
+    );
+    assert_eq!(
+        cfg.launch_hooks,
+        [vec![r"C:\cbm.ps1"], vec![r"C:\sync.ps1", r"C:\commit.ps1"], vec![r"C:\chrome.ps1"]]
+    );
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+    let single = parse_config(r#"{"launchHooks":"C:/one.ps1"}"#, "x", &ctx());
+    assert_eq!(single.launch_hooks, [[r"C:\one.ps1"]], "a bare string stays one hook");
+}
+
+#[test]
+fn a_deeper_level_or_a_non_string_in_a_chain_is_skipped_with_a_warning() {
+    let cfg = parse_config(
+        r#"{"launchHooks":[["C:/a.ps1",["C:/deep.ps1"],5,"rel.ps1","C:/b.ps1"],[],[{}],"C:/c.ps1"]}"#,
+        "x",
+        &ctx(),
+    );
+    assert_eq!(cfg.launch_hooks, [vec![r"C:\a.ps1", r"C:\b.ps1"], vec![r"C:\c.ps1"]]);
+    assert_eq!(
+        cfg.warnings,
+        [
+            "launchHooks: a hook chain holds only path strings, one level deep; [\"C:/deep.ps1\"] skipped",
+            "launchHooks: a hook chain holds only path strings, one level deep; 5 skipped",
+            "launchHooks: 'rel.ps1' is not an absolute path; skipped",
+            "launchHooks: a hook chain holds only path strings, one level deep; {} skipped",
+        ]
     );
 }
 
