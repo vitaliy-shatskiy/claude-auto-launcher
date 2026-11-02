@@ -2,6 +2,7 @@
 //! writers - `statusline.js` (`<name>.json`, while a session runs) and the usage widget
 //! (`<name>.widget.json`, every five minutes). Freshest `atMs` wins for the numbers; the age is
 //! always rendered. `available_models` comes from the WIDGET record only (one writer), three-state.
+//! The model bucket comes from the freshest record, else from a fresh widget record.
 
 use std::path::Path;
 
@@ -93,12 +94,7 @@ pub(crate) fn age_text(age_ms: i64) -> String {
 /// The widget's `availableModels`: `None` = no information (no file, half-written, unstamped,
 /// stale, or the field absent); `Some(list)` = an answer, empty included. JSON null and members
 /// that are null or blank are present-and-empty, never absent.
-fn available(dir: &Path, name: &str, now_ms: i64, max_age_ms: i64) -> Option<Vec<String>> {
-    let wj = read(&dir.join(format!("{name}.widget.json")))?;
-    let at = at_ms(&wj)?;
-    if now_ms.saturating_sub(at) > max_age_ms {
-        return None;
-    }
+fn available(wj: &Value) -> Option<Vec<String>> {
     let list = match wj.get("availableModels")? {
         Value::Array(a) => a.iter().map(|v| ps_str(v).trim().to_owned()).filter(|s| !s.is_empty()).collect(),
         Value::Null => Vec::new(),
@@ -110,14 +106,37 @@ fn available(dir: &Path, name: &str, now_ms: i64, max_age_ms: i64) -> Option<Vec
     Some(list)
 }
 
-fn record(j: &Value, age: String, avail: Option<Vec<String>>) -> Result<LimitRecord, BadCast> {
+/// The widget record when it is stamped within `max_age_ms`: no file, half-written, unstamped or
+/// stale is `None`.
+fn fresh_widget(dir: &Path, name: &str, now_ms: i64, max_age_ms: i64) -> Option<Value> {
+    let wj = read(&dir.join(format!("{name}.widget.json")))?;
+    let at = at_ms(&wj)?;
+    (now_ms.saturating_sub(at) <= max_age_ms).then_some(wj)
+}
+
+/// The per-model weekly bucket and its label; a bad cast is no bucket.
+fn bucket(j: &Value) -> Result<(Option<i64>, Option<String>), BadCast> {
+    Ok((
+        opt_int(j, "modelSevenDay")?,
+        ps_truthy(j.get("modelLabel")).then(|| j.get("modelLabel").map(ps_str).unwrap_or_default()),
+    ))
+}
+
+fn record(j: &Value, age: String, widget: Option<&Value>) -> Result<LimitRecord, BadCast> {
+    let (mut model, mut model_label) = bucket(j)?;
+    // Only the widget writes the model bucket: a fresher statusline record must not hide it.
+    if model.is_none()
+        && let Some((Some(m), label)) = widget.and_then(|w| bucket(w).ok())
+    {
+        (model, model_label) = (Some(m), label);
+    }
     Ok(LimitRecord {
         five_hour: opt_int(j, "fiveHour")?,
         seven_day: opt_int(j, "sevenDay")?,
         age_text: age,
-        model: opt_int(j, "modelSevenDay")?,
-        model_label: ps_truthy(j.get("modelLabel")).then(|| j.get("modelLabel").map(ps_str).unwrap_or_default()),
-        available_models: avail,
+        model,
+        model_label,
+        available_models: widget.and_then(available),
     })
 }
 
@@ -132,8 +151,8 @@ pub(crate) fn summary(accounts: &[Account], dir: &Path, now_ms: i64, max_age_ms:
         if !present("fiveHour") && !present("sevenDay") {
             continue;
         }
-        let avail = available(dir, &a.key, now_ms, max_age_ms);
-        if let Ok(r) = record(&j, age_text(now_ms.saturating_sub(at)), avail) {
+        let widget = fresh_widget(dir, &a.key, now_ms, max_age_ms);
+        if let Ok(r) = record(&j, age_text(now_ms.saturating_sub(at)), widget.as_ref()) {
             out.insert(a.key.clone(), r);
         }
     }
@@ -230,10 +249,33 @@ mod tests {
         );
         assert_eq!(
             (l["personal"].five_hour, l["personal"].model, l["personal"].model_label.as_deref()),
-            (Some(11), None, None)
+            (Some(11), Some(15), Some("FABLE")),
+            "a fresher statusline record keeps the numbers, the fresh widget adds its model bucket"
         );
         assert_eq!(l["work"].age_text, "just now");
         assert_eq!(l["personal"].age_text, "just now");
+    }
+
+    #[test]
+    fn a_stale_missing_or_malformed_widget_adds_no_model_bucket() {
+        let s = Store::new("bucket-stale");
+        s.put("work.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
+        s.put(
+            "work.widget.json",
+            &format!(r#"{{"sevenDay":84,"atMs":{},"modelSevenDay":1,"modelLabel":"FABLE"}}"#, NOW - 31 * 60_000),
+        );
+        s.put("personal.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
+        s.put("shared.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
+        s.put("shared.widget.json", r#"{"modelSevenDay":1,"#);
+        s.put("low.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
+        s.put(
+            "low.widget.json",
+            &format!(r#"{{"sevenDay":84,"atMs":{},"modelSevenDay":"x","modelLabel":"FABLE"}}"#, NOW - 60_000),
+        );
+        let l = sum(&s);
+        for k in ["work", "personal", "shared", "low"] {
+            assert_eq!((l[k].seven_day, l[k].model, l[k].model_label.as_deref()), (Some(83), None, None), "{k}");
+        }
     }
 
     #[test]
