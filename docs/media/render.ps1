@@ -10,7 +10,7 @@ node docs/media/draw.mjs
 New-Item -ItemType Directory -Force -Path 'target/vhs' | Out-Null
 
 # Each tape frames its window on a backdrop of its own size: the launcher's orange fading to the dark page.
-$tapes = [ordered]@{ 'launch-screen' = '2092x912'; 'launch-walk' = '1472x592' }
+$tapes = [ordered]@{ 'launch-screen' = '2092x912'; 'launch-walk' = '1472x592'; 'sessions-walk' = '1472x640' }
 foreach ($e in $tapes.GetEnumerator()) {
     $w, $h = $e.Value -split 'x'
     $grad = "gradients=s=$($e.Value):c0=0x5a2a1a:c1=0x131922:x0=0:y0=0:x1=${w}:y1=${h}:nb_colors=2:type=linear"
@@ -23,3 +23,9 @@ $png = 'docs/media/launch-screen.png'
 $tmp = 'target/vhs/launch-screen-nocursor.png'
 ffmpeg -y -v error -i $png -vf 'drawbox=x=82:y=726:w=48:h=56:color=0x0F1015:t=fill' $tmp
 Move-Item -Force -LiteralPath $tmp -Destination $png
+
+# demo-setup.ps1 substitutes a drive for the demo projects: drop it.
+$demo = Join-Path ([IO.Path]::GetTempPath()) 'claude-auto-demo'
+foreach ($line in @(subst)) {
+    if ($line -like "*=> $demo\*") { subst $line.Substring(0, 2) /D }
+}

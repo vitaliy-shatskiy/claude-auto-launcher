@@ -1,0 +1,56 @@
+[
+  {
+    "project": "aurora",
+    "minutesAgo": 14,
+    "turns": [
+      ["user", "the dark theme flickers when the settings panel opens"],
+      ["assistant", "The panel mounts before the theme class lands on the body, so it paints light for one frame. I moved the class onto the root element in the server render."],
+      ["user", "add a test so it stays fixed"],
+      ["assistant", "Added a render test that opens the settings panel in dark mode and checks the first painted frame. It fails on the old code and passes now."]
+    ]
+  },
+  {
+    "project": "aurora",
+    "minutesAgo": 190,
+    "turns": [
+      ["user", "plan the export to CSV for the reports page"],
+      ["assistant", "Three steps: a button on the reports toolbar, a streaming endpoint that writes rows as they are read, and a filename with the report name and date."],
+      ["user", "go with the streaming endpoint first"],
+      ["assistant", "The endpoint streams 50 000 rows in under a second in the local run. The toolbar button is next."]
+    ]
+  },
+  {
+    "project": "aurora",
+    "minutesAgo": 1500,
+    "turns": [
+      ["user", "why does the build take four minutes now"],
+      ["assistant", "The image step re-encodes every icon on each build. Caching the encoded icons by content hash brings it back to 70 seconds."]
+    ]
+  },
+  {
+    "project": "harbor-api",
+    "minutesAgo": 45,
+    "turns": [
+      ["user", "rate limit the public search endpoint"],
+      ["assistant", "Added a token bucket per API key: 20 requests a second, bursts of 40. A client over the limit gets 429 with a Retry-After header."],
+      ["user", "log who hits it"],
+      ["assistant", "Each 429 now logs the key id and the route, sampled at one in ten so a flood does not fill the log."]
+    ]
+  },
+  {
+    "project": "harbor-api",
+    "minutesAgo": 4300,
+    "turns": [
+      ["user", "migrate the orders table to the new schema"],
+      ["assistant", "The migration copies orders in batches of 5 000 and keeps the old table until the row counts match."]
+    ]
+  },
+  {
+    "project": "pixel-notes",
+    "minutesAgo": 600,
+    "turns": [
+      ["user", "sync notes between the phone and the desktop app"],
+      ["assistant", "Notes now carry a revision number. The newer revision wins, and a conflict keeps both copies side by side."]
+    ]
+  }
+]

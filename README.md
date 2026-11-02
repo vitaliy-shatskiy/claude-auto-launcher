@@ -141,6 +141,12 @@ Scratch directories (under the temp folder or a profile's `jobs\<id>\tmp`) are l
 in the title. Headless sessions (`claude -p`, the SDKs) are left out of the picker the same way. The
 action opens at `new` every launch. `CLAUDE_AUTO_NO_MOUSE=1` turns the mouse off.
 
+<p align="center">
+  <a href="docs/media/sessions-walk.mp4"><img alt="The session picker: a project's past sessions on the left, the highlighted one's last messages previewed on the right, the preview following the cursor, then tab widens the list to every project" src="docs/media/sessions-walk.gif" width="100%"></a>
+  <br>
+  <sub>Resume from the session picker: the preview shows each past session's last messages before you open it.</sub>
+</p>
+
 <details><summary><b>The project screen and the session picker</b> (golden frames from <code>tests/fixtures/wide-frames/</code>, sample data)</summary>
 
 ```
@@ -155,8 +161,7 @@ action opens at `new` every launch. `CLAUDE_AUTO_NO_MOUSE=1` turns the mouse off
 │   + enter a path...                                                                             │
 │   action  ● [new] ○ continue ○ resume ○ worktree                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  w/s move  ┊  a/d action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
-  [/] filter  ┊  [esc] back
+  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree  ┊  [/] filter  ┊  [esc] back
 
 ╭─ resume ─ 5 sessions ───────────────────────────────────────────────────────────────────────────╮
 │   project-1  snippet 1 about t… 7 min │ project-2                                               │
