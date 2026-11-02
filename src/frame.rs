@@ -90,53 +90,92 @@ pub struct Footer {
 }
 
 /// `New-HintFooter`: one list drives what is printed, where it can be clicked and which key a
-/// click means. Wraps greedily in cells at `width` (0 = never), never splitting a hint.
+/// click means. All hints on one line when they fit `width` (0 = never wrap); else the plain
+/// (not clickable) hints drop, and the buttons left go on one line or into an aligned grid with
+/// the most columns that fit. A hint is never split.
 pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) -> Footer {
     let sep = format!("  {}  ", g.hint_sep);
-    let mut lines = Vec::new();
-    let mut text = String::from("  ");
-    let mut spans = Vec::new();
-    for h in hints {
-        let token = if !h.clickable {
+    let token_of = |h: &Hint| {
+        if !h.clickable {
             h.token.clone()
         } else if plain {
             format!("[{}]", h.token)
         } else {
             format!(" {} ", h.token)
-        };
-        let mut piece = token.clone();
+        }
+    };
+    let piece_of = |h: &Hint| {
+        let mut piece = token_of(h);
         if !h.label.is_empty() {
             piece.push(' ');
             piece.push_str(&h.label);
         }
-        let mut has_content = text.chars().count() > 2;
-        if width > 0 && has_content && display_width(&text) + display_width(&sep) + display_width(&piece) > width {
-            lines.push(FooterLine {
-                text: std::mem::replace(&mut text, "  ".into()),
-                spans: std::mem::take(&mut spans),
+        piece
+    };
+    let one_line =
+        |hs: &[&Hint]| 2 + hs.iter().map(|h| display_width(&piece_of(h))).sum::<usize>() + display_width(&sep) * hs.len().saturating_sub(1);
+    let all: Vec<&Hint> = hints.iter().collect();
+    let buttons: Vec<&Hint> = hints.iter().filter(|h| h.clickable).collect();
+    let (shown, columns) = if width == 0 || one_line(&all) <= width || buttons.is_empty() {
+        (all, hints.len().max(1))
+    } else if one_line(&buttons) <= width {
+        let n = buttons.len();
+        (buttons, n)
+    } else {
+        let fits = |k: usize| 2 + column_widths(&buttons, k, &piece_of).iter().sum::<usize>() + display_width(&sep) * (k - 1) <= width;
+        let most = (1..buttons.len()).rev().find(|k| fits(*k)).unwrap_or(1);
+        // As few rows as the widest grid needs, filled evenly: 3 + 3 rather than 5 + 1.
+        let even = buttons.len().div_ceil(buttons.len().div_ceil(most));
+        let k = if fits(even) { even } else { most };
+        (buttons, k)
+    };
+    let col_w = if shown.len() > columns {
+        column_widths(&shown, columns, &piece_of)
+    } else {
+        Vec::new()
+    };
+    let mut lines = Vec::new();
+    for (r, chunk) in shown.chunks(columns).enumerate() {
+        let mut text = String::from("  ");
+        let mut spans = Vec::new();
+        let mut prev_w = 0;
+        for (c, h) in chunk.iter().enumerate() {
+            if c > 0 {
+                let pad = col_w.get(c - 1).map_or(0, |w| w.saturating_sub(prev_w));
+                text.push_str(&" ".repeat(pad));
+                text.push_str(&sep);
+            }
+            prev_w = display_width(&piece_of(h));
+            let token = token_of(h);
+            let start = text.chars().count();
+            let token_end = start + token.chars().count() - 1;
+            text.push_str(&piece_of(h));
+            let end = text.chars().count() - 1;
+            let col = |v: usize| i32::try_from(v).unwrap_or(i32::MAX);
+            spans.push(FooterSpan {
+                start: if h.clickable { col(start) } else { -1 },
+                end: if h.clickable { col(end) } else { -1 },
+                key_start: start,
+                key_end: token_end,
+                key: if h.clickable { h.key.clone() } else { String::new() },
+                ch: if h.clickable { h.ch } else { None },
+                line: r,
             });
-            has_content = false;
         }
-        if has_content {
-            text.push_str(&sep);
-        }
-        let start = text.chars().count();
-        let token_end = start + token.chars().count() - 1;
-        text.push_str(&piece);
-        let end = text.chars().count() - 1;
-        let col = |v: usize| i32::try_from(v).unwrap_or(i32::MAX);
-        spans.push(FooterSpan {
-            start: if h.clickable { col(start) } else { -1 },
-            end: if h.clickable { col(end) } else { -1 },
-            key_start: start,
-            key_end: token_end,
-            key: if h.clickable { h.key.clone() } else { String::new() },
-            ch: if h.clickable { h.ch } else { None },
-            line: lines.len(),
-        });
+        lines.push(FooterLine { text, spans });
     }
-    lines.push(FooterLine { text, spans });
     Footer { lines }
+}
+
+/// The width of each grid column when `hints` fill rows of `k`, row-major.
+fn column_widths(hints: &[&Hint], k: usize, piece_of: &dyn Fn(&Hint) -> String) -> Vec<usize> {
+    let mut w = vec![0; k];
+    for (i, h) in hints.iter().enumerate() {
+        if let Some(slot) = w.get_mut(i % k) {
+            *slot = (*slot).max(display_width(&piece_of(h)));
+        }
+    }
+    w
 }
 
 /// Which footer button is lit: by (key, char), so a wrapped footer stays correct.

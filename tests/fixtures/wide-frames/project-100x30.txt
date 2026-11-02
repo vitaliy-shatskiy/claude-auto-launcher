@@ -9,5 +9,4 @@
 │   + enter a path...                                                                             │
 │   action  ● [new] ○ continue ○ resume ○ worktree                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  w/s move  ┊  a/d action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
-  [/] filter  ┊  [esc] back
+  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree  ┊  [/] filter  ┊  [esc] back

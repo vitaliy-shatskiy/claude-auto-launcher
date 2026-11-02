@@ -242,7 +242,10 @@ fn action_field_radio_cells_and_compact_form() {
     assert_eq!(step_project_action("new", -1), "worktree");
     assert_eq!(step_project_action("not-an-action", 0), "new");
     let f80 = project_frame(&view(&ps, 0, r"C:\cwd", 80, 24));
-    assert!(text(&f80).contains("a/d action"));
+    assert!(
+        !text(&f80).contains("a/d action") && text(&f80).contains("[esc] back"),
+        "a footer too wide keeps its buttons only"
+    );
     assert_eq!(f80.map.footer_lines, 2);
 }
 

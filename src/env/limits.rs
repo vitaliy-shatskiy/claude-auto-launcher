@@ -262,7 +262,10 @@ mod tests {
         s.put("work.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
         s.put(
             "work.widget.json",
-            &format!(r#"{{"sevenDay":84,"atMs":{},"modelSevenDay":1,"modelLabel":"FABLE"}}"#, NOW - 31 * 60_000),
+            &format!(
+                r#"{{"sevenDay":84,"atMs":{},"modelSevenDay":1,"modelLabel":"FABLE"}}"#,
+                NOW - 31 * 60_000
+            ),
         );
         s.put("personal.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
         s.put("shared.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
@@ -270,11 +273,18 @@ mod tests {
         s.put("low.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
         s.put(
             "low.widget.json",
-            &format!(r#"{{"sevenDay":84,"atMs":{},"modelSevenDay":"x","modelLabel":"FABLE"}}"#, NOW - 60_000),
+            &format!(
+                r#"{{"sevenDay":84,"atMs":{},"modelSevenDay":"x","modelLabel":"FABLE"}}"#,
+                NOW - 60_000
+            ),
         );
         let l = sum(&s);
         for k in ["work", "personal", "shared", "low"] {
-            assert_eq!((l[k].seven_day, l[k].model, l[k].model_label.as_deref()), (Some(83), None, None), "{k}");
+            assert_eq!(
+                (l[k].seven_day, l[k].model, l[k].model_label.as_deref()),
+                (Some(83), None, None),
+                "{k}"
+            );
         }
     }
 

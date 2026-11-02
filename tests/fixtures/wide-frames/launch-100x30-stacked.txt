@@ -3,9 +3,9 @@
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
 
  ❯ account     [work 88%] ┊ personal ┊ low
-     5h                                                              ▓▓▓▓▓▓▓░  88%
-     7d                                                              ░░░░░░░░   5%
-     bucket-bucket-bucket-bucket-bucket-bucket-bucket-bucket-bucket- ▓▓▓▓▓░░░  61%   3 d ago
+   5h                                                              ▓▓▓▓▓▓▓░  88%
+   7d                                                              ░░░░░░░░   5%
+   bucket-bucket-bucket-bucket-bucket-bucket-bucket-bucket-bucket- ▓▓▓▓▓░░░  61%   3 d ago
    remote      ● [on] ○ off ○ on+QR ○ stop server
    model       ● [default] ○ Fable 5.1 ○ Opus 5.5[1M] ○ Sonnet 5.5 ○ Haiku 5.5
    effort      ● [default] ○ low ○ medium ○ high ○ xhigh ○ max ○ ultracode

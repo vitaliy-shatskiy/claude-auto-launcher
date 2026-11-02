@@ -24,12 +24,58 @@ fn footer_plain_text_and_spans() {
     assert_eq!(l.spans.first().map(|s| s.start), Some(-1), "arrows are not clickable");
 }
 
+fn project_hints() -> Vec<Hint> {
+    vec![
+        Hint::plain("w/s", "move"),
+        Hint::plain("a/d", "action"),
+        Hint::key("enter", "run", "Enter"),
+        Hint::ch("c", "continue", 'c'),
+        Hint::ch("r", "resume", 'r'),
+        Hint::ch("t", "worktree", 't'),
+        Hint::ch("/", "filter", '/'),
+        Hint::key("esc", "back", "Escape"),
+    ]
+}
+
 #[test]
-fn footer_wraps_without_splitting_hints() {
-    let f = new_hint_footer(&launch_hints(), &glyphs(true), 50, true);
-    assert!(f.lines.len() >= 2);
-    assert!(f.lines.iter().all(|l| display_width(&l.text) <= 50));
-    assert_eq!(f.lines.last().unwrap().spans.last().unwrap().line, f.lines.len() - 1);
+fn a_narrow_footer_drops_the_plain_hints_and_keeps_one_line() {
+    let f = new_hint_footer(&launch_hints(), &glyphs(true), 49, true);
+    assert_eq!(
+        f.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+        ["  [enter] next  :  [u] maintenance  :  [esc] quit"]
+    );
+    assert_eq!(f.lines.first().unwrap().spans.len(), 3);
+}
+
+#[test]
+fn a_footer_too_wide_for_its_buttons_wraps_into_aligned_columns() {
+    for width in [40, 49, 59] {
+        let f = new_hint_footer(&project_hints(), &glyphs(true), width, true);
+        assert!(f.lines.len() >= 2, "{width}");
+        assert!(f.lines.iter().all(|l| display_width(&l.text) <= width), "{width}: {f:#?}");
+        let seps = |t: &str| t.char_indices().filter(|(_, c)| *c == ':').map(|(i, _)| i).collect::<Vec<_>>();
+        let first = seps(&f.lines.first().unwrap().text);
+        for l in &f.lines {
+            let s = seps(&l.text);
+            assert_eq!(s, first.get(..s.len()).unwrap(), "{width}: separators line up: {f:#?}");
+            for span in &l.spans {
+                let key: String = l
+                    .text
+                    .chars()
+                    .skip(span.key_start)
+                    .take(span.key_end - span.key_start + 1)
+                    .collect();
+                assert!(key.starts_with('[') && key.ends_with(']'), "{width}: span on its key {key}");
+            }
+        }
+        assert!(f.lines.iter().flat_map(|l| &l.spans).all(|s| s.start >= 0), "only buttons are kept");
+        assert_eq!(
+            f.lines.iter().map(|l| l.spans.len()).sum::<usize>(),
+            6,
+            "{width}: every button kept"
+        );
+        assert_eq!(f.lines.last().unwrap().spans.last().unwrap().line, f.lines.len() - 1);
+    }
 }
 
 #[test]

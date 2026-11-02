@@ -185,18 +185,117 @@ fn narrow_tier_draws_compact_rows_and_one_limit_line() {
     };
     let f = launch_frame(&r, &inp);
     assert!(f.lines.iter().all(|l| display_width(l) <= 49), "{:#?}", f.lines);
-    assert!(f.lines.iter().any(|l| l.starts_with("     5h ")));
     assert!(
-        f.lines.iter().any(|l| l == "   effort       < default >"),
-        "too wide compact rows collapse: {:#?}",
+        f.lines.iter().any(|l| l == "   5h     41%   7d     63%   fable  15%"),
+        "the usage row keeps the model bucket before the age: {:#?}",
         f.lines
     );
     assert!(
-        f.lines.iter().any(|l| l == "   advisor      [default] fable opus off"),
-        "{:#?}",
+        f.lines.iter().any(|l| l == "   effort       < default >"),
+        "too wide rows collapse: {:#?}",
+        f.lines
+    );
+    assert!(
+        f.lines.iter().any(|l| l == "   advisor      < default >"),
+        "and every other value row with them: {:#?}",
         f.lines
     );
     assert!(f.lines.len() < MIN_HEIGHT, "the narrow worst case stays under the minimum height");
+}
+
+fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame {
+    let labels = DefaultLabels::new();
+    let v = VersionInfo::default();
+    let inp = LaunchFrameInput {
+        state: s,
+        width,
+        height: 30,
+        limits,
+        version: &v,
+        restored: None,
+        default_model_label: "default",
+        default_advisor_label: "default",
+        default_labels: &labels,
+        style: Style {
+            color: false,
+            ascii: false,
+        },
+    };
+    launch_frame(r, &inp)
+}
+
+/// The column where the values of the row named `name` start.
+fn value_column(f: &Frame, r: &Roster, name: &str) -> usize {
+    let hit = f.map.rows.iter().find(|h| h.name == name).unwrap();
+    let line = &f.lines[usize::try_from(hit.y).unwrap()];
+    let label = r.rows[hit.index].label;
+    let chars: Vec<char> = line.chars().collect();
+    let label: Vec<char> = label.chars().collect();
+    let at = chars.windows(label.len()).position(|w| w == label.as_slice()).unwrap() + label.len();
+    at + chars.iter().skip(at).take_while(|c| **c == ' ' || **c == '*').count()
+}
+
+#[test]
+fn narrow_value_rows_collapse_all_or_none() {
+    let r = four();
+    let limits = golden_limits();
+    let s = r.new_state();
+    for width in [50, 58, 60, 70, 80, 90, 99] {
+        let f = frame_at(&r, &s, &limits, width);
+        let rows: Vec<&String> = f
+            .map
+            .rows
+            .iter()
+            .filter(|h| h.name != "Account")
+            .map(|h| &f.lines[usize::try_from(h.y).unwrap()])
+            .collect();
+        let collapsed = rows.iter().filter(|l| l.contains('‹')).count();
+        assert!(collapsed == 0 || collapsed == rows.len(), "{width}: {:#?}", f.lines);
+        if collapsed == 0 {
+            assert!(rows.iter().all(|l| l.contains('●')), "{width}: radio lists: {:#?}", f.lines);
+        }
+        assert!(f.lines.iter().all(|l| display_width(l) < width), "{width}: {:#?}", f.lines);
+    }
+}
+
+#[test]
+fn the_usage_row_starts_on_the_value_column_and_keeps_the_model_bucket() {
+    let r = four();
+    let personal: Limits = [(
+        "work".to_owned(),
+        LimitRecord {
+            five_hour: None,
+            seven_day: Some(83),
+            age_text: "just now".into(),
+            model: Some(1),
+            model_label: Some("FABLE".into()),
+            available_models: None,
+        },
+    )]
+    .into();
+    let s = r.new_state();
+    for limits in [golden_limits(), personal] {
+        for width in [50, 58, 60, 80, 100, 120] {
+            let f = frame_at(&r, &s, &limits, width);
+            let account_y = usize::try_from(f.map.rows.iter().find(|h| h.name == "Account").unwrap().y).unwrap();
+            let usage = &f.lines[account_y + 1];
+            let col = value_column(&f, &r, "Model");
+            let lead = usage.chars().take_while(|c| *c == ' ').count();
+            assert!(
+                lead == col || (width < 100 && lead == 3),
+                "{width}: value or label column: {usage:?}"
+            );
+            assert!(usage.contains("fable"), "{width}: {usage:?}");
+            assert!(usage.contains("7d "), "{width}: {usage:?}");
+            let l = &limits["work"];
+            if width >= 58 {
+                assert!(usage.contains("fable") && usage.ends_with(&l.age_text), "{width}: {usage:?}");
+            }
+            if width >= 80 || (width >= 58 && l.five_hour.is_none()) {
+                assert!(usage.contains('░'), "{width}: bars kept: {usage:?}");
+            }
+        }
+    }
 }
 
 #[test]

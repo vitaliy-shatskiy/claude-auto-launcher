@@ -49,67 +49,83 @@ fn limit_items(l: &LimitRecord) -> Vec<(String, i64)> {
     items
 }
 
-/// `New-LimitLine`: the narrow tier's one line, packed until the first piece that does not fit.
-pub fn new_limit_line(l: &LimitRecord, max: usize, g: &Glyphs) -> Option<String> {
-    let mut pieces: Vec<String> = limit_items(l)
-        .into_iter()
-        .map(|(label, p)| {
-            let bar = if label == "5h" {
-                format!(" {}", new_bar(p, 8, g, BarStyle::Line))
-            } else {
-                String::new()
-            };
-            format!("{label}{bar} {p}%")
-        })
-        .collect();
-    let has_age = !l.age_text.is_empty();
-    if has_age {
-        pieces.push(l.age_text.clone());
+const WIDE_BAR: usize = 8;
+/// The narrow tier's bar widths, widest first.
+const NARROW_BARS: [usize; 3] = [8, 6, 4];
+/// The row labels' column: the narrow usage row moves here before it gives up its bars.
+const LABEL_COLUMN: usize = 3;
+const LIMIT_SEP: &str = "   ";
+
+/// The usage row under the account tabs: one fixed-width cell per limit (label padded to the
+/// longest, a bar, the percent right-aligned), the age last. It starts on the value column of the
+/// rows below. The wide tier stacks the cells one per line when they do not fit. The narrow tier
+/// tries narrower bars, then the label column, then drops the bars, then keeps the leading
+/// pieces that fit.
+pub fn limit_lines(l: &LimitRecord, indent: usize, inner: usize, wide: bool, g: &Glyphs) -> Vec<String> {
+    let items = limit_items(l);
+    if items.is_empty() {
+        return Vec::new();
     }
-    let mut line = String::new();
-    let n = pieces.len();
-    for (i, p) in pieces.iter().enumerate() {
-        let sep = if i == 0 {
-            "     "
-        } else if has_age && i == n - 1 {
-            "   "
+    let lw = items.iter().map(|(label, _)| label.chars().count()).max().unwrap_or(0);
+    let cells = |bar: usize| -> Vec<String> {
+        items
+            .iter()
+            .map(|(label, p)| {
+                if bar == 0 {
+                    format!("{label:<lw$} {p:>3}%")
+                } else {
+                    format!("{label:<lw$} {} {p:>3}%", new_bar(*p, bar, g, BarStyle::Blocks))
+                }
+            })
+            .collect()
+    };
+    let age = (!l.age_text.is_empty()).then_some(l.age_text.as_str());
+    let tries: Vec<(usize, usize)> = if wide {
+        vec![(indent, WIDE_BAR)]
+    } else {
+        [indent, LABEL_COLUMN]
+            .iter()
+            .flat_map(|i| NARROW_BARS.iter().map(move |b| (*i, *b)))
+            .chain([(LABEL_COLUMN, 0)])
+            .collect()
+    };
+    for (at, bar) in tries {
+        let mut pieces = cells(bar);
+        pieces.extend(age.map(str::to_owned));
+        let one = format!("{}{}", " ".repeat(at), pieces.join(LIMIT_SEP));
+        if display_width(&one) <= inner {
+            return vec![one];
+        }
+    }
+    if wide {
+        let stacked = cells(WIDE_BAR);
+        let last = stacked.len() - 1;
+        let fits = stacked
+            .iter()
+            .all(|c| indent + display_width(c) + LIMIT_SEP.len() + age.map_or(0, display_width) <= inner);
+        let lead = " ".repeat(if fits { indent } else { LABEL_COLUMN });
+        return stacked
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| match age.filter(|_| i == last) {
+                Some(a) => format!("{lead}{c}{LIMIT_SEP}{a}"),
+                None => format!("{lead}{c}"),
+            })
+            .collect();
+    }
+    let mut line = " ".repeat(LABEL_COLUMN);
+    for (i, p) in cells(0).into_iter().chain(age.map(str::to_owned)).enumerate() {
+        let next = if i == 0 {
+            format!("{line}{p}")
         } else {
-            "  "
+            format!("{line}{LIMIT_SEP}{p}")
         };
-        let next = format!("{line}{sep}{p}");
-        if display_width(&next) > max {
+        if display_width(&next) > inner {
             break;
         }
         line = next;
     }
-    (!line.is_empty()).then_some(line)
-}
-
-fn wide_limit_lines(l: &LimitRecord, inner: usize, g: &Glyphs) -> Vec<String> {
-    let bars: Vec<(String, String)> = limit_items(l)
-        .into_iter()
-        .map(|(label, p)| (label, format!("{} {p:>3}%", new_bar(p, 8, g, BarStyle::Blocks))))
-        .collect();
-    if bars.is_empty() {
-        return Vec::new();
-    }
-    let one = format!(
-        "     {}   {}",
-        bars.iter().map(|(l, b)| format!("{l} {b}")).collect::<Vec<_>>().join("  "),
-        l.age_text
-    );
-    if one.chars().count() <= inner {
-        return vec![one];
-    }
-    let lw = bars.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(0);
-    let last = bars.len() - 1;
-    bars.iter()
-        .enumerate()
-        .map(|(i, (label, bar))| {
-            let tail = if i == last { format!("   {}", l.age_text) } else { String::new() };
-            format!("     {label:<lw$} {bar}{tail}")
-        })
-        .collect()
+    (!line.trim().is_empty()).then_some(line).into_iter().collect()
 }
 
 fn pad_right(s: &str, width: usize) -> String {
@@ -161,67 +177,80 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         default_labels: inp.default_labels,
     };
     let hover_row = state.hover_row;
+    let mark_of = |row: &super::RowDef| {
+        if restored.iter().any(|r| r.eq_ignore_ascii_case(row.name.as_str())) {
+            "*"
+        } else {
+            " "
+        }
+    };
+    let shown_of = |row: &super::RowDef| {
+        let current = state.get(row.name);
+        if is_hidden_row_value(roster, row, current, &ctx) {
+            "default"
+        } else {
+            current
+        }
+    };
+    let radio_of = |row: &super::RowDef, prefix: &str, hover: &str| {
+        let texts: Vec<String> = row.values.iter().map(|v| ctx.text(roster, row, v)).collect();
+        let values = visible_row_values(roster, row, &ctx);
+        let vtexts: Vec<String> = values
+            .iter()
+            .map(|v| {
+                row.values
+                    .iter()
+                    .position(|x| x == v)
+                    .and_then(|p| texts.get(p).cloned())
+                    .unwrap_or_else(|| ctx.text(roster, row, v))
+            })
+            .collect();
+        new_radio_row(
+            &RadioSpec {
+                prefix,
+                label: &format!("{}{}", row.label, mark_of(row)),
+                values: &values,
+                current: shown_of(row),
+                texts: &vtexts,
+                label_width,
+                max_width: if wide { inner } else { 0 },
+                hover,
+                compact: false,
+            },
+            &g,
+        )
+    };
+    // The narrow tier draws every value row one way: all as radio lists when each one fits,
+    // else all collapsed to `< value >`.
+    let collapse_all = !wide
+        && roster
+            .rows
+            .iter()
+            .filter(|r| r.name != RowName::Account)
+            .any(|r| display_width(&radio_of(r, "   ", "").text) > inner);
     let mut body: Vec<String> = Vec::new();
     let mut hits: Vec<(usize, &'static str, usize, Vec<CellSpan>)> = Vec::new();
     for (i, row) in roster.rows.iter().enumerate() {
-        let current = state.get(row.name);
         let prefix = if state.row == i {
             format!(" {} ", g.cursor)
         } else {
             "   ".to_owned()
         };
-        let mark = if restored.iter().any(|r| r.eq_ignore_ascii_case(row.name.as_str())) {
-            "*"
-        } else {
-            " "
-        };
-        let label_part = pad_right(&format!("{}{mark}", row.label), label_width);
+        let label_part = pad_right(&format!("{}{}", row.label, mark_of(row)), label_width);
         let hovered_here = i32::try_from(i).is_ok_and(|ii| ii == hover_row);
-        let mut unreadable = false;
         let (mut line, mut cells) = if row.name == RowName::Account {
             account_strip(row, state, inp.limits, &prefix, &label_part, inner, &g, hovered_here)
         } else {
-            let texts: Vec<String> = row.values.iter().map(|v| ctx.text(roster, row, v)).collect();
-            let values = visible_row_values(roster, row, &ctx);
-            let vtexts: Vec<String> = values
-                .iter()
-                .map(|v| {
-                    row.values
-                        .iter()
-                        .position(|x| x == v)
-                        .and_then(|p| texts.get(p).cloned())
-                        .unwrap_or_else(|| ctx.text(roster, row, v))
-                })
-                .collect();
-            let shown = if is_hidden_row_value(roster, row, current, &ctx) {
-                "default"
-            } else {
-                current
-            };
-            let radio = new_radio_row(
-                &RadioSpec {
-                    prefix: &prefix,
-                    label: &format!("{}{mark}", row.label),
-                    values: &values,
-                    current: shown,
-                    texts: &vtexts,
-                    label_width,
-                    max_width: inner,
-                    hover: if hovered_here { &state.hover_value } else { "" },
-                    compact: !wide,
-                },
-                &g,
-            );
-            unreadable = !wide && !radio.compact;
+            let radio = radio_of(row, &prefix, if hovered_here { &state.hover_value } else { "" });
             (radio.text, radio.cells)
         };
-        if unreadable || display_width(&line) > inner {
-            let sel = if is_hidden_row_value(roster, row, current, &ctx) {
-                "default"
-            } else {
-                current
-            };
-            line = format!("{prefix}{label_part}{} {} {}", g.l_angle, ctx.text(roster, row, sel), g.r_angle);
+        if (collapse_all && row.name != RowName::Account) || display_width(&line) > inner {
+            line = format!(
+                "{prefix}{label_part}{} {} {}",
+                g.l_angle,
+                ctx.text(roster, row, shown_of(row)),
+                g.r_angle
+            );
             cells = Vec::new();
         }
         hits.push((i, row.name.as_str(), body.len(), cells));
@@ -229,11 +258,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         if row.name == RowName::Account
             && let Some(l) = limit
         {
-            if wide {
-                body.extend(wide_limit_lines(l, inner, &g));
-            } else if let Some(one) = new_limit_line(l, inner, &g) {
-                body.push(one);
-            }
+            body.extend(limit_lines(l, 3 + label_width, inner, wide, &g));
         }
     }
 
