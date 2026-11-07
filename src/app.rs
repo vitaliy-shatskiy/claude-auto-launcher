@@ -291,7 +291,7 @@ fn launch(run: &Run) -> i32 {
     if !run.preview {
         let _s = tm.scope(&["secrets"]);
         let cwd = std::env::current_dir().unwrap_or_else(|_| run.ctx.cwd.clone());
-        env::import_project_secrets(&cwd, &run.cfg.secrets_root, &mut child);
+        env::import_project_secrets(&cwd, &mut child);
     }
     {
         let _s = tm.scope(&["sharing"]);

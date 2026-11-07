@@ -1,14 +1,21 @@
-//! `Import-ProjectSecrets`: one file per variable (file name = variable name, content = value),
-//! tiers shared -> org -> project, later beating earlier. The org tier is a junction at
-//! `<slug>\org`. Values go to the CHILD environment only and are never printed.
+//! Session secrets from `vsec launch-env --cwd <dir>`: vsec resolves the tiers (shared -> org ->
+//! project) and writes `{vars:[{name,value}], loaded:["NAME(tier)"], notes:[...]}` to stdout.
+//! Values go to the CHILD environment only and are never printed. vsec missing or failing costs
+//! one line and the session starts without secrets.
 
-use std::os::windows::fs::MetadataExt as _;
+use std::ffi::OsString;
+use std::io;
+use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 
-use super::Note;
+use serde::Deserialize;
+
+use super::{CREATE_NO_WINDOW, Note};
 use crate::out::Fg;
 
-/// Names the shell owns: a secret file called PATH is a mistake, never an instruction.
+/// Names the shell owns: a secret called PATH is a mistake, never an instruction. vsec refuses
+/// them too; the launcher checks again because these values land in its child's environment.
 const RESERVED: [&str; 12] = [
     "PATH",
     "PATHEXT",
@@ -23,7 +30,6 @@ const RESERVED: [&str; 12] = [
     "OS",
     "PSMODULEPATH",
 ];
-const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
 
 /// What one import decided: the variables to set (in order), the `NAME(tier)` list, the lines.
 #[derive(Debug, Default)]
@@ -33,269 +39,323 @@ pub(crate) struct Import {
     pub(crate) notes: Vec<Note>,
 }
 
+#[derive(Deserialize)]
+struct LaunchEnv {
+    vars: Vec<Var>,
+    #[serde(default)]
+    loaded: Vec<String>,
+    #[serde(default)]
+    notes: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct Var {
+    name: String,
+    value: String,
+}
+
 fn is_env_name(n: &str) -> bool {
     let mut c = n.chars();
     c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_') && c.all(|x| x.is_ascii_alphanumeric() || x == '_')
 }
 
-/// A secret read by PATH (`openrouter-api-key`, `teams-reader-app.json`): starts with a letter,
-/// carries a dash or a dot. It costs no warning line.
-fn is_path_secret(n: &str) -> bool {
-    let mut c = n.chars();
-    c.next().is_some_and(|f| f.is_ascii_alphabetic())
-        && c.all(|x| x.is_ascii_alphanumeric() || matches!(x, '.' | '_' | '-'))
-        && n.contains(['-', '.'])
+/// Where vsec is: `CLAUDE_AUTO_VSEC` when set, else `vsec.exe` or the `vsec.cmd` shim on PATH.
+pub(crate) fn find_vsec(explicit: Option<OsString>, path: Option<OsString>) -> Option<PathBuf> {
+    if let Some(e) = explicit.filter(|e| !e.is_empty()) {
+        return Some(PathBuf::from(e));
+    }
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path?).collect();
+    ["vsec.exe", "vsec.cmd"]
+        .iter()
+        .flat_map(|n| dirs.iter().map(move |d| d.join(n)))
+        .find(|p| p.is_file())
 }
 
-/// `Get-Content -Raw` then `Trim`: a BOM is decoding, a trailing newline is not part of a token.
-fn read_value(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    let text = if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        String::from_utf8_lossy(rest).into_owned()
-    } else if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)).collect();
-        String::from_utf16_lossy(&units)
-    } else {
-        String::from_utf8_lossy(&bytes).into_owned()
+/// `vsec launch-env --cwd <dir>`, windowless, stdin closed.
+pub(crate) fn run_vsec(vsec: Option<&Path>, cwd: &str) -> io::Result<Output> {
+    let not_found = |m: String| Err(io::Error::new(io::ErrorKind::NotFound, m));
+    let Some(vsec) = vsec else {
+        return not_found("vsec not found (set CLAUDE_AUTO_VSEC or put vsec on PATH)".into());
     };
-    let t = text.trim();
-    (!t.is_empty()).then(|| t.to_owned())
+    if !vsec.is_file() {
+        return not_found(format!("vsec not found at {}", vsec.display()));
+    }
+    Command::new(vsec)
+        .args(["launch-env", "--cwd", cwd])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .output()
 }
 
-/// The visible files of a tier, in directory order (`Get-ChildItem -File` without `-Force`).
-fn tier_files(dir: &Path) -> Vec<(String, PathBuf)> {
-    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
-    rd.flatten()
-        .filter(|e| {
-            e.metadata()
-                .is_ok_and(|m| m.is_file() && m.file_attributes() & FILE_ATTRIBUTE_HIDDEN == 0)
-        })
-        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
-        .filter(|(n, _)| !Path::new(n).extension().is_some_and(|x| x.eq_ignore_ascii_case("md")))
-        .collect()
+fn one_line(s: &str) -> String {
+    s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" | ")
 }
 
-/// The decision, separate from the child environment so the suite can read it.
-pub(crate) fn import(working_directory: &str, root: &str) -> Import {
-    let slug: String = working_directory
-        .chars()
-        .map(|c| if matches!(c, ':' | '\\' | '/' | '.') { '-' } else { c })
-        .collect();
-    let root = Path::new(root);
-    let tiers = [
-        ("shared", root.join("shared")),
-        ("org", root.join(&slug).join("org")),
-        ("project", root.join(&slug)),
-    ];
-    // (name, tier, path) in first-seen order; a later tier replaces the value in place.
-    let mut winner: Vec<(String, &str, PathBuf, String)> = Vec::new();
-    let mut by_path = Vec::new();
+/// The decision, with the vsec call injected so the suite runs on a fake `launch-env`.
+pub(crate) fn import(working_directory: &str, launch_env: impl FnOnce(&str) -> io::Result<Output>) -> Import {
     let mut out = Import::default();
-    for (tier, dir) in &tiers {
-        for (name, path) in tier_files(dir) {
-            if !is_env_name(&name) {
-                if is_path_secret(&name) {
-                    by_path.push(name);
-                } else {
-                    out.notes.push(Note::new(
-                        format!("  secret '{name}' skipped: not a valid environment variable name"),
-                        Fg::DarkYellow,
-                    ));
-                }
-                continue;
-            }
-            if RESERVED.contains(&name.to_ascii_uppercase().as_str()) {
-                out.notes.push(Note::new(
-                    format!("  secret '{name}' skipped: that name is reserved by the system"),
-                    Fg::DarkYellow,
-                ));
-                continue;
-            }
-            let Some(value) = read_value(&path) else { continue };
-            match winner.iter_mut().find(|w| w.0.eq_ignore_ascii_case(&name)) {
-                Some(w) => (w.1, w.2, w.3) = (*tier, path, value),
-                None => winner.push((name, *tier, path, value)),
-            }
+    let warn = |t: String| Note::new(format!("  secrets not loaded: {t}"), Fg::DarkYellow);
+    let got = match launch_env(working_directory) {
+        Ok(o) => o,
+        Err(e) => {
+            out.notes.push(warn(one_line(&e.to_string())));
+            return out;
+        }
+    };
+    let stderr = String::from_utf8_lossy(&got.stderr);
+    if !got.status.success() {
+        let code = got.status.code().map_or_else(|| "?".to_owned(), |c| c.to_string());
+        out.notes.push(warn(format!("vsec launch-env exit {code}: {}", one_line(&stderr))));
+        return out;
+    }
+    let parsed: LaunchEnv = match serde_json::from_slice(&got.stdout) {
+        Ok(p) => p,
+        Err(e) => {
+            // The serde message names a position, never the text, so no value can leak here.
+            out.notes.push(warn(format!("vsec launch-env output unreadable ({e})")));
+            return out;
+        }
+    };
+    for v in parsed.vars {
+        if !is_env_name(&v.name) {
+            out.notes.push(Note::new(
+                format!("  secret '{}' skipped: not a valid environment variable name", v.name),
+                Fg::DarkYellow,
+            ));
+        } else if RESERVED.contains(&v.name.to_ascii_uppercase().as_str()) {
+            out.notes.push(Note::new(
+                format!("  secret '{}' skipped: that name is reserved by the system", v.name),
+                Fg::DarkYellow,
+            ));
+        } else {
+            out.vars.push((v.name, v.value));
         }
     }
-    for (name, _, _, value) in &winner {
-        out.vars.push((name.clone(), value.clone()));
-    }
-    // <NAME>_FILE = the path of the tier that won; a real secret file of that name outranks it.
-    for (name, _, path, _) in &winner {
-        let derived = format!("{name}_FILE");
-        if !winner.iter().any(|w| w.0.eq_ignore_ascii_case(&derived)) {
-            out.vars.push((derived, path.to_string_lossy().into_owned()));
-        }
-    }
-    out.loaded = winner.iter().map(|(n, t, _, _)| format!("{n}({t})")).collect();
+    out.loaded = parsed.loaded;
     if !out.loaded.is_empty() {
         out.notes
             .push(Note::new(format!("  secrets loaded: {}", out.loaded.join(", ")), Fg::DarkGray));
     }
-    if !by_path.is_empty() {
-        out.notes.push(Note::new(
-            format!("  read by path, not exported: {}", by_path.join(", ")),
-            Fg::DarkGray,
-        ));
-    }
+    let lines = parsed.notes.iter().map(String::as_str).chain(stderr.lines());
+    out.notes.extend(
+        lines
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|l| Note::new(format!("  {l}"), Fg::DarkGray)),
+    );
     out
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::os::windows::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+
     use super::*;
 
-    struct Store(PathBuf);
-    impl Store {
-        fn new(tag: &str) -> Self {
-            Self(std::env::temp_dir().join(format!("claude-auto-rs-secrets-{tag}-{}", crate::log::new_run_id())))
-        }
-        fn put(&self, rel: &str, value: &str) {
-            let p = self.0.join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, value).unwrap();
-        }
-        fn root(&self) -> String {
-            self.0.to_string_lossy().into_owned()
-        }
+    #[expect(clippy::unnecessary_wraps, reason = "the fake returns what the import seam takes")]
+    fn output(code: u32, stdout: &str, stderr: &str) -> io::Result<Output> {
+        Ok(Output {
+            status: ExitStatus::from_raw(code),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        })
     }
-    impl Drop for Store {
-        fn drop(&mut self) {
-            if std::fs::remove_dir_all(&self.0).is_err() {
-                // A leftover temp directory is litter, not a test failure.
-            }
-        }
+
+    /// A fake `launch-env`: the JSON vsec writes for the given vars and loaded list.
+    fn launch_env(vars: &[(&str, &str)], loaded: &[&str], notes: &[&str]) -> String {
+        serde_json::json!({
+            "vars": vars.iter().map(|(n, v)| serde_json::json!({"name": n, "value": v})).collect::<Vec<_>>(),
+            "loaded": loaded,
+            "notes": notes,
+        })
+        .to_string()
     }
 
     fn var<'a>(i: &'a Import, n: &str) -> Option<&'a str> {
         i.vars.iter().rev().find(|(k, _)| k == n).map(|(_, v)| v.as_str())
     }
 
-    fn file_of(i: &Import, n: &str) -> String {
-        std::fs::read_to_string(var(i, n).unwrap()).unwrap()
+    fn texts(i: &Import) -> Vec<&str> {
+        i.notes.iter().map(|n| n.text.as_str()).collect()
     }
 
-    fn tiered_store() -> Store {
-        let s = Store::new("tiers");
-        let slug = "C--test--proj";
-        s.put(r"shared\SHARED_ONLY", "from-shared");
-        s.put(r"shared\OVERRIDDEN", "from-shared");
-        s.put(r"shared\ORG_BEATS_THIS", "from-shared");
-        s.put(r"org\acme\ORG_ONLY", "from-org");
-        s.put(r"org\acme\OVERRIDDEN", "from-org");
-        s.put(r"org\acme\ORG_BEATS_THIS", "from-org");
-        s.put(&format!(r"{slug}\PROJ_ONLY"), "from-proj\r\n");
-        s.put(&format!(r"{slug}\OVERRIDDEN"), "from-proj");
-        s.put(&format!(r"{slug}\EMPTY"), "");
-        s.put(&format!(r"{slug}\PAIR"), "pair-value");
-        s.put(&format!(r"{slug}\PAIR_FILE"), "a-real-secret-not-a-path");
-        s.put(&format!(r"{slug}\NOTES.md"), "not a secret");
-        super::super::win_fs::create_junction(&s.0.join(slug).join("org"), &s.0.join(r"org\acme")).unwrap();
-        s
+    /// What vsec resolves for the tiered fixture the file walk used: project beats org beats shared.
+    fn tiered() -> String {
+        launch_env(
+            &[
+                ("SHARED_ONLY", "from-shared"),
+                ("OVERRIDDEN", "from-proj"),
+                ("ORG_BEATS_THIS", "from-org"),
+                ("ORG_ONLY", "from-org"),
+                ("PROJ_ONLY", "from-proj"),
+                ("PAIR", "pair-value"),
+                ("PAIR_FILE", "a-real-secret-not-a-path"),
+            ],
+            &[
+                "SHARED_ONLY(shared)",
+                "OVERRIDDEN(project)",
+                "ORG_BEATS_THIS(org)",
+                "ORG_ONLY(org)",
+                "PROJ_ONLY(project)",
+                "PAIR(project)",
+                "PAIR_FILE(project)",
+            ],
+            &["read by path, not exported: by-path-key.json"],
+        )
     }
 
     #[test]
-    fn tiers_cascade_shared_org_project() {
-        let s = tiered_store();
-        let i = import(r"C:\test\.proj", &s.root());
-        assert_eq!(var(&i, "SHARED_ONLY"), Some("from-shared"), "shared tier is loaded");
-        assert_eq!(var(&i, "ORG_ONLY"), Some("from-org"), "org tier is loaded through the junction");
+    fn launch_env_output_sets_tier_vars_without_name_file() {
+        let seen = RefCell::new(String::new());
+        let i = import(r"C:\test\.proj", |cwd| {
+            seen.replace(cwd.to_owned());
+            output(0, &tiered(), "")
+        });
+        assert_eq!(seen.into_inner(), r"C:\test\.proj", "vsec gets the session's directory");
+        let names: Vec<&str> = i.vars.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(
-            var(&i, "PROJ_ONLY"),
-            Some("from-proj"),
-            "project tier is loaded, trailing newline trimmed"
+            names,
+            [
+                "SHARED_ONLY",
+                "OVERRIDDEN",
+                "ORG_BEATS_THIS",
+                "ORG_ONLY",
+                "PROJ_ONLY",
+                "PAIR",
+                "PAIR_FILE"
+            ],
+            "exactly vsec's vars, in order, no derived <NAME>_FILE"
         );
-        assert_eq!(var(&i, "OVERRIDDEN"), Some("from-proj"), "project beats org and shared");
-        assert_eq!(var(&i, "ORG_BEATS_THIS"), Some("from-org"), "org beats shared");
-        assert_eq!(var(&i, "NOTES.md"), None, "markdown is not loaded as a variable");
-        assert_eq!(var(&i, "EMPTY"), None, "an empty file sets nothing");
-        let joined = i.loaded.join(",");
-        assert!(
-            joined.contains("shared") && joined.contains("org") && joined.contains("project"),
-            "the return value names each tier"
-        );
-        std::fs::remove_dir(s.0.join(r"C--test--proj\org")).unwrap();
-    }
-
-    #[test]
-    fn every_loaded_secret_gets_a_file_companion_from_the_winning_tier() {
-        let s = tiered_store();
-        s.put(r"shared\TIERED_TOKEN", "shared-token");
-        s.put(r"C--test--proj\TIERED_TOKEN", "proj-token");
-        let i = import(r"C:\test\.proj", &s.root());
-        assert_eq!(file_of(&i, "SHARED_ONLY_FILE"), "from-shared");
-        assert_eq!(file_of(&i, "OVERRIDDEN_FILE"), "from-proj", "_FILE points at the tier that won");
-        assert_eq!(file_of(&i, "ORG_BEATS_THIS_FILE"), "from-org");
-        assert_eq!(var(&i, "EMPTY_FILE"), None, "a skipped empty file gets no _FILE");
-        assert_eq!(var(&i, "NOTES.md_FILE"), None);
-        let joined = i.loaded.join(",");
-        assert!(!joined.contains("SHARED_ONLY_FILE"), "a derived name stays out of the loaded list");
-        assert!(joined.contains("PAIR_FILE(project)"), "while a real secret named _FILE is in it");
+        assert_eq!(var(&i, "OVERRIDDEN"), Some("from-proj"));
         assert_eq!(
             var(&i, "PAIR_FILE"),
             Some("a-real-secret-not-a-path"),
-            "a real _FILE secret is not overwritten"
+            "a real _FILE secret passes as is"
         );
-        assert_eq!(file_of(&i, "PAIR_FILE_FILE"), "a-real-secret-not-a-path");
-        assert_eq!(var(&i, "SONAR_TOKEN_FILE"), None);
-        assert_eq!(file_of(&i, "TIERED_TOKEN_FILE"), "proj-token");
-        assert_eq!(var(&i, "TIERED_TOKEN"), Some("proj-token"));
-        std::fs::remove_dir(s.0.join(r"C--test--proj\org")).unwrap();
+        let joined = i.loaded.join(",");
+        assert!(joined.contains("(shared)") && joined.contains("(org)") && joined.contains("(project)"));
+        let text = texts(&i);
+        assert!(text.iter().any(|t| t.starts_with("  secrets loaded: SHARED_ONLY(shared)")));
+        assert!(text.iter().any(|t| t.contains("read by path") && t.contains("by-path-key.json")));
+        assert!(!text.iter().any(|t| t.contains("from-")), "a value is never printed");
     }
 
     #[test]
-    fn an_unknown_project_gets_shared_only_and_a_missing_root_nothing() {
-        let s = tiered_store();
-        let i = import(r"C:\test\unknown", &s.root());
-        assert_eq!(var(&i, "SHARED_ONLY"), Some("from-shared"));
-        assert_eq!(var(&i, "PROJ_ONLY"), None);
-        assert!(!i.loaded.is_empty() && !i.loaded.join(",").contains("project"));
-        let none = import(r"C:\test\.proj", &s.0.join("does-not-exist").to_string_lossy());
-        assert!(none.loaded.is_empty() && none.vars.is_empty() && none.notes.is_empty());
-        std::fs::remove_dir(s.0.join(r"C--test--proj\org")).unwrap();
+    fn an_empty_launch_env_sets_and_prints_nothing() {
+        let i = import(r"C:\test\unknown", |_| output(0, &launch_env(&[], &[], &[]), ""));
+        assert!(i.loaded.is_empty() && i.vars.is_empty() && i.notes.is_empty());
     }
 
     #[test]
-    fn a_file_name_that_is_no_variable_name_costs_one_line() {
-        let s = Store::new("names");
-        for n in ["PATH", "A=B", "1DIGIT", "HAS SPACE"] {
-            s.put(&format!(r"shared\{n}"), "x");
-        }
-        s.put(r"shared\GOOD_NAME", "good");
-        s.put(r"shared\by-path-key.json", "k");
-        let i = import(r"C:\test\.names", &s.root());
-        let text: Vec<&str> = i.notes.iter().map(|n| n.text.as_str()).collect();
-        assert_eq!(var(&i, "PATH"), None, "a secret file named PATH does not replace PATH");
-        assert_eq!(
-            text.iter().filter(|t| t.trim_start().starts_with("secret '")).count(),
-            4,
-            "each rejected name costs exactly one line"
+    fn a_name_that_is_no_variable_name_costs_one_line() {
+        let json = launch_env(
+            &[
+                ("PATH", "x"),
+                ("A=B", "x"),
+                ("1DIGIT", "x"),
+                ("HAS SPACE", "x"),
+                ("GOOD_NAME", "good"),
+            ],
+            &["GOOD_NAME(shared)"],
+            &[],
         );
-        assert_eq!(text.iter().filter(|t| t.contains("secret 'A=B'")).count(), 1);
+        let i = import(r"C:\test\.names", |_| output(0, &json, ""));
+        let text = texts(&i);
+        assert_eq!(var(&i, "PATH"), None, "a secret named PATH does not replace PATH");
+        assert_eq!(text.iter().filter(|t| t.starts_with("  secret '")).count(), 4);
         assert!(text.iter().any(|t| t.contains("secret 'PATH'") && t.contains("reserved")));
         assert_eq!(var(&i, "GOOD_NAME"), Some("good"));
-        assert!(
-            !text.iter().any(|t| t.contains("secret 'by-path-key.json'")),
-            "a path-read secret costs no warning line"
-        );
-        assert!(text.iter().any(|t| t.contains("read by path") && t.contains("by-path-key.json")));
-        assert_eq!(var(&i, "by-path-key.json"), None);
-        assert_eq!(i.loaded, vec!["GOOD_NAME(shared)".to_owned()]);
         assert!(!text.iter().any(|t| t.contains("good")), "a value is never printed");
     }
 
     #[test]
-    fn a_store_under_a_bracket_path_loads() {
-        let s = Store::new("br");
-        let root = s.0.join("br[x]dir");
-        std::fs::create_dir_all(root.join("shared")).unwrap();
-        std::fs::create_dir_all(root.join("C--test--brk")).unwrap();
-        std::fs::write(root.join(r"shared\BRACKET_SHARED"), "br-shared").unwrap();
-        std::fs::write(root.join(r"C--test--brk\BRACKET_PROJ"), "br-proj").unwrap();
-        let i = import(r"C:\test\.brk", &root.to_string_lossy());
-        assert_eq!(var(&i, "BRACKET_SHARED"), Some("br-shared"));
-        assert_eq!(var(&i, "BRACKET_PROJ"), Some("br-proj"));
-        assert_eq!(file_of(&i, "BRACKET_PROJ_FILE"), "br-proj");
+    fn a_bracket_directory_reaches_vsec_verbatim() {
+        let seen = RefCell::new(String::new());
+        import(r"C:\test\br[x]dir", |cwd| {
+            seen.replace(cwd.to_owned());
+            output(0, &launch_env(&[], &[], &[]), "")
+        });
+        assert_eq!(seen.into_inner(), r"C:\test\br[x]dir");
+    }
+
+    #[test]
+    fn vsec_missing_starts_the_session_without_secrets_and_one_line() {
+        let i = import(r"C:\p", |_| run_vsec(Some(Path::new(r"C:\does-not-exist\vsec.cmd")), r"C:\p"));
+        assert!(i.vars.is_empty() && i.loaded.is_empty());
+        assert_eq!(texts(&i), [r"  secrets not loaded: vsec not found at C:\does-not-exist\vsec.cmd"]);
+        let none = import(r"C:\p", |_| run_vsec(None, r"C:\p"));
+        assert_eq!(
+            texts(&none),
+            ["  secrets not loaded: vsec not found (set CLAUDE_AUTO_VSEC or put vsec on PATH)"]
+        );
+    }
+
+    #[test]
+    fn a_vsec_shim_is_spawned_with_launch_env_and_the_directory() {
+        let root = std::env::temp_dir().join(format!("claude-auto-rs-vsec-run-{}", crate::log::new_run_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let shim = root.join("vsec.cmd");
+        // A forward-slash directory: the echo builds JSON by hand, where a backslash would escape.
+        std::fs::write(&shim, "@echo {\"vars\":[{\"name\":\"ARGS\",\"value\":\"%*\"}]}\r\n").unwrap();
+        let i = import("C:/test/proj", |dir| run_vsec(Some(&shim), dir));
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(i.vars, [("ARGS".to_owned(), "launch-env --cwd C:/test/proj".to_owned())]);
+    }
+
+    #[test]
+    fn vsec_is_found_by_override_then_exe_then_shim_on_path() {
+        let root = std::env::temp_dir().join(format!("claude-auto-rs-vsec-{}", crate::log::new_run_id()));
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("vsec.cmd"), "").unwrap();
+        let path = std::env::join_paths([&a, &b]).unwrap();
+        assert_eq!(find_vsec(None, Some(path.clone())), Some(a.join("vsec.cmd")), "the shim on PATH");
+        std::fs::write(b.join("vsec.exe"), "").unwrap();
+        assert_eq!(find_vsec(None, Some(path.clone())), Some(b.join("vsec.exe")), "an exe beats a shim");
+        assert_eq!(
+            find_vsec(Some(r"C:\x\vsec.exe".into()), Some(path.clone())),
+            Some(PathBuf::from(r"C:\x\vsec.exe")),
+            "CLAUDE_AUTO_VSEC wins"
+        );
+        assert_eq!(
+            find_vsec(Some("".into()), Some(path)),
+            Some(b.join("vsec.exe")),
+            "an empty override is unset"
+        );
+        assert_eq!(find_vsec(None, Some(root.join("none").into_os_string())), None);
+        assert_eq!(find_vsec(None, None), None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn vsec_exit_2_starts_the_session_without_secrets_and_names_the_reason() {
+        let i = import(r"C:\p", |_| {
+            output(2, &launch_env(&[("A", "leak")], &["A(shared)"], &[]), "vsec: no cache\r\n")
+        });
+        assert!(
+            i.vars.is_empty() && i.loaded.is_empty(),
+            "a failed run sets nothing, even with stdout"
+        );
+        assert_eq!(texts(&i), ["  secrets not loaded: vsec launch-env exit 2: vsec: no cache"]);
+    }
+
+    #[test]
+    fn unreadable_output_sets_nothing_and_never_echoes_it() {
+        let i = import(r"C:\p", |_| output(0, "not json SECRET_VALUE", ""));
+        assert_eq!(i.vars, [] as [(String, String); 0]);
+        let text = texts(&i);
+        assert_eq!(text.len(), 1);
+        assert!(text[0].contains("output unreadable") && !text[0].contains("SECRET_VALUE"));
+    }
+
+    #[test]
+    fn vsec_stderr_lines_on_success_are_shown() {
+        let i = import(r"C:\p", |_| {
+            output(0, &launch_env(&[], &[], &[]), "vsec: shared\\X read from file (not in Bitwarden)\n")
+        });
+        assert_eq!(texts(&i), [r"  vsec: shared\X read from file (not in Bitwarden)"]);
     }
 }
