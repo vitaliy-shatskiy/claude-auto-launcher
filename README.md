@@ -278,7 +278,8 @@ two-account starting point.
 | `remote` | bool | `false` | **the companion it needs is not published**: `crc.cmd` on PATH plus a `remote-control-claude-code` checkout (`CLAUDE_REMOTE_ROOT`). Leave it off unless you have written your own. Adds a Remote row to the launch screen and a second prompt in the no-UI fallback |
 | `riderMcp` | `auto`\|`on`\|`off` | `auto` | `auto` scans for Rider's MCP port only while Rider is running |
 | `extraMcpConfigs[]` | paths | `["~/.claude/mcp-shared.json"]` | must be absolute. A relative entry is skipped with a warning |
-| `secretsRoot` | path | `~/.claude-secrets` | must be absolute. See [Secrets](#secrets) |
+| `secretsRoot` | path | `~/.claude-secrets` | must be absolute. Read only when vsec is not found. See [Secrets](#secrets) |
+| `vsecPath` | path | `""` | the `vsec` secrets tool (`vsec.exe` or a `.cmd` shim); empty = `CLAUDE_AUTO_VSEC`, then PATH. Must be absolute. See [Secrets](#secrets) |
 | `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice with the chosen project as the working directory, each best-effort. Must be absolute. Entries run at the same time; an entry that is an array of paths runs them in order (`["a.ps1", ["b.ps1", "c.ps1"]]`) |
 | `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p`. `script` is required and must be absolute. An entry failing either check is skipped with a warning |
 
@@ -286,7 +287,16 @@ two-account starting point.
 
 ### Secrets
 
-`secretsRoot` is a directory of per-project subdirectories whose files become environment variables
+With a `vsec` secrets tool (config `vsecPath`, else env `CLAUDE_AUTO_VSEC`, else `vsec.exe` or
+`vsec.cmd` on PATH), the launcher runs `vsec launch-env --cwd <project>` windowless and sets the
+variables it returns (JSON `{vars:[{name,value}], loaded, notes}`) on the session. Names that are no
+valid variable name, or that the system owns (`PATH`, `TEMP`, ...), are refused. If vsec is found
+but fails (non-zero exit, unreadable output, or a configured path that does not exist), the session
+starts with no secrets and one yellow line saying why; the files below are not read then, so two
+sources are never mixed.
+
+Without vsec, the launcher reads `secretsRoot` itself and prints `secrets from files (vsec not
+found)`. `secretsRoot` is a directory of per-project subdirectories whose files become environment variables
 of the launched session (file name = variable name, content = value). `.md` files and empty files
 are skipped. Three tiers apply in order, each later one overriding the earlier: `shared/`,
 `<slug>/org/` (opted in with a junction, never automatic), then `<slug>/` for the chosen project.

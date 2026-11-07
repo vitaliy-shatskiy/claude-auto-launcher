@@ -13,8 +13,11 @@ Worth knowing before you run it, and the places a vulnerability would matter:
   (14-day retention), and the `claude-auto-*.json` caches (full list in the README, "Files it
   writes"). The logs record the launcher's own argument vector and working directory: a prompt
   passed positionally lands there in plain text.
-- **Environment variables from files.** With `secretsRoot` configured, every file under it becomes an
-  environment variable in the launched session. Anything readable there reaches the child process.
+- **Environment variables from vsec or files.** When a `vsec` tool is found (`vsecPath`,
+  `CLAUDE_AUTO_VSEC` or PATH), the launcher runs it and every variable it returns reaches the
+  launched session: whatever is first on PATH under that name is trusted. Without vsec, every file
+  under `secretsRoot` becomes an environment variable in the launched session. Anything readable
+  there reaches the child process. Values are never printed.
 - **Your Claude Code install.** The maintenance screen updates, renames and prunes binaries under
   the real install directory.
 - **Other account roots.** With `sharing: true` it hardlinks and junctions directories between

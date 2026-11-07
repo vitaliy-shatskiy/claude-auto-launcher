@@ -119,11 +119,12 @@ pub fn mirror_project_mcp(root: &str) -> Result<String, String> {
     )
 }
 
-/// The session's secrets from `vsec launch-env`, reserved shell names refused. Adds to the CHILD
-/// environment; returns how many were imported.
-pub fn import_project_secrets(cwd: &Path, child: &mut ChildEnv) -> usize {
-    let vsec = secrets::find_vsec(std::env::var_os("CLAUDE_AUTO_VSEC"), std::env::var_os("PATH"));
-    let got = secrets::import(&cwd.to_string_lossy(), |dir| secrets::run_vsec(vsec.as_deref(), dir));
+/// The session's secrets from `vsec launch-env`, else (vsec not found) the file walk under
+/// `secretsRoot`; reserved shell names refused. Adds to the CHILD environment; returns how many
+/// were imported.
+pub fn import_project_secrets(cwd: &Path, cfg: &Config, child: &mut ChildEnv) -> usize {
+    let vsec = secrets::find_vsec(&cfg.vsec_path, std::env::var_os("CLAUDE_AUTO_VSEC"), std::env::var_os("PATH"));
+    let got = secrets::load(&cwd.to_string_lossy(), vsec.as_deref(), &cfg.secrets_root);
     for (k, v) in &got.vars {
         child.set(k, v);
     }

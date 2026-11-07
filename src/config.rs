@@ -13,13 +13,14 @@ pub use roster::{Account, parse_roster};
 /// Distinct on purpose: two accounts sharing a colour is the confusion a tint exists to prevent.
 pub const ALLOWED_TINTS: [&str; 6] = ["Green", "Magenta", "Cyan", "Blue", "Yellow", "Red"];
 const ALLOWED_RIDER_MODES: [&str; 3] = ["auto", "on", "off"];
-const KNOWN_KEYS: [&str; 8] = [
+const KNOWN_KEYS: [&str; 9] = [
     "accounts",
     "sharing",
     "remote",
     "riderMcp",
     "extraMcpConfigs",
     "secretsRoot",
+    "vsecPath",
     "launchHooks",
     "maintenanceActions",
 ];
@@ -150,6 +151,8 @@ pub struct Config {
     pub rider_mcp: RiderMcp,
     pub extra_mcp_configs: Vec<String>,
     pub secrets_root: String,
+    /// `vsec.exe` or its shim; empty = `CLAUDE_AUTO_VSEC`, then PATH.
+    pub vsec_path: String,
     /// Top-level entries run at the same time; the paths inside one entry run in order.
     pub launch_hooks: Vec<Vec<String>>,
     pub maintenance_actions: Vec<MaintenanceAction>,
@@ -167,6 +170,7 @@ impl Config {
             rider_mcp: RiderMcp::Auto,
             extra_mcp_configs: vec![format!("{home}\\.claude\\mcp-shared.json")],
             secrets_root: format!("{home}\\.claude-secrets"),
+            vsec_path: String::new(),
             launch_hooks: Vec::new(),
             maintenance_actions: Vec::new(),
             warnings: Vec::new(),
@@ -366,6 +370,15 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
             cfg.warnings.push("secretsRoot must be an absolute path".into());
         } else {
             cfg.secrets_root = ctx.expand(&raw_secrets);
+        }
+    }
+    if let Some(v) = present("vsecPath") {
+        let raw = ps_str(v).trim().to_owned();
+        if !raw.is_empty() && !is_rooted_raw(&raw) {
+            cfg.warnings
+                .push("vsecPath must be an absolute path; looking up vsec instead".into());
+        } else if !raw.is_empty() {
+            cfg.vsec_path = ctx.expand(&raw);
         }
     }
     if let Some(v) = present("launchHooks") {

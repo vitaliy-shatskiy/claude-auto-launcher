@@ -1,7 +1,10 @@
 //! Session secrets from `vsec launch-env --cwd <dir>`: vsec resolves the tiers (shared -> org ->
 //! project) and writes `{vars:[{name,value}], loaded:["NAME(tier)"], notes:[...]}` to stdout.
-//! Values go to the CHILD environment only and are never printed. vsec missing or failing costs
-//! one line and the session starts without secrets.
+//! Values go to the CHILD environment only and are never printed. vsec not found: the file walk
+//! under `secretsRoot` (`files`). vsec found but failing: one line, no secrets, never the files
+//! (two sources are never mixed silently).
+
+mod files;
 
 use std::ffi::OsString;
 use std::io;
@@ -59,9 +62,14 @@ fn is_env_name(n: &str) -> bool {
     c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_') && c.all(|x| x.is_ascii_alphanumeric() || x == '_')
 }
 
-/// Where vsec is: `CLAUDE_AUTO_VSEC` when set, else `vsec.exe` or the `vsec.cmd` shim on PATH.
-pub(crate) fn find_vsec(explicit: Option<OsString>, path: Option<OsString>) -> Option<PathBuf> {
-    if let Some(e) = explicit.filter(|e| !e.is_empty()) {
+/// Where vsec is: config `vsecPath`, else `CLAUDE_AUTO_VSEC`, else `vsec.exe` or the `vsec.cmd`
+/// shim on PATH. An explicit path is returned even when missing: the user asked for vsec, so
+/// `run_vsec` reports it instead of falling back to files.
+pub(crate) fn find_vsec(configured: &str, env: Option<OsString>, path: Option<OsString>) -> Option<PathBuf> {
+    if !configured.is_empty() {
+        return Some(PathBuf::from(configured));
+    }
+    if let Some(e) = env.filter(|e| !e.is_empty()) {
         return Some(PathBuf::from(e));
     }
     let dirs: Vec<PathBuf> = std::env::split_paths(&path?).collect();
@@ -71,14 +79,27 @@ pub(crate) fn find_vsec(explicit: Option<OsString>, path: Option<OsString>) -> O
         .find(|p| p.is_file())
 }
 
-/// `vsec launch-env --cwd <dir>`, windowless, stdin closed.
-pub(crate) fn run_vsec(vsec: Option<&Path>, cwd: &str) -> io::Result<Output> {
-    let not_found = |m: String| Err(io::Error::new(io::ErrorKind::NotFound, m));
+/// The session's secrets: vsec when found, else the file walk under `secrets_root`.
+pub(crate) fn load(cwd: &str, vsec: Option<&Path>, secrets_root: &str) -> Import {
     let Some(vsec) = vsec else {
-        return not_found("vsec not found (set CLAUDE_AUTO_VSEC or put vsec on PATH)".into());
+        let mut got = files::import(cwd, secrets_root);
+        // Silent when the walk found nothing: a user with neither vsec nor a store sees no line.
+        if !got.notes.is_empty() {
+            got.notes
+                .insert(0, Note::new("  secrets from files (vsec not found)".to_owned(), Fg::DarkGray));
+        }
+        return got;
     };
+    import(cwd, |dir| run_vsec(vsec, dir))
+}
+
+/// `vsec launch-env --cwd <dir>`, windowless, stdin closed.
+pub(crate) fn run_vsec(vsec: &Path, cwd: &str) -> io::Result<Output> {
     if !vsec.is_file() {
-        return not_found(format!("vsec not found at {}", vsec.display()));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("vsec not found at {}", vsec.display()),
+        ));
     }
     Command::new(vsec)
         .args(["launch-env", "--cwd", cwd])
@@ -281,15 +302,28 @@ mod tests {
     }
 
     #[test]
-    fn vsec_missing_starts_the_session_without_secrets_and_one_line() {
-        let i = import(r"C:\p", |_| run_vsec(Some(Path::new(r"C:\does-not-exist\vsec.cmd")), r"C:\p"));
-        assert!(i.vars.is_empty() && i.loaded.is_empty());
+    fn an_explicit_vsec_path_that_is_missing_costs_a_line_and_never_falls_back() {
+        let store = std::env::temp_dir().join(format!("claude-auto-rs-vsec-nofb-{}", crate::log::new_run_id()));
+        std::fs::create_dir_all(store.join("shared")).unwrap();
+        std::fs::write(store.join(r"shared\FROM_FILE"), "file-value").unwrap();
+        let i = load(r"C:\p", Some(Path::new(r"C:\does-not-exist\vsec.cmd")), &store.to_string_lossy());
+        std::fs::remove_dir_all(&store).unwrap();
+        assert!(i.vars.is_empty() && i.loaded.is_empty(), "the file store is not read");
         assert_eq!(texts(&i), [r"  secrets not loaded: vsec not found at C:\does-not-exist\vsec.cmd"]);
-        let none = import(r"C:\p", |_| run_vsec(None, r"C:\p"));
-        assert_eq!(
-            texts(&none),
-            ["  secrets not loaded: vsec not found (set CLAUDE_AUTO_VSEC or put vsec on PATH)"]
-        );
+    }
+
+    #[test]
+    fn vsec_not_found_falls_back_to_the_file_walk_with_one_gray_line() {
+        let store = std::env::temp_dir().join(format!("claude-auto-rs-vsec-fb-{}", crate::log::new_run_id()));
+        std::fs::create_dir_all(store.join("shared")).unwrap();
+        std::fs::write(store.join(r"shared\FROM_FILE"), "file-value").unwrap();
+        let i = load(r"C:\p", None, &store.to_string_lossy());
+        let empty = load(r"C:\p", None, &store.join("none").to_string_lossy());
+        std::fs::remove_dir_all(&store).unwrap();
+        assert_eq!(var(&i, "FROM_FILE"), Some("file-value"));
+        assert_eq!(texts(&i).first(), Some(&"  secrets from files (vsec not found)"));
+        assert_eq!(i.notes.first().map(|n| n.fg), Some(Fg::DarkGray));
+        assert!(empty.notes.is_empty() && empty.vars.is_empty(), "no vsec and no store: no line");
     }
 
     #[test]
@@ -299,7 +333,7 @@ mod tests {
         let shim = root.join("vsec.cmd");
         // A forward-slash directory: the echo builds JSON by hand, where a backslash would escape.
         std::fs::write(&shim, "@echo {\"vars\":[{\"name\":\"ARGS\",\"value\":\"%*\"}]}\r\n").unwrap();
-        let i = import("C:/test/proj", |dir| run_vsec(Some(&shim), dir));
+        let i = load("C:/test/proj", Some(&shim), r"C:\no-store");
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(i.vars, [("ARGS".to_owned(), "launch-env --cwd C:/test/proj".to_owned())]);
     }
@@ -312,21 +346,34 @@ mod tests {
         std::fs::create_dir_all(&b).unwrap();
         std::fs::write(a.join("vsec.cmd"), "").unwrap();
         let path = std::env::join_paths([&a, &b]).unwrap();
-        assert_eq!(find_vsec(None, Some(path.clone())), Some(a.join("vsec.cmd")), "the shim on PATH");
-        std::fs::write(b.join("vsec.exe"), "").unwrap();
-        assert_eq!(find_vsec(None, Some(path.clone())), Some(b.join("vsec.exe")), "an exe beats a shim");
         assert_eq!(
-            find_vsec(Some(r"C:\x\vsec.exe".into()), Some(path.clone())),
-            Some(PathBuf::from(r"C:\x\vsec.exe")),
-            "CLAUDE_AUTO_VSEC wins"
+            find_vsec("", None, Some(path.clone())),
+            Some(a.join("vsec.cmd")),
+            "the shim on PATH"
+        );
+        std::fs::write(b.join("vsec.exe"), "").unwrap();
+        assert_eq!(
+            find_vsec("", None, Some(path.clone())),
+            Some(b.join("vsec.exe")),
+            "an exe beats a shim"
         );
         assert_eq!(
-            find_vsec(Some("".into()), Some(path)),
+            find_vsec("", Some(r"C:\x\vsec.exe".into()), Some(path.clone())),
+            Some(PathBuf::from(r"C:\x\vsec.exe")),
+            "CLAUDE_AUTO_VSEC beats PATH"
+        );
+        assert_eq!(
+            find_vsec(r"C:\cfg\vsec.exe", Some(r"C:\x\vsec.exe".into()), Some(path.clone())),
+            Some(PathBuf::from(r"C:\cfg\vsec.exe")),
+            "config vsecPath beats CLAUDE_AUTO_VSEC"
+        );
+        assert_eq!(
+            find_vsec("", Some("".into()), Some(path)),
             Some(b.join("vsec.exe")),
             "an empty override is unset"
         );
-        assert_eq!(find_vsec(None, Some(root.join("none").into_os_string())), None);
-        assert_eq!(find_vsec(None, None), None);
+        assert_eq!(find_vsec("", None, Some(root.join("none").into_os_string())), None);
+        assert_eq!(find_vsec("", None, None), None);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

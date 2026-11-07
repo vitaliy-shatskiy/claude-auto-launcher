@@ -8,6 +8,17 @@ fn ctx() -> PathCtx {
 }
 
 #[test]
+fn vsec_path_is_expanded_and_a_relative_one_is_refused() {
+    let cfg = parse_config(r#"{"vsecPath": "~/tools/vsec.cmd"}"#, "p.json", &ctx());
+    assert_eq!(cfg.vsec_path, r"C:\Users\someone\tools\vsec.cmd");
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+    let bad = parse_config(r#"{"vsecPath": "tools/vsec.cmd"}"#, "p.json", &ctx());
+    assert_eq!(bad.vsec_path, "");
+    assert_eq!(bad.warnings, ["vsecPath must be an absolute path; looking up vsec instead"]);
+    assert_eq!(Config::defaults(&ctx(), "p.json").vsec_path, "", "unset by default");
+}
+
+#[test]
 fn expand_resolves_tilde_and_relative_against_cwd() {
     let c = ctx();
     assert_eq!(c.expand("~"), r"C:\Users\someone");
