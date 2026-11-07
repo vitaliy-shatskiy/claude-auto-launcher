@@ -43,17 +43,21 @@ const CLAUDE_AUTH: [&str; 4] = [
     "ANTHROPIC_BASE_URL",
 ];
 
+/// The secrets store's own key: vsec reads it, a session never gets it (nor its `_FILE` path).
+const STORE_KEY: [&str; 1] = ["BWS_ACCESS_TOKEN"];
+
+/// Names never exported, with the note's tail for each list.
+const REFUSED: [(&[&str], &str); 3] = [
+    (&RESERVED, "that name is reserved by the system"),
+    (&CLAUDE_AUTH, "Claude Code auth stays with the profile login"),
+    (&STORE_KEY, "the secrets store's own key stays out of sessions"),
+];
+
 /// Why a valid variable name is never exported, as the note's tail; matched case-insensitively,
 /// as Windows matches environment names.
 fn refusal(name: &str) -> Option<&'static str> {
     let up = name.to_ascii_uppercase();
-    if RESERVED.contains(&up.as_str()) {
-        Some("that name is reserved by the system")
-    } else if CLAUDE_AUTH.contains(&up.as_str()) {
-        Some("Claude Code auth stays with the profile login")
-    } else {
-        None
-    }
+    REFUSED.iter().find(|(names, _)| names.contains(&up.as_str())).map(|(_, why)| *why)
 }
 
 /// What one import decided: the variables to set (in order), the `NAME(tier)` list, the lines.
@@ -154,8 +158,13 @@ pub(crate) fn import(working_directory: &str, launch_env: impl FnOnce(&str) -> i
     let parsed: LaunchEnv = match serde_json::from_slice(&got.stdout) {
         Ok(p) => p,
         Err(e) => {
-            // The serde message names a position, never the text, so no value can leak here.
-            out.notes.push(warn(format!("vsec launch-env output unreadable ({e})")));
+            // serde's message can quote a value ("invalid type: string \"...\""): category and position only.
+            out.notes.push(warn(format!(
+                "vsec launch-env output unreadable ({:?} error at line {} column {})",
+                e.classify(),
+                e.line(),
+                e.column()
+            )));
             return out;
         }
     };
@@ -439,6 +448,37 @@ mod tests {
         let text = texts(&i);
         assert_eq!(text.len(), 1);
         assert!(text[0].contains("output unreadable") && !text[0].contains("SECRET_VALUE"));
+    }
+
+    #[test]
+    fn a_wrong_shape_in_launch_env_never_quotes_a_value() {
+        for bad in [
+            r#"{"vars":"SENTINEL-abc"}"#,
+            r#"{"vars":[{"name":"A","value":["SENTINEL-abc"]}]}"#,
+            r#"{"vars":[],"loaded":"SENTINEL-abc"}"#,
+            r#"{"vars":[{"name":"A","value":987654321}]}"#,
+        ] {
+            let i = import(r"C:\p", |_| output(0, bad, ""));
+            let text = texts(&i);
+            assert!(i.vars.is_empty(), "{bad}");
+            assert_eq!(text.len(), 1, "{bad}");
+            assert!(text[0].contains("output unreadable"), "{bad}");
+            assert!(
+                !text[0].contains("SENTINEL") && !text[0].contains("987654321"),
+                "{bad}: {}",
+                text[0]
+            );
+        }
+    }
+
+    #[test]
+    fn the_secrets_store_access_token_from_vsec_is_skipped_by_name_only() {
+        let json = launch_env(&[("BWS_ACCESS_TOKEN", "bws-leak"), ("GOOD_NAME", "good")], &[], &[]);
+        let i = import(r"C:\p", |_| output(0, &json, ""));
+        assert_eq!(i.vars, [("GOOD_NAME".to_owned(), "good".to_owned())]);
+        let text = texts(&i);
+        assert_eq!(text.iter().filter(|t| t.contains("secret 'BWS_ACCESS_TOKEN' skipped")).count(), 1);
+        assert!(!text.iter().any(|t| t.contains("bws-leak")), "a value is never printed");
     }
 
     #[test]

@@ -287,6 +287,20 @@ mod tests {
     }
 
     #[test]
+    fn the_secrets_store_access_token_file_is_skipped_with_its_file_twin() {
+        let s = Store::new("bws");
+        s.put(r"shared\BWS_ACCESS_TOKEN", "bws-leak");
+        s.put(r"shared\GOOD_NAME", "good");
+        let i = import(r"C:\test\.bws", &s.root());
+        let text: Vec<&str> = i.notes.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(i.loaded, vec!["GOOD_NAME(shared)".to_owned()]);
+        assert_eq!(var(&i, "BWS_ACCESS_TOKEN"), None);
+        assert_eq!(var(&i, "BWS_ACCESS_TOKEN_FILE"), None, "no path to the token either");
+        assert_eq!(text.iter().filter(|t| t.contains("secret 'BWS_ACCESS_TOKEN' skipped")).count(), 1);
+        assert!(!text.iter().any(|t| t.contains("bws-leak")), "a value is never printed");
+    }
+
+    #[test]
     fn a_store_under_a_bracket_path_loads() {
         let s = Store::new("br");
         let root = s.0.join("br[x]dir");
