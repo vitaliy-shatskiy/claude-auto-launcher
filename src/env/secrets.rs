@@ -34,6 +34,28 @@ const RESERVED: [&str; 12] = [
     "PSMODULEPATH",
 ];
 
+/// Claude Code auth names: one in the store would move every launched session to API billing or
+/// another account.
+const CLAUDE_AUTH: [&str; 4] = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+];
+
+/// Why a valid variable name is never exported, as the note's tail; matched case-insensitively,
+/// as Windows matches environment names.
+fn refusal(name: &str) -> Option<&'static str> {
+    let up = name.to_ascii_uppercase();
+    if RESERVED.contains(&up.as_str()) {
+        Some("that name is reserved by the system")
+    } else if CLAUDE_AUTH.contains(&up.as_str()) {
+        Some("Claude Code auth stays with the profile login")
+    } else {
+        None
+    }
+}
+
 /// What one import decided: the variables to set (in order), the `NAME(tier)` list, the lines.
 #[derive(Debug, Default)]
 pub(crate) struct Import {
@@ -143,11 +165,9 @@ pub(crate) fn import(working_directory: &str, launch_env: impl FnOnce(&str) -> i
                 format!("  secret '{}' skipped: not a valid environment variable name", v.name),
                 Fg::DarkYellow,
             ));
-        } else if RESERVED.contains(&v.name.to_ascii_uppercase().as_str()) {
-            out.notes.push(Note::new(
-                format!("  secret '{}' skipped: that name is reserved by the system", v.name),
-                Fg::DarkYellow,
-            ));
+        } else if let Some(why) = refusal(&v.name) {
+            out.notes
+                .push(Note::new(format!("  secret '{}' skipped: {why}", v.name), Fg::DarkYellow));
         } else {
             out.vars.push((v.name, v.value));
         }
@@ -289,6 +309,29 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("secret 'PATH'") && t.contains("reserved")));
         assert_eq!(var(&i, "GOOD_NAME"), Some("good"));
         assert!(!text.iter().any(|t| t.contains("good")), "a value is never printed");
+    }
+
+    #[test]
+    fn a_claude_auth_name_from_vsec_is_skipped_with_a_line_naming_only_it() {
+        let names = [
+            "ANTHROPIC_API_KEY",
+            "anthropic_auth_token",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+        ];
+        let mut vars: Vec<(&str, &str)> = names.iter().map(|n| (*n, "sk-ant-leak")).collect();
+        vars.push(("GOOD_NAME", "good"));
+        let i = import(r"C:\p", |_| output(0, &launch_env(&vars, &[], &[]), ""));
+        assert_eq!(i.vars, [("GOOD_NAME".to_owned(), "good".to_owned())]);
+        let text = texts(&i);
+        for n in names {
+            assert_eq!(
+                text.iter().filter(|t| t.contains(&format!("secret '{n}' skipped"))).count(),
+                1,
+                "{n}"
+            );
+        }
+        assert!(!text.iter().any(|t| t.contains("sk-ant-leak")), "a value is never printed");
     }
 
     #[test]

@@ -5,7 +5,7 @@
 use std::os::windows::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
-use super::{Import, RESERVED, is_env_name};
+use super::{Import, is_env_name, refusal};
 use crate::env::Note;
 use crate::out::Fg;
 
@@ -77,11 +77,9 @@ pub(crate) fn import(working_directory: &str, root: &str) -> Import {
                 }
                 continue;
             }
-            if RESERVED.contains(&name.to_ascii_uppercase().as_str()) {
-                out.notes.push(Note::new(
-                    format!("  secret '{name}' skipped: that name is reserved by the system"),
-                    Fg::DarkYellow,
-                ));
+            if let Some(why) = refusal(&name) {
+                out.notes
+                    .push(Note::new(format!("  secret '{name}' skipped: {why}"), Fg::DarkYellow));
                 continue;
             }
             let Some(value) = read_value(&path) else { continue };
@@ -256,6 +254,36 @@ mod tests {
         assert_eq!(var(&i, "by-path-key.json"), None);
         assert_eq!(i.loaded, vec!["GOOD_NAME(shared)".to_owned()]);
         assert!(!text.iter().any(|t| t.contains("good")), "a value is never printed");
+    }
+
+    #[test]
+    fn a_claude_auth_file_is_skipped_with_a_line_naming_only_it() {
+        let s = Store::new("auth");
+        let names = [
+            "ANTHROPIC_API_KEY",
+            "anthropic_auth_token",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+        ];
+        for n in names {
+            s.put(&format!(r"shared\{n}"), "sk-ant-leak");
+        }
+        s.put(r"shared\GOOD_NAME", "good");
+        let i = import(r"C:\test\.auth", &s.root());
+        let text: Vec<&str> = i.notes.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(i.loaded, vec!["GOOD_NAME(shared)".to_owned()]);
+        assert!(
+            i.vars.iter().all(|(k, _)| k.starts_with("GOOD_NAME")),
+            "no auth var and no derived _FILE"
+        );
+        for n in names {
+            assert_eq!(
+                text.iter().filter(|t| t.contains(&format!("secret '{n}' skipped"))).count(),
+                1,
+                "{n}"
+            );
+        }
+        assert!(!text.iter().any(|t| t.contains("sk-ant-leak")), "a value is never printed");
     }
 
     #[test]
