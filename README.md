@@ -103,7 +103,14 @@ cargo build --release --locked
 ```
 
 The binary is `target\release\claude-auto.exe`. Copy it to a folder on your PATH. There is no
-installer. With no config file the launcher runs one `work` account on `~/.claude`.
+installer. Or take `claude-auto.exe` from the
+[latest release](https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/latest) and
+check it against the `.sha256` file beside it.
+
+To update, replace the file. A running launcher holds it: rename the old one first
+(`claude-auto.exe` → `claude-auto.old.exe`), copy the new one in, delete the old one later. From
+0.5.0 or older (`install.ps1` put the clone folder on the user PATH): remove the clone from PATH, or
+leave it and copy `claude-auto.exe` into it. Config, prefs and caches carry over. With no config file the launcher runs one `work` account on `~/.claude`.
 
 The launch screen is tested against Claude Code `2.1.316`. A much older or newer CLI may accept
 different flags. Node.js or PowerShell 7 is needed only for `.js`/`.mjs` or `.ps1` launch hooks and

@@ -4,90 +4,78 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-08
+
+The launcher is one Rust binary, `claude-auto.exe`. The PowerShell launcher is gone.
+
+### Added
+
+- The launcher rewritten in Rust (`cargo build --release --locked`, or `claude-auto.exe` from the
+  release page). Same screens, config, prefs, project and model caches. The multi-account MCP
+  mirror runs inside it, so a launch needs neither PowerShell nor Node.
+- Secrets from a `vsec` secrets tool: config `vsecPath`, else env `CLAUDE_AUTO_VSEC`, else
+  `vsec.exe` or `vsec.cmd` on PATH. The launcher runs `vsec launch-env --cwd <project>` windowless
+  and sets the variables it returns on the session. vsec not found: the `secretsRoot` file walk
+  runs as before, with one gray line. vsec found but failing: no secrets and one yellow line, never
+  a mix of both sources.
+- Debug mode (`--launcher-debug` or `CLAUDE_AUTO_DEBUG=1`): nothing on screen (a timing footer only
+  with `CLAUDE_AUTO_DEBUG=footer`), F12 for the timings of the run, `timing` records in the run log,
+  and `claude-auto --launcher-timings [--days N]` for count, p50, p95 and max per span.
+- CI: a Windows job for the crate (`cargo fmt --check`, `clippy -D warnings`, `cargo test`, all
+  `--locked`).
+
 ### Changed
 
-- The binary is `claude-auto.exe` (was `claude-auto-rs.exe`). Rename the old file on PATH, or delete it after
-  copying the new one. Cache and temp file names keep their old prefix.
+- The binary is `claude-auto.exe` (was `claude-auto-rs.exe` while under test). Rename the old file
+  on PATH, or delete it after copying the new one. Cache and temp file names keep their old prefix.
+- Secrets: Claude Code's own auth variables (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`) and the secrets store's access token
+  (`BWS_ACCESS_TOKEN`) never reach the session from either source.
+  The vsec path exports exactly vsec's variables, no derived `<NAME>_FILE`.
+- Launch hooks run at the same time, not one after another. The session still starts only after
+  every hook has ended, and their lines print in config order.
+- `launchHooks`: an entry may be an array of paths, run in order as one chain beside the other
+  entries (`["a.ps1", ["b.ps1", "c.ps1"]]`). A plain string is one hook, as before.
+- Launch hooks get the console's stdin. The companion server, its build and the pairing QR start
+  with the chosen account's environment (`CLAUDE_CONFIG_DIR`, project secrets), as the session
+  does. An offline launch passes the release-channel check silently; any other failed request
+  prints `update check skipped: <reason>` (a remembered failure stays silent for five minutes).
+- Project screen: scratch directories are no longer listed as projects. A directory under the temp
+  folder or under a profile's `jobs\<id>\tmp` stays known but hidden: the title reads
+  `10 known ─ 19 hidden`, and a filter (`/`) that matches a hidden project lists it after the
+  visible matches. The current directory is always shown.
+- Project screen: headless sessions (`claude -p`, the SDKs) no longer date a project. A folder only
+  headless runs used is hidden like a scratch directory, unless it is a repository root. The
+  session picker leaves headless sessions out, counts them in its title (`N headless hidden`), and
+  loads further pages until it has a page of resumable sessions or none are left.
+- Launch screen: on an account whose widget `availableModels` lacks the family of `settings.json`'s
+  model, `default` launches with `--model opus[1m]` and the row names that option; the advisor row
+  does the same with `--advisor opus`. An account that has the model, or one the widget never
+  reported (or reported over 30 minutes ago), still passes no `--model`.
+- Session picker: with `sharing` on, one session list for every account. With `sharing` off each
+  account still lists its own sessions.
 
 ### Removed
 
 - The PowerShell launcher (`claude-auto.ps1`, `claude-auto/`, `claude-auto.cmd`, `install.ps1`),
-  its tests (`tests/*.ps1` except the privacy scan `check-clean.ps1`), the Node MCP mirror
-  (`sharing/claude-mirror-mcp.mjs`, `tests/Test-Mirror.mjs`) and the PowerShell CI job. The Rust
-  launcher `claude-auto-rs` is the only launcher. The last commit with the PowerShell code is
-  `7348f59`.
-- `tests/check-clean.ps1`: the privacy scan is `examples/privacy_scan.rs` now
-  (`cargo run --example privacy_scan`, same contract, case-insensitive, a hit names the pattern's
-  line number instead of its text). No PowerShell tests remain.
-
-### Added
-
-- `claude-auto-rs`: the launcher rewritten in Rust (`src/`, `cargo build --release`), under test
-  beside the PowerShell launcher, which stays the default until the cut-over. Same screens, same
-  config, prefs, projects and model caches; its sessions cache is its own file until the cut-over.
-  The multi-account MCP mirror runs inside it, so a launch needs no Node.
-- CI: a Windows job for the Rust crate (`cargo fmt --check`, `clippy -D warnings`, `cargo test`, all
-  `--locked`, cargo cached) beside the PowerShell suites.
-- `claude-auto-rs`: debug mode (`--launcher-debug` or `CLAUDE_AUTO_DEBUG=1`): nothing on screen
-  (a timing footer only with `CLAUDE_AUTO_DEBUG=footer`), F12 for the timings of the run,
-  `timing` records in the run log, and `claude-auto-rs --launcher-timings [--days N]` for count, p50, p95 and max per span.
-
-### Changed
-
-- `claude-auto-rs`: launch hooks run at the same time, not one after another. The session still
-  starts only after every hook has ended, and their lines print in config order.
-- `launchHooks`: an entry may be an array of paths, run in order as one chain beside the other
-  entries (`["a.ps1", ["b.ps1", "c.ps1"]]`). A plain string is one hook, as before.
-- `claude-auto-rs`: launch hooks get the console's stdin, as the PowerShell launcher gave them. The
-  companion server, its build and the pairing QR start with the chosen account's environment
-  (`CLAUDE_CONFIG_DIR`, project secrets), as the session does. A console whose input cannot be
-  re-armed after a typed path ends with its own message instead of `scripted keys exhausted`. An
-  offline launch passes the release-channel check silently. Any other failed request prints
-  `update check skipped: <reason>` with the reason in words (a remembered failure stays silent for
-  five minutes).
-- `claude-auto-rs` internals: the four modules over 500 lines split along their seams, the mirror and
-  sharing tests in their modules' folders, typed errors in the companion and sharing paths, the IP Helper calls made
-  inside the one function that owns their buffer, no busy wait while an ESC sequence is peeked, and
-  the unused `anyhow` dependency dropped.
-
-- Project screen: scratch directories are no longer listed as projects. A directory under the temp
-  folder or under a profile's `jobs\<id>\tmp` (what a headless `claude -p` run in a temporary cwd
-  leaves behind) stays known but hidden: the title reads `10 known ─ 19 hidden`, and typing a filter
-  (`/`) that matches a hidden project lists it, after the visible matches. The current directory is
-  always shown. A temp root that is a drive root, or the home directory or above it, is ignored.
-- Project screen: headless sessions (`claude -p`, the SDKs: entrypoint `sdk-*`) no longer date a
-  project, which shows the time of its newest interactive session. A folder only headless runs
-  used is hidden like a scratch directory, unless it is a repository root (`.git` directory): a plain
-  folder and a linked worktree are hidden. The session picker leaves headless sessions out, counts
-  them apart in its title (`N headless hidden`), and loads further pages until a page's worth of
-  sessions is resumable or none are left, so a run of headless sessions never opens it empty.
-- Launch screen: on an account whose widget `availableModels` lacks the family `settings.json`'s
-  model belongs to (today Fable on one Team account), the `default` model launches with the
-  `Opus[1M]` option's own `--model opus[1m]` and the row names that option's label; an account that
-  has the model, or one the widget never reported, still passes no `--model`. A widget record older
-  than 30 minutes counts as unreported. The advisor row does the same: a `default` whose
-  `advisorModel` names Fable on such an account launches with `--advisor opus` and reads
-  `default (opus)` (or folds into the `opus` option), never `default (plan default)`. The family
-  match reads raw settings ids too (`fable5`, `fable_1m`).
-- Session picker: with `sharing` on, one session list for every account, read from the projects
-  directory the project screen lists, so one summary cache serves all accounts. With `sharing` off
-  each account still lists its own sessions.
+  its tests, the Node MCP mirror (`sharing/claude-mirror-mcp.mjs`) and the PowerShell CI job. The
+  last commit with the PowerShell code is `7348f59`.
+- `tests/check-clean.ps1`: the privacy scan is `cargo run --example privacy_scan` now (same
+  contract, case-insensitive, a hit names the pattern's line number instead of its text).
 
 ### Fixed
 
-- Launch: the Claude session the launcher starts carries `CLAUDE_AUTO_LAUNCHED=1` in its
-  environment, on every account, so a SessionStart hook can tell a launcher start from one by hand.
-  It is set only around the child start and removed after, so a later `claude` typed in the same
-  terminal does not carry it.
+- Launch: the session carries `CLAUDE_AUTO_LAUNCHED=1`, on every account, so a SessionStart hook
+  can tell a launcher start from one by hand. It is set only around the child start, so a later
+  `claude` typed in the same terminal does not carry it.
 - Multi-account sharing: every secondary account's root gets `CLAUDE.md` as a file symlink to the
-  canonical one, repaired at each launch. A session under `CLAUDE_CONFIG_DIR` reads its user
-  instructions from there, so outside the home tree it ran with none. A copy equal to the canonical
-  file is saved as `CLAUDE.md.pre-symlink.<yyyyMMdd-HHmmss>` and replaced, a diverged one is left and
-  named, and without the symlink privilege one warning line is printed and the launch goes on.
-- Project screen: neither the registry nor the remembered-project check probes a network path
-  (`\\host\share`, `\\?\UNC\...`, a mapped network drive) any more, so an unreachable share cannot
-  hold the first screen or a tab switch; such a row is listed unchecked and refused at launch if it
-  cannot be entered. A drive letter that is not there is skipped without a look.
+  canonical one, repaired at each launch; a session under `CLAUDE_CONFIG_DIR` outside the home tree
+  ran with no user instructions before. A copy equal to the canonical file is saved as
+  `CLAUDE.md.pre-symlink.<yyyyMMdd-HHmmss>` and replaced, a diverged one is left and named, and
+  without the symlink privilege one warning line is printed and the launch goes on.
+- Project screen: no network path (`\\host\share`, `\\?\UNC\...`, a mapped network drive) is probed
+  any more, so an unreachable share cannot hold the first screen or a tab switch; such a row is
+  listed unchecked and refused at launch if it cannot be entered. A missing drive letter is skipped.
 
 ### Known limits
 
