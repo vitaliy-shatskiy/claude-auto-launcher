@@ -4,6 +4,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-11-08
+
+### Fixed
+
+- A `vsec.cmd` shim as the vsec path (`vsecPath`, `CLAUDE_AUTO_VSEC` or PATH) is resolved to the
+  `vsec.exe` it names and that exe is spawned directly, so a vsec redeploy no longer breaks session
+  secrets and quoted arguments survive. A shim naming anything outside its folder is refused.
+- The "secrets loaded" line prints once.
+
 ## [0.6.0] — 2026-11-08
 
 The launcher is one Rust binary, `claude-auto.exe`. The PowerShell launcher is gone.
