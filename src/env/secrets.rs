@@ -9,7 +9,7 @@ mod files;
 use std::ffi::OsString;
 use std::io;
 use std::os::windows::process::CommandExt as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde::Deserialize;
@@ -121,17 +121,57 @@ pub(crate) fn load(cwd: &str, vsec: Option<&Path>, secrets_root: &str) -> Import
 
 /// `vsec launch-env --cwd <dir>`, windowless, stdin closed.
 pub(crate) fn run_vsec(vsec: &Path, cwd: &str) -> io::Result<Output> {
-    if !vsec.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("vsec not found at {}", vsec.display()),
-        ));
-    }
-    Command::new(vsec)
+    Command::new(vsec_exe(vsec)?)
         .args(["launch-env", "--cwd", cwd])
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .output()
+}
+
+/// The exe to spawn: an exe as is; the deploy's shim `vsec.cmd` (`@"%~dp0<version>\vsec.exe" %*`) as
+/// the exe it names, read the way worker-runtime's `vsec_exe` reads it. cmd.exe re-parses arguments,
+/// so the shim itself is never run. A target outside the shim's folder is refused, never spawned.
+fn vsec_exe(vsec: &Path) -> io::Result<PathBuf> {
+    let is_shim = vsec.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd"));
+    let exe = if is_shim {
+        let shim = match std::fs::read(vsec) {
+            Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(io::Error::new(e.kind(), format!("vsec not found at {}", vsec.display())));
+            }
+            Err(e) => {
+                return Err(io::Error::new(e.kind(), format!("vsec shim unreadable at {}: {e}", vsec.display())));
+            }
+        };
+        let refused = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("vsec shim {} names no vsec.exe below its folder", vsec.display()),
+            )
+        };
+        let target = shim
+            .split_once("%~dp0")
+            .and_then(|(_, rest)| rest.split('"').next())
+            .ok_or_else(refused)?;
+        let rel = Path::new(target.trim());
+        let named_vsec = rel
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("vsec.exe"));
+        if !named_vsec || rel.components().any(|c| !matches!(c, Component::Normal(_))) {
+            return Err(refused());
+        }
+        vsec.with_file_name(rel)
+    } else {
+        vsec.to_path_buf()
+    };
+    if !exe.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("vsec not found at {}", exe.display()),
+        ));
+    }
+    Ok(exe)
 }
 
 fn one_line(s: &str) -> String {
@@ -190,7 +230,8 @@ pub(crate) fn import(working_directory: &str, launch_env: impl FnOnce(&str) -> i
     out.notes.extend(
         lines
             .map(str::trim)
-            .filter(|l| !l.is_empty())
+            // vsec writes its own copy of the line above, built from the same `loaded` list.
+            .filter(|l| !l.is_empty() && !l.starts_with("secrets loaded:"))
             .map(|l| Note::new(format!("  {l}"), Fg::DarkGray)),
     );
     out
@@ -378,16 +419,88 @@ mod tests {
         assert!(empty.notes.is_empty() && empty.vars.is_empty(), "no vsec and no store: no line");
     }
 
+    /// A temp folder holding `vsec.cmd` with `shim`, and `<ver>\vsec.exe` when `exe` is set.
+    fn shim_dir(tag: &str, shim: &str, exe: bool) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("claude-auto-rs-vsec-{tag}-{}", crate::log::new_run_id()));
+        std::fs::create_dir_all(root.join("0.2.0-abc")).unwrap();
+        std::fs::write(root.join("vsec.cmd"), shim).unwrap();
+        if exe {
+            std::fs::write(root.join(r"0.2.0-abc\vsec.exe"), "").unwrap();
+        }
+        root
+    }
+
     #[test]
-    fn a_vsec_shim_is_spawned_with_launch_env_and_the_directory() {
-        let root = std::env::temp_dir().join(format!("claude-auto-rs-vsec-run-{}", crate::log::new_run_id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let shim = root.join("vsec.cmd");
-        // A forward-slash directory: the echo builds JSON by hand, where a backslash would escape.
-        std::fs::write(&shim, "@echo {\"vars\":[{\"name\":\"ARGS\",\"value\":\"%*\"}]}\r\n").unwrap();
-        let i = load("C:/test/proj", Some(&shim), r"C:\no-store");
+    fn the_deploy_shim_resolves_to_the_exe_it_names() {
+        let root = shim_dir("shim", "@\"%~dp00.2.0-abc\\vsec.exe\" %*\r\n", true);
+        let got = vsec_exe(&root.join("vsec.cmd"));
+        let upper = vsec_exe(&root.join("VSEC.CMD"));
         std::fs::remove_dir_all(&root).unwrap();
-        assert_eq!(i.vars, [("ARGS".to_owned(), "launch-env --cwd C:/test/proj".to_owned())]);
+        assert_eq!(got.unwrap(), root.join(r"0.2.0-abc\vsec.exe"));
+        assert_eq!(
+            upper.unwrap(),
+            root.join(r"0.2.0-abc\vsec.exe"),
+            "the extension matches in any case"
+        );
+    }
+
+    #[test]
+    fn an_exe_vsec_path_is_spawned_as_is() {
+        let root = shim_dir("exe", "", true);
+        let exe = root.join(r"0.2.0-abc\vsec.exe");
+        let got = vsec_exe(&exe);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(got.unwrap(), exe);
+    }
+
+    #[test]
+    fn a_shim_naming_no_exe_below_its_folder_is_refused() {
+        for (shim, why) in [
+            ("@echo hi %*\r\n", "no %~dp0 line"),
+            ("@\"%~dp0..\\vsec.exe\" %*\r\n", "parent folder"),
+            ("@\"%~dp0C:\\evil\\vsec.exe\" %*\r\n", "absolute path"),
+            ("@\"%~dp0\\\\host\\share\\vsec.exe\" %*\r\n", "UNC path"),
+            ("@\"%~dp0\\vsec.exe\" %*\r\n", "rooted path"),
+            ("@\"%~dp00.2.0-abc\\other.exe\" %*\r\n", "not vsec.exe"),
+        ] {
+            let root = shim_dir("bad", shim, true);
+            let got = vsec_exe(&root.join("vsec.cmd"));
+            std::fs::remove_dir_all(&root).unwrap();
+            let err = got.expect_err(why).to_string();
+            assert!(err.contains("names no vsec.exe below its folder"), "{why}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_shim_whose_exe_is_gone_or_that_is_missing_names_the_path() {
+        let root = shim_dir("gone", "@\"%~dp00.2.0-abc\\vsec.exe\" %*\r\n", false);
+        let gone = vsec_exe(&root.join("vsec.cmd")).unwrap_err().to_string();
+        let missing = vsec_exe(&root.join(r"none\vsec.cmd")).unwrap_err().to_string();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(gone, format!("vsec not found at {}", root.join(r"0.2.0-abc\vsec.exe").display()));
+        assert_eq!(missing, format!("vsec not found at {}", root.join(r"none\vsec.cmd").display()));
+    }
+
+    #[test]
+    fn a_broken_shim_costs_one_line_and_never_reads_the_store() {
+        let root = shim_dir("nofb", "@echo hi %*\r\n", false);
+        std::fs::create_dir_all(root.join(r"store\shared")).unwrap();
+        std::fs::write(root.join(r"store\shared\FROM_FILE"), "file-value").unwrap();
+        let i = load(r"C:\p", Some(&root.join("vsec.cmd")), &root.join("store").to_string_lossy());
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(i.vars.is_empty() && i.loaded.is_empty(), "the file store is not read");
+        let text = texts(&i);
+        assert_eq!(text.len(), 1, "{text:?}");
+        assert!(text[0].starts_with("  secrets not loaded: vsec shim "), "{}", text[0]);
+    }
+
+    #[test]
+    fn vsecs_own_secrets_loaded_note_is_not_printed_twice() {
+        let json = launch_env(&[("A", "a")], &["A(shared)"], &["  secrets loaded: A(shared)", "other note"]);
+        let i = import(r"C:\p", |_| output(0, &json, ""));
+        let text = texts(&i);
+        assert_eq!(text.iter().filter(|t| t.contains("secrets loaded")).count(), 1, "{text:?}");
+        assert!(text.contains(&"  other note"), "other notes still show");
     }
 
     #[test]
