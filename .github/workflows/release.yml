@@ -43,7 +43,8 @@ jobs:
           Copy-Item target\release\claude-auto.exe dist\
           $h = (Get-FileHash dist\claude-auto.exe -Algorithm SHA256).Hash.ToLower()
           [IO.File]::WriteAllText("dist\claude-auto.exe.sha256", "$h  claude-auto.exe`n")
-          & dist\claude-auto.exe --version
+          $out = & dist\claude-auto.exe --launcher-version
+          if ($out -notmatch [regex]::Escape($env:TAG.TrimStart('v'))) { throw "exe reports '$out', expected $env:TAG" }
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/claude-auto.exe
