@@ -166,7 +166,7 @@ impl<'a> LaunchScreen<'a> {
         }
     }
 
-    /// ctrl+w / ctrl+s: the selected config row swaps with the next shown one that way.
+    /// ctrl+w / ctrl+s (alt+up / alt+down): the selected config row swaps with the next shown one that way.
     fn move_row(&mut self, up: bool) {
         let shown = self.roster.shown_config_rows();
         let Some(cur) = self.roster.rows.get(self.state.row).map(|r| r.name) else {
@@ -194,6 +194,9 @@ impl<'a> LaunchScreen<'a> {
             return;
         }
         let mut rows = self.config_rows();
+        if !rows.contains(&cur) {
+            return;
+        }
         rows.retain(|r| *r != cur);
         self.apply(&rows, None);
         self.save();
@@ -329,8 +332,9 @@ impl Screen for LaunchScreen<'_> {
             self.cursor.index = i32::try_from(self.state.row).unwrap_or(0);
             return true;
         }
-        if key.is_ctrl(vk::W) || key.is_ctrl(vk::S) {
-            self.move_row(key.is(vk::W));
+        // alt+up/down too: ctrl+s is XOFF on some terminals.
+        if key.is_ctrl(vk::W) || key.is_ctrl(vk::S) || (key.alt && (key.is(vk::UP) || key.is(vk::DOWN))) {
+            self.move_row(key.is(vk::W) || key.is(vk::UP));
             return true;
         }
         if key.is_ctrl(vk::X) {
@@ -671,6 +675,46 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("rows for this run only: access denied"))
         );
+    }
+
+    #[test]
+    fn ctrl_x_on_the_action_row_writes_nothing() {
+        let mut r = four();
+        r.add_action_row();
+        let mut store = FakeStore::default();
+        let st = r.new_state();
+        let (out, _) = edit(&mut r, st, &mut store, "DownArrow,DownArrow,Ctrl+X,Enter");
+        assert!(out.is_some());
+        assert_eq!(store.saved, [] as [Vec<RowName>; 0]);
+        assert!(r.row(RowName::Action).is_some());
+    }
+
+    #[test]
+    fn alt_down_moves_the_row_down() {
+        let mut r = four();
+        let v = view();
+        let p = Prefs::default();
+        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+        let mut store = FakeStore::default();
+        let st = r.new_state();
+        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook).with_rows(&mut store);
+        let alt = |code| KeyPress {
+            alt: true,
+            ..KeyPress::named(code)
+        };
+        let keys = [
+            KeyPress::named(vk::DOWN),
+            KeyPress::named(vk::DOWN),
+            alt(vk::DOWN),
+            alt(vk::UP),
+            alt(vk::DOWN),
+            KeyPress::named(vk::ENTER),
+        ];
+        let mut t = PreviewTerm::new((100, 30), keys.into(), true);
+        assert_eq!(run(&mut s, &mut t).unwrap().unwrap().row, 3, "the cursor follows the row");
+        drop(s);
+        assert_eq!(names(&r).get(2..4), Some(&[RowName::Effort, RowName::Model][..]));
+        assert_eq!(store.saved.len(), 3);
     }
 
     #[test]

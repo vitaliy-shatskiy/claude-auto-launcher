@@ -10,6 +10,8 @@ use super::{AfterEsc, EscSource, Event, KeyPress, VtOutcome, after_esc, esc_wait
 use crate::sys::{self, Handle, RawRecord};
 
 const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+/// conhost suspends output on ctrl+s and drops it while line input is on; echo needs line input.
+const LINE_AND_ECHO_INPUT: u32 = 0x0002 | 0x0004;
 const ENABLE_WINDOW_INPUT: u32 = 0x0008;
 const ENABLE_MOUSE_INPUT: u32 = 0x0010;
 const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
@@ -30,12 +32,13 @@ pub fn wants_vt_motion(tmux: Option<&str>, stdout_console: bool, mouse: bool) ->
 }
 
 /// The arm: the original mode plus window, mouse and extended flags, minus `QuickEdit` and
-/// processed input (Ctrl+C becomes a key). Keyboard-only keeps `QuickEdit` and asks for no mouse.
+/// processed, line and echo input (Ctrl+C and Ctrl+S become keys). Keyboard-only keeps `QuickEdit` and asks for no mouse.
 pub fn armed_mode(original: u32, mouse: bool) -> u32 {
     if mouse {
-        (original | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS) & !(ENABLE_QUICK_EDIT_MODE | ENABLE_PROCESSED_INPUT)
+        (original | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS)
+            & !(ENABLE_QUICK_EDIT_MODE | ENABLE_PROCESSED_INPUT | LINE_AND_ECHO_INPUT)
     } else {
-        (original | ENABLE_WINDOW_INPUT) & !ENABLE_PROCESSED_INPUT
+        (original | ENABLE_WINDOW_INPUT) & !(ENABLE_PROCESSED_INPUT | LINE_AND_ECHO_INPUT)
     }
 }
 
@@ -346,6 +349,15 @@ mod tests {
         assert_eq!(armed & ENABLE_PROCESSED_INPUT, 0);
         assert_ne!(armed & ENABLE_MOUSE_INPUT, 0);
         assert_eq!(armed & 0x0100, 0x0100, "unrelated bits survive");
+    }
+
+    #[test]
+    fn arm_clears_line_and_echo_input_so_ctrl_s_is_a_key_and_close_restores_them() {
+        let original = 0x01F7;
+        for mouse in [true, false] {
+            assert_eq!(armed_mode(original, mouse) & 0x6, 0, "conhost eats ctrl+s under line input");
+        }
+        assert_eq!(original & 0x6, 0x6, "close sets the untouched original back");
     }
 
     #[test]

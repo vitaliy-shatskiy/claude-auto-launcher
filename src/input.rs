@@ -200,19 +200,21 @@ pub fn key_from_record(down: bool, code: u16, unicode: u16, control_state: u32) 
     if !down || matches!(code, vk::SHIFT | vk::CONTROL | vk::MENU) {
         return None;
     }
-    let code = match (code, unicode) {
-        (0, 13) => vk::ENTER,
-        (0, 9) => vk::TAB,
-        (0, 8) => vk::BACKSPACE,
-        (0, 27) => vk::ESCAPE,
-        _ => code,
+    let (code, ctrl_char) = match (code, unicode) {
+        (0, 13) => (vk::ENTER, false),
+        (0, 9) => (vk::TAB, false),
+        (0, 8) => (vk::BACKSPACE, false),
+        (0, 27) => (vk::ESCAPE, false),
+        // Any other control char is ctrl+<letter>: 0x17 is ctrl+w.
+        (0, 1..=26) => (0x40 + unicode, true),
+        _ => (code, false),
     };
     Some(KeyPress {
         ch: char::from_u32(u32::from(unicode)).unwrap_or('\0'),
         vk: code,
         shift: control_state & SHIFT_PRESSED != 0,
         alt: control_state & ALT_PRESSED != 0,
-        ctrl: control_state & CTRL_PRESSED != 0,
+        ctrl: ctrl_char || control_state & CTRL_PRESSED != 0,
         caps_lock: control_state & CAPSLOCK_ON != 0,
     })
 }

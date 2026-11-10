@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Added
 
-- Launch screen: `ctrl+w`/`ctrl+s` move the selected row, `ctrl+x` hides it (not `account`), `o`
+- Launch screen: `ctrl+w`/`ctrl+s` (or `alt+up`/`alt+down`) move the selected row, `ctrl+x` hides it (not `account`), `o`
   opens the rows editor, where hidden rows can be shown again. Each change saves `rows` at once;
   a refused save holds for this run and says why. The footer names the keys.
 
@@ -14,6 +14,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 - A `rows` save from the rows editor (`o`, or maintenance `l`) shows on return to the launch
   screen, no longer from the next start.
+- `ctrl+s` reaches the launcher on Windows: the armed console drops line and echo input, so
+  conhost no longer takes it as pause and swallows it with the next key.
+- `ctrl+x` on the action row (`projectScreen: "onDemand"`) no longer writes `rows`.
+- A control key psmux sends as a bare character (`ctrl+w` as U+0017) arrives as that ctrl key.
 
 ## [0.7.0] — 2026-11-10
 

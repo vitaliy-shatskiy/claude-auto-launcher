@@ -143,6 +143,20 @@ fn a_char_only_control_key_gets_its_virtual_key() {
     assert_eq!(ctrl_m.vk, 0x4D, "a real vk is never rewritten");
 }
 
+#[test]
+fn a_char_only_control_letter_is_that_letter_with_ctrl() {
+    for (ch, code) in [(0x17, vk::W), (0x13, vk::S), (0x18, vk::X), (0x12, vk::R), (1, 0x41), (26, 0x5A)] {
+        let k = key_from_record(true, 0, ch, 0).expect("a press");
+        assert!(k.is_ctrl(code), "char {ch} -> ctrl+vk {code}");
+    }
+    for ch in [13, 9, 8] {
+        assert!(
+            !key_from_record(true, 0, ch, 0).expect("a press").ctrl,
+            "char {ch} stays its own key"
+        );
+    }
+}
+
 /// Key-downs that arrive at virtual milliseconds after the ESC; a peek or take waits up to its
 /// timeout on that clock.
 struct Timeline {
