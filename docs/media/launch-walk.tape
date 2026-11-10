@@ -60,16 +60,12 @@ Sleep 900ms
 Left
 Sleep 1.2s
 
-# Row editing: ctrl+w moves advisor up, then effort back above it; ctrl+x hides mode, o shows it
-# again. No ctrl+s here: the recording terminal takes it as XOFF and drops the next key.
+# Row editing: ctrl+w moves advisor up, ctrl+s moves it back down; ctrl+x hides mode, o shows it
+# again.
 Ctrl+W
 Sleep 900ms
-Down
-Sleep 400ms
-Ctrl+W
+Ctrl+S
 Sleep 900ms
-Down
-Sleep 300ms
 Down
 Sleep 300ms
 Down
