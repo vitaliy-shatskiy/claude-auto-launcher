@@ -106,12 +106,11 @@ fn available(wj: &Value) -> Option<Vec<String>> {
     Some(list)
 }
 
-/// The widget record when it is stamped within `max_age_ms`: no file, half-written, unstamped or
-/// stale is `None`.
-fn fresh_widget(dir: &Path, name: &str, now_ms: i64, max_age_ms: i64) -> Option<Value> {
+/// The stamped widget record and its age in ms: no file, half-written or unstamped is `None`.
+fn widget(dir: &Path, name: &str, now_ms: i64) -> Option<(Value, i64)> {
     let wj = read(&dir.join(format!("{name}.widget.json")))?;
     let at = at_ms(&wj)?;
-    (now_ms.saturating_sub(at) <= max_age_ms).then_some(wj)
+    Some((wj, now_ms.saturating_sub(at)))
 }
 
 /// The per-model weekly bucket and its label; a bad cast is no bucket.
@@ -122,13 +121,17 @@ fn bucket(j: &Value) -> Result<(Option<i64>, Option<String>), BadCast> {
     ))
 }
 
-fn record(j: &Value, age: String, widget: Option<&Value>) -> Result<LimitRecord, BadCast> {
+/// `widget`: the widget record and whether it is within the availability cap. Availability comes
+/// only from a fresh one; the model bucket from any, a stale one's carrying its own age.
+fn record(j: &Value, age: String, widget: Option<(&Value, Option<String>)>) -> Result<LimitRecord, BadCast> {
     let (mut model, mut model_label) = bucket(j)?;
+    let mut model_age = None;
     // Only the widget writes the model bucket: a fresher statusline record must not hide it.
     if model.is_none()
-        && let Some((Some(m), label)) = widget.and_then(|w| bucket(w).ok())
+        && let Some((w, stale_age)) = &widget
+        && let Ok((Some(m), label)) = bucket(w)
     {
-        (model, model_label) = (Some(m), label);
+        (model, model_label, model_age) = (Some(m), label, stale_age.clone());
     }
     Ok(LimitRecord {
         five_hour: opt_int(j, "fiveHour")?,
@@ -136,7 +139,8 @@ fn record(j: &Value, age: String, widget: Option<&Value>) -> Result<LimitRecord,
         age_text: age,
         model,
         model_label,
-        available_models: widget.and_then(available),
+        model_age,
+        available_models: widget.filter(|(_, stale)| stale.is_none()).and_then(|(w, _)| available(w)),
     })
 }
 
@@ -151,8 +155,11 @@ pub(crate) fn summary(accounts: &[Account], dir: &Path, now_ms: i64, max_age_ms:
         if !present("fiveHour") && !present("sevenDay") {
             continue;
         }
-        let widget = fresh_widget(dir, &a.key, now_ms, max_age_ms);
-        if let Ok(r) = record(&j, age_text(now_ms.saturating_sub(at)), widget.as_ref()) {
+        let widget = widget(dir, &a.key, now_ms);
+        let widget = widget
+            .as_ref()
+            .map(|(w, age)| (w, (*age > max_age_ms).then(|| age_text(*age))));
+        if let Ok(r) = record(&j, age_text(now_ms.saturating_sub(at)), widget) {
             out.insert(a.key.clone(), r);
         }
     }
@@ -257,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_missing_or_malformed_widget_adds_no_model_bucket() {
+    fn a_stale_widget_adds_its_model_bucket_with_its_age_a_missing_or_malformed_one_none() {
         let s = Store::new("bucket-stale");
         s.put("work.json", &format!(r#"{{"sevenDay":83,"atMs":{NOW}}}"#));
         s.put(
@@ -279,13 +286,24 @@ mod tests {
             ),
         );
         let l = sum(&s);
-        for k in ["work", "personal", "shared", "low"] {
+        assert_eq!(
+            (l["work"].model, l["work"].model_label.as_deref(), l["work"].model_age.as_deref()),
+            (Some(1), Some("FABLE"), Some("31 min ago")),
+            "D5: a stale export still shows the bucket, with its own age"
+        );
+        assert_eq!(l["work"].available_models, None, "but never its availability");
+        for k in ["personal", "shared", "low"] {
             assert_eq!(
-                (l[k].seven_day, l[k].model, l[k].model_label.as_deref()),
-                (Some(83), None, None),
+                (l[k].seven_day, l[k].model, l[k].model_label.as_deref(), l[k].model_age.as_deref()),
+                (Some(83), None, None, None),
                 "{k}"
             );
         }
+        s.put(
+            "personal.widget.json",
+            &format!(r#"{{"atMs":{},"modelSevenDay":9,"modelLabel":"FABLE"}}"#, NOW - 60_000),
+        );
+        assert_eq!(sum(&s)["personal"].model_age, None, "a fresh export adds no age of its own");
     }
 
     #[test]

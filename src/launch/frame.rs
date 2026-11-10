@@ -29,14 +29,15 @@ pub struct LaunchFrameInput<'a> {
     pub style: Style,
 }
 
-/// One limit as label and percent, in drawing order: five hour, seven day, model bucket.
-fn limit_items(l: &LimitRecord) -> Vec<(String, i64)> {
+/// One limit as label, percent and an age of its own, in drawing order: five hour, seven day,
+/// model bucket (aged when it came from a stale widget export).
+fn limit_items(l: &LimitRecord) -> Vec<(String, i64, String)> {
     let mut items = Vec::new();
     if let Some(p) = l.five_hour {
-        items.push(("5h".to_owned(), p));
+        items.push(("5h".to_owned(), p, String::new()));
     }
     if let Some(p) = l.seven_day {
-        items.push(("7d".to_owned(), p));
+        items.push(("7d".to_owned(), p, String::new()));
     }
     if let Some(p) = l.model {
         let label = l
@@ -44,7 +45,8 @@ fn limit_items(l: &LimitRecord) -> Vec<(String, i64)> {
             .as_deref()
             .filter(|s| !s.is_empty())
             .map_or_else(|| "model".to_owned(), str::to_lowercase);
-        items.push((label, p));
+        let age = l.model_age.as_deref().map_or_else(String::new, |a| format!(" ({a})"));
+        items.push((label, p, age));
     }
     items
 }
@@ -66,15 +68,15 @@ pub fn limit_lines(l: &LimitRecord, indent: usize, inner: usize, wide: bool, g: 
     if items.is_empty() {
         return Vec::new();
     }
-    let lw = items.iter().map(|(label, _)| label.chars().count()).max().unwrap_or(0);
+    let lw = items.iter().map(|(label, _, _)| label.chars().count()).max().unwrap_or(0);
     let cells = |bar: usize| -> Vec<String> {
         items
             .iter()
-            .map(|(label, p)| {
+            .map(|(label, p, age)| {
                 if bar == 0 {
-                    format!("{label:<lw$} {p:>3}%")
+                    format!("{label:<lw$} {p:>3}%{age}")
                 } else {
-                    format!("{label:<lw$} {} {p:>3}%", new_bar(*p, bar, g, BarStyle::Blocks))
+                    format!("{label:<lw$} {} {p:>3}%{age}", new_bar(*p, bar, g, BarStyle::Blocks))
                 }
             })
             .collect()

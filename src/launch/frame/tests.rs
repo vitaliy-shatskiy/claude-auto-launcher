@@ -17,6 +17,7 @@ fn golden_limits() -> Limits {
         age_text: age.into(),
         model: m,
         model_label: ml.map(String::from),
+        model_age: None,
         available_models: None,
     };
     [
@@ -102,6 +103,7 @@ fn wide_frames_match_the_powershell_goldens() {
             age_text: "3 d ago".into(),
             model: Some(61),
             model_label: Some("BUCKET-".repeat(9)),
+            model_age: None,
             available_models: None,
         },
     )]
@@ -269,6 +271,7 @@ fn the_usage_row_starts_on_the_value_column_and_keeps_the_model_bucket() {
             age_text: "just now".into(),
             model: Some(1),
             model_label: Some("FABLE".into()),
+            model_age: None,
             available_models: None,
         },
     )]
@@ -331,6 +334,33 @@ fn row_map_points_at_the_drawn_lines() {
         }
     }
     assert_eq!(f.map.footer.len(), 3, "enter, u, esc are clickable");
+}
+
+#[test]
+fn model_row_weak_to_strong_and_fable_cell() {
+    let r = four();
+    let s = r.new_state();
+    let mut limits = golden_limits();
+    limits.get_mut("work").unwrap().model_age = Some("2 h ago".into());
+    let f = frame_at(&r, &s, &limits, 100);
+    let hit = f.map.rows.iter().find(|h| h.name == "Model").unwrap();
+    let line = &f.lines[usize::try_from(hit.y).unwrap()];
+    let at = |label: &str| line.find(label).unwrap_or_else(|| panic!("{label} missing: {line}"));
+    assert!(
+        at("default") < at("Haiku 5.5") && at("Haiku 5.5") < at("Sonnet 5.5") && at("Sonnet 5.5") < at("Opus 5.5[1M]") && at("Opus 5.5[1M]") < at("Fable 5.2"),
+        "haiku, sonnet, opus, fable: {line}"
+    );
+    let y = |name: &str| usize::try_from(f.map.rows.iter().find(|h| h.name == name).unwrap().y).unwrap();
+    let usage = f.lines[y("Account") + 1..y("Remote")].join("\n");
+    assert!(usage.contains("fable") && usage.contains("15% (2 h ago)"), "{usage}");
+
+    let mut ordered = four();
+    ordered.apply_model_order(&["fable".to_owned(), "haiku".to_owned()]);
+    assert_eq!(
+        ordered.row(RowName::Model).unwrap().values,
+        ["default", "fable", "haiku"],
+        "modelOrder: listed families in its order, the rest hidden"
+    );
 }
 
 #[test]

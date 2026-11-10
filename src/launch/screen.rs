@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn down_then_right_steps_the_model() {
         let s = drive("DownArrow,DownArrow,RightArrow,Enter").unwrap();
-        assert_eq!(s.model, "fable");
+        assert_eq!(s.model, "haiku", "weakest first");
         assert_eq!(s.row, 2);
     }
 

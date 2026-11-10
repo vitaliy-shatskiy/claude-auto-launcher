@@ -119,9 +119,10 @@ fn base_rows() -> Vec<RowDef> {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect::<BTreeMap<_, _>>()
     };
-    let mut model = RowDef::plain(RowName::Model, "model", &["default", "fable", "opus1m", "sonnet1m", "haiku"]);
+    let mut model = RowDef::plain(RowName::Model, "model", &["default"]);
+    model.values.extend(MODEL_FAMILY_KEYS.iter().map(|(_, k)| (*k).to_owned()));
     model.labels = pairs(&[
-        ("fable", "Fable 5.1"),
+        ("fable", "Fable 5.2"),
         ("opus1m", "Opus 5.5[1M]"),
         ("sonnet1m", "Sonnet 5.5"),
         ("haiku", "Haiku 5.5"),
@@ -202,6 +203,22 @@ impl Roster {
     /// `Get-AccountTint`: one table for both painters; unknown -> Green.
     pub fn tint(&self, account: &str) -> &'static str {
         self.tints.get(account).and_then(|n| theme::palette(n)).unwrap_or(theme::GREEN)
+    }
+
+    /// `modelOrder`: the model row lists `default`, then these families in this order; an unlisted
+    /// family is no option, so a remembered pick of it falls back to `default`.
+    pub fn apply_model_order(&mut self, families: &[String]) {
+        let Some(row) = self.rows.iter_mut().find(|r| r.name == RowName::Model) else {
+            return;
+        };
+        row.values = std::iter::once("default".to_owned())
+            .chain(families.iter().filter_map(|f| {
+                MODEL_FAMILY_KEYS
+                    .iter()
+                    .find(|(fam, _)| fam.eq_ignore_ascii_case(f))
+                    .map(|(_, k)| (*k).to_owned())
+            }))
+            .collect();
     }
 
     /// `Set-ModelRowLabels`: family -> display name from the installed binary; the 1M keys

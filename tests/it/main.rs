@@ -276,7 +276,7 @@ fn preview_steps_rows_into_launch_arguments() {
     let o = launcher(&d)
         .env("CLAUDE_AUTO_CONFIG", &config)
         .env("CLAUDE_AUTO_PREVIEW", "1")
-        .env("CLAUDE_AUTO_PREVIEW_KEYS", "RightArrow,s,s,d,s,d,d,d,d,s,d,Enter,Enter")
+        .env("CLAUDE_AUTO_PREVIEW_KEYS", "RightArrow,s,s,d,d,d,d,s,d,d,d,d,s,d,Enter,Enter")
         .output()
         .unwrap();
     let out = text(&o);

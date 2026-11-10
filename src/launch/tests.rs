@@ -102,10 +102,11 @@ fn step_wraps_and_skips_hidden_fable() {
     let none: Vec<String> = Vec::new();
     let labels = DefaultLabels::new();
     let ctx = OptionText::plain(Some(&none), &labels);
+    s.model = "opus1m".into();
     step_launch_value(&r, &mut s, 1, &ctx);
-    assert_eq!(s.model, "opus1m", "fable is hidden on this account");
-    step_launch_value(&r, &mut s, -2, &ctx);
-    assert_eq!(s.model, "haiku", "wraps backwards");
+    assert_eq!(s.model, "default", "fable is hidden on this account; wraps");
+    step_launch_value(&r, &mut s, -1, &ctx);
+    assert_eq!(s.model, "opus1m", "wraps backwards over the hidden fable");
 }
 
 #[test]

@@ -12,6 +12,8 @@ pub struct LimitRecord {
     /// The per-model weekly bucket and its label ('FABLE'), from the same record.
     pub model: Option<i64>,
     pub model_label: Option<String>,
+    /// The bucket's own age when it came from a widget export older than the availability cap.
+    pub model_age: Option<String>,
     /// THREE-STATE: `None` = the widget never reported (hide nothing), `Some(empty)` = an answer.
     pub available_models: Option<Vec<String>>,
 }

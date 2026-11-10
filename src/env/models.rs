@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 /// What the row says when the binary cannot be read. Same four families, same order, always.
 pub(crate) const STATIC_FAMILY_LABELS: [(&str, &str); 4] = [
-    ("fable", "Fable 5.1"),
+    ("fable", "Fable 5.2"),
     ("opus", "Opus 5.5"),
     ("sonnet", "Sonnet 5.5"),
     ("haiku", "Haiku 5.5"),
@@ -265,8 +265,8 @@ mod tests {
 
     #[test]
     fn friendly_names_without_a_catalog() {
-        assert_eq!(friendly("claude-fable-5-1[1m]", None), "Fable 5.1[1M]");
-        assert_eq!(friendly("fable", None), "Fable 5.1");
+        assert_eq!(friendly("claude-fable-5-1[1m]", None), "Fable 5.2[1M]");
+        assert_eq!(friendly("fable", None), "Fable 5.2");
         assert_eq!(friendly("opus[1m]", None), "Opus 5.5[1M]");
         assert_eq!(friendly("claude-sonnet-4-6", None), "Sonnet 5.5");
         assert_eq!(
@@ -299,14 +299,14 @@ mod tests {
         let c = cat();
         assert_eq!(label(Some(&c), "fable"), "Fable 5.1");
         assert_eq!(label(Some(&c), "opus"), "Opus 5");
-        assert_eq!(label(None, "fable"), "Fable 5.1");
+        assert_eq!(label(None, "fable"), "Fable 5.2");
         let partial = Catalog {
             latest: [("fable".to_owned(), "claude-fable-9".to_owned())].into(),
             names: BTreeMap::new(),
         };
         assert_eq!(
             label(Some(&partial), "fable"),
-            "Fable 5.1",
+            "Fable 5.2",
             "a latest id with no display name keeps the static label"
         );
         assert_eq!(

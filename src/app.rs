@@ -91,7 +91,10 @@ pub fn run(args: Vec<String>) -> i32 {
         config::read_config(&config::config_path(&ctx, var("CLAUDE_AUTO_CONFIG").as_deref()), &ctx)
     };
     let canonical = cfg.canonical().map(|a| (a.key.clone(), a.root.clone()));
-    let roster = Roster::new(&cfg.accounts, cfg.remote, canonical.as_ref().map(|(k, _)| k.as_str()));
+    let mut roster = Roster::new(&cfg.accounts, cfg.remote, canonical.as_ref().map(|(k, _)| k.as_str()));
+    if let Some(order) = &cfg.model_order {
+        roster.apply_model_order(order);
+    }
     for w in &cfg.warnings {
         out::line(&format!("  config: {w}"), Fg::DarkYellow);
     }
