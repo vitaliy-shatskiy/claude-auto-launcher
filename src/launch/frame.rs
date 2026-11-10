@@ -311,22 +311,32 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
 }
 
 /// The footer: arrows are not clickable ("w/s" names two directions), every single action is.
+/// Too narrow for all: `^w/^s move` and `^x hide` go first (the `o` editor names them too), then
+/// the hint footer's own tiers.
 pub fn launch_footer(g: &Glyphs, width: usize, color: bool) -> Footer {
-    new_hint_footer(
-        &[
-            Hint::plain("w/s", "row"),
-            Hint::plain("a/d", "value"),
-            Hint::key("enter", "next", "Enter"),
-            Hint::plain("^w/^s", "move"),
-            Hint::plain("^x", "hide"),
-            Hint::ch("o", "rows", 'o'),
-            Hint::ch("u", "maintenance", 'u'),
-            Hint::key("esc", "quit", "Escape"),
-        ],
-        g,
-        width,
-        !color,
-    )
+    let all = [
+        Hint::plain("w/s", "row"),
+        Hint::plain("a/d", "value"),
+        Hint::key("enter", "next", "Enter"),
+        Hint::plain("^w/^s", "move"),
+        Hint::plain("^x", "hide"),
+        Hint::ch("o", "rows", 'o'),
+        Hint::ch("u", "maintenance", 'u'),
+        Hint::key("esc", "quit", "Escape"),
+    ];
+    let whole = |hints: &[Hint]| {
+        let f = new_hint_footer(hints, g, width, !color);
+        let n = f.lines.iter().map(|l| l.spans.len()).sum::<usize>();
+        (f.lines.len() == 1 && n == hints.len()).then_some(f)
+    };
+    let short: Vec<Hint> = all
+        .iter()
+        .filter(|h| !matches!(h.token.as_str(), "^w/^s" | "^x"))
+        .cloned()
+        .collect();
+    whole(&all)
+        .or_else(|| whole(&short))
+        .unwrap_or_else(|| new_hint_footer(&short, g, width, !color))
 }
 
 #[expect(

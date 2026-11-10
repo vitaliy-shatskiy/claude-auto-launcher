@@ -341,6 +341,40 @@ fn row_map_points_at_the_drawn_lines() {
 }
 
 #[test]
+fn footer_drops_move_and_hide_before_the_row_and_value_hints() {
+    let r = four();
+    let s = r.new_state();
+    let limits = golden_limits();
+    let all = [
+        "w/s row",
+        "a/d value",
+        "[enter] next",
+        "^w/^s move",
+        "^x hide",
+        "[o] rows",
+        "[u] maintenance",
+        "[esc] quit",
+    ];
+    let shown = |width: usize| {
+        let f = frame_at(&r, &s, &limits, width);
+        let rule = f.lines.iter().rposition(|l| l.contains('─')).unwrap();
+        let text = f.lines[rule + 1..].join("\n");
+        all.into_iter().filter(|h| text.contains(h)).collect::<Vec<_>>()
+    };
+    assert_eq!(shown(120), all, "120: everything fits");
+    assert_eq!(
+        shown(100),
+        ["w/s row", "a/d value", "[enter] next", "[o] rows", "[u] maintenance", "[esc] quit"],
+        "100: move and hide go first"
+    );
+    assert_eq!(
+        shown(50),
+        ["[enter] next", "[o] rows", "[u] maintenance", "[esc] quit"],
+        "narrow: the buttons alone"
+    );
+}
+
+#[test]
 fn model_row_weak_to_strong_and_fable_cell() {
     let r = four();
     let s = r.new_state();
