@@ -2,7 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{self, PathCtx};
+use crate::config::{self, PathCtx, ProjectScreen};
+use crate::launch::PROJECT_ACTION;
 use crate::frame::{self, Style};
 use crate::input::console::ConsoleInput;
 use crate::input::{Event, KeyPress, is_hotkey, vk};
@@ -69,7 +70,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             PreviewTerm::new(parse_preview_size(var("CLAUDE_AUTO_PREVIEW_SIZE").as_deref()), keys, false).with_logger(run.logger.clone()),
         )
     } else {
-        let mouse = var("CLAUDE_AUTO_NO_MOUSE").as_deref() != Some("1");
+        let mouse = mouse_armed(run.cfg.mouse, var("CLAUDE_AUTO_NO_MOUSE").as_deref());
         let trace = (var("CLAUDE_AUTO_INPUT_TRACE").as_deref() == Some("1")).then(|| trace_path(&run.ctx));
         let Some(input) = ConsoleInput::open(mouse, output_redirected, trace) else {
             return Ok(UiEnd::NoConsole);
@@ -125,17 +126,29 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             break UiEnd::Cancelled;
         };
         state = next;
-        let Some(chosen) = projects::run_project_screen(term.as_mut(), &project_list, &run.ctx.cwd, style, &hiding)? else {
-            if run.preview {
-                break UiEnd::PreviewPickerCancelled;
+        let via_project = state.action == PROJECT_ACTION;
+        if opens_project_screen(run.cfg.project_screen, &state.action) {
+            let Some(chosen) = projects::run_project_screen(term.as_mut(), &project_list, &run.ctx.cwd, style, &hiding)? else {
+                if run.preview {
+                    break UiEnd::PreviewPickerCancelled;
+                }
+                continue;
+            };
+            state.project.clone_from(&chosen.path);
+            state.project_slug.clone_from(&chosen.slug);
+            state.project_slugs.clone_from(&chosen.slugs);
+            state.action.clone_from(&chosen.action);
+            chosen_how = Some(chosen.how);
+        } else {
+            start_in_cwd(&mut state, &run.ctx.cwd, &project_list);
+            chosen_how = Some("cwd".into());
+        }
+        // Back on the launch screen after a pick, the action row still says `project`.
+        let back_to = |state: &mut LaunchState| {
+            if via_project {
+                PROJECT_ACTION.clone_into(&mut state.action);
             }
-            continue;
         };
-        state.project.clone_from(&chosen.path);
-        state.project_slug.clone_from(&chosen.slug);
-        state.project_slugs.clone_from(&chosen.slugs);
-        state.action.clone_from(&chosen.action);
-        chosen_how = Some(chosen.how);
         let mode = launch_mode(&state.action);
         let mut slugs: Vec<String> = state.project_slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
         if slugs.is_empty() && !state.project_slug.is_empty() {
@@ -153,6 +166,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             if run.preview {
                 break UiEnd::PreviewHeldBack;
             }
+            back_to(&mut state);
             continue;
         }
         if !mode.is_some_and(|m| m.picks_session) {
@@ -191,11 +205,13 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             if run.preview {
                 break UiEnd::PreviewHeldBack;
             }
+            back_to(&mut state);
             continue;
         }
         if run.preview {
             break UiEnd::PreviewPickerCancelled;
         }
+        back_to(&mut state);
     };
     if let Some(c) = cache
         && c.exists()
@@ -204,6 +220,27 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         // A stale per-PID cache is swept by the next preview.
     }
     Ok(outcome)
+}
+
+/// `mouse` false or `CLAUDE_AUTO_NO_MOUSE=1`: keys only; the variable wins over the config.
+pub(super) fn mouse_armed(config_mouse: bool, no_mouse_env: Option<&str>) -> bool {
+    config_mouse && no_mouse_env != Some("1")
+}
+
+/// `projectScreen` always: the project screen follows every launch screen; onDemand: only the
+/// `project` action opens it.
+pub(super) fn opens_project_screen(mode: ProjectScreen, action: &str) -> bool {
+    match mode {
+        ProjectScreen::Always => true,
+        ProjectScreen::OnDemand => action == PROJECT_ACTION,
+    }
+}
+
+/// A launch without the project screen runs in the launch directory, with every slug it has.
+pub(super) fn start_in_cwd(state: &mut LaunchState, cwd: &Path, projects: &[projects::Project]) {
+    state.project = cwd.to_string_lossy().into_owned();
+    state.project_slugs = projects::slugs_for_path(projects, &state.project);
+    state.project_slug = state.project_slugs.first().cloned().unwrap_or_default();
 }
 
 #[expect(clippy::too_many_arguments, reason = "the outcome record is assembled once, here")]

@@ -20,6 +20,11 @@ pub use paths::project_key;
 pub(crate) use registry::path_from_transcript;
 pub use screen::Hiding;
 
+/// Every slug of the directory `path` names; empty when it is no known project.
+pub fn slugs_for_path(projects: &[Project], path: &str) -> Vec<String> {
+    select::slugs_for_path(projects, path)
+}
+
 /// One project row (`Get-ProjectRegistry`): one real directory, every slug folder naming it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {

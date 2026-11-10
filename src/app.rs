@@ -98,6 +98,9 @@ pub fn run(args: Vec<String>) -> i32 {
     if let Some(rows) = &cfg.rows {
         roster.apply_rows(rows);
     }
+    if cfg.project_screen == config::ProjectScreen::OnDemand {
+        roster.add_action_row();
+    }
     for w in &cfg.warnings {
         out::line(&format!("  config: {w}"), Fg::DarkYellow);
     }

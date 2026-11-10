@@ -69,6 +69,28 @@ fn hidden_mode_row_launches_normal() {
 }
 
 #[test]
+fn the_action_row_follows_account_and_remote_and_project_adds_no_argument() {
+    let mut r = four();
+    r.add_action_row();
+    let names: Vec<&str> = r.rows.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names.join(","), "Account,Remote,Action,Model,Effort,Advisor,Permission,Mode");
+    assert_eq!(
+        r.row(RowName::Action).unwrap().values.join(" "),
+        "new project continue resume worktree"
+    );
+    assert!(!PROFILE_FIELDS.contains(&RowName::Action), "never remembered");
+    assert_eq!(r.new_state().action, "new", "Enter at once launches new");
+    let mut s = r.new_state();
+    s.action = PROJECT_ACTION.into();
+    assert_eq!(launch_args(&r, &s, None, false, None, "", "").join(" "), "");
+    let mut only = four();
+    only.apply_rows(&[RowName::Model, RowName::Account]);
+    only.add_action_row();
+    let names: Vec<&str> = only.rows.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["Model", "Account", "Action"], "after account wherever rows put it");
+}
+
+#[test]
 fn default_state_adds_no_arguments() {
     assert_eq!(args(&four(), |_| {}), "");
 }

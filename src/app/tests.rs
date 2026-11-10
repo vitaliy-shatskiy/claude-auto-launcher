@@ -46,6 +46,40 @@ fn debug_mode_draws_the_held_warning_exactly_as_off() {
 }
 
 #[test]
+fn on_demand_enter_skips_project_screen() {
+    use crate::config::ProjectScreen;
+    assert!(!screens::opens_project_screen(ProjectScreen::OnDemand, "new"), "Enter at once");
+    assert!(!screens::opens_project_screen(ProjectScreen::OnDemand, "continue"));
+    assert!(screens::opens_project_screen(ProjectScreen::OnDemand, "project"), "the project action opens it");
+    assert!(screens::opens_project_screen(ProjectScreen::Always, "new"), "always: today's flow");
+    let mut s = LaunchState::fresh("work");
+    s.project = r"C:\remembered".into();
+    let p = crate::projects::Project {
+        name: "here".into(),
+        path: r"C:\here".into(),
+        slug: "C--here".into(),
+        slugs: vec!["C--here".into(), "C--here-alt".into()],
+        worktree: None,
+        last_activity_ms: None,
+        hidden: false,
+    };
+    screens::start_in_cwd(&mut s, Path::new(r"C:\here"), &[p]);
+    assert_eq!(
+        (s.project.as_str(), s.project_slug.as_str(), s.project_slugs.len()),
+        (r"C:\here", "C--here", 2),
+        "the launch directory, with every slug, never the remembered project"
+    );
+}
+
+#[test]
+fn mouse_false_arms_nothing() {
+    assert!(!screens::mouse_armed(false, None), "config mouse false");
+    assert!(!screens::mouse_armed(true, Some("1")), "the variable still wins");
+    assert!(screens::mouse_armed(true, None), "on by default");
+    assert!(screens::mouse_armed(true, Some("0")));
+}
+
+#[test]
 fn answers_resolve_by_full_key_or_longest_prefix() {
     let p = account_prefixes(&["work", "personal"]);
     assert_eq!(resolve_account_answer(" Personal ", &p, "work"), "personal");

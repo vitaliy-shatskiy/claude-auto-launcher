@@ -23,6 +23,8 @@ pub use options::{
 pub enum RowName {
     Account,
     Remote,
+    /// projectScreen onDemand only: what the launch does; never remembered.
+    Action,
     Model,
     Effort,
     Advisor,
@@ -35,6 +37,7 @@ impl RowName {
         match self {
             Self::Account => "Account",
             Self::Remote => "Remote",
+            Self::Action => "Action",
             Self::Model => "Model",
             Self::Effort => "Effort",
             Self::Advisor => "Advisor",
@@ -47,6 +50,7 @@ impl RowName {
         [
             Self::Account,
             Self::Remote,
+            Self::Action,
             Self::Model,
             Self::Effort,
             Self::Advisor,
@@ -57,6 +61,9 @@ impl RowName {
         .find(|r| r.as_str().eq_ignore_ascii_case(s))
     }
 }
+
+/// The action row value that opens the project screen (`projectScreen` onDemand).
+pub const PROJECT_ACTION: &str = "project";
 
 /// The rows config `rows` may name, in the order the launch screen draws them by default.
 pub const CONFIG_ROWS: [RowName; 7] = [
@@ -215,6 +222,21 @@ impl Roster {
             .collect();
     }
 
+    /// `projectScreen` onDemand: the action row after account (and remote), `new` first. `project`
+    /// opens the project screen for that one launch; it adds no claude argument.
+    pub fn add_action_row(&mut self) {
+        let after = self
+            .rows
+            .iter()
+            .rposition(|r| matches!(r.name, RowName::Account | RowName::Remote))
+            .map_or(0, |i| i + 1);
+        let values: Vec<&str> = std::iter::once(LAUNCH_MODES[0].name)
+            .chain(std::iter::once(PROJECT_ACTION))
+            .chain(LAUNCH_MODES.iter().skip(1).map(|m| m.name))
+            .collect();
+        self.rows.insert(after, RowDef::plain(RowName::Action, "action", &values));
+    }
+
     /// `modelOrder`: the model row lists `default`, then these families in this order; an unlisted
     /// family is no option, so a remembered pick of it falls back to `default`.
     pub fn apply_model_order(&mut self, families: &[String]) {
@@ -325,6 +347,7 @@ impl LaunchState {
         match row {
             RowName::Account => &self.account,
             RowName::Remote => &self.remote,
+            RowName::Action => &self.action,
             RowName::Model => &self.model,
             RowName::Effort => &self.effort,
             RowName::Advisor => &self.advisor,
@@ -337,6 +360,7 @@ impl LaunchState {
         let slot = match row {
             RowName::Account => &mut self.account,
             RowName::Remote => &mut self.remote,
+            RowName::Action => &mut self.action,
             RowName::Model => &mut self.model,
             RowName::Effort => &mut self.effort,
             RowName::Advisor => &mut self.advisor,

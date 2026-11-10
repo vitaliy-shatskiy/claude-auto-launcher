@@ -377,7 +377,7 @@ static SGR_ROW_LABEL: LazyLock<Regex> = LazyLock::new(|| theme::re(r"^.{3}accoun
 static COMPACT_PREFIX: LazyLock<Regex> = LazyLock::new(|| theme::re("^.{3}[a-z]+\\*? +(?:[^\\s\\[\\]]+ )*\u{4}?$"));
 static BRACKET: LazyLock<Regex> = LazyLock::new(|| theme::re(r"\[([^\[\]]+)\]"));
 static PERCENT: LazyLock<Regex> = LazyLock::new(|| theme::re(r"(\d+)%"));
-static ROW_WORDS: LazyLock<Regex> = LazyLock::new(|| theme::re(r"\b(account|model|effort|advisor|permission|remote|mode)\b"));
+static ROW_WORDS: LazyLock<Regex> = LazyLock::new(|| theme::re(r"\b(account|action|model|effort|advisor|permission|remote|mode)\b"));
 static AGE: LazyLock<Regex> = LazyLock::new(|| theme::re(r"(\d+ (?:min|h|d) ago|just now)"));
 
 /// The selected cell's bracket `[...]` with at most one nested pair, starting at `open`

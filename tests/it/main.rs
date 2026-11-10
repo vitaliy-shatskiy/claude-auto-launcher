@@ -266,6 +266,33 @@ fn preview_dumps_the_launch_frame_and_launches_nothing() {
 }
 
 #[test]
+fn preview_on_demand_enter_launches_without_the_project_screen() {
+    let d = scratch("ondemand");
+    fake_claude(&d);
+    let config = d.join("home").join("on-demand.json");
+    std::fs::write(&config, r#"{"projectScreen":"onDemand","rows":["model","effort"]}"#).unwrap();
+    let run = |keys: &str| {
+        text(
+            &launcher(&d)
+                .env("CLAUDE_AUTO_CONFIG", &config)
+                .env("CLAUDE_AUTO_PREVIEW", "1")
+                .env("CLAUDE_AUTO_PREVIEW_KEYS", keys)
+                .output()
+                .unwrap(),
+        )
+    };
+    let enter = run("Enter");
+    assert!(enter.contains("--- preview, nothing launched ---"), "Enter launches at once: {enter}");
+    assert!(!enter.contains("enter a path"), "no project screen was drawn: {enter}");
+    assert!(enter.contains("action"), "the launch screen has the action row: {enter}");
+    assert!(!enter.contains("   mode "), "rows without mode draw no mode row: {enter}");
+    let project = run("s,d,Enter,Escape");
+    assert!(project.contains("enter a path"), "the project action opens the project screen: {project}");
+    assert!(project.contains("--- preview: picker cancelled ---"), "{project}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
 fn preview_steps_rows_into_launch_arguments() {
     let d = scratch("steps");
     fake_claude(&d);
