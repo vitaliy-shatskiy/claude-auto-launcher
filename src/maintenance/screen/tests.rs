@@ -134,11 +134,11 @@ fn footer_keys(map: &RowMap) -> String {
 #[test]
 fn every_hint_is_clickable_even_at_50_columns_with_a_cjk_label() {
     let f = maintenance_frame(&info(true, None, None), (100, 24), "", plain(), &reindex(), -1);
-    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,i,Escape");
+    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,L,i,Escape");
     let mut cjk = reindex();
     cjk[0].label = "\u{5168}\u{91CF}\u{91CD}\u{5EFA}\u{7D22}\u{5F15}\u{FF08}\u{6162}\u{FF09}".into();
     let f = maintenance_frame(&info(true, None, None), (50, 24), "", plain(), &cjk, -1);
-    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,i,Escape");
+    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,L,i,Escape");
     assert!(widest(&f.lines) <= 49);
     assert!(f.lines.join("\n").contains(&cjk[0].label));
 }
@@ -239,6 +239,7 @@ struct Log {
     prunes: usize,
     doctor: usize,
     updates: usize,
+    rows: Vec<Vec<RowName>>,
 }
 
 struct FakeOps {
@@ -280,6 +281,28 @@ impl Ops for FakeOps {
             exit_code: self.exit_code,
         })
     }
+    fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String> {
+        self.log.borrow_mut().rows.push(rows.to_vec());
+        Ok(())
+    }
+}
+
+#[test]
+fn capital_l_edits_the_launch_rows_and_saves_them() {
+    let log = Rc::new(RefCell::new(Log::default()));
+    let mut ops = FakeOps {
+        log: Rc::clone(&log),
+        exit_code: 0,
+    };
+    let mut s = MaintScreen::new(&mut ops, &[], plain());
+    s.rows = Some(vec![RowName::Account, RowName::Model, RowName::Mode]);
+    let keys = crate::ui::parse_preview_keys("L,s,s,Spacebar,Enter,l,Escape").unwrap();
+    let mut t = PreviewTerm::new((100, 30), keys, true);
+    assert!(run(&mut s, &mut t).unwrap().is_none());
+    assert_eq!(s.rows, Some(vec![RowName::Account, RowName::Model]), "the next open starts from the save");
+    assert!(s.status.contains("launch rows saved: account, model"), "{}", s.status);
+    assert_eq!(log.borrow().rows, [vec![RowName::Account, RowName::Model]]);
+    assert_eq!(log.borrow().runs.len(), 0, "a lower-case l is no editor key");
 }
 
 /// Scripted events with an injectable record clock; frames and statuses recorded.

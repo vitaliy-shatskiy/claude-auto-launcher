@@ -39,6 +39,36 @@ fn row_order_is_account_remote_model_effort_advisor_permission_mode() {
 }
 
 #[test]
+fn hidden_mode_row_launches_normal() {
+    let mut r = four();
+    r.apply_rows(&[RowName::Account, RowName::Model, RowName::Effort]);
+    let names: Vec<&str> = r.rows.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["Account", "Model", "Effort"], "listed rows in their order, the rest hidden");
+    let mut s = r.new_state();
+    let prefs = crate::prefs::Prefs {
+        account: Some("work".into()),
+        profiles: [(
+            "work".to_owned(),
+            serde_json::json!({"Permission": "bypass", "Remote": "off", "Effort": "max"}),
+        )]
+        .into_iter()
+        .collect(),
+        ..crate::prefs::Prefs::default()
+    };
+    crate::prefs::merge_prefs(&mut s, &prefs, &r, 0);
+    assert_eq!(
+        (s.mode.as_str(), s.permission.as_str(), s.remote.as_str(), s.effort.as_str()),
+        ("normal", "default", "on", "max"),
+        "a hidden row keeps its default, never a remembered pick"
+    );
+    assert_eq!(launch_args(&r, &s, None, false, None, "", "").join(" "), "--effort max");
+    let mut reordered = four();
+    reordered.apply_rows(&[RowName::Mode, RowName::Account]);
+    let names: Vec<&str> = reordered.rows.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["Mode", "Account"]);
+}
+
+#[test]
 fn default_state_adds_no_arguments() {
     assert_eq!(args(&four(), |_| {}), "");
 }

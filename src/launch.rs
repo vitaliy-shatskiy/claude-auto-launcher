@@ -205,6 +205,16 @@ impl Roster {
         self.tints.get(account).and_then(|n| theme::palette(n)).unwrap_or(theme::GREEN)
     }
 
+    /// `rows`: the listed rows in that order, every other row gone. A gone row keeps its default
+    /// for the launch: prefs restore only rows the roster has. Remote stays absent when it is off.
+    pub fn apply_rows(&mut self, order: &[RowName]) {
+        let mut rows = std::mem::take(&mut self.rows);
+        self.rows = order
+            .iter()
+            .filter_map(|name| rows.iter().position(|r| r.name == *name).map(|i| rows.remove(i)))
+            .collect();
+    }
+
     /// `modelOrder`: the model row lists `default`, then these families in this order; an unlisted
     /// family is no option, so a remembered pick of it falls back to `default`.
     pub fn apply_model_order(&mut self, families: &[String]) {

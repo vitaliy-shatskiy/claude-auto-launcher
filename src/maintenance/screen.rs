@@ -10,6 +10,8 @@ use regex::Regex;
 use unicode_general_category::{GeneralCategory, get_general_category};
 
 use super::install::{InstallInfo, Pruned};
+use super::rows::RowsEditor;
+use crate::launch::RowName;
 use crate::config::MaintenanceAction;
 use crate::frame::{
     FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
@@ -148,6 +150,7 @@ pub(crate) fn maintenance_frame(
         Hint::ch("d", "doctor", 'd'),
         Hint::ch("m", "mcp list", 'm'),
         Hint::ch("p", "prune", 'p'),
+        Hint::ch("L", "rows", ROWS_KEY),
     ];
     for a in actions {
         if let Some(c) = a.key.chars().next() {
@@ -201,7 +204,12 @@ pub(crate) trait Ops {
     fn prune(&mut self) -> Pruned;
     /// The script runner behind `Invoke-MaintenanceScript`.
     fn run(&mut self, script: &Path) -> Result<ScriptRun, String>;
+    /// Writes config `rows`, every other key untouched.
+    fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String>;
 }
+
+/// Opens the launch-rows editor; upper case, so it never takes a configured action's letter.
+const ROWS_KEY: char = 'L';
 
 /// The screen's state between keys.
 pub(crate) struct MaintScreen<'a> {
@@ -211,6 +219,8 @@ pub(crate) struct MaintScreen<'a> {
     pub(crate) style: Style,
     pub(crate) info: InstallInfo,
     pub(crate) status: String,
+    /// Config `rows` as the editor opens on it; `None` = every row.
+    pub(crate) rows: Option<Vec<RowName>>,
     /// The key whose confirm is armed, and the record time it was armed at. State, never a parse
     /// of the status text: any press consumes it.
     pending: Option<char>,
@@ -235,6 +245,7 @@ impl<'a> MaintScreen<'a> {
             style,
             info: InstallInfo::default(),
             status: String::new(),
+            rows: None,
             pending: None,
             pending_at: None,
         }
@@ -283,6 +294,22 @@ impl<'a> MaintScreen<'a> {
         }
     }
 
+    /// The rows editor; a save is reported in the status line and seen by the next editor open.
+    fn edit_rows(&mut self, term: &mut dyn Term) {
+        let mut editor = RowsEditor::new(self.rows.as_deref(), self.style);
+        self.status = match crate::ui::screen_loop::run(&mut editor, term) {
+            Ok(Some(rows)) => match self.ops.save_rows(&rows) {
+                Ok(()) => {
+                    let names: Vec<String> = rows.iter().map(|r| r.as_str().to_lowercase()).collect();
+                    self.rows = Some(rows);
+                    format!("launch rows saved: {} - shown from the next start", names.join(", "))
+                }
+                Err(e) => format!("launch rows not saved: {e}"),
+            },
+            Ok(None) | Err(_) => "launch rows unchanged".into(),
+        };
+    }
+
     fn action(&mut self, a: &MaintenanceAction, key: char, term: &mut dyn Term, confirmed: bool, now: Option<u64>) {
         if a.confirm_twice && !confirmed {
             self.arm(
@@ -328,6 +355,10 @@ impl Screen for MaintScreen<'_> {
         let too_fast = matches!((now, armed_at), (Some(n), Some(a)) if n.checked_sub(a).is_none_or(|d| d < CONFIRM_MIN_MS));
         if was_pending.is_some_and(|p| !is_hotkey_exact(key, p)) {
             self.status.clear();
+        }
+        if key.ch == ROWS_KEY {
+            self.edit_rows(term);
+            return true;
         }
         if let Some(c) = BUILT_IN.into_iter().find(|c| is_hotkey_exact(key, *c)) {
             let confirmed = was_pending == Some(c) && !too_fast;

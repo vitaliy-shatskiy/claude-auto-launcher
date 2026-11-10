@@ -99,12 +99,11 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     tm.end(load);
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
     let mut chosen_how: Option<String>;
-    let actions = run.cfg.maintenance_actions.clone();
 
     let outcome = loop {
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
             if is_hotkey(k, 'u') {
-                if maintenance::run_screen(t, &actions, style).is_err() {
+                if maintenance::run_screen(t, &run.cfg, style).is_err() {
                     return true;
                 }
                 t.drain();

@@ -95,6 +95,9 @@ pub fn run(args: Vec<String>) -> i32 {
     if let Some(order) = &cfg.model_order {
         roster.apply_model_order(order);
     }
+    if let Some(rows) = &cfg.rows {
+        roster.apply_rows(rows);
+    }
     for w in &cfg.warnings {
         out::line(&format!("  config: {w}"), Fg::DarkYellow);
     }

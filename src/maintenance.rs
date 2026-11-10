@@ -4,14 +4,16 @@
 
 mod install;
 mod release;
+mod rows;
 mod screen;
 mod win;
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::config::{MaintenanceAction, PathCtx};
+use crate::config::{Config, PathCtx};
 use crate::frame::Style;
+use crate::launch::RowName;
 use crate::out::{self, Fg};
 use crate::types::VersionInfo;
 use crate::ui::{Term, UiStop};
@@ -53,6 +55,7 @@ fn claude_output(args: &[&str]) -> Result<String, String> {
 struct RealOps {
     install: Install,
     preview: bool,
+    config_path: String,
 }
 
 impl Ops for RealOps {
@@ -97,6 +100,14 @@ impl Ops for RealOps {
         }
         let p = script.to_string_lossy();
         captured(Path::new("pwsh"), &["-NoProfile", "-File", &p]).map(|(output, exit_code)| ScriptRun { output, exit_code })
+    }
+
+    fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String> {
+        if self.preview {
+            return Err(PREVIEW_NOTE.into());
+        }
+        let names: Vec<String> = rows.iter().map(|r| r.as_str().to_lowercase()).collect();
+        crate::config::save_keys(&self.config_path, &[("rows", serde_json::json!(names))]).map_err(|e| e.to_string())
     }
 }
 
@@ -179,15 +190,17 @@ pub fn update_before_launch(version: &mut VersionInfo) {
 }
 
 /// `Invoke-MaintenanceScreen`, opened by `u` from the launch screen and returning to it.
-pub fn run_screen(term: &mut dyn Term, actions: &[MaintenanceAction], style: Style) -> Result<(), UiStop> {
+pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style) -> Result<(), UiStop> {
     let tm = term.logger().timings.clone();
     let load = tm.begin(&["load", "maintenance"]);
     let preview = is_preview();
     let mut ops = RealOps {
         install: Install::from_env(preview),
         preview,
+        config_path: cfg.path.clone(),
     };
-    let mut s = MaintScreen::new(&mut ops, actions, style);
+    let mut s = MaintScreen::new(&mut ops, &cfg.maintenance_actions, style);
+    s.rows.clone_from(&cfg.rows);
     tm.end(load);
     crate::ui::screen_loop::run(&mut s, term).map(|_| ())
 }
