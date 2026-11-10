@@ -72,7 +72,9 @@ foreach ($s in (Get-Content -Raw -LiteralPath 'docs/media/demo-sessions.json' | 
 }
 
 $env:USERPROFILE = $t
-$env:CLAUDE_AUTO_CONFIG = (Resolve-Path -LiteralPath 'docs/media/demo-config.json').Path
+# A copy: the walk's row edits (ctrl+x, the o editor) save to the config.
+$env:CLAUDE_AUTO_CONFIG = Join-Path $t 'config.json'
+Copy-Item -LiteralPath 'docs/media/demo-config.json' -Destination $env:CLAUDE_AUTO_CONFIG
 $env:CLAUDE_AUTO_PREFS = Join-Path $t 'prefs.json'
 $env:CLAUDE_AUTO_PROJECTS_ROOT = $projectsRoot
 $env:CLAUDE_AUTO_RATE_LIMITS_DIR = $limits
