@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::launch::{CONFIG_ROWS, MODEL_FAMILY_KEYS, RowName};
 use roster::default_account;
 pub use roster::{Account, parse_roster};
 
 /// Distinct on purpose: two accounts sharing a colour is the confusion a tint exists to prevent.
 pub const ALLOWED_TINTS: [&str; 6] = ["Green", "Magenta", "Cyan", "Blue", "Yellow", "Red"];
 const ALLOWED_RIDER_MODES: [&str; 3] = ["auto", "on", "off"];
-const KNOWN_KEYS: [&str; 9] = [
+const KNOWN_KEYS: [&str; 15] = [
     "accounts",
     "sharing",
     "remote",
@@ -23,6 +24,12 @@ const KNOWN_KEYS: [&str; 9] = [
     "vsecPath",
     "launchHooks",
     "maintenanceActions",
+    "rows",
+    "modelOrder",
+    "hiddenProjects",
+    "hideHeadlessProjects",
+    "projectScreen",
+    "mouse",
 ];
 const RESERVED_ACTION_KEYS: [&str; 5] = ["u", "r", "d", "m", "p"];
 
@@ -142,9 +149,25 @@ pub enum RiderMcp {
     Off,
 }
 
+/// `projectScreen`: after every launch screen, or only when the launch screen's action asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectScreen {
+    Always,
+    OnDemand,
+}
+
 /// The whole launcher configuration after validation.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// The launch rows in drawing order, account always among them; `None` = every row.
+    pub rows: Option<Vec<RowName>>,
+    /// Model families in drawing order (lower case); `None` = the default order.
+    pub model_order: Option<Vec<String>>,
+    /// Projects hidden by hand: full paths, kept when the directory is gone.
+    pub hidden_projects: Vec<String>,
+    pub hide_headless_projects: bool,
+    pub project_screen: ProjectScreen,
+    pub mouse: bool,
     pub accounts: Vec<Account>,
     pub sharing: bool,
     pub remote: bool,
@@ -164,6 +187,12 @@ impl Config {
     pub fn defaults(ctx: &PathCtx, path: &str) -> Self {
         let home = ctx.home.to_string_lossy();
         Self {
+            rows: None,
+            model_order: None,
+            hidden_projects: Vec::new(),
+            hide_headless_projects: true,
+            project_screen: ProjectScreen::Always,
+            mouse: true,
             accounts: vec![default_account(ctx)],
             sharing: false,
             remote: false,
@@ -263,6 +292,48 @@ fn path_list(raw: &Value, name: &str, ctx: &PathCtx, warnings: &mut Vec<String>)
         out.push(ctx.expand(&s));
     }
     out
+}
+
+/// An ordered list of names out of `known` (case-insensitive, the first of a duplicate wins);
+/// unknown names are named once in one warning. `None` = not a list, or no known name in it.
+fn name_list<T: Copy + PartialEq>(raw: &Value, key: &str, what: &str, known: &[(&str, T)], warnings: &mut Vec<String>) -> Option<Vec<T>> {
+    let names = known.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ");
+    let Value::Array(items) = raw else {
+        warnings.push(format!("{key} must be a list out of {names}; using the default"));
+        return None;
+    };
+    let mut out = Vec::new();
+    let mut unknown = Vec::new();
+    for item in items {
+        let s = ps_str(item).trim().to_owned();
+        match known.iter().find(|(n, _)| n.eq_ignore_ascii_case(&s)) {
+            Some((_, v)) if !out.contains(v) => out.push(*v),
+            Some(_) => {}
+            None => unknown.push(format!("'{s}'")),
+        }
+    }
+    if !unknown.is_empty() {
+        warnings.push(format!("{key}: unknown {what} {} ignored (known: {names})", unknown.join(", ")));
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// `rows`: account is always drawn, first when unlisted.
+fn row_list(raw: &Value, warnings: &mut Vec<String>) -> Option<Vec<RowName>> {
+    let lower: Vec<String> = CONFIG_ROWS.iter().map(|r| r.as_str().to_lowercase()).collect();
+    let known: Vec<(&str, RowName)> = lower.iter().map(String::as_str).zip(CONFIG_ROWS).collect();
+    let mut rows = name_list(raw, "rows", "row name(s)", &known, warnings)?;
+    if !rows.contains(&RowName::Account) {
+        rows.insert(0, RowName::Account);
+    }
+    Some(rows)
+}
+
+/// `modelOrder`: family names, stored lower case.
+fn family_list(raw: &Value, warnings: &mut Vec<String>) -> Option<Vec<String>> {
+    let known: Vec<(&str, &str)> = MODEL_FAMILY_KEYS.iter().map(|(f, _)| (*f, *f)).collect();
+    name_list(raw, "modelOrder", "model famil(ies)", &known, warnings)
+        .map(|fams| fams.into_iter().map(str::to_owned).collect())
 }
 
 /// `launchHooks`: a path is an entry of its own, an array of paths one entry run in order.
@@ -389,6 +460,37 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
         cfg.maintenance_actions = actions;
         cfg.warnings.extend(w);
     }
+    if let Some(v) = present("rows") {
+        cfg.rows = row_list(v, &mut cfg.warnings);
+    }
+    if let Some(v) = present("modelOrder") {
+        cfg.model_order = family_list(v, &mut cfg.warnings);
+    }
+    if let Some(v) = present("hiddenProjects") {
+        cfg.hidden_projects = path_list(v, "hiddenProjects", ctx, &mut cfg.warnings);
+    }
+    if let Some(v) = present("hideHeadlessProjects") {
+        let (b, w) = to_bool(Some(v), cfg.hide_headless_projects, "hideHeadlessProjects");
+        cfg.hide_headless_projects = b;
+        cfg.warnings.extend(w);
+    }
+    if let Some(v) = present("projectScreen") {
+        let raw = ps_str(v);
+        cfg.project_screen = if raw.eq_ignore_ascii_case("onDemand") {
+            ProjectScreen::OnDemand
+        } else {
+            if !raw.eq_ignore_ascii_case("always") {
+                cfg.warnings
+                    .push(format!("projectScreen '{raw}' is not always/onDemand; using always"));
+            }
+            ProjectScreen::Always
+        };
+    }
+    if let Some(v) = present("mouse") {
+        let (b, w) = to_bool(Some(v), cfg.mouse, "mouse");
+        cfg.mouse = b;
+        cfg.warnings.extend(w);
+    }
     if cfg.sharing && cfg.accounts.len() < 2 {
         cfg.sharing = false;
         cfg.warnings.push("sharing needs at least two accounts; off".into());
@@ -429,6 +531,26 @@ pub fn read_config(path: &str, ctx: &PathCtx) -> Config {
             cfg
         }
     }
+}
+
+/// Writes `keys` into the config file and leaves every other key as it was (order kept). A file
+/// that is not a JSON object is refused, never overwritten; a missing one is created. The write is
+/// a temp file renamed over the old one: two launchers saving at once leave the last writer's file.
+pub fn save_keys(path: &str, keys: &[(&str, Value)]) -> std::io::Result<()> {
+    let mut obj = if Path::new(path).exists() {
+        let bytes = std::fs::read(path)?;
+        let text = String::from_utf8_lossy(&bytes);
+        match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).map_err(std::io::Error::other)? {
+            Value::Object(m) => m,
+            _ => return Err(std::io::Error::other(format!("{path} is not a JSON object"))),
+        }
+    } else {
+        serde_json::Map::new()
+    };
+    for (k, v) in keys {
+        obj.insert((*k).to_owned(), v.clone());
+    }
+    crate::prefs::write_atomic(path, &Value::Object(obj))
 }
 
 #[cfg(test)]

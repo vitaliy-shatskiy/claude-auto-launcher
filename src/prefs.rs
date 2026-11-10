@@ -229,7 +229,7 @@ pub fn save_prefs(path: &str, state: &LaunchState, now_ms: i64, roster: &Roster)
     data
 }
 
-fn write_atomic(path: &str, data: &Value) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &str, data: &Value) -> std::io::Result<()> {
     let p = Path::new(path);
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;

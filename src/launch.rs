@@ -58,6 +58,20 @@ impl RowName {
     }
 }
 
+/// The rows config `rows` may name, in the order the launch screen draws them by default.
+pub const CONFIG_ROWS: [RowName; 7] = [
+    RowName::Account,
+    RowName::Remote,
+    RowName::Model,
+    RowName::Effort,
+    RowName::Advisor,
+    RowName::Permission,
+    RowName::Mode,
+];
+
+/// Model family -> its model row key, in the default order: weakest to strongest.
+pub const MODEL_FAMILY_KEYS: [(&str, &str); 4] = [("haiku", "haiku"), ("sonnet", "sonnet1m"), ("opus", "opus1m"), ("fable", "fable")];
+
 /// The habit rows remembered per account (Prefs.ps1 `$ProfileFields`).
 pub const PROFILE_FIELDS: [RowName; 5] = [
     RowName::Model,

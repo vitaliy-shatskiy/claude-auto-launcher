@@ -176,6 +176,100 @@ fn sharing_with_one_account_is_turned_off() {
 }
 
 #[test]
+fn rows_key_orders_and_hides() {
+    let cfg = parse_config(r#"{"rows":["Model","effort","bogus","model","wat","permission"]}"#, "x", &ctx());
+    assert_eq!(
+        cfg.rows,
+        Some(vec![RowName::Account, RowName::Model, RowName::Effort, RowName::Permission]),
+        "account first when unlisted, duplicates: the first wins, mode hidden"
+    );
+    assert_eq!(
+        cfg.warnings,
+        ["rows: unknown row name(s) 'bogus', 'wat' ignored (known: account, remote, model, effort, advisor, permission, mode)"]
+    );
+    let kept = parse_config(r#"{"rows":["mode","account"]}"#, "x", &ctx());
+    assert_eq!(kept.rows, Some(vec![RowName::Mode, RowName::Account]), "a listed account keeps its place");
+    for bad in [r#"{"rows":"model"}"#, r#"{"rows":["nope"]}"#, r#"{"rows":[]}"#, r#"{"rows":["action"]}"#] {
+        assert_eq!(parse_config(bad, "x", &ctx()).rows, None, "{bad}: every row");
+    }
+    assert_eq!(Config::defaults(&ctx(), "x").rows, None);
+}
+
+#[test]
+fn model_order_key_lists_families_and_hides_the_rest() {
+    let cfg = parse_config(r#"{"modelOrder":["Opus","haiku","opus","gpt"]}"#, "x", &ctx());
+    assert_eq!(cfg.model_order, Some(vec!["opus".to_owned(), "haiku".to_owned()]));
+    assert_eq!(
+        cfg.warnings,
+        ["modelOrder: unknown model famil(ies) 'gpt' ignored (known: haiku, sonnet, opus, fable)"]
+    );
+    assert_eq!(parse_config(r#"{"modelOrder":5}"#, "x", &ctx()).model_order, None);
+    assert_eq!(Config::defaults(&ctx(), "x").model_order, None);
+}
+
+#[test]
+fn project_hiding_keys_parse() {
+    let cfg = parse_config(
+        r#"{"hiddenProjects":["~/old","rel","D:/x/"],"hideHeadlessProjects":false}"#,
+        "x",
+        &ctx(),
+    );
+    assert_eq!(cfg.hidden_projects, [r"C:\Users\someone\old", r"D:\x\"]);
+    assert!(!cfg.hide_headless_projects);
+    assert_eq!(cfg.warnings, ["hiddenProjects: 'rel' is not an absolute path; skipped"]);
+    assert!(Config::defaults(&ctx(), "x").hide_headless_projects, "on by default");
+}
+
+#[test]
+fn project_screen_key_parses() {
+    let on = parse_config(r#"{"projectScreen":"ondemand"}"#, "x", &ctx());
+    assert_eq!(on.project_screen, ProjectScreen::OnDemand);
+    assert!(on.warnings.is_empty(), "{:?}", on.warnings);
+    assert_eq!(
+        parse_config(r#"{"projectScreen":"always"}"#, "x", &ctx()).project_screen,
+        ProjectScreen::Always
+    );
+    let bad = parse_config(r#"{"projectScreen":"never"}"#, "x", &ctx());
+    assert_eq!(bad.project_screen, ProjectScreen::Always);
+    assert_eq!(bad.warnings, ["projectScreen 'never' is not always/onDemand; using always"]);
+    assert_eq!(Config::defaults(&ctx(), "x").project_screen, ProjectScreen::Always);
+}
+
+#[test]
+fn mouse_key_parses() {
+    assert!(!parse_config(r#"{"mouse":false}"#, "x", &ctx()).mouse);
+    assert!(!parse_config(r#"{"mouse":"FALSE"}"#, "x", &ctx()).mouse);
+    assert!(Config::defaults(&ctx(), "x").mouse, "on by default");
+    let bad = parse_config(r#"{"mouse":"maybe"}"#, "x", &ctx());
+    assert!(bad.mouse);
+    assert_eq!(bad.warnings, ["mouse: 'maybe' is not a boolean; using True"]);
+}
+
+#[test]
+fn save_keys_writes_its_keys_and_keeps_the_rest() {
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-keys-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("claude-auto.json");
+    let p = path.to_str().unwrap();
+    std::fs::write(&path, "\u{feff}{\"remote\": true, \"rows\": [\"model\"], \"zeta\": 1}").unwrap();
+    save_keys(p, &[("rows", serde_json::json!(["account", "mode"])), ("hiddenProjects", serde_json::json!([]))]).unwrap();
+    let back: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        back.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["remote", "rows", "zeta", "hiddenProjects"],
+        "other keys untouched, order kept"
+    );
+    assert_eq!(back["rows"], serde_json::json!(["account", "mode"]));
+    std::fs::write(&path, "{ not json").unwrap();
+    assert!(save_keys(p, &[("rows", serde_json::json!([]))]).is_err(), "an unparseable file is never overwritten");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    let fresh = dir.join("new.json");
+    save_keys(fresh.to_str().unwrap(), &[("mouse", serde_json::json!(false))]).unwrap();
+    assert!(!parse_config(&std::fs::read_to_string(&fresh).unwrap(), "x", &ctx()).mouse);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn maintenance_action_rules() {
     let (a, w) = parse_actions(
         &serde_json::json!([{"key":"u","script":"C:/x"},{"key":"i","script":"C:/x"},{"key":"I","script":"C:/y"},{"key":"z","script":"rel"}]),
