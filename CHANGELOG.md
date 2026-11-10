@@ -8,7 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 - Config `rows`: which launch rows show and in what order; a hidden row launches with its default,
   and a hidden model row still pins Opus on an account without the default model's family. The
-  maintenance screen's `L` edits it in place.
+  maintenance screen's `l` edits it in place, so `l` is no longer free for `maintenanceActions`.
 - The launcher's own config writes (`rows`, `hiddenProjects`) keep every other key, refuse a file
   that is not UTF-8 JSON, and go through a symlinked config to its target.
 - Config `modelOrder`: the model row's families and their order; unlisted families are hidden.

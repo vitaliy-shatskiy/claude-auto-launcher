@@ -31,7 +31,8 @@ const KNOWN_KEYS: [&str; 15] = [
     "projectScreen",
     "mouse",
 ];
-const RESERVED_ACTION_KEYS: [&str; 5] = ["u", "r", "d", "m", "p"];
+/// The maintenance screen's own keys: five built-ins and `l`, the launch-rows editor.
+const RESERVED_ACTION_KEYS: [&str; 6] = ["u", "r", "d", "m", "p", "l"];
 
 /// Where `~` and relative paths resolve: the home directory and the launch directory.
 #[derive(Debug, Clone)]

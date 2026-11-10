@@ -102,6 +102,10 @@ impl Ops for RealOps {
         captured(Path::new("pwsh"), &["-NoProfile", "-File", &p]).map(|(output, exit_code)| ScriptRun { output, exit_code })
     }
 
+    fn load_rows(&mut self) -> Option<Vec<RowName>> {
+        crate::config::read_config(&self.config_path, &PathCtx::from_env()).rows
+    }
+
     fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String> {
         if self.preview {
             return Err(PREVIEW_NOTE.into());
@@ -200,7 +204,6 @@ pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style) -> Result<(),
         config_path: cfg.path.clone(),
     };
     let mut s = MaintScreen::new(&mut ops, &cfg.maintenance_actions, style);
-    s.rows.clone_from(&cfg.rows);
     tm.end(load);
     crate::ui::screen_loop::run(&mut s, term).map(|_| ())
 }

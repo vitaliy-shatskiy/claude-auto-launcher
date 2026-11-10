@@ -1,4 +1,4 @@
-//! The launch-rows editor behind the maintenance screen's `L`: which launch rows show and in what
+//! The launch-rows editor behind the maintenance screen's `l`: which launch rows show and in what
 //! order, saved as config `rows`. w/s cursor, shift+w/s move, space show/hide, enter save, esc cancel.
 
 use crate::frame::{

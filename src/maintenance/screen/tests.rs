@@ -134,11 +134,11 @@ fn footer_keys(map: &RowMap) -> String {
 #[test]
 fn every_hint_is_clickable_even_at_50_columns_with_a_cjk_label() {
     let f = maintenance_frame(&info(true, None, None), (100, 24), "", plain(), &reindex(), -1);
-    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,L,i,Escape");
+    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,l,i,Escape");
     let mut cjk = reindex();
     cjk[0].label = "\u{5168}\u{91CF}\u{91CD}\u{5EFA}\u{7D22}\u{5F15}\u{FF08}\u{6162}\u{FF09}".into();
     let f = maintenance_frame(&info(true, None, None), (50, 24), "", plain(), &cjk, -1);
-    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,L,i,Escape");
+    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,l,i,Escape");
     assert!(widest(&f.lines) <= 49);
     assert!(f.lines.join("\n").contains(&cjk[0].label));
 }
@@ -240,6 +240,8 @@ struct Log {
     doctor: usize,
     updates: usize,
     rows: Vec<Vec<RowName>>,
+    /// Config `rows` as the file holds it; every save lands here.
+    config: Option<Vec<RowName>>,
 }
 
 struct FakeOps {
@@ -281,32 +283,87 @@ impl Ops for FakeOps {
             exit_code: self.exit_code,
         })
     }
+    fn load_rows(&mut self) -> Option<Vec<RowName>> {
+        self.log.borrow().config.clone()
+    }
     fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String> {
-        self.log.borrow_mut().rows.push(rows.to_vec());
+        let mut log = self.log.borrow_mut();
+        log.rows.push(rows.to_vec());
+        log.config = Some(rows.to_vec());
         Ok(())
     }
 }
 
 #[test]
-fn capital_l_edits_the_launch_rows_and_saves_them() {
-    let log = Rc::new(RefCell::new(Log::default()));
+fn l_edits_the_launch_rows_and_saves_them() {
+    let log = Rc::new(RefCell::new(Log {
+        config: Some(vec![RowName::Account, RowName::Model, RowName::Mode]),
+        ..Log::default()
+    }));
     let mut ops = FakeOps {
         log: Rc::clone(&log),
         exit_code: 0,
     };
     let mut s = MaintScreen::new(&mut ops, &[], plain());
-    s.rows = Some(vec![RowName::Account, RowName::Model, RowName::Mode]);
-    let keys = crate::ui::parse_preview_keys("L,s,s,Spacebar,Enter,l,Escape").unwrap();
+    let keys = crate::ui::parse_preview_keys("l,s,s,Spacebar,Enter,l,Enter,Escape").unwrap();
+    let mut t = PreviewTerm::new((100, 30), keys, true);
+    assert!(run(&mut s, &mut t).unwrap().is_none());
+    assert!(s.status.contains("launch rows saved: account, model"), "{}", s.status);
+    let saved = vec![RowName::Account, RowName::Model];
+    assert_eq!(log.borrow().rows, [saved.clone(), saved], "the next open starts from the save");
+}
+
+#[test]
+fn the_rows_editor_opens_on_the_config_as_it_is_now() {
+    let log = Rc::new(RefCell::new(Log {
+        config: Some(vec![RowName::Account, RowName::Mode]),
+        ..Log::default()
+    }));
+    let mut ops = FakeOps {
+        log: Rc::clone(&log),
+        exit_code: 0,
+    };
+    let mut s = MaintScreen::new(&mut ops, &[], plain());
+    let keys = crate::ui::parse_preview_keys("l,Enter,Escape").unwrap();
     let mut t = PreviewTerm::new((100, 30), keys, true);
     assert!(run(&mut s, &mut t).unwrap().is_none());
     assert_eq!(
-        s.rows,
-        Some(vec![RowName::Account, RowName::Model]),
-        "the next open starts from the save"
+        log.borrow().rows,
+        [vec![RowName::Account, RowName::Mode]],
+        "another launcher's save is what the editor starts from"
     );
-    assert!(s.status.contains("launch rows saved: account, model"), "{}", s.status);
-    assert_eq!(log.borrow().rows, [vec![RowName::Account, RowName::Model]]);
-    assert_eq!(log.borrow().runs.len(), 0, "a lower-case l is no editor key");
+}
+
+#[test]
+fn only_a_plain_l_opens_the_rows_editor() {
+    let shifted = Event::Key(KeyPress {
+        shift: true,
+        ..KeyPress::char('L')
+    });
+    // psmux drops the Caps Lock flag: a Latin letter then arrives as a bare upper-case char.
+    let bare_upper = Event::Key(KeyPress::char('L'));
+    for stray in [shifted, bare_upper] {
+        let (_, status, _, r) = go(vec![stray, esc()], &[], vec![], 0, (100, 24));
+        assert_eq!(r, Ok(None), "Escape left the maintenance screen, no editor took it");
+        assert!(!status.contains("launch rows"), "{status}");
+    }
+    let caps = Event::Key(KeyPress {
+        caps_lock: true,
+        ..KeyPress::char('L')
+    });
+    for press in [key('l'), caps] {
+        let (_, status, _, r) = go(vec![press, esc(), esc()], &[], vec![], 0, (100, 24));
+        assert_eq!(r, Ok(None));
+        assert!(status.contains("launch rows unchanged"), "{status}");
+    }
+}
+
+#[test]
+fn an_error_inside_the_rows_editor_still_ends_the_screen() {
+    // The editor's wait fails (keys exhausted, as a lost console would): the screen's own next
+    // wait fails the same way, so the error reaches the caller.
+    let (.., r) = go(vec![key('l')], &[], vec![], 0, (100, 24));
+    assert_eq!(r, Err(UiStop::KeysExhausted));
 }
 
 /// Scripted events with an injectable record clock; frames and statuses recorded.

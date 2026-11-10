@@ -150,7 +150,7 @@ pub(crate) fn maintenance_frame(
         Hint::ch("d", "doctor", 'd'),
         Hint::ch("m", "mcp list", 'm'),
         Hint::ch("p", "prune", 'p'),
-        Hint::ch("L", "rows", ROWS_KEY),
+        Hint::ch("l", "rows", ROWS_KEY),
     ];
     for a in actions {
         if let Some(c) = a.key.chars().next() {
@@ -204,12 +204,15 @@ pub(crate) trait Ops {
     fn prune(&mut self) -> Pruned;
     /// The script runner behind `Invoke-MaintenanceScript`.
     fn run(&mut self, script: &Path) -> Result<ScriptRun, String>;
+    /// Config `rows` as the file holds it now; `None` = every row.
+    fn load_rows(&mut self) -> Option<Vec<RowName>>;
     /// Writes config `rows`, every other key untouched.
     fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String>;
 }
 
-/// Opens the launch-rows editor; upper case, so it never takes a configured action's letter.
-const ROWS_KEY: char = 'L';
+/// Opens the launch-rows editor. Lower case and matched exactly: a Shift + upper-case letter is
+/// what a split mouse report looks like. Config reserves it, so no action takes it.
+const ROWS_KEY: char = 'l';
 
 /// The screen's state between keys.
 pub(crate) struct MaintScreen<'a> {
@@ -219,8 +222,6 @@ pub(crate) struct MaintScreen<'a> {
     pub(crate) style: Style,
     pub(crate) info: InstallInfo,
     pub(crate) status: String,
-    /// Config `rows` as the editor opens on it; `None` = every row.
-    pub(crate) rows: Option<Vec<RowName>>,
     /// The key whose confirm is armed, and the record time it was armed at. State, never a parse
     /// of the status text: any press consumes it.
     pending: Option<char>,
@@ -245,7 +246,6 @@ impl<'a> MaintScreen<'a> {
             style,
             info: InstallInfo::default(),
             status: String::new(),
-            rows: None,
             pending: None,
             pending_at: None,
         }
@@ -294,14 +294,16 @@ impl<'a> MaintScreen<'a> {
         }
     }
 
-    /// The rows editor; a save is reported in the status line and seen by the next editor open.
+    /// The rows editor, opened on the config as the file holds it now; a save is reported in the
+    /// status line. An editor that ends in `Err` (a lost console) is "unchanged" here: the error
+    /// is a state, so this screen's own next wait returns it to the caller.
     fn edit_rows(&mut self, term: &mut dyn Term) {
-        let mut editor = RowsEditor::new(self.rows.as_deref(), self.style);
+        let current = self.ops.load_rows();
+        let mut editor = RowsEditor::new(current.as_deref(), self.style);
         self.status = match crate::ui::screen_loop::run(&mut editor, term) {
             Ok(Some(rows)) => match self.ops.save_rows(&rows) {
                 Ok(()) => {
                     let names: Vec<String> = rows.iter().map(|r| r.as_str().to_lowercase()).collect();
-                    self.rows = Some(rows);
                     format!("launch rows saved: {} - shown from the next start", names.join(", "))
                 }
                 Err(e) => format!("launch rows not saved: {e}"),
@@ -356,7 +358,7 @@ impl Screen for MaintScreen<'_> {
         if was_pending.is_some_and(|p| !is_hotkey_exact(key, p)) {
             self.status.clear();
         }
-        if key.ch == ROWS_KEY {
+        if is_hotkey_exact(key, ROWS_KEY) {
             self.edit_rows(term);
             return true;
         }

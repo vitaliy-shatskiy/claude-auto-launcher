@@ -327,6 +327,13 @@ fn save_keys_writes_through_a_symlinked_config() {
 }
 
 #[test]
+fn l_is_reserved_for_the_rows_editor() {
+    let (a, w) = parse_actions(&serde_json::json!([{"key":"l","script":"C:/x"}]), &ctx());
+    assert_eq!(a, []);
+    assert!(w[0].contains("outside u,r,d,m,p,l"), "{w:?}");
+}
+
+#[test]
 fn maintenance_action_rules() {
     let (a, w) = parse_actions(
         &serde_json::json!([{"key":"u","script":"C:/x"},{"key":"i","script":"C:/x"},{"key":"I","script":"C:/y"},{"key":"z","script":"rel"}]),
