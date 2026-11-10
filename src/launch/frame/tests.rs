@@ -337,7 +337,7 @@ fn row_map_points_at_the_drawn_lines() {
             assert!(drawn.contains(&c.value) || hit.name == "Model", "{drawn} vs {}", c.value);
         }
     }
-    assert_eq!(f.map.footer.len(), 3, "enter, u, esc are clickable");
+    assert_eq!(f.map.footer.len(), 4, "enter, o, u, esc are clickable");
 }
 
 #[test]

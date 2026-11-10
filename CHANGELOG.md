@@ -4,6 +4,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- Launch screen: `ctrl+w`/`ctrl+s` move the selected row, `ctrl+x` hides it (not `account`), `o`
+  opens the rows editor, where hidden rows can be shown again. Each change saves `rows` at once;
+  a refused save holds for this run and says why. The footer names the keys.
+
+### Changed
+
+- A `rows` save from the rows editor (`o`, or maintenance `l`) shows on return to the launch
+  screen, no longer from the next start.
+
 ## [0.7.0] — 2026-11-10
 
 ### Added
