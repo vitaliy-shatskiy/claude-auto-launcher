@@ -289,6 +289,44 @@ fn save_keys_writes_its_keys_and_keeps_the_rest() {
 }
 
 #[test]
+fn save_keys_refuses_a_file_that_is_not_utf8() {
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-cp1251-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("claude-auto.json");
+    // "Робота" saved as ANSI (cp1251): a lossy read would write U+FFFD over every letter.
+    let bytes: &[u8] = b"{\"accounts\": [{\"key\": \"work\", \"label\": \"\xD0\xEE\xE1\xEE\xF2\xE0\"}]}";
+    std::fs::write(&path, bytes).unwrap();
+    assert!(save_keys(path.to_str().unwrap(), &[("mouse", serde_json::json!(false))]).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the file stays byte-exact");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn save_keys_writes_through_a_symlinked_config() {
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-link-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (target, link) = (dir.join("real.json"), dir.join("claude-auto.json"));
+    std::fs::write(&target, r#"{"remote": true}"#).unwrap();
+    if std::os::windows::fs::symlink_file(&target, &link).is_err() {
+        // Creating a symlink needs Developer Mode or elevation; without it there is nothing to test.
+        std::fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+    save_keys(link.to_str().unwrap(), &[("mouse", serde_json::json!(false))]).unwrap();
+    assert!(
+        std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
+        "the link survives"
+    );
+    let back: Value = serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(
+        back,
+        serde_json::json!({"remote": true, "mouse": false}),
+        "the target took the write"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn maintenance_action_rules() {
     let (a, w) = parse_actions(
         &serde_json::json!([{"key":"u","script":"C:/x"},{"key":"i","script":"C:/x"},{"key":"I","script":"C:/y"},{"key":"z","script":"rel"}]),

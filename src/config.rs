@@ -539,13 +539,23 @@ pub fn read_config(path: &str, ctx: &PathCtx) -> Config {
     }
 }
 
-/// Writes `keys` into the config file and leaves every other key as it was (order kept). A file
-/// that is not a JSON object is refused, never overwritten; a missing one is created. The write is
-/// a temp file renamed over the old one: two launchers saving at once leave the last writer's file.
+/// Writes `keys` into the config file and leaves every other key as it was (order kept).
 pub fn save_keys(path: &str, keys: &[(&str, Value)]) -> std::io::Result<()> {
+    update_config(path, |obj| {
+        for (k, v) in keys {
+            obj.insert((*k).to_owned(), v.clone());
+        }
+    })
+}
+
+/// Rewrites the config through `edit`. A file that is not UTF-8 (an ANSI save would lose its
+/// bytes) or not a JSON object is refused, never overwritten; a missing one is created. The write
+/// is a temp file renamed over the old one, next to a symlink's target so the link survives: two
+/// launchers saving at once leave the last writer's file.
+pub(crate) fn update_config(path: &str, edit: impl FnOnce(&mut serde_json::Map<String, Value>)) -> std::io::Result<()> {
     let mut obj = if Path::new(path).exists() {
         let bytes = std::fs::read(path)?;
-        let text = String::from_utf8_lossy(&bytes);
+        let text = std::str::from_utf8(&bytes).map_err(|e| std::io::Error::other(format!("{path} is not UTF-8 ({e})")))?;
         match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).map_err(std::io::Error::other)? {
             Value::Object(m) => m,
             _ => return Err(std::io::Error::other(format!("{path} is not a JSON object"))),
@@ -553,10 +563,13 @@ pub fn save_keys(path: &str, keys: &[(&str, Value)]) -> std::io::Result<()> {
     } else {
         serde_json::Map::new()
     };
-    for (k, v) in keys {
-        obj.insert((*k).to_owned(), v.clone());
-    }
-    crate::prefs::write_atomic(path, &Value::Object(obj))
+    edit(&mut obj);
+    let target = if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        std::fs::canonicalize(path)?.to_string_lossy().into_owned()
+    } else {
+        path.to_owned()
+    };
+    crate::prefs::write_atomic(&target, &Value::Object(obj))
 }
 
 #[cfg(test)]

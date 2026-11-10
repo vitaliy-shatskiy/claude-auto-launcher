@@ -147,6 +147,17 @@ fn default_pins_opus_when_account_lacks_fable() {
 }
 
 #[test]
+fn a_hidden_model_row_still_pins_the_unavailable_default() {
+    let mut r = four();
+    r.apply_rows(&[RowName::Account, RowName::Effort]);
+    let none: Vec<String> = Vec::new();
+    assert_eq!(
+        launch_args(&r, &r.new_state(), None, false, Some(&none), "Fable 5.1[1M]", "").join(" "),
+        "--model opus[1m]"
+    );
+}
+
+#[test]
 fn step_wraps_and_skips_hidden_fable() {
     let r = four();
     let mut s = r.new_state();

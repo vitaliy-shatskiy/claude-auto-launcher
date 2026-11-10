@@ -274,8 +274,16 @@ impl Roster {
     }
 
     /// `Get-UnavailableDefaultModel`: (arg, label) of the pin.
+    /// A hidden model row still pins: its definition comes from the base rows then.
     pub fn unavailable_default_model(&self) -> (String, String) {
-        let row = self.row(RowName::Model);
+        let base;
+        let row = match self.row(RowName::Model) {
+            Some(r) => Some(r),
+            None => {
+                base = base_rows();
+                base.iter().find(|r| r.name == RowName::Model)
+            }
+        };
         let get = |m: Option<&BTreeMap<String, String>>| m.and_then(|t| t.get(UNAVAILABLE_DEFAULT_KEY)).cloned().unwrap_or_default();
         (get(row.map(|r| &r.args)), get(row.map(|r| &r.labels)))
     }
