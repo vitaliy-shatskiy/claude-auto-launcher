@@ -254,7 +254,7 @@ fn a_failed_save_says_the_hide_lasts_this_run_only() {
     let frames = run_hiding(&f, &hiding, keys(&["s", "h", "Escape"]));
     let last = frames.last().unwrap();
     assert!(last.iter().any(|l| l.contains("hidden for this run only: disk full")), "{last:#?}");
-    assert_eq!(hiding.paths.borrow().as_slice(), [f.alpha.clone()], "the hide holds for this run");
+    assert_eq!(*hiding.paths.borrow(), [f.alpha.as_str()], "the hide holds for this run");
 }
 
 #[test]
