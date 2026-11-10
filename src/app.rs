@@ -54,6 +54,8 @@ struct UiOutcome {
     resume_id: Option<String>,
     fork: bool,
     view: LaunchView,
+    /// The rows as the launch screen left them (edited there this run).
+    roster: Roster,
     restored: Vec<String>,
     project_source: String,
     preselect: String,
@@ -247,7 +249,7 @@ fn launch(run: &Run) -> i32 {
                 &prefs::prefs_path(&run.ctx, var("CLAUDE_AUTO_PREFS").as_deref()),
                 &o.state,
                 now_ms(),
-                &run.roster,
+                &o.roster,
             )
         };
         if o.state.advisor.eq_ignore_ascii_case("off") {
@@ -340,7 +342,7 @@ fn launch(run: &Run) -> i32 {
             };
             let (default_model, default_advisor) = (resolved("Model"), resolved("Advisor"));
             launch_args(
-                &run.roster,
+                &o.roster,
                 &o.state,
                 o.resume_id.as_deref(),
                 o.fork,

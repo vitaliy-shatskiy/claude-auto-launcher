@@ -26,6 +26,9 @@ pub mod vk {
     pub const F12: u16 = 123;
     pub const C: u16 = 0x43;
     pub const R: u16 = 0x52;
+    pub const S: u16 = 0x53;
+    pub const W: u16 = 0x57;
+    pub const X: u16 = 0x58;
     pub const OEM2: u16 = 191;
 }
 
@@ -161,7 +164,14 @@ pub fn key_name(code: u16) -> String {
 }
 
 /// `New-ScriptedKeyReader`'s rule: one character is a typed character, anything longer a key name.
+/// `Ctrl+<name>` (new in the Rust port) is that key with Ctrl held.
 pub fn scripted_key(entry: &str) -> Option<KeyPress> {
+    if let Some(name) = entry.get(..5).filter(|p| p.eq_ignore_ascii_case("ctrl+")).and(entry.get(5..)) {
+        return parse_key_name(name).map(|code| KeyPress {
+            ctrl: true,
+            ..KeyPress::named(code)
+        });
+    }
     let mut chars = entry.chars();
     match (chars.next(), chars.next()) {
         (Some(c), None) => Some(KeyPress::char(c)),

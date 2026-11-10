@@ -304,7 +304,7 @@ impl<'a> MaintScreen<'a> {
             Ok(Some(rows)) => match self.ops.save_rows(&rows) {
                 Ok(()) => {
                     let names: Vec<String> = rows.iter().map(|r| r.as_str().to_lowercase()).collect();
-                    format!("launch rows saved: {} - shown from the next start", names.join(", "))
+                    format!("launch rows saved: {} - shown on return to the launch screen", names.join(", "))
                 }
                 Err(e) => format!("launch rows not saved: {e}"),
             },

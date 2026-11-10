@@ -109,7 +109,7 @@ impl Screen for RowsEditor {
         body.push(format!(
             "  {}",
             if self.notice.is_empty() {
-                "saved to the config; the launch screen uses it from the next start"
+                "saved to the config; the launch screen shows it on return"
             } else {
                 self.notice
             }

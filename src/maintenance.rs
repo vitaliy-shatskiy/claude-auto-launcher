@@ -4,7 +4,7 @@
 
 mod install;
 mod release;
-mod rows;
+pub(crate) mod rows;
 mod screen;
 mod win;
 
@@ -110,8 +110,7 @@ impl Ops for RealOps {
         if self.preview {
             return Err(PREVIEW_NOTE.into());
         }
-        let names: Vec<String> = rows.iter().map(|r| r.as_str().to_lowercase()).collect();
-        crate::config::save_keys(&self.config_path, &[("rows", serde_json::json!(names))]).map_err(|e| e.to_string())
+        crate::config::save_rows(&self.config_path, rows).map_err(|e| e.to_string())
     }
 }
 

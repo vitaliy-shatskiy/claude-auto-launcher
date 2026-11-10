@@ -168,6 +168,8 @@ const UNAVAILABLE_DEFAULT_ADVISOR: &str = "opus";
 #[derive(Debug, Clone)]
 pub struct Roster {
     pub rows: Vec<RowDef>,
+    /// The rows `rows` set aside, kept so the launch screen can show them again in this run.
+    spare: Vec<RowDef>,
     tints: BTreeMap<String, String>,
     default_account: String,
 }
@@ -194,6 +196,7 @@ impl Roster {
         let tints = accounts.iter().map(|a| (a.key.clone(), a.tint.clone())).collect();
         Self {
             rows,
+            spare: Vec::new(),
             tints,
             default_account,
         }
@@ -212,24 +215,44 @@ impl Roster {
         self.tints.get(account).and_then(|n| theme::palette(n)).unwrap_or(theme::GREEN)
     }
 
-    /// `rows`: the listed rows in that order, every other row gone. A gone row keeps its default
-    /// for the launch: prefs restore only rows the roster has. Remote stays absent when it is off.
+    /// `rows`: the listed rows in that order, every other row set aside. A gone row keeps its
+    /// default for the launch: prefs restore only rows the roster has. Remote stays absent when it
+    /// is off. Applied again it brings set-aside rows back; the action row keeps its place.
     pub fn apply_rows(&mut self, order: &[RowName]) {
-        let mut rows = std::mem::take(&mut self.rows);
+        let mut all = std::mem::take(&mut self.rows);
+        all.append(&mut self.spare);
+        let action = all.iter().position(|r| r.name == RowName::Action).map(|i| all.remove(i));
         self.rows = order
             .iter()
-            .filter_map(|name| rows.iter().position(|r| r.name == *name).map(|i| rows.remove(i)))
+            .filter_map(|name| all.iter().position(|r| r.name == *name).map(|i| all.remove(i)))
             .collect();
+        self.spare = all;
+        if let Some(a) = action {
+            self.rows.insert(self.action_slot(), a);
+        }
+    }
+
+    /// The config rows on screen in order (the action row is no config row).
+    pub fn shown_config_rows(&self) -> Vec<RowName> {
+        self.rows.iter().map(|r| r.name).filter(|n| CONFIG_ROWS.contains(n)).collect()
+    }
+
+    /// Whether this run has the row at all, shown or set aside (Remote has none when it is off).
+    pub fn knows(&self, name: RowName) -> bool {
+        self.rows.iter().chain(&self.spare).any(|r| r.name == name)
+    }
+
+    fn action_slot(&self) -> usize {
+        self.rows
+            .iter()
+            .rposition(|r| matches!(r.name, RowName::Account | RowName::Remote))
+            .map_or(0, |i| i + 1)
     }
 
     /// `projectScreen` onDemand: the action row after account (and remote), `new` first. `project`
     /// opens the project screen for that one launch; it adds no claude argument.
     pub fn add_action_row(&mut self) {
-        let after = self
-            .rows
-            .iter()
-            .rposition(|r| matches!(r.name, RowName::Account | RowName::Remote))
-            .map_or(0, |i| i + 1);
+        let after = self.action_slot();
         let values: Vec<&str> = std::iter::once(LAUNCH_MODES[0].name)
             .chain(std::iter::once(PROJECT_ACTION))
             .chain(LAUNCH_MODES.iter().skip(1).map(|m| m.name))
@@ -240,7 +263,7 @@ impl Roster {
     /// `modelOrder`: the model row lists `default`, then these families in this order; an unlisted
     /// family is no option, so a remembered pick of it falls back to `default`.
     pub fn apply_model_order(&mut self, families: &[String]) {
-        let Some(row) = self.rows.iter_mut().find(|r| r.name == RowName::Model) else {
+        let Some(row) = self.rows.iter_mut().chain(&mut self.spare).find(|r| r.name == RowName::Model) else {
             return;
         };
         row.values = std::iter::once("default".to_owned())
@@ -256,7 +279,7 @@ impl Roster {
     /// `Set-ModelRowLabels`: family -> display name from the installed binary; the 1M keys
     /// append their bracket (none for Sonnet, whose 1M context is native).
     pub fn set_model_labels(&mut self, family_labels: &BTreeMap<String, String>) {
-        let Some(row) = self.rows.iter_mut().find(|r| r.name == RowName::Model) else {
+        let Some(row) = self.rows.iter_mut().chain(&mut self.spare).find(|r| r.name == RowName::Model) else {
             return;
         };
         for (key, fam) in [("fable", "fable"), ("opus1m", "opus"), ("sonnet1m", "sonnet"), ("haiku", "haiku")] {

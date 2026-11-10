@@ -27,6 +27,8 @@ pub struct LaunchFrameInput<'a> {
     pub default_advisor_label: &'a str,
     pub default_labels: &'a DefaultLabels,
     pub style: Style,
+    /// One line under the rows about the last row edit ('' none).
+    pub notice: &'a str,
 }
 
 /// One limit as label, percent and an age of its own, in drawing order: five hour, seven day,
@@ -294,6 +296,9 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
             format!("{restored_age} ago")
         };
         lines.push(format!("  * restored ({when}), ctrl+r resets"));
+    }
+    if !inp.notice.is_empty() {
+        lines.push(format!("  {}", inp.notice));
     }
     let footer = launch_footer(&g, fw, inp.style.color);
     let light = FooterLight {

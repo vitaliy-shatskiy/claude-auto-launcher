@@ -8,8 +8,9 @@ use crate::input::console::ConsoleInput;
 use crate::input::{Event, KeyPress, is_hotkey, vk};
 use crate::launch::LaunchState;
 use crate::launch::PROJECT_ACTION;
+use crate::launch::RowName;
 use crate::launch::launch_mode;
-use crate::launch::screen::{LaunchScreen, LaunchView};
+use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore};
 use crate::out;
 use crate::prefs;
 use crate::timing::view;
@@ -111,6 +112,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     tm.end(load);
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
     let mut chosen_how: Option<String>;
+    let mut rows_store = ConfigRows { run };
 
     let outcome = loop {
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
@@ -123,7 +125,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             }
             false
         };
-        let mut screen = LaunchScreen::new(&roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook);
+        let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook).with_rows(&mut rows_store);
         let Some(next) = crate::ui::screen_loop::run(&mut screen, term.as_mut())? else {
             break UiEnd::Cancelled;
         };
@@ -163,7 +165,17 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
                 sessions::continue_session_holder(&held_dirs, &slugs, &sessions_root)
             };
             if confirm_held(term.as_mut(), holder.as_deref(), style)? {
-                break launch_end(state, None, false, view, merged.restored, project_source, preselect, chosen_how);
+                break launch_end(
+                    state,
+                    None,
+                    false,
+                    view,
+                    roster,
+                    merged.restored,
+                    project_source,
+                    preselect,
+                    chosen_how,
+                );
             }
             if run.preview {
                 break UiEnd::PreviewHeldBack;
@@ -172,7 +184,17 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             continue;
         }
         if !mode.is_some_and(|m| m.picks_session) {
-            break launch_end(state, None, false, view, merged.restored, project_source, preselect, chosen_how);
+            break launch_end(
+                state,
+                None,
+                false,
+                view,
+                roster,
+                merged.restored,
+                project_source,
+                preselect,
+                chosen_how,
+            );
         }
         let name = Path::new(&state.project)
             .file_name()
@@ -198,6 +220,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
                     Some(picked.session_id),
                     picked.fork,
                     view,
+                    roster,
                     merged.restored,
                     project_source,
                     preselect,
@@ -222,6 +245,24 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         // A stale per-PID cache is swept by the next preview.
     }
     Ok(outcome)
+}
+
+/// Config `rows` on disk, re-read each time; a preview reads it and writes nothing.
+struct ConfigRows<'a> {
+    run: &'a Run,
+}
+
+impl RowsStore for ConfigRows<'_> {
+    fn load(&mut self) -> Option<Vec<RowName>> {
+        crate::config::read_config(&self.run.cfg.path, &self.run.ctx).rows
+    }
+
+    fn save(&mut self, rows: &[RowName]) -> Result<(), String> {
+        if self.run.preview {
+            return Ok(());
+        }
+        crate::config::save_rows(&self.run.cfg.path, rows).map_err(|e| e.to_string())
+    }
 }
 
 /// `mouse` false or `CLAUDE_AUTO_NO_MOUSE=1`: keys only; the variable wins over the config.
@@ -251,6 +292,7 @@ fn launch_end(
     resume_id: Option<String>,
     fork: bool,
     view: LaunchView,
+    roster: crate::launch::Roster,
     restored: Vec<String>,
     project_source: String,
     preselect: String,
@@ -261,6 +303,7 @@ fn launch_end(
         resume_id,
         fork,
         view,
+        roster,
         restored,
         project_source,
         preselect,

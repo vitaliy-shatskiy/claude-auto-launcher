@@ -549,6 +549,12 @@ pub fn save_keys(path: &str, keys: &[(&str, Value)]) -> std::io::Result<()> {
     })
 }
 
+/// Writes config `rows` (lower-case names), every other key untouched.
+pub fn save_rows(path: &str, rows: &[RowName]) -> std::io::Result<()> {
+    let names: Vec<String> = rows.iter().map(|r| r.as_str().to_lowercase()).collect();
+    save_keys(path, &[("rows", serde_json::json!(names))])
+}
+
 /// Rewrites the config through `edit`. A file that is not UTF-8 (an ANSI save would lose its
 /// bytes) or not a JSON object is refused, never overwritten; a missing one is created. The write
 /// is a temp file renamed over the old one, next to a symlink's target so the link survives: two

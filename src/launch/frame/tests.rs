@@ -66,6 +66,7 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
         default_advisor_label: "default",
         default_labels: c.labels,
         style: c.style,
+        notice: "",
     };
     launch_frame(r, &inp).lines.join("\n")
 }
@@ -184,6 +185,7 @@ fn narrow_tier_draws_compact_rows_and_one_limit_line() {
         default_advisor_label: "default",
         default_labels: &labels,
         style: Style { color: false, ascii: true },
+        notice: "",
     };
     let f = launch_frame(&r, &inp);
     assert!(f.lines.iter().all(|l| display_width(l) <= 49), "{:#?}", f.lines);
@@ -222,6 +224,7 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
             color: false,
             ascii: false,
         },
+        notice: "",
     };
     launch_frame(r, &inp)
 }
@@ -319,6 +322,7 @@ fn row_map_points_at_the_drawn_lines() {
         default_advisor_label: "default",
         default_labels: &labels,
         style: Style { color: false, ascii: true },
+        notice: "",
     };
     let f = launch_frame(&r, &inp);
     for hit in &f.map.rows {
@@ -382,6 +386,7 @@ fn too_small_terminal_gets_the_size_frame() {
         default_advisor_label: "default",
         default_labels: &d,
         style: Style { color: false, ascii: true },
+        notice: "",
     };
     assert_eq!(
         launch_frame(&r, &inp).lines.first().map(String::as_str),
