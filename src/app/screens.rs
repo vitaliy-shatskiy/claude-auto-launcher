@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{self, PathCtx, ProjectScreen};
+use crate::config::{PathCtx, ProjectScreen};
 use crate::frame::{self, Style};
 use crate::input::console::ConsoleInput;
 use crate::input::{Event, KeyPress, is_hotkey, vk};
@@ -95,10 +95,12 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let account_roots: Vec<String> = run.cfg.accounts.iter().map(|a| a.root.clone()).collect();
     let roots = projects::launcher_profile_roots(&run.ctx.home, var("CLAUDE_CONFIG_DIR").as_deref(), &account_roots);
     let project_list = projects::project_registry(cache.as_deref(), &roots, run.cfg.hide_headless_projects);
-    let save_hidden = |paths: &[String]| {
-        if !run.preview && config::save_keys(&run.cfg.path, &[("hiddenProjects", serde_json::json!(paths))]).is_err() {
-            // An unwritable or unparseable config keeps the hide for this run only.
+    // An unwritable or refused config keeps the change for this run only; the screen says why.
+    let save_hidden = |path: &str, change: projects::HideChange| -> Result<(), String> {
+        if run.preview {
+            return Ok(());
         }
+        projects::save_hidden_project(&run.cfg.path, &run.ctx, path, change).map_err(|e| e.to_string())
     };
     let hiding = projects::Hiding {
         paths: std::cell::RefCell::new(run.cfg.hidden_projects.clone()),

@@ -13,7 +13,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   that is not UTF-8 JSON, and go through a symlinked config to its target.
 - Config `modelOrder`: the model row's families and their order; unlisted families are hidden.
 - Config `hiddenProjects` and the project screen's `h` (hide or show the project under the
-  cursor, saved at once) and `v` (list the hidden projects, marked).
+  cursor, saved at once; only that entry changes, and a failed save is named on screen) and `v`
+  (list the hidden projects, marked).
 - Config `projectScreen: "onDemand"`: Enter starts in the launch directory; the launch screen's
   new `action` row picks new, project, continue, resume or worktree, and `project` opens the
   project screen for that launch.

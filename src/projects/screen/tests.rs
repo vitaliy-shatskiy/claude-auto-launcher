@@ -158,28 +158,34 @@ fn opening_map(f: &Fx) -> crate::frame::RowMap {
 /// One launcher run's project screen over `config`: `hiddenProjects` read from the file, every
 /// change saved back to it as the launcher saves it.
 fn run_with_config(f: &Fx, config: &str, ks: &[&str]) -> Vec<Vec<String>> {
+    run_events_with_config(f, config, keys(ks))
+}
+
+fn run_events_with_config(f: &Fx, config: &str, events: Vec<Event>) -> Vec<Vec<String>> {
     let ctx = crate::config::PathCtx {
         home: f.tree.0.clone(),
         cwd: f.tree.0.clone(),
     };
     let cfg = crate::config::read_config(config, &ctx);
-    let save = |paths: &[String]| {
-        crate::config::save_keys(config, &[("hiddenProjects", serde_json::json!(paths))]).unwrap();
-    };
+    let save = |path: &str, change: HideChange| crate::projects::save_hidden_project(config, &ctx, path, change).map_err(|e| e.to_string());
     let hiding = Hiding {
         paths: RefCell::new(cfg.hidden_projects),
         save: &save,
     };
+    run_hiding(f, &hiding, events)
+}
+
+fn run_hiding(f: &Fx, hiding: &Hiding<'_>, events: Vec<Event>) -> Vec<Vec<String>> {
     let mut t = Script {
         inner: PreviewTerm::new((80, 24), VecDeque::new(), true),
-        q: keys(ks).into(),
+        q: events.into(),
         answer: String::new(),
         asked: 0,
     };
     let c = clock;
     let style = Style { color: false, ascii: true };
     assert!(
-        run_screen(&mut t, &f.projects, Path::new(&f.cwd), "new", style, &c, Some(&hiding))
+        run_screen(&mut t, &f.projects, Path::new(&f.cwd), "new", style, &c, Some(hiding))
             .unwrap()
             .is_none()
     );
@@ -214,6 +220,64 @@ fn h_hides_and_unhides_in_show_hidden() {
     assert!(listed(shown.last().unwrap()), "h there un-hides it");
     let again = run_with_config(&f, config, &["Escape"]);
     assert!(listed(&again[0]), "and it stays listed");
+}
+
+#[test]
+fn h_changes_only_its_own_entry_and_keeps_the_rest_as_written() {
+    let f = fx();
+    let config = f.tree.0.join("claude-auto.json");
+    let config = config.to_str().unwrap();
+    let kept = serde_json::json!([r"~\keep", r"%APPDATA%\x", "relative"]);
+    let mut written = kept.as_array().unwrap().clone();
+    written.insert(1, serde_json::json!(f.alpha.replace('\\', "/").to_uppercase()));
+    std::fs::write(config, serde_json::json!({ "hiddenProjects": written }).to_string()).unwrap();
+    let on_disk =
+        || -> Value { serde_json::from_str::<Value>(&std::fs::read_to_string(config).unwrap()).unwrap()["hiddenProjects"].clone() };
+
+    run_with_config(&f, config, &["v", "s", "h", "Escape"]);
+    assert_eq!(on_disk(), kept, "unhide removes the entry whose expansion matches, nothing else");
+
+    run_with_config(&f, config, &["s", "h", "Escape"]);
+    let mut appended = kept.as_array().unwrap().clone();
+    appended.push(serde_json::json!(f.alpha));
+    assert_eq!(on_disk(), Value::Array(appended), "hide appends the path, the rest as written");
+}
+
+#[test]
+fn a_failed_save_says_the_hide_lasts_this_run_only() {
+    let f = fx();
+    let save = |_: &str, _: HideChange| Err("disk full".to_owned());
+    let hiding = Hiding {
+        paths: RefCell::new(Vec::new()),
+        save: &save,
+    };
+    let frames = run_hiding(&f, &hiding, keys(&["s", "h", "Escape"]));
+    let last = frames.last().unwrap();
+    assert!(last.iter().any(|l| l.contains("hidden for this run only: disk full")), "{last:#?}");
+    assert_eq!(hiding.paths.borrow().as_slice(), [f.alpha.clone()], "the hide holds for this run");
+}
+
+#[test]
+fn only_an_exact_h_hides_a_shifted_one_never_writes() {
+    let f = fx();
+    let config = f.tree.0.join("claude-auto.json");
+    let config = config.to_str().unwrap();
+    // A split X10 mouse report arrives as Shift + an upper-case letter.
+    let shifted = Event::Key(KeyPress {
+        shift: true,
+        ..KeyPress::char('H')
+    });
+    run_events_with_config(&f, config, vec![key("s"), shifted, key("Escape")]);
+    assert!(!Path::new(config).exists(), "nothing saved");
+    let caps = Event::Key(KeyPress {
+        caps_lock: true,
+        ..KeyPress::char('H')
+    });
+    run_events_with_config(&f, config, vec![key("s"), caps, key("Escape")]);
+    assert!(
+        std::fs::read_to_string(config).unwrap().contains("alpha"),
+        "Caps Lock h still hides"
+    );
 }
 
 #[test]

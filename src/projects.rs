@@ -12,13 +12,16 @@ mod win;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use serde_json::Value;
+
+use crate::config::{PathCtx, is_rooted_raw};
 use crate::frame::Style;
 use crate::launch::LaunchState;
 use crate::ui::{Term, UiStop};
 
 pub use paths::project_key;
 pub(crate) use registry::path_from_transcript;
-pub use screen::Hiding;
+pub use screen::{HideChange, Hiding};
 
 /// Every slug of the directory `path` names; empty when it is no known project.
 pub fn slugs_for_path(projects: &[Project], path: &str) -> Vec<String> {
@@ -153,6 +156,28 @@ pub fn update_start_selection(state: &mut LaunchState) {
 /// day, by their exact name only.
 pub fn remove_stale_preview_cache(dir: &Path) {
     registry::remove_stale_preview_cache_at(dir, SystemTime::now());
+}
+
+/// `h` saved: one entry of the config's `hiddenProjects` changes. Hiding appends `project`; showing
+/// removes every entry that expands to the same directory. Every other entry stays as written
+/// (`~`, `%VAR%`, even one the parser skips).
+pub fn save_hidden_project(config: &str, ctx: &PathCtx, project: &str, change: HideChange) -> std::io::Result<()> {
+    crate::config::update_config(config, |obj| {
+        let entry = obj.entry("hiddenProjects").or_insert(Value::Null);
+        let mut list = match std::mem::take(entry) {
+            Value::Null => Vec::new(),
+            Value::Array(a) => a,
+            other => vec![other],
+        };
+        match change {
+            HideChange::Hide => list.push(Value::String(project.to_owned())),
+            HideChange::Show => {
+                let key = project_key(project);
+                list.retain(|e| !e.as_str().is_some_and(|s| is_rooted_raw(s) && project_key(&ctx.expand(s)) == key));
+            }
+        }
+        *entry = Value::Array(list);
+    })
 }
 
 /// `Invoke-ProjectScreen`: where the session runs and what it does there. `None` = Escape, back to

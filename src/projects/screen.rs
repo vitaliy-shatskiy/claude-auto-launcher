@@ -12,7 +12,7 @@ use super::select::{RowKind, project_rows, slugs_for_path};
 use super::view::{ProjectView, project_actions, project_frame, step_project_action};
 use super::{Project, ProjectChoice};
 use crate::frame::{Frame, Style};
-use crate::input::{KeyPress, vk};
+use crate::input::{KeyPress, is_hotkey_exact, vk};
 use crate::launch::LAUNCH_MODES;
 use crate::ui::screen_loop::{Cursor, Flow, Screen, run};
 use crate::ui::{Hit, Term, UiStop};
@@ -27,10 +27,18 @@ pub(crate) enum Outcome {
     },
 }
 
+/// What one `h` press does to a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HideChange {
+    Hide,
+    Show,
+}
+
 /// Projects hidden by hand (config `hiddenProjects`, full paths) and how a change is saved.
 pub struct Hiding<'a> {
     pub paths: RefCell<Vec<String>>,
-    pub save: &'a dyn Fn(&[String]),
+    /// Saves one change for the project at this path; `Err` says why it was not saved.
+    pub save: &'a dyn Fn(&str, HideChange) -> Result<(), String>,
 }
 
 impl std::fmt::Debug for Hiding<'_> {
@@ -75,7 +83,7 @@ impl std::fmt::Debug for ProjectScreen<'_> {
 
 impl<'a> ProjectScreen<'a> {
     pub(crate) fn new(projects: &'a [Project], cwd: &str, initial_action: &str, style: Style, clock: &'a dyn Fn() -> i64) -> Self {
-        let mut hotkeys = vec!['/', HIDE_KEY, SHOW_HIDDEN_KEY];
+        let mut hotkeys = vec!['/', SHOW_HIDDEN_KEY];
         hotkeys.extend(LAUNCH_MODES.iter().filter_map(|m| m.hotkey));
         Self {
             projects,
@@ -139,17 +147,22 @@ impl<'a> ProjectScreen<'a> {
         }
         let key = project_key(&path);
         let mut paths = h.paths.borrow_mut();
-        if let Some(i) = paths.iter().position(|p| project_key(p) == key) {
+        let change = if let Some(i) = paths.iter().position(|p| project_key(p) == key) {
             paths.remove(i);
-            self.notice = format!("{name} shown again");
+            HideChange::Show
         } else if self.projects.iter().any(|p| p.hidden && project_key(&p.path) == key) {
             "hidden by rule (headless or scratch), not by h".clone_into(&mut self.notice);
             return;
         } else {
-            paths.push(path);
-            self.notice = format!("{name} hidden - v lists hidden projects");
-        }
-        (h.save)(&paths);
+            paths.push(path.clone());
+            HideChange::Hide
+        };
+        self.notice = match ((h.save)(&path, change), change) {
+            (Ok(()), HideChange::Show) => format!("{name} shown again"),
+            (Ok(()), HideChange::Hide) => format!("{name} hidden - v lists hidden projects"),
+            (Err(e), HideChange::Show) => format!("{name} shown for this run only: {e}"),
+            (Err(e), HideChange::Hide) => format!("{name} hidden for this run only: {e}"),
+        };
     }
 
     /// R16: a filter parks the cursor on its first match - row 0 when the cwd's project matches,
@@ -321,10 +334,6 @@ impl Screen for ProjectScreen<'_> {
             self.cursor.typing = true;
             return Flow::Continue;
         }
-        if c == HIDE_KEY {
-            self.toggle_hide();
-            return Flow::Continue;
-        }
         if c == SHOW_HIDDEN_KEY {
             self.show_hidden = !self.show_hidden;
             return Flow::Continue;
@@ -337,11 +346,16 @@ impl Screen for ProjectScreen<'_> {
     }
 
     /// A new KEY retires the last notice (a mouse gesture never does); while typing, the filter
-    /// box takes the key.
+    /// box takes the key. `h` writes the config, so it is matched exactly: a split mouse report's
+    /// Shift + upper-case letter never hides a project.
     fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
         self.notice.clear();
         if self.cursor.typing {
             self.type_filter(key, term);
+            return true;
+        }
+        if is_hotkey_exact(key, HIDE_KEY) {
+            self.toggle_hide();
             return true;
         }
         false
