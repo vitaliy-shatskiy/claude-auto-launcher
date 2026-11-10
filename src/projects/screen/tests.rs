@@ -244,6 +244,19 @@ fn h_changes_only_its_own_entry_and_keeps_the_rest_as_written() {
 }
 
 #[test]
+fn unhide_shows_a_project_listed_under_two_spellings_at_once() {
+    let f = fx();
+    let config = f.tree.0.join("claude-auto.json");
+    let config = config.to_str().unwrap();
+    let twice = serde_json::json!([f.alpha, f.alpha.replace('\\', "/").to_uppercase()]);
+    std::fs::write(config, serde_json::json!({ "hiddenProjects": twice }).to_string()).unwrap();
+    let listed = |frame: &[String]| frame.iter().any(|l| l.contains("alpha") && !l.contains("known"));
+
+    let frames = run_with_config(&f, config, &["v", "s", "h", "v", "Escape"]);
+    assert!(listed(frames.last().unwrap()), "both spellings go in this run, not only the first");
+}
+
+#[test]
 fn a_failed_save_says_the_hide_lasts_this_run_only() {
     let f = fx();
     let save = |_: &str, _: HideChange| Err("disk full".to_owned());

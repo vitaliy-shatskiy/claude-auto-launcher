@@ -147,8 +147,9 @@ impl<'a> ProjectScreen<'a> {
         }
         let key = project_key(&path);
         let mut paths = h.paths.borrow_mut();
-        let change = if let Some(i) = paths.iter().position(|p| project_key(p) == key) {
-            paths.remove(i);
+        let change = if paths.iter().any(|p| project_key(p) == key) {
+            // Every spelling of this folder goes, as the save does on disk.
+            paths.retain(|p| project_key(p) != key);
             HideChange::Show
         } else if self.projects.iter().any(|p| p.hidden && project_key(&p.path) == key) {
             "hidden by rule (headless or scratch), not by h".clone_into(&mut self.notice);
