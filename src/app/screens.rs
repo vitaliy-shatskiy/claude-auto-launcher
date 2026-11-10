@@ -3,11 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::{self, PathCtx, ProjectScreen};
-use crate::launch::PROJECT_ACTION;
 use crate::frame::{self, Style};
 use crate::input::console::ConsoleInput;
 use crate::input::{Event, KeyPress, is_hotkey, vk};
 use crate::launch::LaunchState;
+use crate::launch::PROJECT_ACTION;
 use crate::launch::launch_mode;
 use crate::launch::screen::{LaunchScreen, LaunchView};
 use crate::out;

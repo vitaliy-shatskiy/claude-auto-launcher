@@ -282,12 +282,18 @@ fn preview_on_demand_enter_launches_without_the_project_screen() {
         )
     };
     let enter = run("Enter");
-    assert!(enter.contains("--- preview, nothing launched ---"), "Enter launches at once: {enter}");
+    assert!(
+        enter.contains("--- preview, nothing launched ---"),
+        "Enter launches at once: {enter}"
+    );
     assert!(!enter.contains("enter a path"), "no project screen was drawn: {enter}");
     assert!(enter.contains("action"), "the launch screen has the action row: {enter}");
     assert!(!enter.contains("   mode "), "rows without mode draw no mode row: {enter}");
     let project = run("s,d,Enter,Escape");
-    assert!(project.contains("enter a path"), "the project action opens the project screen: {project}");
+    assert!(
+        project.contains("enter a path"),
+        "the project action opens the project screen: {project}"
+    );
     assert!(project.contains("--- preview: picker cancelled ---"), "{project}");
     std::fs::remove_dir_all(&d).unwrap();
 }

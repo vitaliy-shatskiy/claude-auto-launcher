@@ -299,7 +299,11 @@ fn capital_l_edits_the_launch_rows_and_saves_them() {
     let keys = crate::ui::parse_preview_keys("L,s,s,Spacebar,Enter,l,Escape").unwrap();
     let mut t = PreviewTerm::new((100, 30), keys, true);
     assert!(run(&mut s, &mut t).unwrap().is_none());
-    assert_eq!(s.rows, Some(vec![RowName::Account, RowName::Model]), "the next open starts from the save");
+    assert_eq!(
+        s.rows,
+        Some(vec![RowName::Account, RowName::Model]),
+        "the next open starts from the save"
+    );
     assert!(s.status.contains("launch rows saved: account, model"), "{}", s.status);
     assert_eq!(log.borrow().rows, [vec![RowName::Account, RowName::Model]]);
     assert_eq!(log.borrow().runs.len(), 0, "a lower-case l is no editor key");

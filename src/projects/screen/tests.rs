@@ -178,7 +178,11 @@ fn run_with_config(f: &Fx, config: &str, ks: &[&str]) -> Vec<Vec<String>> {
     };
     let c = clock;
     let style = Style { color: false, ascii: true };
-    assert!(run_screen(&mut t, &f.projects, Path::new(&f.cwd), "new", style, &c, Some(&hiding)).unwrap().is_none());
+    assert!(
+        run_screen(&mut t, &f.projects, Path::new(&f.cwd), "new", style, &c, Some(&hiding))
+            .unwrap()
+            .is_none()
+    );
     t.inner.frames.unwrap()
 }
 
@@ -196,7 +200,10 @@ fn h_hides_and_unhides_in_show_hidden() {
 
     let restarted = run_with_config(&f, config, &["Escape"]);
     assert!(!listed(&restarted[0]), "the launcher restarts: alpha stays hidden");
-    assert!(std::fs::read_to_string(config).unwrap().contains("\"remote\": false"), "other keys kept");
+    assert!(
+        std::fs::read_to_string(config).unwrap().contains("\"remote\": false"),
+        "other keys kept"
+    );
 
     let shown = run_with_config(&f, config, &["v", "s", "h", "v", "Escape"]);
     assert!(

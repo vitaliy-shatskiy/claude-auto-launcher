@@ -158,6 +158,7 @@ pub enum ProjectScreen {
 
 /// The whole launcher configuration after validation.
 #[derive(Debug, Clone)]
+#[expect(clippy::struct_excessive_bools, reason = "each bool is one on/off key of the config file")]
 pub struct Config {
     /// The launch rows in drawing order, account always among them; `None` = every row.
     pub rows: Option<Vec<RowName>>,
@@ -332,8 +333,7 @@ fn row_list(raw: &Value, warnings: &mut Vec<String>) -> Option<Vec<RowName>> {
 /// `modelOrder`: family names, stored lower case.
 fn family_list(raw: &Value, warnings: &mut Vec<String>) -> Option<Vec<String>> {
     let known: Vec<(&str, &str)> = MODEL_FAMILY_KEYS.iter().map(|(f, _)| (*f, *f)).collect();
-    name_list(raw, "modelOrder", "model famil(ies)", &known, warnings)
-        .map(|fams| fams.into_iter().map(str::to_owned).collect())
+    name_list(raw, "modelOrder", "model famil(ies)", &known, warnings).map(|fams| fams.into_iter().map(str::to_owned).collect())
 }
 
 /// `launchHooks`: a path is an entry of its own, an array of paths one entry run in order.
@@ -460,6 +460,17 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
         cfg.maintenance_actions = actions;
         cfg.warnings.extend(w);
     }
+    parse_screen_keys(obj, ctx, &mut cfg);
+    if cfg.sharing && cfg.accounts.len() < 2 {
+        cfg.sharing = false;
+        cfg.warnings.push("sharing needs at least two accounts; off".into());
+    }
+    cfg
+}
+
+/// The keys that shape the screens: rows, models, project hiding, the project screen, the mouse.
+fn parse_screen_keys(obj: &serde_json::Map<String, Value>, ctx: &PathCtx, cfg: &mut Config) {
+    let present = |k: &str| obj.get(k).filter(|v| !v.is_null());
     if let Some(v) = present("rows") {
         cfg.rows = row_list(v, &mut cfg.warnings);
     }
@@ -491,11 +502,6 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
         cfg.mouse = b;
         cfg.warnings.extend(w);
     }
-    if cfg.sharing && cfg.accounts.len() < 2 {
-        cfg.sharing = false;
-        cfg.warnings.push("sharing needs at least two accounts; off".into());
-    }
-    cfg
 }
 
 /// `\\[^"\\/bfnrtu]` on the source text: a backslash JSON cannot escape.

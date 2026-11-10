@@ -98,11 +98,22 @@ impl Screen for RowsEditor {
             .map(|(i, (row, on))| {
                 let mark = if i == self.index() { g.cursor } else { ' ' };
                 let state = if *on { g.on } else { g.off };
-                format!(" {mark} {state} {:<12}{}", row.as_str().to_lowercase(), if *on { "shown" } else { "hidden" })
+                format!(
+                    " {mark} {state} {:<12}{}",
+                    row.as_str().to_lowercase(),
+                    if *on { "shown" } else { "hidden" }
+                )
             })
             .collect();
         body.push(String::new());
-        body.push(format!("  {}", if self.notice.is_empty() { "saved to the config; the launch screen uses it from the next start" } else { self.notice }));
+        body.push(format!(
+            "  {}",
+            if self.notice.is_empty() {
+                "saved to the config; the launch screen uses it from the next start"
+            } else {
+                self.notice
+            }
+        ));
         let footer = new_hint_footer(
             &[
                 Hint::plain("w/s", "row"),
@@ -178,7 +189,14 @@ mod tests {
         let out = edit(None, keys).unwrap();
         assert_eq!(
             out,
-            [RowName::Account, RowName::Remote, RowName::Model, RowName::Effort, RowName::Advisor, RowName::Permission]
+            [
+                RowName::Account,
+                RowName::Remote,
+                RowName::Model,
+                RowName::Effort,
+                RowName::Advisor,
+                RowName::Permission
+            ]
         );
     }
 

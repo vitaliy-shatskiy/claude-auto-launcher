@@ -50,7 +50,10 @@ fn on_demand_enter_skips_project_screen() {
     use crate::config::ProjectScreen;
     assert!(!screens::opens_project_screen(ProjectScreen::OnDemand, "new"), "Enter at once");
     assert!(!screens::opens_project_screen(ProjectScreen::OnDemand, "continue"));
-    assert!(screens::opens_project_screen(ProjectScreen::OnDemand, "project"), "the project action opens it");
+    assert!(
+        screens::opens_project_screen(ProjectScreen::OnDemand, "project"),
+        "the project action opens it"
+    );
     assert!(screens::opens_project_screen(ProjectScreen::Always, "new"), "always: today's flow");
     let mut s = LaunchState::fresh("work");
     s.project = r"C:\remembered".into();

@@ -4,6 +4,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- Config `rows`: which launch rows show and in what order; a hidden row launches with its default.
+  The maintenance screen's `L` edits it in place.
+- Config `modelOrder`: the model row's families and their order; unlisted families are hidden.
+- Config `hiddenProjects` and the project screen's `h` (hide or show the project under the
+  cursor, saved at once) and `v` (list the hidden projects, marked).
+- Config `projectScreen: "onDemand"`: Enter starts in the launch directory; the launch screen's
+  new `action` row picks new, project, continue, resume or worktree, and `project` opens the
+  project screen for that launch.
+- Config `mouse: false` turns mouse input off (`CLAUDE_AUTO_NO_MOUSE=1` still wins).
+
+### Changed
+
+- The model row lists Haiku, Sonnet, Opus, Fable (weakest to strongest); the static Fable label is
+  Fable 5.2.
+- The usage line keeps the Fable weekly bucket from a widget export older than 30 minutes, with
+  that export's age.
+- Config `hideHeadlessProjects` (default `true`): a project only headless sessions ran in is hidden
+  even when it is a git root.
+
 ## [0.6.1] — 2026-11-08
 
 ### Fixed

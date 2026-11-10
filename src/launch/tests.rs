@@ -268,7 +268,11 @@ fn the_hide_keys_collide_with_no_project_screen_or_launch_mode_key() {
         hotkey: Some('h'),
         ..LAUNCH_MODES[1]
     }];
-    assert_eq!(launch_mode_table_errors(&h, &PROJECT_SCREEN_OWN_KEYS).len(), 1, "a mode on h is refused");
+    assert_eq!(
+        launch_mode_table_errors(&h, &PROJECT_SCREEN_OWN_KEYS).len(),
+        1,
+        "a mode on h is refused"
+    );
 }
 
 #[test]

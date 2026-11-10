@@ -137,16 +137,18 @@ Every argument goes to `claude` untouched, except the launcher's own `--launcher
 
 | Screen | Keys |
 |---|---|
-| **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices · `enter` next · `u` maintenance · `esc` quit |
-| **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `esc` back |
+| **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices · `enter` next (with `projectScreen: "onDemand"`: launch) · `u` maintenance · `esc` quit |
+| **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `h` hide or show the project (saved to `hiddenProjects`) · `v` list the hidden projects, marked · `esc` back |
 | **Session picker** | `enter` open · `f` fork · `tab` this project or every project · `/` filter · `esc` back |
-| **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · one key per `maintenanceActions` entry · `esc` back |
+| **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · `L` (shift+l) launch rows editor: `w`/`s` row, shift+`w`/`s` move it, `space` show/hide, `enter` save to `rows`, `esc` cancel · one key per `maintenanceActions` entry · `esc` back |
 | **Mouse** | hover highlights · click selects · click the highlighted row to run it · click a footer button to press its key · wheel scrolls |
 
 The project screen lists the current directory first, then known projects from `~/.claude/projects`.
 Scratch directories (under the temp folder or a profile's `jobs\<id>\tmp`) are left out and counted
-in the title. Headless sessions (`claude -p`, the SDKs) are left out of the picker the same way. The
-action opens at `new` every launch. `CLAUDE_AUTO_NO_MOUSE=1` turns the mouse off.
+in the title, and so is a project only headless sessions (`claude -p`, the SDKs) ever ran in, a git
+root included (`hideHeadlessProjects`). Headless sessions are left out of the picker the same way.
+The action opens at `new` every launch. Config `mouse: false` or `CLAUDE_AUTO_NO_MOUSE=1` turns the
+mouse off.
 
 <p align="center">
   <a href="docs/media/sessions-walk.mp4"><img alt="The session picker: a project's past sessions on the left, the highlighted one's last messages previewed on the right, the preview following the cursor, then tab widens the list to every project" src="docs/media/sessions-walk.gif" width="100%"></a>
@@ -168,7 +170,8 @@ action opens at `new` every launch. `CLAUDE_AUTO_NO_MOUSE=1` turns the mouse off
 │   + enter a path...                                                                             │
 │   action  ● [new] ○ continue ○ resume ○ worktree                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree  ┊  [/] filter  ┊  [esc] back
+  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
+  [/] filter   ┊  [h] hide      ┊  [v] hidden  ┊  [esc] back
 
 ╭─ resume ─ 5 sessions ───────────────────────────────────────────────────────────────────────────╮
 │   project-1  snippet 1 about t… 7 min │ project-2                                               │
@@ -289,6 +292,12 @@ two-account starting point.
 | `vsecPath` | path | `""` | the `vsec` secrets tool (`vsec.exe` or a `.cmd` shim); empty = `CLAUDE_AUTO_VSEC`, then PATH. Must be absolute. See [Secrets](#secrets) |
 | `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice with the chosen project as the working directory, each best-effort. Must be absolute. Entries run at the same time; an entry that is an array of paths runs them in order (`["a.ps1", ["b.ps1", "c.ps1"]]`) |
 | `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p`. `script` is required and must be absolute. An entry failing either check is skipped with a warning |
+| `rows[]` | row names | every row | the launch rows in drawing order: `account`, `remote`, `model`, `effort`, `advisor`, `permission`, `mode`. An unlisted row is hidden and launches with its default (`mode` = normal), never a remembered choice. `account` is always shown, first when unlisted. Duplicates: the first wins; unknown names are named in one warning. Edit it on the maintenance screen with `L` |
+| `modelOrder[]` | family names | `["haiku","sonnet","opus","fable"]` | the model row after `default`, in this order. An unlisted family is hidden. Unknown names warn |
+| `hiddenProjects[]` | paths | `[]` | projects the project screen leaves out (`h` adds and removes them). Absolute, case-insensitive; a path that no longer exists is kept. A filter or `v` still finds them |
+| `hideHeadlessProjects` | bool | `true` | a project with no interactive session (only `sdk-*` transcripts) is hidden even when it is a git root. `false` keeps a headless git root listed |
+| `projectScreen` | `always`\|`onDemand` | `always` | `onDemand`: Enter on the launch screen starts in the launch directory, and an `action` row (`new`, `project`, `continue`, `resume`, `worktree`, never remembered) picks what it does; `project` opens the project screen for that launch, Esc returns |
+| `mouse` | bool | `true` | `false` arms no mouse input. `CLAUDE_AUTO_NO_MOUSE=1` turns it off whatever this says |
 
 </details>
 

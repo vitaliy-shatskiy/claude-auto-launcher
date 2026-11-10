@@ -347,7 +347,10 @@ fn model_row_weak_to_strong_and_fable_cell() {
     let line = &f.lines[usize::try_from(hit.y).unwrap()];
     let at = |label: &str| line.find(label).unwrap_or_else(|| panic!("{label} missing: {line}"));
     assert!(
-        at("default") < at("Haiku 5.5") && at("Haiku 5.5") < at("Sonnet 5.5") && at("Sonnet 5.5") < at("Opus 5.5[1M]") && at("Opus 5.5[1M]") < at("Fable 5.2"),
+        at("default") < at("Haiku 5.5")
+            && at("Haiku 5.5") < at("Sonnet 5.5")
+            && at("Sonnet 5.5") < at("Opus 5.5[1M]")
+            && at("Opus 5.5[1M]") < at("Fable 5.2"),
         "haiku, sonnet, opus, fable: {line}"
     );
     let y = |name: &str| usize::try_from(f.map.rows.iter().find(|h| h.name == name).unwrap().y).unwrap();

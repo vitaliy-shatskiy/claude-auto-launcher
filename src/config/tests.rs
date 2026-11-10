@@ -188,8 +188,17 @@ fn rows_key_orders_and_hides() {
         ["rows: unknown row name(s) 'bogus', 'wat' ignored (known: account, remote, model, effort, advisor, permission, mode)"]
     );
     let kept = parse_config(r#"{"rows":["mode","account"]}"#, "x", &ctx());
-    assert_eq!(kept.rows, Some(vec![RowName::Mode, RowName::Account]), "a listed account keeps its place");
-    for bad in [r#"{"rows":"model"}"#, r#"{"rows":["nope"]}"#, r#"{"rows":[]}"#, r#"{"rows":["action"]}"#] {
+    assert_eq!(
+        kept.rows,
+        Some(vec![RowName::Mode, RowName::Account]),
+        "a listed account keeps its place"
+    );
+    for bad in [
+        r#"{"rows":"model"}"#,
+        r#"{"rows":["nope"]}"#,
+        r#"{"rows":[]}"#,
+        r#"{"rows":["action"]}"#,
+    ] {
         assert_eq!(parse_config(bad, "x", &ctx()).rows, None, "{bad}: every row");
     }
     assert_eq!(Config::defaults(&ctx(), "x").rows, None);
@@ -252,7 +261,14 @@ fn save_keys_writes_its_keys_and_keeps_the_rest() {
     let path = dir.join("claude-auto.json");
     let p = path.to_str().unwrap();
     std::fs::write(&path, "\u{feff}{\"remote\": true, \"rows\": [\"model\"], \"zeta\": 1}").unwrap();
-    save_keys(p, &[("rows", serde_json::json!(["account", "mode"])), ("hiddenProjects", serde_json::json!([]))]).unwrap();
+    save_keys(
+        p,
+        &[
+            ("rows", serde_json::json!(["account", "mode"])),
+            ("hiddenProjects", serde_json::json!([])),
+        ],
+    )
+    .unwrap();
     let back: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         back.as_object().unwrap().keys().collect::<Vec<_>>(),
@@ -261,7 +277,10 @@ fn save_keys_writes_its_keys_and_keeps_the_rest() {
     );
     assert_eq!(back["rows"], serde_json::json!(["account", "mode"]));
     std::fs::write(&path, "{ not json").unwrap();
-    assert!(save_keys(p, &[("rows", serde_json::json!([]))]).is_err(), "an unparseable file is never overwritten");
+    assert!(
+        save_keys(p, &[("rows", serde_json::json!([]))]).is_err(),
+        "an unparseable file is never overwritten"
+    );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
     let fresh = dir.join("new.json");
     save_keys(fresh.to_str().unwrap(), &[("mouse", serde_json::json!(false))]).unwrap();

@@ -11,13 +11,13 @@ use unicode_general_category::{GeneralCategory, get_general_category};
 
 use super::install::{InstallInfo, Pruned};
 use super::rows::RowsEditor;
-use crate::launch::RowName;
 use crate::config::MaintenanceAction;
 use crate::frame::{
     FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
     too_small_frame,
 };
 use crate::input::{KeyPress, is_hotkey_exact};
+use crate::launch::RowName;
 use crate::layout::{new_box, split_output_lines};
 use crate::theme::{glyphs, strip_ctl};
 use crate::ui::Term;

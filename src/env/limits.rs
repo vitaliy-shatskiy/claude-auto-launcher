@@ -156,9 +156,7 @@ pub(crate) fn summary(accounts: &[Account], dir: &Path, now_ms: i64, max_age_ms:
             continue;
         }
         let widget = widget(dir, &a.key, now_ms);
-        let widget = widget
-            .as_ref()
-            .map(|(w, age)| (w, (*age > max_age_ms).then(|| age_text(*age))));
+        let widget = widget.as_ref().map(|(w, age)| (w, (*age > max_age_ms).then(|| age_text(*age))));
         if let Ok(r) = record(&j, age_text(now_ms.saturating_sub(at)), widget) {
             out.insert(a.key.clone(), r);
         }
