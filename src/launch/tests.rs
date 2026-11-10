@@ -236,6 +236,20 @@ fn launch_mode_table_is_valid_and_case_insensitive() {
 }
 
 #[test]
+fn the_hide_keys_collide_with_no_project_screen_or_launch_mode_key() {
+    for k in ['h', 'v'] {
+        assert!(PROJECT_SCREEN_OWN_KEYS.contains(&k), "{k} is reserved on the project screen");
+        assert!(LAUNCH_MODES.iter().all(|m| m.hotkey != Some(k)), "{k} is no launch-mode hotkey");
+        assert_eq!(PROJECT_SCREEN_OWN_KEYS.iter().filter(|c| **c == k).count(), 1, "{k} is one key");
+    }
+    let h = [LaunchMode {
+        hotkey: Some('h'),
+        ..LAUNCH_MODES[1]
+    }];
+    assert_eq!(launch_mode_table_errors(&h, &PROJECT_SCREEN_OWN_KEYS).len(), 1, "a mode on h is refused");
+}
+
+#[test]
 fn model_labels_from_catalog_keep_sonnet_bracketless() {
     let mut r = four();
     r.set_model_labels(

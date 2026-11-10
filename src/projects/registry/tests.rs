@@ -46,13 +46,39 @@ fn user(cwd: &str, entry: Option<&str>) -> String {
     format!("{{\"type\":\"queue-operation\"}}\n{v}\n")
 }
 
+/// `hideHeadlessProjects` false: the git-root exception these tests were written against.
 fn build(root: &Path, cache: &Path, temp: &[String], profiles: &[String]) -> Vec<Project> {
     build_registry(&RegistryInput {
         projects_root: root,
         cache_path: cache,
         temp_roots: temp,
         profile_roots: profiles,
+        hide_headless: false,
     })
+}
+
+#[test]
+fn headless_git_root_is_hidden() {
+    let t = Tree::new("hlgit");
+    let root = t.0.join("projects");
+    let repo = t.dir("rules-1");
+    let mixed = t.dir("mixed");
+    fs::create_dir_all(Path::new(&repo).join(".git")).unwrap();
+    write_at(&root.join("Gr").join("g1.jsonl"), &user(&repo, Some("sdk-cli")), ago(1));
+    write_at(&root.join("Gr").join("g2.jsonl"), &user(&repo, Some("sdk-ts")), ago(2));
+    write_at(&root.join("Mx").join("m1.jsonl"), &user(&mixed, Some("cli")), ago(3));
+    let on = build_registry(&RegistryInput {
+        projects_root: &root,
+        cache_path: &t.0.join("c.json"),
+        temp_roots: &[],
+        profile_roots: &[],
+        hide_headless: true,
+    });
+    let hidden = |reg: &[Project], slug: &str| reg.iter().find(|p| p.slug == slug).unwrap().hidden;
+    assert!(hidden(&on, "Gr"), "only sdk-* transcripts: hidden even in a git root");
+    assert!(!hidden(&on, "Mx"), "an interactive session keeps it listed");
+    let off = build(&root, &t.0.join("c2.json"), &[], &[]);
+    assert!(!hidden(&off, "Gr"), "hideHeadlessProjects false: the git root stays listed");
 }
 
 fn slugs(r: &[Project]) -> String {

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::PathCtx;
+use crate::config::{self, PathCtx};
 use crate::frame::{self, Style};
 use crate::input::console::ConsoleInput;
 use crate::input::{Event, KeyPress, is_hotkey, vk};
@@ -93,7 +93,16 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     });
     let account_roots: Vec<String> = run.cfg.accounts.iter().map(|a| a.root.clone()).collect();
     let roots = projects::launcher_profile_roots(&run.ctx.home, var("CLAUDE_CONFIG_DIR").as_deref(), &account_roots);
-    let project_list = projects::project_registry(cache.as_deref(), &roots);
+    let project_list = projects::project_registry(cache.as_deref(), &roots, run.cfg.hide_headless_projects);
+    let save_hidden = |paths: &[String]| {
+        if !run.preview && config::save_keys(&run.cfg.path, &[("hiddenProjects", serde_json::json!(paths))]).is_err() {
+            // An unwritable or unparseable config keeps the hide for this run only.
+        }
+    };
+    let hiding = projects::Hiding {
+        paths: std::cell::RefCell::new(run.cfg.hidden_projects.clone()),
+        save: &save_hidden,
+    };
     let project_source = projects::set_launch_start_project(&mut state, &run.ctx.cwd, &project_list);
     let preselect = state.project.clone();
     tm.end(load);
@@ -116,7 +125,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             break UiEnd::Cancelled;
         };
         state = next;
-        let Some(chosen) = projects::run_project_screen(term.as_mut(), &project_list, &run.ctx.cwd, style)? else {
+        let Some(chosen) = projects::run_project_screen(term.as_mut(), &project_list, &run.ctx.cwd, style, &hiding)? else {
             if run.preview {
                 break UiEnd::PreviewPickerCancelled;
             }

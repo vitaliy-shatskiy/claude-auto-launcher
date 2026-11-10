@@ -18,6 +18,7 @@ use crate::ui::{Term, UiStop};
 
 pub use paths::project_key;
 pub(crate) use registry::path_from_transcript;
+pub use screen::Hiding;
 
 /// One project row (`Get-ProjectRegistry`): one real directory, every slug folder naming it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +60,7 @@ fn home() -> PathBuf {
 /// `~\.claude\projects`; the cache is `cache_path` (preview: its own per-PID file), else
 /// `claude-auto-projects.json` beside the root. `profile_roots`: every account root a job tmp
 /// directory can sit under. Never fails: an unreadable root is an empty list.
-pub fn project_registry(cache_path: Option<&Path>, profile_roots: &[String]) -> Vec<Project> {
+pub fn project_registry(cache_path: Option<&Path>, profile_roots: &[String], hide_headless: bool) -> Vec<Project> {
     let home = home();
     let root = std::env::var_os("CLAUDE_AUTO_PROJECTS_ROOT")
         .filter(|v| !v.is_empty())
@@ -74,6 +75,7 @@ pub fn project_registry(cache_path: Option<&Path>, profile_roots: &[String]) -> 
         cache_path: &cache,
         temp_roots: &temp,
         profile_roots,
+        hide_headless,
     })
 }
 
@@ -150,9 +152,15 @@ pub fn remove_stale_preview_cache(dir: &Path) {
 
 /// `Invoke-ProjectScreen`: where the session runs and what it does there. `None` = Escape, back to
 /// the launch screen. The cursor opens on the current directory and the action field on `new`.
-pub fn run_project_screen(term: &mut dyn Term, projects: &[Project], cwd: &Path, style: Style) -> Result<Option<ProjectChoice>, UiStop> {
+pub fn run_project_screen(
+    term: &mut dyn Term,
+    projects: &[Project],
+    cwd: &Path,
+    style: Style,
+    hiding: &Hiding<'_>,
+) -> Result<Option<ProjectChoice>, UiStop> {
     let clock = || registry::unix_ms(SystemTime::now());
-    screen::run_screen(term, projects, cwd, "new", style, &clock)
+    screen::run_screen(term, projects, cwd, "new", style, &clock, Some(hiding))
 }
 
 #[cfg(test)]

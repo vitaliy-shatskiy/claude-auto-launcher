@@ -2,10 +2,12 @@
 //! box, the action field stepped from every row, the mode hotkeys, and the pick with its existence
 //! check. The free path is read between two loop runs, because only the caller holds the terminal.
 
+use std::cell::RefCell;
 use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
+use super::paths::project_key;
 use super::select::{RowKind, project_rows, slugs_for_path};
 use super::view::{ProjectView, project_actions, project_frame, step_project_action};
 use super::{Project, ProjectChoice};
@@ -25,9 +27,31 @@ pub(crate) enum Outcome {
     },
 }
 
+/// Projects hidden by hand (config `hiddenProjects`, full paths) and how a change is saved.
+pub struct Hiding<'a> {
+    pub paths: RefCell<Vec<String>>,
+    pub save: &'a dyn Fn(&[String]),
+}
+
+impl std::fmt::Debug for Hiding<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Hiding").field("paths", &self.paths).finish_non_exhaustive()
+    }
+}
+
+/// `h` hides or shows the project under the cursor, `v` lists the hidden ones marked.
+const HIDE_KEY: char = 'h';
+const SHOW_HIDDEN_KEY: char = 'v';
+
 /// The project screen's own state; the loop's cursor carries the index and the hover.
 pub(crate) struct ProjectScreen<'a> {
     projects: &'a [Project],
+    hiding: Option<&'a Hiding<'a>>,
+    show_hidden: bool,
+    /// `projects` as listed: hand-hidden ones hidden, or every one shown in the show-hidden view.
+    view: Vec<Project>,
+    /// Keys of the hidden projects the show-hidden view lists; empty otherwise.
+    marked: Vec<String>,
     cwd: String,
     style: Style,
     clock: &'a dyn Fn() -> i64,
@@ -51,10 +75,14 @@ impl std::fmt::Debug for ProjectScreen<'_> {
 
 impl<'a> ProjectScreen<'a> {
     pub(crate) fn new(projects: &'a [Project], cwd: &str, initial_action: &str, style: Style, clock: &'a dyn Fn() -> i64) -> Self {
-        let mut hotkeys = vec!['/'];
+        let mut hotkeys = vec!['/', HIDE_KEY, SHOW_HIDDEN_KEY];
         hotkeys.extend(LAUNCH_MODES.iter().filter_map(|m| m.hotkey));
         Self {
             projects,
+            hiding: None,
+            show_hidden: false,
+            view: projects.to_vec(),
+            marked: Vec::new(),
             cwd: cwd.to_owned(),
             style,
             clock,
@@ -67,13 +95,70 @@ impl<'a> ProjectScreen<'a> {
         }
     }
 
+    pub(crate) fn with_hiding(self, hiding: Option<&'a Hiding<'a>>) -> Self {
+        Self { hiding, ..self }
+    }
+
+    /// The listed projects: a hand-hidden one is hidden like a rule-hidden one; the show-hidden
+    /// view lists every one and marks the hidden.
+    fn rebuild_view(&mut self) {
+        let manual: Vec<String> = self
+            .hiding
+            .map(|h| h.paths.borrow().iter().map(|p| project_key(p)).collect())
+            .unwrap_or_default();
+        let hidden = |p: &Project| p.hidden || manual.contains(&project_key(&p.path));
+        self.marked = if self.show_hidden {
+            self.projects.iter().filter(|p| hidden(p)).map(|p| project_key(&p.path)).collect()
+        } else {
+            Vec::new()
+        };
+        self.view = self
+            .projects
+            .iter()
+            .map(|p| Project {
+                hidden: !self.show_hidden && hidden(p),
+                ..p.clone()
+            })
+            .collect();
+    }
+
+    /// `h`: a listed project joins `hiddenProjects`, a hand-hidden one leaves it; a rule-hidden one
+    /// (headless or scratch) stays as it is. Every change is saved at once.
+    fn toggle_hide(&mut self) {
+        let Some(h) = self.hiding else { return };
+        let Some((kind, name, path)) = usize::try_from(self.cursor.index)
+            .ok()
+            .and_then(|i| self.rows.get(i))
+            .map(|r| (r.kind, r.name.clone(), r.path.clone()))
+        else {
+            return;
+        };
+        if kind != RowKind::Project {
+            "only a listed project can be hidden".clone_into(&mut self.notice);
+            return;
+        }
+        let key = project_key(&path);
+        let mut paths = h.paths.borrow_mut();
+        if let Some(i) = paths.iter().position(|p| project_key(p) == key) {
+            paths.remove(i);
+            self.notice = format!("{name} shown again");
+        } else if self.projects.iter().any(|p| p.hidden && project_key(&p.path) == key) {
+            "hidden by rule (headless or scratch), not by h".clone_into(&mut self.notice);
+            return;
+        } else {
+            paths.push(path);
+            self.notice = format!("{name} hidden - v lists hidden projects");
+        }
+        (h.save)(&paths);
+    }
+
     /// R16: a filter parks the cursor on its first match - row 0 when the cwd's project matches,
     /// else the first list row; no filter, or no match, is row 0.
     fn park(&self) -> i32 {
         if self.filter.is_empty() {
             return 0;
         }
-        let rows = project_rows(self.projects, &self.filter, &self.cwd);
+        let rows = project_rows(&self.view, &self.filter, &self.cwd);
         if rows.first().is_some_and(|r| r.matched) {
             0
         } else {
@@ -177,14 +262,16 @@ impl Screen for ProjectScreen<'_> {
 
     /// The filter decides the rows: rebuilt before every frame, the cursor clamped to them.
     fn before(&mut self) {
-        self.rows = project_rows(self.projects, &self.filter, &self.cwd);
+        self.rebuild_view();
+        self.rows = project_rows(&self.view, &self.filter, &self.cwd);
         let n = i32::try_from(self.rows.len()).unwrap_or(1);
         self.cursor.index = self.cursor.index.min(n - 1).max(0);
     }
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
         project_frame(&ProjectView {
-            projects: self.projects,
+            projects: &self.view,
+            marked: &self.marked,
             index: usize::try_from(self.cursor.index).unwrap_or(0),
             filter: &self.filter,
             typing: self.cursor.typing,
@@ -232,6 +319,14 @@ impl Screen for ProjectScreen<'_> {
     fn hotkey(&mut self, c: char) -> Flow<Outcome> {
         if c == '/' {
             self.cursor.typing = true;
+            return Flow::Continue;
+        }
+        if c == HIDE_KEY {
+            self.toggle_hide();
+            return Flow::Continue;
+        }
+        if c == SHOW_HIDDEN_KEY {
+            self.show_hidden = !self.show_hidden;
             return Flow::Continue;
         }
         if let Some(m) = LAUNCH_MODES.iter().find(|m| m.hotkey == Some(c)) {
@@ -294,9 +389,10 @@ pub(crate) fn run_screen(
     initial_action: &str,
     style: Style,
     clock: &dyn Fn() -> i64,
+    hiding: Option<&Hiding<'_>>,
 ) -> Result<Option<ProjectChoice>, UiStop> {
     let cwd = cwd.to_string_lossy();
-    let mut screen = ProjectScreen::new(projects, &cwd, initial_action, style, clock);
+    let mut screen = ProjectScreen::new(projects, &cwd, initial_action, style, clock).with_hiding(hiding);
     loop {
         match run(&mut screen, term)? {
             None => return Ok(None),

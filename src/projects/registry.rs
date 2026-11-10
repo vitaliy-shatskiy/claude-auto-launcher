@@ -22,6 +22,8 @@ pub(crate) struct RegistryInput<'a> {
     pub cache_path: &'a Path,
     pub temp_roots: &'a [String],
     pub profile_roots: &'a [String],
+    /// `hideHeadlessProjects`: a folder only headless runs used is hidden even as a git root.
+    pub hide_headless: bool,
 }
 
 /// One transcript file of a slug folder.
@@ -264,7 +266,9 @@ pub(crate) fn build_registry(inp: &RegistryInput<'_>) -> Vec<Project> {
         let present = path_present(&path, &mut drives);
         let network = on_network(&path, &drives);
         let mut headless_hidden = false;
-        if present && interactive.is_none() && !network {
+        if present && interactive.is_none() && !network && inp.hide_headless {
+            headless_hidden = true;
+        } else if present && interactive.is_none() && !network {
             let git = cache
                 .get(&key)
                 .and_then(|v| v.get("GitRoot"))

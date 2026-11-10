@@ -54,7 +54,7 @@ pub const LAUNCH_MODES: [LaunchMode; 4] = [
 ];
 
 /// Keys the project screen keeps for itself: a mode hotkey on one would replace it.
-pub const PROJECT_SCREEN_OWN_KEYS: [char; 5] = ['/', 'w', 'a', 's', 'd'];
+pub const PROJECT_SCREEN_OWN_KEYS: [char; 7] = ['/', 'w', 'a', 's', 'd', 'h', 'v'];
 
 /// `Get-LaunchMode`: case-insensitive, like the switch it replaced.
 pub fn launch_mode(name: &str) -> Option<&'static LaunchMode> {
@@ -69,7 +69,7 @@ pub fn launch_mode_table_errors(modes: &[LaunchMode], reserved: &[char]) -> Vec<
         let Some(k) = m.hotkey else { continue };
         if reserved.contains(&k) {
             errors.push(format!(
-                "mode '{}': hotkey '{k}' is a project-screen key (/ filter, w/s move, a/d action)",
+                "mode '{}': hotkey '{k}' is a project-screen key (/ filter, w/s move, a/d action, h hide, v hidden)",
                 m.name
             ));
         }

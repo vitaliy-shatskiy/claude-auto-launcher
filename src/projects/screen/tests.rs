@@ -110,7 +110,7 @@ fn drive_with(ps: &[Project], cwd: &str, initial: &str, events: Vec<Event>, answ
         asked: 0,
     };
     let c = clock;
-    let out = run_screen(&mut t, ps, Path::new(cwd), initial, Style { color: false, ascii: true }, &c).unwrap();
+    let out = run_screen(&mut t, ps, Path::new(cwd), initial, Style { color: false, ascii: true }, &c, None).unwrap();
     (out, t)
 }
 
@@ -129,6 +129,7 @@ fn project_frames(f: &Fx, timings: crate::timing::Timings) -> Vec<Vec<String>> {
         "new",
         Style { color: false, ascii: true },
         &c,
+        None,
     )
     .unwrap();
     assert!(out.is_some());
@@ -152,6 +153,70 @@ fn opening_map(f: &Fx) -> crate::frame::RowMap {
     let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: false, ascii: true }, &c);
     s.before();
     s.draw((80, 24)).map
+}
+
+/// One launcher run's project screen over `config`: `hiddenProjects` read from the file, every
+/// change saved back to it as the launcher saves it.
+fn run_with_config(f: &Fx, config: &str, ks: &[&str]) -> Vec<Vec<String>> {
+    let ctx = crate::config::PathCtx {
+        home: f.tree.0.clone(),
+        cwd: f.tree.0.clone(),
+    };
+    let cfg = crate::config::read_config(config, &ctx);
+    let save = |paths: &[String]| {
+        crate::config::save_keys(config, &[("hiddenProjects", serde_json::json!(paths))]).unwrap();
+    };
+    let hiding = Hiding {
+        paths: RefCell::new(cfg.hidden_projects),
+        save: &save,
+    };
+    let mut t = Script {
+        inner: PreviewTerm::new((80, 24), VecDeque::new(), true),
+        q: keys(ks).into(),
+        answer: String::new(),
+        asked: 0,
+    };
+    let c = clock;
+    let style = Style { color: false, ascii: true };
+    assert!(run_screen(&mut t, &f.projects, Path::new(&f.cwd), "new", style, &c, Some(&hiding)).unwrap().is_none());
+    t.inner.frames.unwrap()
+}
+
+#[test]
+fn h_hides_and_unhides_in_show_hidden() {
+    let f = fx();
+    let config = f.tree.0.join("claude-auto.json");
+    let config = config.to_str().unwrap();
+    std::fs::write(config, r#"{"remote": false}"#).unwrap();
+    // The title line ("N known") carries the notice naming the project: only list rows count.
+    let listed = |frame: &[String]| frame.iter().any(|l| l.contains("alpha") && !l.contains("known"));
+
+    let first = run_with_config(&f, config, &["s", "h", "Escape"]);
+    assert!(!listed(first.last().unwrap()), "h hides alpha at once");
+
+    let restarted = run_with_config(&f, config, &["Escape"]);
+    assert!(!listed(&restarted[0]), "the launcher restarts: alpha stays hidden");
+    assert!(std::fs::read_to_string(config).unwrap().contains("\"remote\": false"), "other keys kept");
+
+    let shown = run_with_config(&f, config, &["v", "s", "h", "v", "Escape"]);
+    assert!(
+        shown[1].iter().any(|l| l.contains("alpha (hidden)")),
+        "the show-hidden view lists it marked: {:#?}",
+        shown[1]
+    );
+    assert!(listed(shown.last().unwrap()), "h there un-hides it");
+    let again = run_with_config(&f, config, &["Escape"]);
+    assert!(listed(&again[0]), "and it stays listed");
+}
+
+#[test]
+fn h_on_the_current_directory_hides_nothing() {
+    let f = fx();
+    let config = f.tree.0.join("c.json");
+    let config = config.to_str().unwrap();
+    let frames = run_with_config(&f, config, &["h", "Escape"]);
+    assert!(frames.last().unwrap().iter().any(|l| l.contains("only a listed project")));
+    assert!(!Path::new(config).exists(), "nothing saved");
 }
 
 #[test]

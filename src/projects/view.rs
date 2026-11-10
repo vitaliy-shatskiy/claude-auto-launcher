@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::Project;
+use super::paths::project_key;
 use super::select::{Row, RowKind, project_count, project_rows};
 use crate::frame::{
     self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioSpec, RowMap, Style, TWO_PANE_WIDTH,
@@ -111,6 +112,8 @@ pub(crate) fn project_viewport(rows: &[Row], index: usize, lines: usize) -> (usi
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectView<'a> {
     pub projects: &'a [Project],
+    /// Project keys drawn with a hidden mark: the show-hidden view's hidden projects.
+    pub marked: &'a [String],
     pub index: usize,
     pub filter: &'a str,
     pub typing: bool,
@@ -142,6 +145,8 @@ fn footer_hints() -> Vec<Hint> {
             .filter_map(|m| m.hotkey.map(|k| Hint::ch(&k.to_string(), m.name, k))),
     );
     h.push(Hint::ch("/", "filter", '/'));
+    h.push(Hint::ch("h", "hide", 'h'));
+    h.push(Hint::ch("v", "hidden", 'v'));
     h.push(Hint::key("esc", "back", "Escape"));
     h
 }
@@ -151,6 +156,9 @@ fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
     let mut t = format!("project {} {known} known", g.h);
     if hidden > 0 {
         t = format!("{t} {} {hidden} hidden", g.h);
+    }
+    if !v.marked.is_empty() {
+        t = format!("{t} {} {} hidden listed", g.h, v.marked.len());
     }
     if !v.filter.is_empty() || v.typing {
         t = format!("{t} {} filter: {}", g.h, clean_text(v.filter));
@@ -167,7 +175,11 @@ fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
 /// One list row's text: project, cwd, or the free-path row.
 fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &ProjectView<'_>, g: &Glyphs) -> String {
     let ascii = v.style.ascii;
-    let named = |n: &str| if r.worktree { format!("{} {n}", g.worktree) } else { n.to_owned() };
+    let marked = r.kind == RowKind::Project && v.marked.contains(&project_key(&r.path));
+    let named = |n: &str| {
+        let n = if marked { format!("{n} (hidden)") } else { n.to_owned() };
+        if r.worktree { format!("{} {n}", g.worktree) } else { n }
+    };
     let age = r.last_activity_ms.map(|t| relative_age(t, v.now_ms)).unwrap_or_default();
     match r.kind {
         RowKind::Project | RowKind::Cwd => {

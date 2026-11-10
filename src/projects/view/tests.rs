@@ -34,6 +34,7 @@ fn golden_projects() -> Vec<Project> {
 fn view<'a>(ps: &'a [Project], index: usize, cwd: &'a str, w: usize, h: usize) -> ProjectView<'a> {
     ProjectView {
         projects: ps,
+        marked: &[],
         index,
         filter: "",
         typing: false,
