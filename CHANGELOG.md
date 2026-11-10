@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-11-10
+
 ### Added
 
 - Launch screen: `ctrl+w`/`ctrl+s` (or `alt+up`/`alt+down`) move the selected row, `ctrl+x` hides it (not `account`), `o`
