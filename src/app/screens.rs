@@ -329,10 +329,13 @@ pub(super) fn wait_on_screen(
         launching,
         update,
         tm,
-        || status(&mut **term.borrow_mut(), preview, "checking for a Claude Code update...")(),
+        || status(&mut **term.borrow_mut(), preview, UPDATE_STATUS)(),
         || leave_key(&mut **term.borrow_mut()),
     )
 }
+
+/// The wait's status line: Esc leaves even a running install, which finishes on its own.
+const UPDATE_STATUS: &str = "checking for a Claude Code update... (esc: quit; claude update keeps running in the background)";
 
 /// One poll of the console: Esc or Ctrl+C. Other input during the wait is dropped.
 fn leave_key(term: &mut dyn Term) -> bool {

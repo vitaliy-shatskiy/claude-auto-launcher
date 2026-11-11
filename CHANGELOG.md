@@ -31,11 +31,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   (`error`, `where=registry`) and prints nothing over the screen.
 - A stuck update wait can be left: Esc or Ctrl+C while `checking for a Claude Code update...` is
   shown quits without launching (claude never starts mid-update), and during `u` returns to the
-  launch screen without opening maintenance.
+  launch screen without opening maintenance. A `claude update` already running finishes on its
+  own; the status line says so.
 - A project whose newest transcript is held open by its writer no longer shows a last activity
   hours old: that one file's time is re-read by path (the folder listing lags on NTFS).
 - The model catalog is read before the update check starts, so the check's re-read after an
   install never writes the catalog cache at the same time.
+- Every launcher file write (prefs, config edits, the install and release-channel caches, the
+  project registry cache, the model catalog cache) goes through one temp + rename write: a reader
+  never sees half a file, two writers in one process never share a temp, and day-old temps an
+  exit left are swept. The model catalog cache was a plain write before.
 
 ## [0.8.0] — 2026-11-11
 

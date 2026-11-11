@@ -3,6 +3,7 @@
 //! map and the porting record live in PORTING.md.
 
 pub mod app;
+pub(crate) mod atomic_file;
 pub mod background;
 pub mod config;
 pub mod env;

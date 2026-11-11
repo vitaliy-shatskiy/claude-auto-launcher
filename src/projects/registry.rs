@@ -12,6 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
+use crate::atomic_file::{is_temp_of, modified_before};
+
 use super::paths::{DriveCache, is_scratch_key, on_network, path_present, project_key, scratch_key, scratch_keys};
 use super::{Phase, Project, Registry};
 
@@ -224,12 +226,8 @@ fn write_cache(path: &Path, fresh: &Map<String, Value>) {
     let Ok(text) = serde_json::to_string_pretty(&Value::Object(fresh.clone())) else {
         return;
     };
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
-    remove_stale_cache_temps(path, SystemTime::now());
-    let tmp = PathBuf::from(format!("{}.{}-{:06x}.tmp", path.display(), std::process::id(), nonce & 0x00FF_FFFF));
-    if fs::write(&tmp, text).is_err() || fs::rename(&tmp, path).is_err() {
-        // Best effort: a temp that cannot be removed now is swept by a write a day later.
-        fs::remove_file(&tmp).unwrap_or_default();
+    if crate::atomic_file::write_atomic(path, text.as_bytes()).is_err() {
+        // Best effort: the next build recomputes.
     }
 }
 
@@ -377,40 +375,6 @@ fn merge(rows: Vec<SlugRow>) -> Vec<Project> {
     merged
 }
 
-/// A `write_cache` temp of the cache named `cache`: `<cache>.<pid>-<hex>.tmp`. An exit between
-/// the write and the rename leaves one behind.
-fn is_cache_temp(name: &str, cache: &str) -> bool {
-    name.strip_prefix(cache)
-        .and_then(|r| r.strip_prefix('.'))
-        .and_then(|r| r.strip_suffix(".tmp"))
-        .and_then(|r| r.split_once('-'))
-        .is_some_and(|(pid, hex)| {
-            !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) && !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit())
-        })
-}
-
-/// The day-old temps beside `cache` that an exit cut off; younger ones may be another run's write.
-pub(crate) fn remove_stale_cache_temps(cache: &Path, now: SystemTime) {
-    let (Some(dir), Some(name)) = (cache.parent(), cache.file_name().map(|n| n.to_string_lossy().into_owned())) else {
-        return;
-    };
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    let cutoff = now.checked_sub(Duration::from_hours(24)).unwrap_or(UNIX_EPOCH);
-    for e in rd.flatten() {
-        if is_cache_temp(&e.file_name().to_string_lossy(), &name) && modified_before(&e, cutoff) {
-            fs::remove_file(e.path()).unwrap_or_default();
-        }
-    }
-}
-
-fn modified_before(e: &fs::DirEntry, cutoff: SystemTime) -> bool {
-    e.metadata()
-        .ok()
-        .filter(fs::Metadata::is_file)
-        .and_then(|m| m.modified().ok())
-        .is_some_and(|m| m < cutoff)
-}
-
 /// `Remove-StalePreviewProjectsCache`: only the exact names a preview writes (its cache and that
 /// cache's temps), older than a day.
 pub(crate) fn remove_stale_preview_cache_at(dir: &Path, now: SystemTime) {
@@ -426,7 +390,7 @@ pub(crate) fn remove_stale_preview_cache_at(dir: &Path, now: SystemTime) {
         let ours = preview_cache(&name)
             || name.split_once(".json.").is_some_and(|(stem, _)| {
                 let cache = format!("{stem}.json");
-                preview_cache(&cache) && is_cache_temp(&name, &cache)
+                preview_cache(&cache) && is_temp_of(&name, &cache)
             });
         if ours && modified_before(&e, cutoff) {
             // Best effort: a file another process holds is pruned by a later run.

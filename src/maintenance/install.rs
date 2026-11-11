@@ -133,18 +133,16 @@ impl HashCache {
             })
             .collect();
         if let Ok(text) = serde_json::to_string_pretty(&Value::Object(live)) {
-            write_atomic(&self.path, &text);
+            write_cache(&self.path, &text);
         }
         Some(hash)
     }
 }
 
-/// Write-then-rename, so a concurrent reader never sees half a file. Failure is silent: the
-/// cache is an optimisation.
-pub(crate) fn write_atomic(path: &Path, text: &str) {
-    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_err() {
-        drop(std::fs::remove_file(&tmp));
+/// A cache write: whole or not at all, and a failure is silent (the cache is an optimisation).
+pub(crate) fn write_cache(path: &Path, text: &str) {
+    if crate::atomic_file::write_atomic(path, text.as_bytes()).is_err() {
+        // The next run recomputes it.
     }
 }
 

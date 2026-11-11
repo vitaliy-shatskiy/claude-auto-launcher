@@ -223,28 +223,16 @@ pub fn save_prefs(path: &str, state: &LaunchState, now_ms: i64, roster: &Roster)
     if prev.unreadable || !lock.as_ref().is_some_and(sys::NamedMutex::held) {
         return data;
     }
-    if write_atomic(path, &data).is_err() {
+    if write_json(path, &data).is_err() {
         // Never let a preferences write stop a session from starting.
     }
     data
 }
 
-pub(crate) fn write_atomic(path: &str, data: &Value) -> std::io::Result<()> {
-    let p = Path::new(path);
-    if let Some(dir) = p.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = format!(
-        "{path}.{}-{}.tmp",
-        std::process::id(),
-        crate::log::new_run_id().get(..6).unwrap_or_default()
-    );
+/// `data` as pretty JSON, written whole (`atomic_file::write_atomic`).
+pub(crate) fn write_json(path: &str, data: &Value) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(data).map_err(std::io::Error::other)?;
-    let result = std::fs::write(&tmp, text.as_bytes()).and_then(|()| std::fs::rename(&tmp, p));
-    if result.is_err() && std::fs::remove_file(&tmp).is_err() {
-        // The temp may never have been created.
-    }
-    result
+    crate::atomic_file::write_atomic(Path::new(path), text.as_bytes())
 }
 
 /// What `Merge-LaunchPrefs` applied.

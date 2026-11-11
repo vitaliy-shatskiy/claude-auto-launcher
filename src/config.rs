@@ -648,7 +648,7 @@ pub(crate) fn update_config(path: &str, edit: impl FnOnce(&mut serde_json::Map<S
     } else {
         path.to_owned()
     };
-    crate::prefs::write_atomic(&target, &Value::Object(obj))
+    crate::prefs::write_json(&target, &Value::Object(obj))
 }
 
 #[cfg(test)]

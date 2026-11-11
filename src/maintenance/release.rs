@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use super::install::{parse_version, write_atomic};
+use super::install::{parse_version, write_cache};
 
 pub(crate) const RELEASE_ENDPOINT: &str = "https://downloads.claude.ai/claude-code-releases";
 const TTL_MS: i64 = 30 * 60_000;
@@ -117,7 +117,7 @@ pub(crate) fn remote_version(
             .map(|m| m.as_str().to_owned())
     });
     let record = json!({ "Channel": channel, "Version": version, "CheckedAtMs": now_ms });
-    write_atomic(cache, &record.to_string());
+    write_cache(cache, &record.to_string());
     fetched.map(|_| version)
 }
 

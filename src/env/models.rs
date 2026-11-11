@@ -161,7 +161,7 @@ pub(crate) fn load(bin: &Path, cache: &Path, preview: bool) -> Option<(Catalog, 
     let body = json!({ "Key": key, "Latest": cat.latest, "Names": cat.names });
     if serde_json::to_string_pretty(&body)
         .map_err(std::io::Error::other)
-        .and_then(|t| std::fs::write(cache, t))
+        .and_then(|t| crate::atomic_file::write_atomic(cache, t.as_bytes()))
         .is_err()
     {
         // An unwritable cache costs the next launch a rescan, never this one its labels.
