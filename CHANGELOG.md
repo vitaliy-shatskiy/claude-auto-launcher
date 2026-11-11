@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-11-11
+
 ### Changed
 
 - Row editing moved from the launch screen to the maintenance rows editor (`l`): `ctrl+w`/`ctrl+s`
