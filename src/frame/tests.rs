@@ -152,10 +152,3 @@ fn too_small_keeps_size_line_first() {
     let f = too_small_frame(40, 2, true);
     assert_eq!(f, ["  need 50x16, have 40x2", "  terminal too small"]);
 }
-
-#[test]
-fn held_frame_keeps_hint_when_short() {
-    let f = held_session_frame("another claude holds this session and the words go on", 60, 3, true);
-    assert_eq!(f.last().map(String::as_str), Some("  enter continue anyway   esc back"));
-    assert_eq!(f.len(), 2, "no blank lines when the full frame does not fit");
-}

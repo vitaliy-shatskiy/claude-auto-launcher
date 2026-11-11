@@ -1,7 +1,7 @@
 //! Frame pieces every screen shares (`Screens.ps1` middle): the footer as data, radio rows, click
 //! spans, the row map, and the per-line truncate-then-paint chain. Pure.
 
-use crate::layout::{display_width, limit_line, split_text_lines};
+use crate::layout::{display_width, limit_line};
 use crate::theme::{self, Glyphs};
 
 /// 50 columns: a phone over RDP. 16 rows: the worst launch frame at 50 columns plus one.
@@ -495,37 +495,6 @@ pub fn too_small_frame(width: usize, height: usize, ascii: bool) -> Vec<String> 
     .collect();
     lines.truncate(height.max(1));
     lines
-}
-
-/// `Get-HeldSessionFrame`: the key hint placed first, the warning wrapped into what is left.
-pub fn held_session_frame(warning: &str, width: usize, height: usize, ascii: bool) -> Vec<String> {
-    let fw = frame_width(width);
-    let sets: [&[&str]; 3] = [
-        &["  enter continue anyway   esc back"],
-        &["  enter continue anyway", "  esc back"],
-        &["enter = go on", "esc = back"],
-    ];
-    let chosen = sets.iter().find(|s| s.iter().all(|l| display_width(l) <= fw)).unwrap_or(&sets[2]);
-    let hint: Vec<String> = chosen.iter().map(|l| limit_line(l, fw, ascii)).collect();
-    let warn: Vec<String> = split_text_lines(warning, fw.saturating_sub(2).max(1), 0, ascii)
-        .into_iter()
-        .map(|l| format!("  {l}"))
-        .collect();
-    let budget = height.max(1);
-    let full_len = 2 + warn.len() + hint.len();
-    if full_len <= budget {
-        let mut full = vec![String::new()];
-        full.extend(warn);
-        full.push(String::new());
-        full.extend(hint);
-        return full;
-    }
-    let Some(room) = budget.checked_sub(hint.len()).filter(|r| *r > 0) else {
-        return hint.into_iter().take(budget).collect();
-    };
-    let mut out: Vec<String> = warn.into_iter().take(room).collect();
-    out.extend(hint);
-    out
 }
 
 #[cfg(test)]
