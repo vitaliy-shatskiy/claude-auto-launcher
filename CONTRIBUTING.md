@@ -11,7 +11,7 @@ cargo test --locked
 ```
 
 All three exit `0`. CI runs the same three on Windows. Try a screen change in preview mode first
-(README, [Preview mode](README.md#preview-mode)): it needs no real Claude and writes nothing.
+(README, [Preview mode](README.md#preview-mode)): it writes nothing and runs no Claude, but a `claude` must resolve on PATH (a stub will do).
 
 `cargo run --example privacy_scan` is the privacy scan (`examples/privacy_scan.rs`, not in the
 release exe). It reads an optional pattern list from `CLAUDE_AUTO_CLEAN_PATTERNS` or `--patterns`. Without one it only checks the current Windows username. It scans the
