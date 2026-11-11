@@ -1,6 +1,6 @@
 //! Every Win32 call the launcher makes, behind safe wrappers: console input and modes, the
-//! window size, the code page, Ctrl+C, the prefs mutex, SHA-256, local time, the process table and
-//! the TCP listener table.
+//! window size, the code page, Ctrl+C, the prefs mutex, a file's hard-link count, SHA-256, local
+//! time, the process table and the TCP listener table.
 #![expect(unsafe_code, reason = "the one FFI module: Win32 console, mutex, hash and process calls")]
 
 use std::ffi::c_void;
@@ -9,7 +9,9 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, INVALID_HANDLE_VALUE, WAIT_ABANDONED, WAIT_OBJECT_0};
 use windows_sys::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, GetIpAddrTable, TCP_TABLE_OWNER_PID_LISTENER};
 use windows_sys::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
-use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+use windows_sys::Win32::Storage::FileSystem::{
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING,
+};
 use windows_sys::Win32::System::Console::{
     CONSOLE_SCREEN_BUFFER_INFO, FlushConsoleInputBuffer, GetConsoleMode, GetConsoleOutputCP, GetConsoleScreenBufferInfo,
     GetNumberOfConsoleInputEvents, INPUT_RECORD, PeekConsoleInputW, ReadConsoleInputW, SetConsoleCtrlHandler, SetConsoleMode,
@@ -187,6 +189,15 @@ impl Drop for NamedMutex {
             unsafe { ReleaseMutex(self.handle.0) };
         }
     }
+}
+
+/// How many names (hard links) the open file has; `None` when the query fails.
+pub(crate) fn link_count(file: &std::fs::File) -> Option<u32> {
+    use std::os::windows::io::AsRawHandle as _;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `file` keeps its handle open for the call; `info` is a valid out-pointer.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) };
+    (ok != 0).then_some(info.nNumberOfLinks)
 }
 
 pub(crate) fn sha256(data: &[u8]) -> Option<[u8; 32]> {

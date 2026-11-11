@@ -382,6 +382,63 @@ fn save_keys_writes_through_a_symlinked_config() {
 }
 
 #[test]
+fn concurrent_saves_lose_no_key() {
+    // Given: a config with the user's keys, and four launchers saving their own key at once.
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-race-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("claude-auto.json").to_string_lossy().into_owned();
+    let keep: serde_json::Map<String, Value> = (0..20).map(|i| (format!("keep{i}"), serde_json::json!(i))).collect();
+    std::fs::write(&path, serde_json::to_string(&keep).unwrap()).unwrap();
+    let (writers, saves) = (4, 25);
+    let start = std::sync::Barrier::new(writers);
+    // When: each writes its key `saves` times.
+    let errors: Vec<String> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..writers)
+            .map(|w| {
+                let (path, start) = (&path, &start);
+                s.spawn(move || {
+                    start.wait();
+                    (0..saves)
+                        .filter_map(|n| save_keys(path, &[(&format!("w{w}"), serde_json::json!(n))]).err())
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    // Then: every save landed, every user key is still there, and each writer's last value won.
+    assert_eq!(errors, Vec::<String>::new());
+    let back: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for (k, v) in &keep {
+        assert_eq!(back.get(k), Some(v), "user key {k} lost");
+    }
+    for w in 0..writers {
+        assert_eq!(
+            back.get(format!("w{w}")),
+            Some(&serde_json::json!(saves - 1)),
+            "writer {w}'s last save lost"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_save_never_starts_from_empty_while_another_writer_replaces_the_file() {
+    // Given: the config is missing, but another writer's temp of it was written a moment ago.
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-mid-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("claude-auto.json");
+    std::fs::write(dir.join("claude-auto.json.42-0f0f0f.tmp"), r#"{"keep": 1}"#).unwrap();
+    // When: a save runs.
+    let r = save_keys(path.to_str().unwrap(), &[("mouse", serde_json::json!(false))]);
+    // Then: it fails instead of writing a config of its key alone.
+    assert!(r.is_err());
+    assert!(!path.exists(), "no config built from {{}}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn l_is_reserved_for_the_rows_editor() {
     let (a, w) = parse_actions(&serde_json::json!([{"key":"l","script":"C:/x"}]), &ctx());
     assert_eq!(a, []);

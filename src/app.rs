@@ -246,12 +246,17 @@ fn launch(run: &Run) -> i32 {
         let saved = if run.preview {
             Value::Null
         } else {
-            prefs::save_prefs(
+            let (saved, written) = prefs::save_prefs(
                 &prefs::prefs_path(&run.ctx, var("CLAUDE_AUTO_PREFS").as_deref()),
                 &o.state,
                 now_ms(),
                 &o.roster,
-            )
+            );
+            if let Err(e) = written {
+                run.logger
+                    .write("error", log_data! { "where" => "prefs save", "message" => e.to_string() });
+            }
+            saved
         };
         if o.state.advisor.eq_ignore_ascii_case("off") {
             child.set("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "1");

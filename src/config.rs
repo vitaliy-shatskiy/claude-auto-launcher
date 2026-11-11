@@ -626,14 +626,19 @@ pub fn save_rows(path: &str, rows: &[RowName], hidden: &BTreeMap<RowName, String
 }
 
 /// Rewrites the config through `edit`. A file that is not UTF-8 (an ANSI save would lose its
-/// bytes) or not a JSON object is refused, never overwritten; a missing one is created. The write
-/// is a temp file renamed over the old one, next to a symlink's target so the link survives: two
-/// launchers saving at once leave the last writer's file.
+/// bytes) or not a JSON object is refused, never overwritten; a missing one is created. Read, edit
+/// and write run under the per-file mutex the prefs use (`prefs::mutex_name`), so two launchers
+/// saving at once both land; one that cannot get it in 2 s fails rather than write unlocked. The
+/// write is durable and keeps a symlink or hard link (`atomic_file::write_durable`).
 pub(crate) fn update_config(path: &str, edit: impl FnOnce(&mut serde_json::Map<String, Value>)) -> std::io::Result<()> {
-    // `try_exists`, not `exists`: a file whose metadata fails must never be taken for missing and
-    // replaced by `{}`.
-    let mut obj = if Path::new(path).try_exists()? {
-        let bytes = std::fs::read(path)?;
+    let lock = crate::sys::NamedMutex::acquire(&crate::prefs::mutex_name(path), 2000);
+    if !lock.as_ref().is_some_and(crate::sys::NamedMutex::held) {
+        return Err(std::io::Error::other(format!("{path} is being saved by another claude-auto")));
+    }
+    // `exists_settled`, not `exists`: a file whose metadata fails, or that another writer is
+    // replacing, must never be taken for missing and replaced by `{}`.
+    let mut obj = if crate::atomic_file::exists_settled(Path::new(path))? {
+        let bytes = crate::atomic_file::read(Path::new(path))?;
         let text = std::str::from_utf8(&bytes).map_err(|e| std::io::Error::other(format!("{path} is not UTF-8 ({e})")))?;
         match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).map_err(std::io::Error::other)? {
             Value::Object(m) => m,
@@ -643,12 +648,7 @@ pub(crate) fn update_config(path: &str, edit: impl FnOnce(&mut serde_json::Map<S
         serde_json::Map::new()
     };
     edit(&mut obj);
-    let target = if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        std::fs::canonicalize(path)?.to_string_lossy().into_owned()
-    } else {
-        path.to_owned()
-    };
-    crate::prefs::write_json(&target, &Value::Object(obj))
+    crate::prefs::write_json(path, &Value::Object(obj))
 }
 
 #[cfg(test)]

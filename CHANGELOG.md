@@ -4,6 +4,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Fixed
+
+- A power cut during a save can no longer leave `claude-auto.json` or the prefs file empty: both
+  are flushed to disk before they replace the old file (caches still skip the flush).
+- Two launchers saving the config at once no longer lose each other's keys: the config save now
+  runs under the same per-file lock as the prefs save, and a config that another writer is
+  replacing at that moment is never mistaken for a missing one and rebuilt from nothing.
+- A file held for a moment by an antivirus scan or another reader (access denied, sharing
+  violation) is retried three times 25 ms apart before a save or read gives up; a prefs save that
+  still fails, or that the lock skipped, now writes an `error` record to the run log.
+- Saving through a symlink keeps the link for every file the launcher writes, a hard-linked config
+  or prefs file stays linked (rewritten in place), and hidden and system attributes survive a save.
+- Two saves of one process in the same clock tick can no longer pick the same temp file name.
+
 ## [0.8.1] — 2026-11-11
 
 ### Changed

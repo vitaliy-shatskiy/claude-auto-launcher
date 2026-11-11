@@ -34,11 +34,11 @@ impl Drop for Tmp {
     }
 }
 
-fn work_save(path: &str) {
+fn work_save(path: &str) -> std::io::Result<()> {
     let r = four();
     let mut s = r.new_state();
     s.effort = "max".into();
-    save_prefs(path, &s, 60_000, &r);
+    save_prefs(path, &s, 60_000, &r).1
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn save_round_trips_through_the_file_atomically() {
     let path = dir.join("p.json").to_string_lossy().into_owned();
     let mut s = r.new_state();
     s.effort = "max".into();
-    save_prefs(&path, &s, 60_000, &r);
+    save_prefs(&path, &s, 60_000, &r).1.unwrap();
     let bytes = std::fs::read(&path).unwrap();
     assert_ne!(bytes.get(..3), Some(&[0xEF, 0xBB, 0xBF][..]), "no BOM");
     let back = read_prefs(&path);
@@ -109,10 +109,10 @@ fn save_writes_nothing_while_another_handle_denies_reading_the_file() {
         .open(&path)
         .unwrap();
     assert!(read_prefs(&path).unreadable, "the held file reads as unreadable");
-    work_save(&path);
+    assert!(work_save(&path).is_err(), "a skipped save reports why");
     drop(held);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), OTHERS, "nothing was written");
-    work_save(&path);
+    work_save(&path).unwrap();
     let after = read_prefs(&path);
     assert_eq!(
         (after.profiles.len(), after.account.as_deref()),
@@ -127,7 +127,7 @@ fn an_exclusively_held_file_reads_unreadable_and_keeps_every_profile() {
     let path = t.prefs();
     let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
     assert!(read_prefs(&path).unreadable, "the held file reads as unreadable");
-    work_save(&path);
+    assert!(work_save(&path).is_err(), "a skipped save reports why");
     drop(held);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), OTHERS, "other accounts' profiles survive");
     assert_eq!(std::fs::read_dir(&t.0).unwrap().count(), 1, "no temp left behind");
@@ -148,11 +148,11 @@ fn save_writes_nothing_while_another_holder_owns_the_mutex() {
         drop(m);
     });
     assert!(held_rx.recv().unwrap(), "the second handle owns the mutex");
-    work_save(&path);
+    assert!(work_save(&path).is_err(), "a save the lock skipped reports why");
     release_tx.send(()).unwrap();
     holder.join().unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), OTHERS, "nothing was written");
-    work_save(&path);
+    work_save(&path).unwrap();
     assert_eq!(
         read_prefs(&path).account.as_deref(),
         Some("work"),

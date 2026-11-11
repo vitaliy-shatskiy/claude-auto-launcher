@@ -111,13 +111,13 @@ pub fn parse_prefs(text: &str) -> Prefs {
     }
 }
 
-/// `Read-LaunchPrefs`: missing = empty; unreadable = empty AND marked, so save will not rebuild.
+/// `Read-LaunchPrefs`: missing = empty; unreadable (a lock that outlasts the retries, a replace in
+/// flight) = empty AND marked, so save will not rebuild.
 pub fn read_prefs(path: &str) -> Prefs {
-    if !Path::new(path).exists() {
-        return Prefs::default();
-    }
-    match std::fs::read(path) {
-        Ok(bytes) => parse_prefs(&String::from_utf8_lossy(&bytes)),
+    let path = Path::new(path);
+    match crate::atomic_file::exists_settled(path).and_then(|exists| exists.then(|| crate::atomic_file::read(path)).transpose()) {
+        Ok(None) => Prefs::default(),
+        Ok(Some(bytes)) => parse_prefs(&String::from_utf8_lossy(&bytes)),
         Err(_) => Prefs {
             unreadable: true,
             ..Prefs::default()
@@ -215,24 +215,26 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// `Save-LaunchPrefs`: read, merge and write under one lock. A lock that does not arrive in 2 s,
-/// or an unreadable file, is a skipped write, never a delay or a loss. Returns what was built.
-pub fn save_prefs(path: &str, state: &LaunchState, now_ms: i64, roster: &Roster) -> Value {
+/// or an unreadable file, is a skipped write, never a delay or a loss. Returns what was built, and
+/// why nothing was written when it was not (the caller logs it; a session still starts).
+pub fn save_prefs(path: &str, state: &LaunchState, now_ms: i64, roster: &Roster) -> (Value, std::io::Result<()>) {
     let lock = sys::NamedMutex::acquire(&mutex_name(path), 2000);
     let prev = read_prefs(path);
     let data = build_prefs_data(&prev, state, now_ms, roster);
-    if prev.unreadable || !lock.as_ref().is_some_and(sys::NamedMutex::held) {
-        return data;
-    }
-    if write_json(path, &data).is_err() {
-        // Never let a preferences write stop a session from starting.
-    }
-    data
+    let written = if !lock.as_ref().is_some_and(sys::NamedMutex::held) {
+        Err(std::io::Error::other(format!("{path} is locked by another claude-auto; not saved")))
+    } else if prev.unreadable {
+        Err(std::io::Error::other(format!("{path} could not be read; not saved")))
+    } else {
+        write_json(path, &data)
+    };
+    (data, written)
 }
 
-/// `data` as pretty JSON, written whole (`atomic_file::write_atomic`).
+/// `data` as pretty JSON, written whole and flushed to disk (`atomic_file::write_durable`).
 pub(crate) fn write_json(path: &str, data: &Value) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(data).map_err(std::io::Error::other)?;
-    crate::atomic_file::write_atomic(Path::new(path), text.as_bytes())
+    crate::atomic_file::write_durable(Path::new(path), text.as_bytes())
 }
 
 /// What `Merge-LaunchPrefs` applied.
