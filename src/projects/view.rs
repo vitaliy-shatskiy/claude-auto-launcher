@@ -9,8 +9,8 @@ use super::Project;
 use super::paths::project_key;
 use super::select::{Row, RowKind, filter_words, project_count, project_rows};
 use crate::frame::{
-    self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioSpec, RowMap, Style, TWO_PANE_WIDTH,
-    new_hint_footer, new_radio_row,
+    self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioRow, RadioSpec, RowMap, Style,
+    TWO_PANE_WIDTH, new_hint_footer, new_radio_row,
 };
 use crate::launch::{LAUNCH_MODES, launch_mode, step_option};
 use crate::layout::{display_width, limit_line, limit_path, new_box, viewport};
@@ -392,24 +392,9 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         });
     }
 
-    let values = project_actions();
-    let current = step_project_action(v.action, 0);
-    let radio = new_radio_row(
-        &RadioSpec {
-            prefix: "   ",
-            label: "action",
-            values: &values,
-            current: &current,
-            texts: &values,
-            label_width: 8,
-            max_width: inner,
-            hover: v.hover_value,
-            compact: false,
-        },
-        &g,
-    );
+    let radio = action_radio(v.action, v.hover_value, inner, &g);
     let action_index = body.len();
-    body.push(radio.text);
+    body.push(radio.text.clone());
 
     let lines = new_box(&body, fw, &title(v, &g), &g, v.style.ascii);
     let first_row_y = lines.len() - body.len() - 1;
@@ -421,32 +406,61 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
             start: i32::try_from(start).unwrap_or(0),
             row_ys: row_ys.iter().map(|r| y(*r)).collect(),
         }),
-        action: Some(ActionHit {
-            y: y(action_index),
-            cells: radio
-                .cells
-                .iter()
-                .map(|c| CellSpan {
-                    start: c.start + 1,
-                    end: c.end + 1,
-                    value: c.value.clone(),
-                })
-                .collect(),
-        }),
+        action: Some(action_hit(&radio, y(action_index))),
         ..RowMap::default()
     };
-    let selected = launch_mode(&current)
-        .and_then(|m| m.hotkey)
-        .map(|k| (String::new(), Some(k)))
-        .into_iter()
-        .collect();
     let light = FooterLight {
         hover: frame::footer_hover(&footer, v.hover),
-        selected,
+        selected: action_light(v.action),
     };
     let painter = |l: &str, enabled: bool| add_match_color(&add_picker_color(l, enabled, &g), enabled);
     let lines = frame::complete_frame(&lines, &footer, fw, v.style, &painter, &light, &mut map);
     Frame { lines, map }
+}
+
+/// The action field as a radio row inside a box of `inner` cells.
+pub(crate) fn action_radio(action: &str, hover: &str, inner: usize, g: &Glyphs) -> RadioRow {
+    let values = project_actions();
+    let current = step_project_action(action, 0);
+    new_radio_row(
+        &RadioSpec {
+            prefix: "   ",
+            label: "action",
+            values: &values,
+            current: &current,
+            texts: &values,
+            label_width: 8,
+            max_width: inner,
+            hover,
+            compact: false,
+        },
+        g,
+    )
+}
+
+/// The radio row's click cells at frame line `y` (one column right of the box border).
+pub(crate) fn action_hit(radio: &RadioRow, y: i32) -> ActionHit {
+    ActionHit {
+        y,
+        cells: radio
+            .cells
+            .iter()
+            .map(|c| CellSpan {
+                start: c.start + 1,
+                end: c.end + 1,
+                value: c.value.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// The footer button of the selected action, lit.
+pub(crate) fn action_light(action: &str) -> Vec<(String, Option<char>)> {
+    launch_mode(&step_project_action(action, 0))
+        .and_then(|m| m.hotkey)
+        .map(|k| (String::new(), Some(k)))
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]

@@ -2,6 +2,8 @@
 //! the registry of directories Claude Code has sessions in, the start selection, and the screen
 //! that picks where a session runs and what it does there.
 
+mod nav_view;
+mod navigator;
 mod paths;
 mod registry;
 mod screen;

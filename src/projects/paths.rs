@@ -185,6 +185,12 @@ pub(crate) fn path_present_with(path: &str, drives: &mut DriveCache, classify: f
     Path::new(p).exists()
 }
 
+/// A folder to start in, checked without a network wait: a network path is taken as present
+/// unprobed (as `path_present` does); a local one must be a directory, not a file.
+pub(crate) fn folder_present(path: &str, drives: &mut DriveCache) -> bool {
+    path_present(path, drives) && (on_network(path, drives) || Path::new(path).is_dir())
+}
+
 /// The drive class a presence check recorded for a path's letter (`skip` = network).
 pub(crate) fn on_network(path: &str, drives: &DriveCache) -> bool {
     if path.starts_with(r"\\") || path.starts_with("//") {
@@ -276,6 +282,17 @@ mod tests {
         assert!(path_present(&format!(r"\\?\{here}"), &mut DriveCache::new()), r"\\?\X:\ is local");
         assert!(!path_present(&format!(r"\\?\{here}\no-such-dir-604"), &mut DriveCache::new()));
         assert!(!path_present("C:\\a\0b", &mut DriveCache::new()), "a NUL is absent, quietly");
+    }
+
+    #[test]
+    fn a_folder_check_never_probes_a_network_and_refuses_a_file() {
+        let here = env!("CARGO_MANIFEST_DIR");
+        assert!(folder_present(here, &mut DriveCache::new()));
+        assert!(!folder_present(&format!(r"{here}\Cargo.toml"), &mut DriveCache::new()), "a file");
+        assert!(!folder_present(&format!(r"{here}\no-such-dir-604"), &mut DriveCache::new()));
+        assert!(folder_present(r"\\claude-auto-no-such-host-604\share\repo", &mut DriveCache::new()));
+        let mut net = DriveCache::from([('q', DriveClass::Skip)]);
+        assert!(folder_present(r"Q:\src\repo", &mut net), "a network drive is not probed");
     }
 
     #[test]

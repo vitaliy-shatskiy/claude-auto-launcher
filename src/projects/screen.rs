@@ -1,13 +1,16 @@
 //! `Invoke-ProjectScreen`: what the project screen alone does around the shared loop - the filter
-//! box, the action field stepped from every row, the mode hotkeys, and the pick with its existence
-//! check. The free path is read between two loop runs, because only the caller holds the terminal.
+//! box, the action field stepped from every row, the mode hotkeys, the pick with its existence
+//! check, and the path navigator the free-path row opens in the same screen.
 
 use std::cell::RefCell;
 use std::path::Path;
+use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use super::paths::project_key;
+use super::nav_view::{NavView, navigator_frame};
+use super::navigator::{Lister, NETWORK_LIMIT, NavStep, Navigator, list_dirs};
+use super::paths::{DriveCache, folder_present, project_key};
 use super::select::{RowKind, project_rows, slugs_for_path};
 use super::view::{ProjectView, project_actions, project_frame, step_project_action};
 use super::{Project, ProjectChoice};
@@ -16,16 +19,6 @@ use crate::input::{KeyPress, is_hotkey_exact, vk};
 use crate::launch::LAUNCH_MODES;
 use crate::ui::screen_loop::{Cursor, Flow, Screen, run};
 use crate::ui::{Hit, Term, UiStop};
-
-/// What one loop run ends with.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Outcome {
-    Picked(ProjectChoice),
-    /// The free-path row was committed: the caller reads the path and decides.
-    AskPath {
-        how: String,
-    },
-}
 
 /// What one `h` press does to a project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +62,12 @@ pub(crate) struct ProjectScreen<'a> {
     action: String,
     hotkeys: Vec<char>,
     rows: Vec<super::select::Row>,
+    /// The open path navigator; the list's cursor waits in `list_index`.
+    nav: Option<Navigator>,
+    list_index: i32,
+    lister: Lister,
+    limit: Duration,
+    drives: DriveCache,
 }
 
 impl std::fmt::Debug for ProjectScreen<'_> {
@@ -100,6 +99,11 @@ impl<'a> ProjectScreen<'a> {
             action: step_project_action(initial_action, 0),
             hotkeys,
             rows: Vec::new(),
+            nav: None,
+            list_index: 0,
+            lister: list_dirs,
+            limit: NETWORK_LIMIT,
+            drives: DriveCache::new(),
         }
     }
 
@@ -180,26 +184,62 @@ impl<'a> ProjectScreen<'a> {
         }
     }
 
-    /// The row under the cursor into a result; every kind is checked for existence, so a row the
-    /// registry still lists but whose directory vanished is refused with a notice.
-    fn commit(&mut self, how: &str) -> Flow<Outcome> {
+    /// The row under the cursor into a result; every kind is checked for existence without a
+    /// network wait, so a row whose directory vanished is refused with a notice. The free-path
+    /// row opens the navigator.
+    fn commit(&mut self, how: &str) -> Flow<ProjectChoice> {
         let Some(row) = usize::try_from(self.cursor.index).ok().and_then(|i| self.rows.get(i)) else {
             return Flow::Continue;
         };
         if row.kind == RowKind::Path {
-            return Flow::Done(Some(Outcome::AskPath { how: how.to_owned() }));
-        }
-        let target = row.path.clone();
-        if !is_dir(&target) {
-            "path not found".clone_into(&mut self.notice);
+            self.list_index = self.cursor.index;
+            self.cursor.index = 0;
+            self.nav = Some(Navigator::new(self.lister, self.limit));
             return Flow::Continue;
         }
+        let target = row.path.clone();
         let slugs = if row.kind == RowKind::Cwd {
             slugs_for_path(self.projects, &target)
         } else {
             row.slugs.clone()
         };
-        Flow::Done(Some(Outcome::Picked(choice(target, &self.action, how, slugs))))
+        if !folder_present(&target, &mut self.drives) {
+            "path not found".clone_into(&mut self.notice);
+            return Flow::Continue;
+        }
+        Flow::Done(Some(choice(target, &self.action, how, slugs)))
+    }
+
+    /// Enter or a second click in the navigator: a picked folder ends the screen (the records
+    /// carry the LENGTH of the path only, `log_fields`).
+    fn nav_enter(&mut self, how: &str) -> Flow<ProjectChoice> {
+        let index = usize::try_from(self.cursor.index).unwrap_or(0);
+        let Some(nav) = self.nav.as_mut() else { return Flow::Continue };
+        let NavStep::Pick(path) = nav.enter(index) else {
+            return Flow::Continue;
+        };
+        let slugs = slugs_for_path(self.projects, &path);
+        Flow::Done(Some(choice(path, &self.action, how, slugs)))
+    }
+
+    /// The navigator owns the typed characters and Backspace; the arrows, Enter, Tab and Esc
+    /// go to the loop, which hands them to this screen's handlers.
+    fn nav_key(&mut self, key: &KeyPress) -> bool {
+        let Some(nav) = self.nav.as_mut() else { return false };
+        nav.notice.clear();
+        if key.is(vk::BACKSPACE) {
+            nav.backspace(key.ctrl);
+            return true;
+        }
+        let passed = [vk::UP, vk::DOWN, vk::LEFT, vk::RIGHT, vk::ENTER, vk::TAB, vk::ESCAPE];
+        if passed.iter().any(|k| key.is(*k)) || key.is_ctrl(vk::C) {
+            return false;
+        }
+        // Ctrl gives a control character; AltGr (Ctrl+Alt) still types `\` on many layouts.
+        if key.ch != '\0' && !key.ch.is_control() {
+            nav.type_char(key.ch);
+        }
+        true
     }
 
     /// No row matches the filter: Enter would run the current directory the cursor parked on.
@@ -263,10 +303,6 @@ impl<'a> ProjectScreen<'a> {
     }
 }
 
-fn is_dir(path: &str) -> bool {
-    !path.is_empty() && !path.contains('\0') && Path::new(path).is_dir()
-}
-
 fn choice(path: String, action: &str, how: &str, slugs: Vec<String>) -> ProjectChoice {
     ProjectChoice {
         path,
@@ -278,7 +314,7 @@ fn choice(path: String, action: &str, how: &str, slugs: Vec<String>) -> ProjectC
 }
 
 impl Screen for ProjectScreen<'_> {
-    type Output = Outcome;
+    type Output = ProjectChoice;
 
     fn name(&self) -> &'static str {
         "project"
@@ -288,15 +324,37 @@ impl Screen for ProjectScreen<'_> {
         &mut self.cursor
     }
 
-    /// The filter decides the rows: rebuilt before every frame, the cursor clamped to them.
+    /// The filter (or the navigator's text) decides the rows: rebuilt before every frame, the
+    /// cursor clamped to them.
     fn before(&mut self) {
-        self.rebuild_view();
-        self.rows = project_rows(&self.view, &self.filter, &self.cwd);
-        let n = i32::try_from(self.rows.len()).unwrap_or(1);
+        let n = if let Some(nav) = self.nav.as_mut() {
+            if nav.refresh() {
+                self.cursor.index = i32::try_from(nav.park()).unwrap_or(0);
+            }
+            nav.rows.len()
+        } else {
+            self.rebuild_view();
+            self.rows = project_rows(&self.view, &self.filter, &self.cwd);
+            self.rows.len()
+        };
+        let n = i32::try_from(n).unwrap_or(1);
         self.cursor.index = self.cursor.index.min(n - 1).max(0);
     }
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
+        if let Some(nav) = self.nav.as_ref() {
+            return navigator_frame(&NavView {
+                nav,
+                index: usize::try_from(self.cursor.index).unwrap_or(0),
+                width: size.0,
+                height: size.1,
+                style: self.style,
+                action: &self.action,
+                hover: self.cursor.hover,
+                hover_row: self.cursor.hover_row,
+                hover_value: &self.cursor.hover_value,
+            });
+        }
         project_frame(&ProjectView {
             projects: &self.view,
             marked: &self.marked,
@@ -318,30 +376,51 @@ impl Screen for ProjectScreen<'_> {
     }
 
     fn rows(&self) -> Option<i32> {
-        Some(i32::try_from(self.rows.len()).unwrap_or(0))
+        let n = self.nav.as_ref().map_or(self.rows.len(), |nav| nav.rows.len());
+        Some(i32::try_from(n).unwrap_or(0))
     }
 
     fn has_left_right(&self) -> bool {
         true
     }
 
-    fn left(&mut self) -> Flow<Outcome> {
-        self.action = step_project_action(&self.action, -1);
+    /// Left steps the field back; in the navigator it goes one folder up.
+    fn left(&mut self) -> Flow<ProjectChoice> {
+        match self.nav.as_mut() {
+            Some(nav) => nav.up(),
+            None => self.action = step_project_action(&self.action, -1),
+        }
         Flow::Continue
     }
 
-    fn right(&mut self) -> Flow<Outcome> {
-        self.action = step_project_action(&self.action, 1);
+    /// Right steps the field on; in the navigator it enters the folder under the cursor.
+    fn right(&mut self) -> Flow<ProjectChoice> {
+        let index = usize::try_from(self.cursor.index).unwrap_or(0);
+        match self.nav.as_mut() {
+            Some(nav) => nav.right(index),
+            None => self.action = step_project_action(&self.action, 1),
+        }
         Flow::Continue
     }
 
-    fn enter(&mut self) -> Option<Flow<Outcome>> {
+    fn enter(&mut self) -> Option<Flow<ProjectChoice>> {
+        if self.nav.is_some() {
+            return Some(self.nav_enter("enter"));
+        }
         Some(self.commit("enter"))
     }
 
-    /// Esc steps back one level: a kept filter is cleared, the hidden view returns to the list,
-    /// and only then the screen ends (an open filter is cleared by the filter box itself).
-    fn escape(&mut self) -> Option<Flow<Outcome>> {
+    /// Esc steps back one level: the navigator's create question, then the navigator itself
+    /// (never a launch, no notice), a kept filter, the hidden view, and only then the screen (an
+    /// open filter is cleared by the filter box itself).
+    fn escape(&mut self) -> Option<Flow<ProjectChoice>> {
+        if let Some(nav) = self.nav.as_mut() {
+            if !nav.escape() {
+                self.nav = None;
+                self.cursor.index = self.list_index;
+            }
+            return Some(Flow::Continue);
+        }
         if !self.filter.is_empty() {
             self.filter.clear();
             self.cursor.index = 0;
@@ -354,13 +433,20 @@ impl Screen for ProjectScreen<'_> {
         None
     }
 
+    /// Tab completes in the navigator; the list has no Tab.
+    fn tab(&mut self) -> Option<Flow<ProjectChoice>> {
+        let nav = self.nav.as_mut()?;
+        nav.tab();
+        Some(Flow::Continue)
+    }
+
     fn hotkeys(&self) -> &[char] {
         &self.hotkeys
     }
 
     /// `/` opens the filter; a mode hotkey sets the field AND commits, so a rejected pick still
     /// shows what the press did.
-    fn hotkey(&mut self, c: char) -> Flow<Outcome> {
+    fn hotkey(&mut self, c: char) -> Flow<ProjectChoice> {
         if c == '/' {
             self.cursor.typing = true;
             return Flow::Continue;
@@ -376,11 +462,14 @@ impl Screen for ProjectScreen<'_> {
         Flow::Continue
     }
 
-    /// A new KEY retires the last notice (a mouse gesture never does); while typing, the filter
-    /// box takes the key. `h` writes the config, so it is matched exactly: a split mouse report's
-    /// Shift + upper-case letter never hides a project.
+    /// A new KEY retires the last notice (a mouse gesture never does); the navigator or the open
+    /// filter box takes the key. `h` writes the config, so it is matched exactly: a split mouse
+    /// report's Shift + upper-case letter never hides a project.
     fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
         self.notice.clear();
+        if self.nav.is_some() {
+            return self.nav_key(key);
+        }
         if self.cursor.typing {
             return self.type_filter(key, term);
         }
@@ -393,7 +482,7 @@ impl Screen for ProjectScreen<'_> {
 
     /// A click on a value walks the field there with the arrows' own stepper; a click on a row
     /// only moves the cursor (a stray click never starts a session).
-    fn click(&mut self, hit: &Hit) -> Flow<Outcome> {
+    fn click(&mut self, hit: &Hit) -> Flow<ProjectChoice> {
         match hit {
             Hit::Action { value: Some(v) } => {
                 let values = project_actions();
@@ -405,27 +494,35 @@ impl Screen for ProjectScreen<'_> {
                     }
                 }
             }
-            Hit::ListRow(r) => self.cursor.index = *r,
+            Hit::ListRow(r) => {
+                if self.rows().is_some_and(|n| *r < n) {
+                    self.cursor.index = *r;
+                }
+            }
             Hit::None | Hit::Footer { .. } | Hit::Action { value: None } | Hit::Cell { .. } | Hit::LaunchRow { .. } => {}
         }
         Flow::Continue
     }
 
-    /// A click on the row that already carries the cursor is Enter's gesture: it commits the field.
-    fn activate(&mut self, _hit: &Hit) -> Option<Flow<Outcome>> {
+    /// A second click on the row a click selected is Enter's gesture (D1).
+    fn activate(&mut self, _hit: &Hit) -> Option<Flow<ProjectChoice>> {
+        if self.nav.is_some() {
+            return Some(self.nav_enter("mouse"));
+        }
         Some(self.commit("mouse"))
     }
 
     fn log_fields(&self) -> Map<String, Value> {
         let mut m = Map::new();
         m.insert("filterLength".into(), json!(self.filter.chars().count()));
+        if let Some(nav) = self.nav.as_ref() {
+            m.insert("pathLength".into(), json!(nav.text.chars().count()));
+        }
         m
     }
 }
 
-/// Runs the screen until a pick or a cancel. A committed free-path row reads the path through
-/// `Term::read_line`, logs only its length, and returns to the screen with a notice when the
-/// path is no directory.
+/// Runs the screen until a pick or a cancel.
 pub(crate) fn run_screen(
     term: &mut dyn Term,
     projects: &[Project],
@@ -437,28 +534,7 @@ pub(crate) fn run_screen(
 ) -> Result<Option<ProjectChoice>, UiStop> {
     let cwd = cwd.to_string_lossy();
     let mut screen = ProjectScreen::new(projects, &cwd, initial_action, style, clock).with_hiding(hiding);
-    loop {
-        match run(&mut screen, term)? {
-            None => return Ok(None),
-            Some(Outcome::Picked(c)) => return Ok(Some(c)),
-            Some(Outcome::AskPath { how }) => {
-                let raw = term.read_line("  path: ");
-                let typed = raw.trim_matches(['"', ' ']);
-                let found = is_dir(typed);
-                screen.log(
-                    term,
-                    "path",
-                    &[("pathLength", json!(typed.chars().count())), ("found", json!(found))],
-                );
-                if found {
-                    let full = std::path::absolute(typed).map_or_else(|_| typed.to_owned(), |p| p.to_string_lossy().into_owned());
-                    let slugs = slugs_for_path(projects, &full);
-                    return Ok(Some(choice(full, &screen.action, &how, slugs)));
-                }
-                "path not found".clone_into(&mut screen.notice);
-            }
-        }
-    }
+    run(&mut screen, term)
 }
 
 #[cfg(test)]

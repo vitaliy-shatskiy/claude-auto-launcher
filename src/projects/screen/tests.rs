@@ -350,25 +350,40 @@ fn a_cwd_that_is_a_project_runs_there_and_parks_first() {
     assert_eq!(other.path, f.alpha);
 }
 
+/// `before` keys, then the path typed character by character, then `after` keys.
+fn with_path(before: &[&str], path: &str, after: &[&str]) -> Vec<Event> {
+    let mut ev = keys(before);
+    ev.extend(path.chars().map(|c| Event::Key(KeyPress::char(c))));
+    ev.extend(keys(after));
+    ev
+}
+
 #[test]
-fn the_free_path_is_read_checked_and_resolved() {
+fn the_free_path_row_opens_the_navigator_and_picks_in_the_screen() {
     let f = fx();
+    let path_row = ["s", "s", "s", "Enter"];
     let (miss, t) = drive_with(
         &f.projects,
         &f.cwd,
         "new",
-        keys(&["s", "s", "s", "Enter", "Escape"]),
-        r"C:\this-path-does-not-really-exist-9f3a",
+        with_path(
+            &path_row,
+            r"C:\this-path-does-not-really-exist-9f3a\x",
+            &["Enter", "Escape", "Escape"],
+        ),
+        "",
     );
     assert!(miss.is_none());
-    assert_eq!(t.asked, 1);
+    assert_eq!(t.asked, 0, "the console line read is gone");
+    let frames = t.inner.frames.unwrap();
+    assert!(frames.iter().any(|fr| fr.join("\n").contains("path not found")));
     let scratch = f.tree.dir("free");
     let hit = drive_with(
         &f.projects,
         &f.cwd,
         "new",
-        keys(&["s", "s", "s", "Enter", "Escape"]),
-        &format!("\"{scratch}\""),
+        with_path(&path_row, &format!("\"{scratch}\""), &["Enter"]),
+        "",
     )
     .0
     .unwrap();
@@ -377,16 +392,75 @@ fn the_free_path_is_read_checked_and_resolved() {
         &f.projects,
         &f.cwd,
         "new",
-        keys(&["RightArrow", "RightArrow", "s", "s", "s", "Enter", "Escape"]),
-        &scratch,
+        with_path(&["RightArrow", "RightArrow", "s", "s", "s", "Enter"], &scratch, &["Enter"]),
+        "",
     )
     .0
     .unwrap();
     assert_eq!((resumed.action.as_str(), resumed.path.as_str()), ("resume", scratch.as_str()));
-    let d = drive_with(&f.projects, &f.cwd, "new", keys(&["s", "s", "s", "d", "Enter"]), &scratch)
+    let d = drive_with(
+        &f.projects,
+        &f.cwd,
+        "new",
+        with_path(&["s", "s", "s", "d", "Enter"], &scratch, &["Enter"]),
+        "",
+    )
+    .0
+    .unwrap();
+    assert_eq!(d.action, "continue", "d steps the field on the free-path row too");
+    let known = drive_with(&f.projects, &f.cwd, "new", with_path(&path_row, &f.beta, &["Enter"]), "")
         .0
         .unwrap();
-    assert_eq!(d.action, "continue", "d steps the field on the free-path row too");
+    assert_eq!(known.slug, "B", "a typed known project carries its slugs");
+}
+
+/// Esc in the navigator returns to the list with no notice and never launches.
+#[test]
+fn escape_in_the_navigator_never_launches() {
+    let f = fx();
+    let (out, t) = drive_with(
+        &f.projects,
+        &f.cwd,
+        "new",
+        with_path(&["s", "s", "s", "Enter"], &f.alpha, &["Escape", "Escape"]),
+        "",
+    );
+    assert!(out.is_none());
+    let frames = t.inner.frames.unwrap();
+    let last = frames.last().unwrap().join("\n");
+    assert!(
+        last.contains("known") && !last.contains("enter a path ") && !last.contains("not found"),
+        "{last}"
+    );
+    assert!(last.contains("> + enter a path"), "the cursor is back on the free-path row\n{last}");
+}
+
+/// D1 in the navigator: one click selects a row, the second click on it acts.
+#[test]
+fn navigator_rows_take_a_click_then_a_second_click() {
+    let f = fx();
+    let root = format!(r"{}\root\", f.tree.0.display());
+    let c = clock;
+    let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: false, ascii: true }, &c);
+    s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
+    s.nav.as_mut().unwrap().text.clone_from(&root);
+    s.before();
+    let map = s.draw((80, 24)).map;
+    let list = map.list.unwrap();
+    let beta_y = list.first_row_y + 3; // use, .., alpha, beta
+    let ev = with_path(&["s", "s", "s", "Enter"], &root, &[]);
+    let mut once = ev.clone();
+    once.extend([mouse(6, beta_y, true, false), key("Escape"), key("Escape")]);
+    let (out, t) = drive_with(&f.projects, &f.cwd, "new", once, "");
+    assert!(out.is_none());
+    assert!(
+        t.inner.frames.unwrap().iter().any(|fr| fr.join("\n").contains("> beta\\")),
+        "the click selected beta"
+    );
+    let mut twice = ev;
+    twice.extend([mouse(6, beta_y, true, false), mouse(6, beta_y, true, false), key("Enter")]);
+    let picked = drive_with(&f.projects, &f.cwd, "new", twice, "").0.unwrap();
+    assert_eq!(picked.path, f.beta, "the second click entered beta, Enter used it");
 }
 
 #[test]
@@ -631,14 +705,13 @@ fn hover_paints_never_selects_and_a_notice_outlives_the_mouse() {
     let c = map.footer.iter().find(|s| s.ch == Some('c')).unwrap();
     let events = vec![
         key("s"),
-        key("s"),
-        key("s"),
         key("Enter"),
         mouse(c.start, fy + i32::try_from(c.line).unwrap(), false, true),
         key("w"),
         key("Escape"),
     ];
-    let (_, t3) = drive_with(&f.projects, &f.cwd, "new", events, r"C:\bogus-notice-persists-9f3a");
+    let gone = f.tree.0.join("vanished").to_string_lossy().into_owned();
+    let (_, t3) = drive_with(&[proj("V", &gone, "vanished")], &f.cwd, "new", events, "");
     let frames: Vec<String> = t3.inner.frames.unwrap().iter().map(|l| l.join("\n")).collect();
     let n = frames.len();
     assert!(
@@ -708,6 +781,8 @@ fn hidden_rows_are_reached_through_the_filter() {
         .0
         .unwrap();
     assert_eq!((picked.path.as_str(), picked.slug.as_str()), (job.as_str(), "J"));
-    let stepped = drive_with(&ps, &f.cwd, "new", keys(&["s", "s", "s", "Enter"]), &probe).0.unwrap();
+    let stepped = drive_with(&ps, &f.cwd, "new", with_path(&["s", "s", "s", "Enter"], &probe, &["Enter"]), "")
+        .0
+        .unwrap();
     assert_eq!(stepped.path, probe, "the unfiltered list does not show the hidden rows");
 }
