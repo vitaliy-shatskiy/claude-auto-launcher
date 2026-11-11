@@ -205,12 +205,16 @@ impl Roster {
         }
     }
 
-    /// Every config row with remote on and `modelOrder` applied: the values and labels a row can
-    /// take, for the rows editor and the `hiddenValues` check.
+    /// Every config row with remote on and `modelOrder` applied: the values and labels a hidden
+    /// row can take, for the rows editor and the `hiddenValues` check. Remote only `on`/`off`:
+    /// `on+QR` and `stop server` are one-off actions, never a standing choice.
     pub fn catalog(model_order: Option<&[String]>) -> Self {
         let mut r = Self::new(&[], true, None);
         if let Some(order) = model_order {
             r.apply_model_order(order);
+        }
+        if let Some(remote) = r.rows.iter_mut().find(|d| d.name == RowName::Remote) {
+            remote.values = vec!["on".into(), "off".into()];
         }
         r
     }

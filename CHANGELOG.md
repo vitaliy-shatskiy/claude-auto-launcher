@@ -9,12 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - Config `hiddenValues`: the value a hidden row launches with (`{"effort": "high"}`), the same
   claude arguments as picking it on a shown row; unset rows keep their default. The rows editor
   (maintenance `l`) sets it with `a`/`d` on a hidden row, which reads `hidden -> <value>`, and
-  saves it with `rows`. A bad row or value warns and is skipped.
+  saves it with `rows`. `remote` takes only `on` or `off`. A bad row or value warns and is skipped.
 
 ### Fixed
 
 - Rows editor: with config `remote` off the remote entry no longer claims `shown`; it reads
   `off in config (remote: false)`, dimmed, takes no key, and keeps its place in `rows`.
+- A row hidden mid-run no longer takes a value back from another account tab's stash on a tab
+  switch; it launches with its `hiddenValues` entry or its default.
 
 ## [0.7.2] — 2026-11-11
 

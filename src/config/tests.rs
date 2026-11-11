@@ -311,6 +311,14 @@ fn hidden_values_parse_in_the_rows_casing_and_bad_entries_warn() {
     ] {
         assert!(cfg.warnings.iter().any(|x| x == w), "{w}: {:?}", cfg.warnings);
     }
+    for bad in ["on+QR", "stop server"] {
+        let cfg = parse_config(&format!(r#"{{"hiddenValues":{{"remote":"{bad}"}}}}"#), "x", &ctx());
+        assert!(cfg.hidden_values.is_empty(), "{bad}");
+        assert_eq!(
+            cfg.warnings,
+            [format!("hiddenValues: '{bad}' is not a remote value (on, off); ignored")]
+        );
+    }
     let not_object = parse_config(r#"{"hiddenValues":["effort"]}"#, "x", &ctx());
     assert!(not_object.hidden_values.is_empty());
     assert_eq!(

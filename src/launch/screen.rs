@@ -551,6 +551,32 @@ mod tests {
     }
 
     #[test]
+    fn a_row_hidden_mid_run_never_takes_a_value_from_another_tabs_stash() {
+        // work: effort -> low, advisor -> fable; tab to personal; maintenance hides both (effort
+        // pinned high); tab back to work: the stash must not bring low or fable back.
+        let keys =
+            "DownArrow,DownArrow,DownArrow,RightArrow,DownArrow,RightArrow,UpArrow,UpArrow,UpArrow,UpArrow,RightArrow,u,LeftArrow,Enter";
+        let mut r = four();
+        let mut store = FakeStore {
+            pending: Some(RowsConfig {
+                rows: Some(vec![RowName::Account, RowName::Model]),
+                hidden_values: BTreeMap::from([(RowName::Effort, "high".to_owned())]),
+                ..RowsConfig::default()
+            }),
+            ..FakeStore::default()
+        };
+        let st = r.new_state();
+        let out = edit(&mut r, st, &mut store, keys).0.unwrap();
+        assert_eq!(out.account, "work", "back on the first tab");
+        assert_eq!((out.effort.as_str(), out.advisor.as_str()), ("high", "default"));
+        assert!(!out.is_restored(RowName::Effort) && !out.is_restored(RowName::Advisor));
+        assert_eq!(
+            super::super::launch_args(&r, &out, None, false, None, "", "").join(" "),
+            "--effort high"
+        );
+    }
+
+    #[test]
     fn hidden_values_saved_in_maintenance_apply_on_return() {
         let mut r = four();
         let mut store = FakeStore {

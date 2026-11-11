@@ -322,10 +322,13 @@ pub fn switch_account(state: &mut LaunchState, to: &str, prefs: &Prefs, roster: 
     state.project.clear();
     state.project_slug.clear();
     if let Some(entry) = state.profiles.get(to).cloned() {
-        for (f, v) in &entry.values {
+        // A row hidden since the stash was taken keeps its pin or default from `fresh`.
+        let shown = |f: RowName| roster.row(f).is_some();
+        for (f, v) in entry.values.iter().filter(|(f, _)| shown(**f)) {
             state.set(*f, v);
         }
         state.restored = entry.restored;
+        state.restored.retain(|r| RowName::parse(r).is_none_or(shown));
         state.restored_age = entry.restored_age;
         if is_dir(&entry.project) {
             state.project = entry.project;

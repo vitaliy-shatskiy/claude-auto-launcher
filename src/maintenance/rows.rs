@@ -339,6 +339,15 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_remote_cycles_only_on_and_off() {
+        let cur = config(Some(&[RowName::Account]));
+        for (keys_, want) in [("s,d,Enter", Some("off")), ("s,d,d,Enter", None), ("s,a,Enter", Some("off"))] {
+            let (_, hidden) = edit_config(&cur, keys(keys_)).unwrap();
+            assert_eq!(hidden.get(&RowName::Remote).map(String::as_str), want, "{keys_}");
+        }
+    }
+
+    #[test]
     fn a_d_on_a_shown_row_changes_nothing() {
         let cur = config(Some(&[RowName::Account, RowName::Effort]));
         let (rows, hidden) = edit_config(&cur, keys("s,d,a,Enter")).unwrap();
