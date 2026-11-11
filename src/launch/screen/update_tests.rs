@@ -1,7 +1,9 @@
 //! The launch screen over a slow update check: the first frame never waits for it, its answer
 //! redraws the header and the model row in place, the selection stays.
 
-use std::collections::{BTreeMap, VecDeque};
+#![expect(clippy::many_single_char_names, reason = "short fixture names")]
+
+use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
 
 use super::*;
@@ -101,8 +103,8 @@ impl Term for UpdateTerm {
     }
 }
 
-fn haiku_label(label: &str) -> Option<BTreeMap<String, String>> {
-    Some(BTreeMap::from([("haiku".to_owned(), label.to_owned())]))
+fn haiku_label(label: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([("haiku".to_owned(), label.to_owned())])
 }
 
 fn has(frame: &[String], text: &str) -> bool {
@@ -112,7 +114,7 @@ fn has(frame: &[String], text: &str) -> bool {
 #[test]
 fn the_first_frame_never_waits_for_the_update_check() {
     // Given: a check that answers only when the test lets it.
-    let (go, mut w) = slow_check(v("2.1.1"), found(v("2.1.2"), haiku_label("Haiku 9.9")));
+    let (go, mut w) = slow_check(v("2.1.1"), found(v("2.1.2"), Some(haiku_label("Haiku 9.9"))));
     let (mut r, vw, p) = (four(), view(), Prefs::default());
     let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
     let st = r.new_state();
@@ -131,7 +133,7 @@ fn the_first_frame_never_waits_for_the_update_check() {
 
 #[test]
 fn the_answer_redraws_header_and_model_row_and_keeps_the_selection() {
-    let (go, mut w) = slow_check(v("2.1.1"), found(v("2.1.2"), haiku_label("Haiku 9.9")));
+    let (go, mut w) = slow_check(v("2.1.1"), found(v("2.1.2"), Some(haiku_label("Haiku 9.9"))));
     let (mut r, vw, p) = (four(), view(), Prefs::default());
     let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
     let st = r.new_state();
