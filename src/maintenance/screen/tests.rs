@@ -242,6 +242,8 @@ struct Log {
     rows: Vec<Vec<RowName>>,
     /// Config `rows` as the file holds it; every save lands here.
     config: Option<Vec<RowName>>,
+    /// Config `hiddenValues` as the file holds it.
+    hidden: std::collections::BTreeMap<RowName, String>,
 }
 
 struct FakeOps {
@@ -283,15 +285,40 @@ impl Ops for FakeOps {
             exit_code: self.exit_code,
         })
     }
-    fn load_rows(&mut self) -> Option<Vec<RowName>> {
-        self.log.borrow().config.clone()
+    fn load_rows(&mut self) -> RowsConfig {
+        let log = self.log.borrow();
+        RowsConfig {
+            rows: log.config.clone(),
+            hidden_values: log.hidden.clone(),
+            ..RowsConfig::default()
+        }
     }
-    fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String> {
+    fn save_rows(&mut self, rows: &[RowName], hidden: &BTreeMap<RowName, String>) -> Result<(), String> {
         let mut log = self.log.borrow_mut();
         log.rows.push(rows.to_vec());
         log.config = Some(rows.to_vec());
+        hidden.clone_into(&mut log.hidden);
         Ok(())
     }
+}
+
+#[test]
+fn l_saves_a_hidden_rows_value_and_names_it_in_the_status() {
+    let log = Rc::new(RefCell::new(Log {
+        config: Some(vec![RowName::Account, RowName::Effort]),
+        ..Log::default()
+    }));
+    let mut ops = FakeOps {
+        log: Rc::clone(&log),
+        exit_code: 0,
+    };
+    let mut s = MaintScreen::new(&mut ops, &[], plain());
+    // Rows: account, effort, then the hidden ones in default order (remote, model, ...).
+    let keys = crate::ui::parse_preview_keys("l,s,s,s,d,d,d,Enter,Escape").unwrap();
+    let mut t = PreviewTerm::new((100, 30), keys, true);
+    assert!(run(&mut s, &mut t).unwrap().is_none());
+    assert_eq!(log.borrow().hidden.get(&RowName::Model).map(String::as_str), Some("opus1m"));
+    assert!(s.status.contains("hidden model -> opus1m"), "{}", s.status);
 }
 
 #[test]

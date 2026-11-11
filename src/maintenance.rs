@@ -8,10 +8,11 @@ mod rows;
 mod screen;
 mod win;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::config::{Config, PathCtx};
+use crate::config::{Config, PathCtx, RowsConfig};
 use crate::frame::Style;
 use crate::launch::RowName;
 use crate::out::{self, Fg};
@@ -102,15 +103,15 @@ impl Ops for RealOps {
         captured(Path::new("pwsh"), &["-NoProfile", "-File", &p]).map(|(output, exit_code)| ScriptRun { output, exit_code })
     }
 
-    fn load_rows(&mut self) -> Option<Vec<RowName>> {
-        crate::config::read_config(&self.config_path, &PathCtx::from_env()).rows
+    fn load_rows(&mut self) -> RowsConfig {
+        crate::config::read_config(&self.config_path, &PathCtx::from_env()).rows_config()
     }
 
-    fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String> {
+    fn save_rows(&mut self, rows: &[RowName], hidden: &BTreeMap<RowName, String>) -> Result<(), String> {
         if self.preview {
             return Err(PREVIEW_NOTE.into());
         }
-        crate::config::save_rows(&self.config_path, rows).map_err(|e| e.to_string())
+        crate::config::save_rows(&self.config_path, rows, hidden).map_err(|e| e.to_string())
     }
 }
 

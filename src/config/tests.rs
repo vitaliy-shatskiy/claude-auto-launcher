@@ -289,6 +289,60 @@ fn save_keys_writes_its_keys_and_keeps_the_rest() {
 }
 
 #[test]
+fn hidden_values_parse_in_the_rows_casing_and_bad_entries_warn() {
+    let text = r#"{"modelOrder":["opus","sonnet"],"hiddenValues":{"Effort":"HIGH","permission":"acceptedits",
+        "model":"fable","account":"work","bogus":"x","mode":"turbo","remote":"off"}}"#;
+    let cfg = parse_config(text, "x", &ctx());
+    let want: BTreeMap<RowName, String> = [
+        (RowName::Effort, "high"),
+        (RowName::Permission, "acceptEdits"),
+        (RowName::Remote, "off"),
+    ]
+    .into_iter()
+    .map(|(r, v)| (r, v.to_owned()))
+    .collect();
+    assert_eq!(cfg.hidden_values, want);
+    assert_eq!(cfg.warnings.len(), 4, "{:?}", cfg.warnings);
+    for w in [
+        "hiddenValues: 'fable' is not a model value (default, opus1m, sonnet1m); ignored",
+        "hiddenValues: 'account' is not a row that can be hidden; ignored",
+        "hiddenValues: 'bogus' is not a row that can be hidden; ignored",
+        "hiddenValues: 'turbo' is not a mode value (normal, safe); ignored",
+    ] {
+        assert!(cfg.warnings.iter().any(|x| x == w), "{w}: {:?}", cfg.warnings);
+    }
+    let not_object = parse_config(r#"{"hiddenValues":["effort"]}"#, "x", &ctx());
+    assert!(not_object.hidden_values.is_empty());
+    assert_eq!(
+        not_object.warnings,
+        ["hiddenValues must be an object of row name -> value; ignored"]
+    );
+    assert!(parse_config("{}", "x", &ctx()).hidden_values.is_empty(), "unset = none");
+}
+
+#[test]
+fn save_rows_writes_hidden_values_and_drops_the_key_when_empty() {
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-rows-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("claude-auto.json");
+    let p = path.to_str().unwrap();
+    std::fs::write(&path, r#"{"remote": true, "hiddenValues": {"mode": "safe"}, "zeta": 1}"#).unwrap();
+    let pins: BTreeMap<RowName, String> = [(RowName::Model, "fable".to_owned())].into();
+    save_rows(p, &[RowName::Account, RowName::Effort], &pins).unwrap();
+    let back: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(back["hiddenValues"], serde_json::json!({"model": "fable"}));
+    assert_eq!(back["rows"], serde_json::json!(["account", "effort"]));
+    save_rows(p, &[RowName::Account], &BTreeMap::new()).unwrap();
+    let back: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        back.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["remote", "zeta", "rows"],
+        "empty = no key, the rest in order"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn save_keys_refuses_a_file_that_is_not_utf8() {
     let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-cp1251-{}", crate::log::new_run_id()));
     std::fs::create_dir_all(&dir).unwrap();

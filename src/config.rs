@@ -3,18 +3,19 @@
 
 mod roster;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::launch::{CONFIG_ROWS, MODEL_FAMILY_KEYS, RowName};
+use crate::launch::{CONFIG_ROWS, MODEL_FAMILY_KEYS, Roster, RowName};
 use roster::default_account;
 pub use roster::{Account, parse_roster};
 
 /// Distinct on purpose: two accounts sharing a colour is the confusion a tint exists to prevent.
 pub const ALLOWED_TINTS: [&str; 6] = ["Green", "Magenta", "Cyan", "Blue", "Yellow", "Red"];
 const ALLOWED_RIDER_MODES: [&str; 3] = ["auto", "on", "off"];
-const KNOWN_KEYS: [&str; 15] = [
+const KNOWN_KEYS: [&str; 16] = [
     "accounts",
     "sharing",
     "remote",
@@ -25,6 +26,7 @@ const KNOWN_KEYS: [&str; 15] = [
     "launchHooks",
     "maintenanceActions",
     "rows",
+    "hiddenValues",
     "modelOrder",
     "hiddenProjects",
     "hideHeadlessProjects",
@@ -163,6 +165,8 @@ pub enum ProjectScreen {
 pub struct Config {
     /// The launch rows in drawing order, account always among them; `None` = every row.
     pub rows: Option<Vec<RowName>>,
+    /// `hiddenValues`: a hidden row's launch value, in the row's own casing; unlisted = default.
+    pub hidden_values: BTreeMap<RowName, String>,
     /// Model families in drawing order (lower case); `None` = the default order.
     pub model_order: Option<Vec<String>>,
     /// Projects hidden by hand: full paths, kept when the directory is gone.
@@ -190,6 +194,7 @@ impl Config {
         let home = ctx.home.to_string_lossy();
         Self {
             rows: None,
+            hidden_values: BTreeMap::new(),
             model_order: None,
             hidden_projects: Vec::new(),
             hide_headless_projects: true,
@@ -213,6 +218,25 @@ impl Config {
     pub fn canonical(&self) -> Option<&Account> {
         self.accounts.iter().find(|a| a.canonical)
     }
+
+    pub fn rows_config(&self) -> RowsConfig {
+        RowsConfig {
+            rows: self.rows.clone(),
+            hidden_values: self.hidden_values.clone(),
+            remote: self.remote,
+            model_order: self.model_order.clone(),
+        }
+    }
+}
+
+/// What the rows editor edits and the launch screen re-reads: `rows`, `hiddenValues`, and the
+/// keys that shape which rows and values exist.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RowsConfig {
+    pub rows: Option<Vec<RowName>>,
+    pub hidden_values: BTreeMap<RowName, String>,
+    pub remote: bool,
+    pub model_order: Option<Vec<String>>,
 }
 
 /// `Get-LauncherConfigPath`.
@@ -329,6 +353,37 @@ fn row_list(raw: &Value, warnings: &mut Vec<String>) -> Option<Vec<RowName>> {
         rows.insert(0, RowName::Account);
     }
     Some(rows)
+}
+
+/// `hiddenValues`: row name -> one of that row's values (account excluded); a bad entry warns and
+/// is skipped. Checked against the model row as `modelOrder` leaves it.
+fn hidden_values(raw: &Value, model_order: Option<&[String]>, warnings: &mut Vec<String>) -> BTreeMap<RowName, String> {
+    let mut out = BTreeMap::new();
+    let Value::Object(map) = raw else {
+        warnings.push("hiddenValues must be an object of row name -> value; ignored".into());
+        return out;
+    };
+    let catalog = Roster::catalog(model_order);
+    for (key, v) in map {
+        let value = ps_str(v);
+        let def = RowName::parse(key)
+            .filter(|r| CONFIG_ROWS.contains(r) && *r != RowName::Account)
+            .and_then(|r| catalog.def(r));
+        let Some(def) = def else {
+            warnings.push(format!("hiddenValues: '{key}' is not a row that can be hidden; ignored"));
+            continue;
+        };
+        match def.canonical(&value) {
+            Some(c) => {
+                out.insert(def.name, c.to_owned());
+            }
+            None => warnings.push(format!(
+                "hiddenValues: '{value}' is not a {key} value ({}); ignored",
+                def.values.join(", ")
+            )),
+        }
+    }
+    out
 }
 
 /// `modelOrder`: family names, stored lower case.
@@ -478,6 +533,9 @@ fn parse_screen_keys(obj: &serde_json::Map<String, Value>, ctx: &PathCtx, cfg: &
     if let Some(v) = present("modelOrder") {
         cfg.model_order = family_list(v, &mut cfg.warnings);
     }
+    if let Some(v) = present("hiddenValues") {
+        cfg.hidden_values = hidden_values(v, cfg.model_order.as_deref(), &mut cfg.warnings);
+    }
     if let Some(v) = present("hiddenProjects") {
         cfg.hidden_projects = path_list(v, "hiddenProjects", ctx, &mut cfg.warnings);
     }
@@ -549,10 +607,22 @@ pub fn save_keys(path: &str, keys: &[(&str, Value)]) -> std::io::Result<()> {
     })
 }
 
-/// Writes config `rows` (lower-case names), every other key untouched.
-pub fn save_rows(path: &str, rows: &[RowName]) -> std::io::Result<()> {
+/// Writes config `rows` and `hiddenValues` (lower-case row names; the key dropped when empty),
+/// every other key untouched.
+pub fn save_rows(path: &str, rows: &[RowName], hidden: &BTreeMap<RowName, String>) -> std::io::Result<()> {
     let names: Vec<String> = rows.iter().map(|r| r.as_str().to_lowercase()).collect();
-    save_keys(path, &[("rows", serde_json::json!(names))])
+    let pins: serde_json::Map<String, Value> = hidden
+        .iter()
+        .map(|(r, v)| (r.as_str().to_lowercase(), Value::String(v.clone())))
+        .collect();
+    update_config(path, |obj| {
+        obj.insert("rows".into(), serde_json::json!(names));
+        if pins.is_empty() {
+            obj.shift_remove("hiddenValues");
+        } else {
+            obj.insert("hiddenValues".into(), Value::Object(pins));
+        }
+    })
 }
 
 /// Rewrites the config through `edit`. A file that is not UTF-8 (an ANSI save would lose its

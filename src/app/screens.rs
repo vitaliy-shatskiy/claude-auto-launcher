@@ -8,7 +8,6 @@ use crate::input::console::ConsoleInput;
 use crate::input::{Event, KeyPress, is_hotkey, vk};
 use crate::launch::LaunchState;
 use crate::launch::PROJECT_ACTION;
-use crate::launch::RowName;
 use crate::launch::launch_mode;
 use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore};
 use crate::out;
@@ -247,14 +246,14 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     Ok(outcome)
 }
 
-/// Config `rows` on disk, re-read each time.
+/// Config `rows` and `hiddenValues` on disk, re-read each time.
 struct ConfigRows<'a> {
     run: &'a Run,
 }
 
 impl RowsStore for ConfigRows<'_> {
-    fn load(&mut self) -> Option<Vec<RowName>> {
-        crate::config::read_config(&self.run.cfg.path, &self.run.ctx).rows
+    fn load(&mut self) -> crate::config::RowsConfig {
+        crate::config::read_config(&self.run.cfg.path, &self.run.ctx).rows_config()
     }
 }
 

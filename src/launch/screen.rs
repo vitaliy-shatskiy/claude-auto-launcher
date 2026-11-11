@@ -8,6 +8,7 @@ use super::frame::{LaunchFrameInput, launch_frame};
 use super::{
     CONFIG_ROWS, LaunchState, OptionText, Roster, RowName, availability_snap, is_hidden_row_value, step_launch_value, visible_row_values,
 };
+use crate::config::RowsConfig;
 use crate::frame::{Frame, Style};
 use crate::input::{KeyPress, vk};
 use crate::prefs::{self, Prefs};
@@ -18,10 +19,11 @@ use crate::ui::{Hit, Term};
 /// The caller's hook: `true` consumed the key (the loop redraws).
 pub type OnKey<'a> = dyn FnMut(&KeyPress, &mut dyn Term) -> bool + 'a;
 
-/// Config `rows` as the launch screen reads it; the seam that keeps tests off the file.
+/// Config `rows` and `hiddenValues` as the launch screen reads them; the seam that keeps tests off
+/// the file.
 pub trait RowsStore {
-    /// `rows` as the file holds it now; `None` = every row.
-    fn load(&mut self) -> Option<Vec<RowName>>;
+    /// The keys as the file holds them now; `rows` `None` = every row.
+    fn load(&mut self) -> RowsConfig;
 }
 
 /// What the frame is drawn from besides the state.
@@ -46,8 +48,8 @@ pub struct LaunchScreen<'a> {
     cursor: Cursor,
     on_key: &'a mut OnKey<'a>,
     store: Option<&'a mut dyn RowsStore>,
-    /// `rows` as last read: a change on disk (maintenance `l`) is applied on return.
-    disk: Option<Vec<RowName>>,
+    /// `rows` and `hiddenValues` as last read: a change on disk (maintenance `l`) is applied on return.
+    disk: RowsConfig,
 }
 
 impl std::fmt::Debug for LaunchScreen<'_> {
@@ -80,7 +82,7 @@ impl<'a> LaunchScreen<'a> {
             cursor,
             on_key,
             store: None,
-            disk: None,
+            disk: RowsConfig::default(),
         }
     }
 
@@ -117,11 +119,12 @@ impl<'a> LaunchScreen<'a> {
         self.cursor.index = i32::try_from(self.state.row).unwrap_or(0);
     }
 
-    /// Shows `rows` at once: a row that left the screen launches with its default, as a row
-    /// hidden at start does; the cursor stays on its row, or the next shown one.
+    /// Shows `rows` at once: a row that left the screen launches with its default or its
+    /// `hiddenValues` pin, as a row hidden at start does; the cursor stays on its row, or the next
+    /// shown one.
     fn apply(&mut self, rows: &[RowName], keep: Option<RowName>) {
         self.roster.apply_rows(rows);
-        let fresh = LaunchState::fresh(&self.state.account);
+        let fresh = self.roster.new_state();
         for gone in CONFIG_ROWS
             .iter()
             .filter(|r| self.roster.row(**r).is_none() && **r != RowName::Account)
@@ -139,8 +142,9 @@ impl<'a> LaunchScreen<'a> {
     fn reload_rows(&mut self) {
         let Some(store) = self.store.as_deref_mut() else { return };
         let now = store.load();
-        if now != self.disk {
-            let rows = now.clone().unwrap_or_else(|| CONFIG_ROWS.to_vec());
+        if now.rows != self.disk.rows || now.hidden_values != self.disk.hidden_values {
+            let rows = now.rows.clone().unwrap_or_else(|| CONFIG_ROWS.to_vec());
+            self.roster.set_hidden_values(&now.hidden_values);
             self.disk = now;
             let keep = self.roster.rows.get(self.state.row).map(|r| r.name);
             self.apply(&rows, keep);
@@ -473,18 +477,18 @@ mod tests {
     /// Config `rows` in memory. `pending` lands on the second load: what maintenance `l` saved.
     #[derive(Default)]
     struct FakeStore {
-        disk: Option<Vec<RowName>>,
-        pending: Option<Vec<RowName>>,
+        disk: RowsConfig,
+        pending: Option<RowsConfig>,
         loads: usize,
     }
 
     impl RowsStore for FakeStore {
-        fn load(&mut self) -> Option<Vec<RowName>> {
+        fn load(&mut self) -> RowsConfig {
             self.loads += 1;
             if self.loads > 1
                 && let Some(p) = self.pending.take()
             {
-                self.disk = Some(p);
+                self.disk = p;
             }
             self.disk.clone()
         }
@@ -534,12 +538,32 @@ mod tests {
     fn rows_saved_in_maintenance_apply_on_return() {
         let mut r = four();
         let mut store = FakeStore {
-            pending: Some(vec![RowName::Account, RowName::Mode]),
+            pending: Some(RowsConfig {
+                rows: Some(vec![RowName::Account, RowName::Mode]),
+                ..RowsConfig::default()
+            }),
             ..FakeStore::default()
         };
         let st = r.new_state();
         let (out, _) = edit(&mut r, st, &mut store, "u,Enter");
         assert!(out.is_some());
         assert_eq!(names(&r), [RowName::Account, RowName::Mode]);
+    }
+
+    #[test]
+    fn hidden_values_saved_in_maintenance_apply_on_return() {
+        let mut r = four();
+        let mut store = FakeStore {
+            pending: Some(RowsConfig {
+                rows: Some(vec![RowName::Account, RowName::Mode]),
+                hidden_values: BTreeMap::from([(RowName::Effort, "high".to_owned())]),
+                ..RowsConfig::default()
+            }),
+            ..FakeStore::default()
+        };
+        let st = r.new_state();
+        let out = edit(&mut r, st, &mut store, "u,Enter").0.unwrap();
+        assert_eq!(out.effort, "high", "the hidden effort launches with its pin");
+        assert_eq!(out.model, "default", "an unpinned hidden row keeps its default");
     }
 }

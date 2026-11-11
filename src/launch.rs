@@ -170,6 +170,8 @@ pub struct Roster {
     pub rows: Vec<RowDef>,
     /// The rows `rows` set aside, kept so the launch screen can show them again in this run.
     spare: Vec<RowDef>,
+    /// `hiddenValues`: a set-aside row's launch value; a shown row ignores its entry.
+    pins: BTreeMap<RowName, String>,
     tints: BTreeMap<String, String>,
     default_account: String,
 }
@@ -197,13 +199,35 @@ impl Roster {
         Self {
             rows,
             spare: Vec::new(),
+            pins: BTreeMap::new(),
             tints,
             default_account,
         }
     }
 
+    /// Every config row with remote on and `modelOrder` applied: the values and labels a row can
+    /// take, for the rows editor and the `hiddenValues` check.
+    pub fn catalog(model_order: Option<&[String]>) -> Self {
+        let mut r = Self::new(&[], true, None);
+        if let Some(order) = model_order {
+            r.apply_model_order(order);
+        }
+        r
+    }
+
+    /// A shown row; `None` for one the screen does not draw.
     pub fn row(&self, name: RowName) -> Option<&RowDef> {
         self.rows.iter().find(|r| r.name == name)
+    }
+
+    /// A row's definition, shown or set aside.
+    pub fn def(&self, name: RowName) -> Option<&RowDef> {
+        self.rows.iter().chain(&self.spare).find(|r| r.name == name)
+    }
+
+    /// `hiddenValues`: what a row the screen does not show launches with instead of its default.
+    pub fn set_hidden_values(&mut self, values: &BTreeMap<RowName, String>) {
+        values.clone_into(&mut self.pins);
     }
 
     pub fn default_account(&self) -> &str {
@@ -281,9 +305,19 @@ impl Roster {
         }
     }
 
-    /// `New-LaunchState`: pressing Enter at once adds no arguments at all.
+    /// `New-LaunchState`: pressing Enter at once adds no arguments at all, unless `hiddenValues`
+    /// pins a value on a row the screen does not show.
     pub fn new_state(&self) -> LaunchState {
-        LaunchState::fresh(&self.default_account)
+        let mut s = LaunchState::fresh(&self.default_account);
+        for (name, v) in &self.pins {
+            let def = (*name != RowName::Account && self.row(*name).is_none())
+                .then(|| self.def(*name))
+                .flatten();
+            if let Some(value) = def.and_then(|d| d.canonical(v)) {
+                s.set(*name, value);
+            }
+        }
+        s
     }
 
     /// `Get-UnavailableDefaultModel`: (arg, label) of the pin.

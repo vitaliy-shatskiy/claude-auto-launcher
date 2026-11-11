@@ -157,6 +157,81 @@ fn a_hidden_model_row_still_pins_the_unavailable_default() {
     );
 }
 
+fn pinned(p: &[(RowName, &str)]) -> BTreeMap<RowName, String> {
+    p.iter().map(|(r, v)| (*r, (*v).to_owned())).collect()
+}
+
+#[test]
+fn a_hidden_row_with_a_pinned_value_launches_as_if_picked_on_a_shown_row() {
+    let values = [
+        (RowName::Model, "fable"),
+        (RowName::Effort, "high"),
+        (RowName::Advisor, "opus"),
+        (RowName::Permission, "bypass"),
+        (RowName::Mode, "safe"),
+    ];
+    let shown = four();
+    let picked = args(&shown, |s| values.iter().for_each(|(r, v)| s.set(*r, v)));
+    let mut hidden = four();
+    hidden.apply_rows(&[RowName::Account]);
+    hidden.set_hidden_values(&pinned(&values));
+    assert_eq!(args(&hidden, |_| {}), picked);
+    assert_eq!(
+        picked,
+        "--model fable --effort high --advisor opus --permission-mode bypassPermissions --safe-mode"
+    );
+}
+
+#[test]
+fn a_pin_on_a_shown_row_or_no_pins_change_nothing() {
+    let mut r = four();
+    r.set_hidden_values(&pinned(&[(RowName::Effort, "high")]));
+    assert_eq!(args(&r, |_| {}), "", "effort is shown: the screen picks it");
+    let mut bare = four();
+    bare.apply_rows(&[RowName::Account]);
+    assert_eq!(
+        bare.new_state(),
+        four().new_state(),
+        "no hiddenValues: every hidden row stays default"
+    );
+    assert_eq!(args(&bare, |_| {}), "");
+}
+
+#[test]
+fn a_pin_wins_over_a_remembered_value_and_the_remote_pin_needs_the_remote_row() {
+    let mut r = four();
+    r.apply_rows(&[RowName::Account, RowName::Model]);
+    r.set_hidden_values(&pinned(&[(RowName::Effort, "low"), (RowName::Remote, "off")]));
+    let mut s = r.new_state();
+    let prefs = crate::prefs::Prefs {
+        account: Some("work".into()),
+        profiles: [("work".to_owned(), serde_json::json!({"Effort": "max", "Model": "haiku"}))]
+            .into_iter()
+            .collect(),
+        ..crate::prefs::Prefs::default()
+    };
+    crate::prefs::merge_prefs(&mut s, &prefs, &r, 0);
+    assert_eq!((s.effort.as_str(), s.model.as_str(), s.remote.as_str()), ("low", "haiku", "off"));
+    let mut no_remote = Roster::new(&[], false, None);
+    no_remote.set_hidden_values(&pinned(&[(RowName::Remote, "off")]));
+    assert_eq!(no_remote.new_state().remote, "on", "remote feature off: no row, no pin");
+}
+
+#[test]
+fn a_pinned_model_of_a_family_the_account_lacks_snaps_like_a_remembered_one() {
+    let mut r = four();
+    r.apply_rows(&[RowName::Account]);
+    r.set_hidden_values(&pinned(&[(RowName::Model, "fable")]));
+    let mut s = r.new_state();
+    availability_snap(&mut s, Some(&[]));
+    let none: Vec<String> = Vec::new();
+    assert_eq!(
+        launch_args(&r, &s, None, false, Some(&none), "Fable 5.1[1M]", "").join(" "),
+        "--model opus[1m]",
+        "fable snaps to default, which pins opus on an account without fable (CS-231)"
+    );
+}
+
 #[test]
 fn step_wraps_and_skips_hidden_fable() {
     let r = four();

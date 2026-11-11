@@ -95,7 +95,8 @@ pub fn launch_args(
     default_advisor: &str,
 ) -> Vec<String> {
     let mut a = Vec::new();
-    let model_row = roster.row(RowName::Model);
+    // A hidden model row pinned by `hiddenValues` passes its value as a shown one would.
+    let model_row = roster.def(RowName::Model);
     let mut model_arg = model_row
         .and_then(|r| r.args.iter().find(|(k, _)| k.eq_ignore_ascii_case(&state.model)))
         .map(|(_, v)| v.clone());

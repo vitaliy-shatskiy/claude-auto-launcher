@@ -100,6 +100,7 @@ pub fn run(args: Vec<String>) -> i32 {
     if let Some(rows) = &cfg.rows {
         roster.apply_rows(rows);
     }
+    roster.set_hidden_values(&cfg.hidden_values);
     if cfg.project_screen == config::ProjectScreen::OnDemand {
         roster.add_action_row();
     }

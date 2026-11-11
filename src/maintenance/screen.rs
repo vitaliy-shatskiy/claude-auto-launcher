@@ -3,6 +3,7 @@
 //! status line, slow ones draw a "running ..." frame first, and confirm-twice actions gate on the
 //! input RECORD time so a paste is never two presses.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -11,7 +12,7 @@ use unicode_general_category::{GeneralCategory, get_general_category};
 
 use super::install::{InstallInfo, Pruned};
 use super::rows::RowsEditor;
-use crate::config::MaintenanceAction;
+use crate::config::{MaintenanceAction, RowsConfig};
 use crate::frame::{
     FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
     too_small_frame,
@@ -204,10 +205,10 @@ pub(crate) trait Ops {
     fn prune(&mut self) -> Pruned;
     /// The script runner behind `Invoke-MaintenanceScript`.
     fn run(&mut self, script: &Path) -> Result<ScriptRun, String>;
-    /// Config `rows` as the file holds it now; `None` = every row.
-    fn load_rows(&mut self) -> Option<Vec<RowName>>;
-    /// Writes config `rows`, every other key untouched.
-    fn save_rows(&mut self, rows: &[RowName]) -> Result<(), String>;
+    /// Config `rows`, `hiddenValues` and the keys shaping them, as the file holds them now.
+    fn load_rows(&mut self) -> RowsConfig;
+    /// Writes config `rows` and `hiddenValues`, every other key untouched.
+    fn save_rows(&mut self, rows: &[RowName], hidden: &BTreeMap<RowName, String>) -> Result<(), String>;
 }
 
 /// Opens the launch-rows editor. Lower case and matched exactly: a Shift + upper-case letter is
@@ -299,12 +300,13 @@ impl<'a> MaintScreen<'a> {
     /// is a state, so this screen's own next wait returns it to the caller.
     fn edit_rows(&mut self, term: &mut dyn Term) {
         let current = self.ops.load_rows();
-        let mut editor = RowsEditor::new(current.as_deref(), self.style);
+        let mut editor = RowsEditor::new(&current, self.style);
         self.status = match crate::ui::screen_loop::run(&mut editor, term) {
-            Ok(Some(rows)) => match self.ops.save_rows(&rows) {
+            Ok(Some((rows, hidden))) => match self.ops.save_rows(&rows, &hidden) {
                 Ok(()) => {
-                    let names: Vec<String> = rows.iter().map(|r| r.as_str().to_lowercase()).collect();
-                    format!("launch rows saved: {} - shown on return to the launch screen", names.join(", "))
+                    let mut parts = vec![rows.iter().map(|r| r.as_str().to_lowercase()).collect::<Vec<_>>().join(", ")];
+                    parts.extend(hidden.iter().map(|(r, v)| format!("hidden {} -> {v}", r.as_str().to_lowercase())));
+                    format!("launch rows saved: {} - shown on return to the launch screen", parts.join("; "))
                 }
                 Err(e) => format!("launch rows not saved: {e}"),
             },

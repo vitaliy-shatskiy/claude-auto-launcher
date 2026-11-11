@@ -1,22 +1,38 @@
 //! The launch-rows editor behind the maintenance screen's `l`: which launch rows show and in what
-//! order, saved as config `rows`. w/s cursor, ctrl+w/s (alt+up/down) move, ctrl+x or space
-//! show/hide, enter save, esc cancel. A hidden row stays in place while editing, dimmed; `rows`
-//! holds only the shown rows, so on reopen the hidden ones follow them in the default order.
+//! order, saved as config `rows`, and what a hidden row launches with, saved as `hiddenValues`.
+//! w/s cursor, ctrl+w/s (alt+up/down) move, ctrl+x or space show/hide, a/d (left/right) a hidden
+//! row's value, enter save, esc cancel. A hidden row stays in place while editing, dimmed; `rows`
+//! holds only the shown rows, so on reopen the hidden ones follow them in the default order. With
+//! config `remote` off the remote entry keeps its place and shown flag but takes no key.
 
+use std::collections::BTreeMap;
+
+use crate::config::RowsConfig;
 use crate::frame::{
     FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
     too_small_frame,
 };
 use crate::input::{KeyPress, vk};
-use crate::launch::{CONFIG_ROWS, RowName};
+use crate::launch::{CONFIG_ROWS, LaunchState, Roster, RowName, step_option};
 use crate::layout::new_box;
 use crate::theme::{DIM_CLOSE, DIM_OPEN, glyphs};
 use crate::ui::Term;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 
+const REMOTE_OFF: &str = "remote is off: set \"remote\": true in claude-auto.json";
+
+/// What enter saves: `rows`, then `hiddenValues`.
+pub(crate) type RowsChoice = (Vec<RowName>, BTreeMap<RowName, String>);
+
 /// Every config row with its shown flag, in the order being edited.
 pub(crate) struct RowsEditor {
     pub(crate) entries: Vec<(RowName, bool)>,
+    /// A hidden row's launch value; absent = the row's default.
+    values: BTreeMap<RowName, String>,
+    /// The rows' values and labels.
+    catalog: Roster,
+    /// Config `remote`: off leaves the remote entry inert.
+    remote: bool,
     cursor: Cursor,
     style: Style,
     notice: &'static str,
@@ -30,12 +46,15 @@ impl std::fmt::Debug for RowsEditor {
 
 impl RowsEditor {
     /// The shown rows first in their order, the hidden ones after them in the default order.
-    pub(crate) fn new(current: Option<&[RowName]>, style: Style) -> Self {
-        let shown = current.unwrap_or(&CONFIG_ROWS);
+    pub(crate) fn new(current: &RowsConfig, style: Style) -> Self {
+        let shown = current.rows.as_deref().unwrap_or(&CONFIG_ROWS);
         let mut entries: Vec<(RowName, bool)> = shown.iter().map(|r| (*r, true)).collect();
         entries.extend(CONFIG_ROWS.iter().filter(|r| !shown.contains(r)).map(|r| (*r, false)));
         Self {
             entries,
+            values: current.hidden_values.clone(),
+            catalog: Roster::catalog(current.model_order.as_deref()),
+            remote: current.remote,
             cursor: Cursor::at(0),
             style,
             notice: "",
@@ -45,6 +64,33 @@ impl RowsEditor {
     /// The `rows` value to save: the shown rows in order.
     pub(crate) fn rows(&self) -> Vec<RowName> {
         self.entries.iter().filter(|(_, on)| *on).map(|(r, _)| *r).collect()
+    }
+
+    /// The `hiddenValues` to save: hidden rows whose value is not their default.
+    pub(crate) fn hidden_values(&self) -> BTreeMap<RowName, String> {
+        self.entries
+            .iter()
+            .filter(|(r, on)| !on && self.value(*r) != default_of(*r))
+            .map(|(r, _)| (*r, self.value(*r)))
+            .collect()
+    }
+
+    fn value(&self, row: RowName) -> String {
+        self.values.get(&row).cloned().unwrap_or_else(|| default_of(row))
+    }
+
+    /// `default` reads as what it means: claude picks.
+    fn value_label(&self, row: RowName) -> String {
+        let v = self.value(row);
+        if v == "default" {
+            return "claude default".into();
+        }
+        self.catalog.def(row).and_then(|d| d.labels.get(&v)).cloned().unwrap_or(v)
+    }
+
+    /// The remote entry while config `remote` is off: drawn, kept in place, never changed.
+    fn inert(&self, row: RowName) -> bool {
+        row == RowName::Remote && !self.remote
     }
 
     fn index(&self) -> usize {
@@ -62,18 +108,42 @@ impl RowsEditor {
 
     fn toggle(&mut self) {
         let i = self.index();
+        let remote = self.remote;
         if let Some((row, on)) = self.entries.get_mut(i) {
             if *row == RowName::Account {
                 self.notice = "account is always shown";
+            } else if *row == RowName::Remote && !remote {
+                self.notice = REMOTE_OFF;
             } else {
                 *on = !*on;
             }
         }
     }
+
+    /// a/d on a hidden row: its launch value, over the row's own values.
+    fn step(&mut self, delta: i64) {
+        let Some(&(row, on)) = self.entries.get(self.index()) else { return };
+        if self.inert(row) {
+            self.notice = REMOTE_OFF;
+            return;
+        }
+        if on {
+            self.notice = "a/d sets a hidden row's value; pick a shown row's on the launch screen";
+            return;
+        }
+        let Some(def) = self.catalog.def(row) else { return };
+        let next = step_option(&def.values, &self.value(row), delta);
+        self.values.insert(row, next);
+    }
+}
+
+/// The value a row launches with when nothing picks one (`normal` for mode, `on` for remote).
+fn default_of(row: RowName) -> String {
+    LaunchState::fresh("").get(row).to_owned()
 }
 
 impl Screen for RowsEditor {
-    type Output = Vec<RowName>;
+    type Output = RowsChoice;
 
     fn name(&self) -> &'static str {
         "rows"
@@ -100,10 +170,16 @@ impl Screen for RowsEditor {
             .map(|(i, (row, on))| {
                 let mark = if i == self.index() { g.cursor } else { ' ' };
                 let name = row.as_str().to_lowercase();
-                if *on {
-                    format!(" {mark} {} {name:<12}shown", g.on)
+                let glyph = if *on { g.on } else { g.off };
+                if self.inert(*row) {
+                    format!(" {mark} {DIM_OPEN}{glyph} {name:<12}off in config (remote: false){DIM_CLOSE}")
+                } else if *on {
+                    format!(" {mark} {glyph} {name:<12}shown")
                 } else {
-                    format!(" {mark} {DIM_OPEN}{} {name:<12}hidden{DIM_CLOSE}", g.off)
+                    format!(
+                        " {mark} {DIM_OPEN}{glyph} {name:<12}hidden -> {}{DIM_CLOSE}",
+                        self.value_label(*row)
+                    )
                 }
             })
             .collect();
@@ -121,6 +197,7 @@ impl Screen for RowsEditor {
                 Hint::plain("w/s", "row"),
                 Hint::plain("^w/^s", "move"),
                 Hint::plain("^x", "hide"),
+                Hint::plain("a/d", "value"),
                 Hint::key("enter", "save", "Enter"),
                 Hint::key("esc", "cancel", "Escape"),
             ],
@@ -143,8 +220,22 @@ impl Screen for RowsEditor {
         Some(i32::try_from(self.entries.len()).unwrap_or(0))
     }
 
-    fn enter(&mut self) -> Option<Flow<Vec<RowName>>> {
-        Some(Flow::Done(Some(self.rows())))
+    fn enter(&mut self) -> Option<Flow<RowsChoice>> {
+        Some(Flow::Done(Some((self.rows(), self.hidden_values()))))
+    }
+
+    fn has_left_right(&self) -> bool {
+        true
+    }
+
+    fn left(&mut self) -> Flow<RowsChoice> {
+        self.step(-1);
+        Flow::Continue
+    }
+
+    fn right(&mut self) -> Flow<RowsChoice> {
+        self.step(1);
+        Flow::Continue
     }
 
     /// ctrl+w/s move the row, matched on the virtual key (any layout); alt+up/down too, as ctrl+s
@@ -169,10 +260,104 @@ mod tests {
     use super::*;
     use crate::ui::{PreviewTerm, parse_preview_keys};
 
-    fn edit(current: Option<&[RowName]>, keys: Vec<KeyPress>) -> Option<Vec<RowName>> {
+    fn config(rows: Option<&[RowName]>) -> RowsConfig {
+        RowsConfig {
+            rows: rows.map(<[RowName]>::to_vec),
+            remote: true,
+            ..RowsConfig::default()
+        }
+    }
+
+    fn edit_config(current: &RowsConfig, keys: Vec<KeyPress>) -> Option<RowsChoice> {
         let mut e = RowsEditor::new(current, Style { color: false, ascii: true });
         let mut t = PreviewTerm::new((100, 30), keys.into(), true);
         crate::ui::screen_loop::run(&mut e, &mut t).unwrap()
+    }
+
+    fn edit(current: Option<&[RowName]>, keys: Vec<KeyPress>) -> Option<Vec<RowName>> {
+        edit_config(&config(current), keys).map(|(rows, _)| rows)
+    }
+
+    fn pins(p: &[(RowName, &str)]) -> BTreeMap<RowName, String> {
+        p.iter().map(|(r, v)| (*r, (*v).to_owned())).collect()
+    }
+
+    #[test]
+    fn remote_off_is_dimmed_inert_and_keeps_its_place_on_save() {
+        let off = RowsConfig {
+            remote: false,
+            ..config(None)
+        };
+        let mut e = RowsEditor::new(&off, Style { color: true, ascii: false });
+        let f = e.draw((100, 30));
+        let line = f.lines.iter().find(|l| l.contains("remote")).unwrap();
+        assert!(line.contains("off in config (remote: false)"), "{line}");
+        assert!(line.contains(crate::theme::DIM), "{line:?}");
+        let (rows, hidden) = edit_config(&off, keys("s,Ctrl+X,Spacebar,d,a,RightArrow,Enter")).unwrap();
+        assert_eq!(rows, CONFIG_ROWS, "remote still shown, still second");
+        assert!(hidden.is_empty());
+        e.cursor.index = 1;
+        e.toggle();
+        assert_eq!(e.notice, REMOTE_OFF);
+        let moved = edit_config(&off, keys("s,Ctrl+S,Enter")).unwrap().0;
+        assert_eq!(moved.get(2), Some(&RowName::Remote), "moves keep working: the place is the user's");
+    }
+
+    #[test]
+    fn remote_off_and_hidden_keeps_its_saved_value() {
+        let off = RowsConfig {
+            rows: Some(vec![RowName::Account, RowName::Model]),
+            hidden_values: pins(&[(RowName::Remote, "off")]),
+            remote: false,
+            ..RowsConfig::default()
+        };
+        let (rows, hidden) = edit_config(&off, keys("s,s,d,Enter")).unwrap();
+        assert_eq!(rows, [RowName::Account, RowName::Model], "a hidden remote stays out of rows");
+        assert_eq!(hidden, pins(&[(RowName::Remote, "off")]), "d did nothing to it");
+    }
+
+    #[test]
+    fn a_d_cycle_a_hidden_rows_value_and_save_writes_it() {
+        let cur = config(Some(&[RowName::Account, RowName::Mode]));
+        // Hidden after account, mode: remote, model, effort, ...
+        let (_, hidden) = edit_config(&cur, keys("s,s,s,d,d,d,d,s,a,Enter")).unwrap();
+        assert_eq!(hidden, pins(&[(RowName::Model, "fable"), (RowName::Effort, "ultracode")]));
+        let (_, hidden) = edit_config(&cur, keys("s,s,s,RightArrow,LeftArrow,LeftArrow,Enter")).unwrap();
+        assert_eq!(hidden, pins(&[(RowName::Model, "fable")]), "arrows too, and a wraps");
+    }
+
+    #[test]
+    fn the_default_value_writes_nothing_and_a_shown_row_drops_its_entry() {
+        let cur = RowsConfig {
+            hidden_values: pins(&[(RowName::Model, "fable"), (RowName::Mode, "safe")]),
+            ..config(Some(&[RowName::Account]))
+        };
+        // Model (index 2): d wraps fable -> default. Mode (last): shown again.
+        let (rows, hidden) = edit_config(&cur, keys("s,s,d,s,s,s,s,Spacebar,Enter")).unwrap();
+        assert_eq!(rows, [RowName::Account, RowName::Mode]);
+        assert!(hidden.is_empty(), "{hidden:?}");
+    }
+
+    #[test]
+    fn a_d_on_a_shown_row_changes_nothing() {
+        let cur = config(Some(&[RowName::Account, RowName::Effort]));
+        let (rows, hidden) = edit_config(&cur, keys("s,d,a,Enter")).unwrap();
+        assert_eq!(rows, [RowName::Account, RowName::Effort]);
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn a_hidden_row_reads_its_value_by_label() {
+        let cur = RowsConfig {
+            hidden_values: pins(&[(RowName::Model, "fable")]),
+            ..config(Some(&[RowName::Account]))
+        };
+        let mut e = RowsEditor::new(&cur, Style { color: false, ascii: true });
+        let f = e.draw((100, 30));
+        let line = |n: &str| f.lines.iter().find(|l| l.contains(n)).cloned().unwrap();
+        assert!(line("model").contains("hidden -> Fable 5.2"), "{}", line("model"));
+        assert!(line("effort").contains("hidden -> claude default"), "{}", line("effort"));
+        assert!(line("mode ").contains("hidden -> normal"), "{}", line("mode "));
     }
 
     fn keys(s: &str) -> Vec<KeyPress> {
@@ -200,7 +385,7 @@ mod tests {
         assert_eq!(out, [RowName::Account, RowName::Effort, RowName::Model]);
         let out = edit(Some(&[RowName::Account, RowName::Model, RowName::Effort]), keys("s,s,Ctrl+W,Enter")).unwrap();
         assert_eq!(out, [RowName::Account, RowName::Effort, RowName::Model]);
-        let e = RowsEditor::new(Some(&[RowName::Mode]), Style { color: false, ascii: true });
+        let e = RowsEditor::new(&config(Some(&[RowName::Mode])), Style { color: false, ascii: true });
         assert_eq!(e.entries.first(), Some(&(RowName::Mode, true)));
         assert!(e.entries.iter().skip(1).all(|(_, on)| !on), "the rest listed hidden");
     }
@@ -234,7 +419,7 @@ mod tests {
 
     #[test]
     fn a_hidden_row_stays_in_place_dimmed_and_the_footer_names_the_keys() {
-        let mut e = RowsEditor::new(None, Style { color: true, ascii: false });
+        let mut e = RowsEditor::new(&config(None), Style { color: true, ascii: false });
         e.cursor.index = 2;
         e.toggle();
         let f = e.draw((100, 30));
@@ -244,7 +429,7 @@ mod tests {
         assert!(f.lines[model].contains(crate::theme::DIM), "{:?}", f.lines[model]);
         assert!(!f.lines[effort].contains(&format!("{}effort", crate::theme::DIM)));
         let foot = f.lines.last().unwrap();
-        for h in ["w/s", "^w/^s", "move", "^x", "hide", "save", "cancel"] {
+        for h in ["w/s", "^w/^s", "move", "^x", "hide", "a/d", "value", "save", "cancel"] {
             assert!(foot.contains(h), "{h}: {foot}");
         }
     }
