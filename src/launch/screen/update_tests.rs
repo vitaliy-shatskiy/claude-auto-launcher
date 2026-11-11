@@ -32,9 +32,11 @@ fn v(installed: &str) -> VersionInfo {
 }
 
 /// Keys, then one idle poll that lets the check answer, then idle polls until the screen paints
-/// again (at most `cap`, so a screen that never redraws ends the wait), then the rest.
-struct UpdateTerm {
+/// again or `read` says it took the answer (at most `cap`, so a screen that never reads it ends
+/// the wait), then the rest.
+struct UpdateTerm<'a> {
     inner: PreviewTerm,
+    read: Box<dyn Fn() -> bool + 'a>,
     before: VecDeque<Event>,
     go: Option<Sender<()>>,
     painted: usize,
@@ -42,11 +44,12 @@ struct UpdateTerm {
     after: VecDeque<Event>,
 }
 
-impl UpdateTerm {
+impl<'a> UpdateTerm<'a> {
     fn new(before: &str, go: Sender<()>, cap: usize, after: &str) -> Self {
         let keys = |k: &str| crate::ui::parse_preview_keys(k).unwrap().into_iter().map(Event::Key).collect();
         Self {
             inner: PreviewTerm::new((100, 30), VecDeque::new(), true),
+            read: Box::new(|| false),
             before: keys(before),
             go: Some(go),
             painted: 0,
@@ -55,12 +58,18 @@ impl UpdateTerm {
         }
     }
 
+    /// Idle polls also end once `read` is true (an answer that draws nothing).
+    fn until(mut self, read: impl Fn() -> bool + 'a) -> Self {
+        self.read = Box::new(read);
+        self
+    }
+
     fn frames(&self) -> &[Vec<String>] {
         self.inner.frames.as_deref().unwrap()
     }
 }
 
-impl Term for UpdateTerm {
+impl Term for UpdateTerm<'_> {
     fn size(&mut self) -> (usize, usize) {
         (100, 30)
     }
@@ -76,7 +85,7 @@ impl Term for UpdateTerm {
             self.painted = self.frames().len();
             return Ok(Event::Idle);
         }
-        if self.frames().len() == self.painted && self.cap > 0 {
+        if self.frames().len() == self.painted && !(self.read)() && self.cap > 0 {
             // A real idle poll takes ~60 ms; 1 ms keeps a check that answers under load in reach.
             std::thread::sleep(std::time::Duration::from_millis(1));
             self.cap -= 1;
@@ -177,7 +186,7 @@ fn an_answer_that_changes_nothing_draws_nothing() {
     let (mut r, vw, p) = (four(), view(), Prefs::default());
     let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
     let st = r.new_state();
-    let mut t = UpdateTerm::new("", go, 5000, "Enter");
+    let mut t = UpdateTerm::new("", go, 5000, "Enter").until(|| w.borrow().applied().is_some());
     {
         let mut s = LaunchScreen::new(&mut r, st, &vw, &p, 0, &mut hook).with_update(&w);
         run(&mut s, &mut t).unwrap().unwrap();
