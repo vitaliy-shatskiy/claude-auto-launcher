@@ -4,22 +4,30 @@
 //! row's value, enter save, esc cancel. A hidden row stays in place while editing, dimmed; `rows`
 //! holds only the shown rows, so on reopen the hidden ones follow them in the default order. With
 //! config `remote` off the remote entry keeps its place and shown flag but takes no key.
+//! Mouse: a click selects a row, a second click on the value of a hidden row that click selected
+//! steps it as d does; the footer buttons stand for ctrl+w/s, space, enter and esc.
 
 use std::collections::BTreeMap;
 
 use crate::config::RowsConfig;
 use crate::frame::{
-    FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
-    too_small_frame,
+    CellSpan, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowHit, RowMap, Style, complete_frame, footer_hover, frame_width,
+    new_hint_footer, too_small_frame,
 };
 use crate::input::{KeyPress, vk};
 use crate::launch::{CONFIG_ROWS, LaunchState, Roster, RowName, step_option};
-use crate::layout::new_box;
-use crate::theme::{DIM_CLOSE, DIM_OPEN, glyphs};
-use crate::ui::Term;
+use crate::layout::{display_width, new_box};
+use crate::theme::{DIM_CLOSE, DIM_OPEN, add_hover_span, glyphs};
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
+use crate::ui::{Hit, Term};
 
 const REMOTE_OFF: &str = "remote is off: set \"remote\": true in claude-auto.json";
+
+/// What the move buttons send: the chars ctrl+w and ctrl+s type, so a click needs no modifier.
+const CTRL_W: char = '\u{17}';
+const CTRL_S: char = '\u{13}';
+/// The click cell of a hidden row's value.
+const VALUE_CELL: &str = "value";
 
 /// What enter saves: `rows`, then `hiddenValues`.
 pub(crate) type RowsChoice = (Vec<RowName>, BTreeMap<RowName, String>);
@@ -36,6 +44,8 @@ pub(crate) struct RowsEditor {
     cursor: Cursor,
     style: Style,
     notice: &'static str,
+    /// The row the last click selected; a key or the wheel clears it (D1).
+    clicked: Option<usize>,
 }
 
 impl std::fmt::Debug for RowsEditor {
@@ -58,6 +68,7 @@ impl RowsEditor {
             cursor: Cursor::at(0),
             style,
             notice: "",
+            clicked: None,
         }
     }
 
@@ -163,27 +174,43 @@ impl Screen for RowsEditor {
         }
         let g = glyphs(self.style.ascii);
         let fw = frame_width(width);
-        let mut body: Vec<String> = self
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(i, (row, on))| {
-                let mark = if i == self.index() { g.cursor } else { ' ' };
-                let name = row.as_str().to_lowercase();
-                let glyph = if *on { g.on } else { g.off };
-                if self.inert(*row) {
-                    format!(" {mark} {DIM_OPEN}{glyph} {name:<12}off in config (remote: false){DIM_CLOSE}")
-                } else if *on {
-                    format!(" {mark} {glyph} {name:<12}shown")
-                } else {
-                    format!(
-                        " {mark} {DIM_OPEN}{glyph} {name:<12}hidden -> {}{DIM_CLOSE}",
-                        self.value_label(*row)
-                    )
-                }
-            })
-            .collect();
+        let box_w = fw.min(100);
+        let mut hits = Vec::new();
+        let mut body: Vec<String> = Vec::new();
+        for (i, (row, on)) in self.entries.iter().enumerate() {
+            let mark = if i == self.index() { g.cursor } else { ' ' };
+            let name = row.as_str().to_lowercase();
+            let glyph = if *on { g.on } else { g.off };
+            let lead = format!(" {mark} {glyph} {name:<12}");
+            let mut cells = Vec::new();
+            body.push(if self.inert(*row) {
+                format!(" {mark} {DIM_OPEN}{glyph} {name:<12}off in config (remote: false){DIM_CLOSE}")
+            } else if *on {
+                format!("{lead}shown")
+            } else {
+                let value = format!("hidden -> {}", self.value_label(*row));
+                // 1 = the box's left border; the cell never reaches past the right one.
+                let start = 1 + display_width(&lead);
+                let end = (start + display_width(&value)).min(box_w.saturating_sub(1)).saturating_sub(1);
+                cells.push(CellSpan {
+                    start: i32::try_from(start).unwrap_or(i32::MAX),
+                    end: i32::try_from(end).unwrap_or(0),
+                    value: VALUE_CELL.into(),
+                });
+                let hovered = i32::try_from(i).is_ok_and(|ii| ii == self.cursor.hover_row) && self.cursor.hover_value == VALUE_CELL;
+                let value = if hovered { add_hover_span(&value) } else { value };
+                format!(" {mark} {DIM_OPEN}{glyph} {name:<12}{value}{DIM_CLOSE}")
+            });
+            hits.push(RowHit {
+                index: i,
+                name: row.as_str().into(),
+                // 1 = the box's top border.
+                y: i32::try_from(1 + i).unwrap_or(0),
+                cells,
+            });
+        }
         body.push(String::new());
+        body.push("  a/d or a click on its value: what a hidden row launches with".into());
         body.push(format!(
             "  {}",
             if self.notice.is_empty() {
@@ -194,10 +221,10 @@ impl Screen for RowsEditor {
         ));
         let footer = new_hint_footer(
             &[
-                // w/s (the cursor on every screen) yields its place to a/d: six hints overflow 78 columns.
-                Hint::plain("a/d", "value"),
-                Hint::plain("^w/^s", "move"),
-                Hint::plain("^x", "hide"),
+                // Five buttons fill 76 columns; a/d lives in the body, as a sixth hint wraps at 78.
+                Hint::ch("^w", "up", CTRL_W),
+                Hint::ch("^s", "down", CTRL_S),
+                Hint::ch("^x", "show/hide", ' '),
                 Hint::key("enter", "save", "Enter"),
                 Hint::key("esc", "cancel", "Escape"),
             ],
@@ -209,8 +236,11 @@ impl Screen for RowsEditor {
             hover: footer_hover(&footer, self.cursor.hover),
             selected: Vec::new(),
         };
-        let lines = new_box(&body, fw.min(100), "launch rows", &g, self.style.ascii);
-        let mut map = RowMap::default();
+        let lines = new_box(&body, box_w, "launch rows", &g, self.style.ascii);
+        let mut map = RowMap {
+            rows: hits,
+            ..RowMap::default()
+        };
         let painter = |l: &str, e: bool| crate::list::add_picker_color(l, e, &g);
         let lines = complete_frame(&lines, &footer, fw, self.style, &painter, &light, &mut map);
         Frame { lines, map }
@@ -238,13 +268,41 @@ impl Screen for RowsEditor {
         Flow::Continue
     }
 
+    /// The wheel moves the cursor as keys do: it never arms a click.
+    fn wheel(&mut self, _delta: i32) -> bool {
+        self.clicked = None;
+        false
+    }
+
+    /// D1: a click selects a row; a second click on the value of the hidden row the previous
+    /// click selected steps it as d does. Only a hidden, live row has a value cell.
+    fn click(&mut self, hit: &Hit) -> Flow<RowsChoice> {
+        let (row, on_value) = match hit {
+            Hit::LaunchRow { row, .. } => (*row, false),
+            Hit::Cell { row, value, .. } => (*row, value == VALUE_CELL),
+            Hit::None | Hit::Footer { .. } | Hit::Action { .. } | Hit::ListRow(_) => return Flow::Continue,
+        };
+        self.notice = "";
+        let armed = self.clicked == Some(row);
+        self.clicked = Some(row);
+        self.cursor.index = i32::try_from(row).unwrap_or(0);
+        if armed && on_value {
+            self.step(1);
+        }
+        Flow::Continue
+    }
+
     /// ctrl+w/s move the row, matched on the virtual key (any layout); alt+up/down too, as ctrl+s
     /// is XOFF on some terminals. ctrl+x or space shows or hides it. Ahead of the loop's own w/s.
     /// Never shift+w/s: a split mouse report arrives as shift+letter.
+    /// A footer button arrives as its char alone (`CTRL_W`, `CTRL_S`, space).
     fn on_key(&mut self, key: &KeyPress, _term: &mut dyn Term) -> bool {
         self.notice = "";
-        if key.is_ctrl(vk::W) || key.is_ctrl(vk::S) || (key.alt && (key.is(vk::UP) || key.is(vk::DOWN))) {
-            self.shift(if key.is(vk::W) || key.is(vk::UP) { -1 } else { 1 });
+        self.clicked = None;
+        let up = key.is_ctrl(vk::W) || key.ch == CTRL_W || (key.alt && key.is(vk::UP));
+        let down = key.is_ctrl(vk::S) || key.ch == CTRL_S || (key.alt && key.is(vk::DOWN));
+        if up || down {
+            self.shift(if up { -1 } else { 1 });
             return true;
         }
         if key.is_ctrl(vk::X) || key.ch == ' ' || key.is(vk::SPACE) {
@@ -258,6 +316,7 @@ impl Screen for RowsEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::{Event, MouseEvent};
     use crate::ui::{PreviewTerm, parse_preview_keys};
 
     fn config(rows: Option<&[RowName]>) -> RowsConfig {
@@ -437,15 +496,158 @@ mod tests {
         assert!(model < effort, "kept in place");
         assert!(f.lines[model].contains(crate::theme::DIM), "{:?}", f.lines[model]);
         assert!(!f.lines[effort].contains(&format!("{}effort", crate::theme::DIM)));
-        let foot = f.lines.last().unwrap();
-        for h in ["a/d", "value", "^w/^s", "move", "^x", "hide", "save", "cancel"] {
-            assert!(foot.contains(h), "{h}: {foot}");
+        assert!(f.lines.iter().any(|l| l.contains("a/d")), "the body names a/d");
+        for size in [(100, 30), (78, 24)] {
+            let f = e.draw(size);
+            assert_eq!(f.map.footer_lines, 1, "one footer line at {size:?}");
+            let foot = f.lines.last().unwrap();
+            for h in ["^w", "up", "^s", "down", "^x", "show/hide", "save", "cancel"] {
+                assert!(foot.contains(h), "{h} at {size:?}: {foot}");
+            }
+            assert_eq!(f.map.footer.len(), 5, "every hint a button at {size:?}");
         }
-        let narrow = e.draw((78, 24));
-        let foot = narrow.lines.last().unwrap();
-        assert!(
-            ["a/d", "value", "move", "cancel"].iter().all(|h| foot.contains(h)),
-            "one line at 78 columns: {foot}"
-        );
+    }
+
+    /// Scripted events, mouse included.
+    struct Scripted {
+        inner: PreviewTerm,
+        q: std::collections::VecDeque<Event>,
+    }
+
+    impl Term for Scripted {
+        fn size(&mut self) -> (usize, usize) {
+            (100, 30)
+        }
+        fn paint(&mut self, lines: &[String]) {
+            self.inner.paint(lines);
+        }
+        fn wait(&mut self, _s: (usize, usize)) -> Result<Event, crate::ui::UiStop> {
+            self.q.pop_front().ok_or(crate::ui::UiStop::KeysExhausted)
+        }
+        fn window_top(&mut self) -> i32 {
+            0
+        }
+        fn input_pending(&mut self) -> bool {
+            false
+        }
+        fn record_time(&self) -> Option<u64> {
+            None
+        }
+        fn last_activation(&mut self) -> &mut Option<crate::ui::Activation> {
+            self.inner.last_activation()
+        }
+        fn drain(&mut self) {}
+        fn logger(&self) -> &crate::log::Logger {
+            self.inner.logger()
+        }
+        fn read_line(&mut self, _prompt: &str) -> String {
+            String::new()
+        }
+    }
+
+    fn press((x, y): (i32, i32)) -> Event {
+        Event::Mouse(MouseEvent {
+            x,
+            y,
+            left: true,
+            buttons: 1,
+            ..MouseEvent::default()
+        })
+    }
+
+    fn key(name: &str) -> Event {
+        Event::Key(keys(name).remove(0))
+    }
+
+    fn run_events(cur: &RowsConfig, events: Vec<Event>) -> Option<RowsChoice> {
+        let mut e = RowsEditor::new(cur, Style { color: false, ascii: true });
+        let mut t = Scripted {
+            inner: PreviewTerm::new((100, 30), std::collections::VecDeque::default(), true),
+            q: events.into(),
+        };
+        crate::ui::screen_loop::run(&mut e, &mut t).unwrap()
+    }
+
+    /// A point on a row's line, and on its value cell if it has one.
+    fn row_at(cur: &RowsConfig, row: RowName) -> ((i32, i32), Option<(i32, i32)>) {
+        let mut e = RowsEditor::new(cur, Style { color: false, ascii: true });
+        let f = e.draw((100, 30));
+        let hit = f.map.rows.iter().find(|h| h.name == row.as_str()).unwrap();
+        ((2, hit.y), hit.cells.first().map(|c| (c.start, hit.y)))
+    }
+
+    /// The footer button that stands for (key, char).
+    fn button(cur: &RowsConfig, id: (&str, Option<char>)) -> (i32, i32) {
+        let mut e = RowsEditor::new(cur, Style { color: false, ascii: true });
+        let f = e.draw((100, 30));
+        let s = f.map.footer.iter().find(|s| (s.key.as_str(), s.ch) == id).unwrap();
+        (s.start, f.map.footer_y.unwrap() + i32::try_from(s.line).unwrap())
+    }
+
+    #[test]
+    fn a_click_selects_a_row_and_a_second_click_on_its_hidden_value_steps_it() {
+        let cur = config(Some(&[RowName::Account]));
+        let cell = row_at(&cur, RowName::Model).1.expect("a hidden row has a value cell");
+        let once = run_events(&cur, vec![press(cell), key("Enter")]).unwrap();
+        assert!(once.1.is_empty(), "the first click only selects: {:?}", once.1);
+        let twice = run_events(&cur, vec![press(cell), press(cell), key("Enter")]).unwrap();
+        let by_key = edit_config(&cur, keys("s,s,d,Enter")).unwrap();
+        assert!(!twice.1.is_empty());
+        assert_eq!(twice.1, by_key.1, "the second click is d");
+    }
+
+    #[test]
+    fn a_keyboard_moved_cursor_does_not_arm_a_click() {
+        let cur = config(Some(&[RowName::Account]));
+        let (line, cell) = row_at(&cur, RowName::Model);
+        let cell = cell.unwrap();
+        let out = run_events(&cur, vec![key("s"), key("s"), press(cell), key("Enter")]).unwrap();
+        assert!(out.1.is_empty(), "keys put the cursor there, the click only selects: {:?}", out.1);
+        let out = run_events(&cur, vec![press(line), press(cell), key("Enter")]).unwrap();
+        assert!(!out.1.is_empty(), "a click on the row's line arms its value");
+        let out = run_events(&cur, vec![press(cell), key("w"), key("s"), press(cell), key("Enter")]).unwrap();
+        assert!(out.1.is_empty(), "a key between the clicks disarms: {:?}", out.1);
+    }
+
+    #[test]
+    fn a_shown_row_and_the_remote_off_entry_have_no_value_cell_and_clicks_change_nothing() {
+        let off = RowsConfig {
+            rows: Some(vec![RowName::Account, RowName::Model]),
+            remote: false,
+            ..RowsConfig::default()
+        };
+        let (remote, cell) = row_at(&off, RowName::Remote);
+        assert_eq!(cell, None, "remote off: inert");
+        let (model, cell) = row_at(&off, RowName::Model);
+        assert_eq!(cell, None, "a shown row's value is picked on the launch screen");
+        let far = |(_, y): (i32, i32)| (40, y);
+        let events = vec![
+            press(remote),
+            press(remote),
+            press(far(remote)),
+            press(model),
+            press(far(model)),
+            key("Enter"),
+        ];
+        let out = run_events(&off, events).unwrap();
+        assert_eq!(out.0, [RowName::Account, RowName::Model]);
+        assert!(out.1.is_empty(), "{:?}", out.1);
+    }
+
+    #[test]
+    fn footer_buttons_move_and_show_or_hide_the_selected_row() {
+        let cur = config(None);
+        let model = row_at(&cur, RowName::Model).0;
+        let down = button(&cur, ("", Some(CTRL_S)));
+        let up = button(&cur, ("", Some(CTRL_W)));
+        let hide = button(&cur, ("", Some(' ')));
+        let out = run_events(&cur, vec![press(model), press(down), key("Enter")]).unwrap().0;
+        assert_eq!(out.get(3), Some(&RowName::Model), "down: {out:?}");
+        let out = run_events(&cur, vec![press(model), press(up), key("Enter")]).unwrap().0;
+        assert_eq!(out.get(1), Some(&RowName::Model), "up: {out:?}");
+        let out = run_events(&cur, vec![press(model), press(hide), key("Enter")]).unwrap().0;
+        assert!(!out.contains(&RowName::Model), "hidden: {out:?}");
+        assert!(run_events(&cur, vec![press(button(&cur, ("Enter", None)))]).is_some());
+        assert_eq!(run_events(&cur, vec![press(button(&cur, ("Escape", None)))]), None);
     }
 }

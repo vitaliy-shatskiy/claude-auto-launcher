@@ -3,17 +3,18 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::{PathCtx, ProjectScreen};
-use crate::frame::{self, Style};
+use crate::frame::{self, FooterLight, Frame, Hint, RowMap, Style};
 use crate::input::console::ConsoleInput;
-use crate::input::{Event, KeyPress, is_hotkey, vk};
+use crate::input::{KeyPress, is_hotkey};
 use crate::launch::LaunchState;
 use crate::launch::PROJECT_ACTION;
 use crate::launch::launch_mode;
 use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore};
+use crate::layout::split_text_lines;
 use crate::out;
 use crate::prefs;
-use crate::timing::view;
 use crate::types::VersionInfo;
+use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{ConsoleTerm, PreviewTerm, Term, UiStop, parse_preview_keys, parse_preview_size};
 use crate::{env, maintenance, projects, sessions, sys, theme};
 
@@ -312,29 +313,61 @@ fn trace_path(ctx: &PathCtx) -> PathBuf {
     dir.join(format!("input-{d}-{}.log", std::process::id()))
 }
 
-/// `Confirm-HeldSession`: Enter = go on, Esc/Ctrl+C = back; nothing held = go on.
+/// `Confirm-HeldSession`: Enter or `[enter] go on` = go on, Esc/Ctrl+C or `[esc] back` = back;
+/// nothing held = go on.
 pub(super) fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Result<bool, UiStop> {
     let Some(h) = holder else { return Ok(true) };
-    let warning = sessions::held_warning(h);
-    let mut dirty = true;
-    let tm = term.logger().timings.clone();
-    loop {
-        let size = term.size();
-        if dirty {
-            let (w, h) = view::body_size(&tm, size);
-            let lines = frame::held_session_frame(&warning, w, h, style.ascii);
-            term.paint(&view::with_footer(&tm, lines, "held", size));
-            dirty = false;
-        }
-        match term.wait(size)? {
-            Event::Resize => dirty = true,
-            Event::Key(k) if tm.is_on() && k.is(vk::F12) => {
-                view::show_timings(term, &tm)?;
-                dirty = true;
-            }
-            Event::Key(k) if k.is(vk::ENTER) => return Ok(true),
-            Event::Key(k) if k.is(vk::ESCAPE) || k.is_ctrl(vk::C) => return Ok(false),
-            Event::Key(_) | Event::Mouse(_) => {}
-        }
+    let mut screen = HeldConfirm {
+        warning: sessions::held_warning(h),
+        style,
+        cursor: Cursor::at(0),
+    };
+    Ok(crate::ui::screen_loop::run(&mut screen, term)?.unwrap_or(false))
+}
+
+/// The held-session warning: the text, then the two buttons as its footer.
+struct HeldConfirm {
+    warning: String,
+    style: Style,
+    cursor: Cursor,
+}
+
+impl Screen for HeldConfirm {
+    type Output = bool;
+
+    fn name(&self) -> &'static str {
+        "held"
+    }
+
+    fn cursor(&mut self) -> &mut Cursor {
+        &mut self.cursor
+    }
+
+    /// The buttons placed first, the warning wrapped into what is left.
+    fn draw(&mut self, (width, height): (usize, usize)) -> Frame {
+        let g = theme::glyphs(self.style.ascii);
+        let fw = frame::frame_width(width);
+        let hints = [Hint::key("enter", "go on", "Enter"), Hint::key("esc", "back", "Escape")];
+        let footer = frame::new_hint_footer(&hints, &g, fw, !self.style.color);
+        // 2 = the blank lines above and below the warning.
+        let room = height.saturating_sub(footer.lines.len() + 2).max(1);
+        let mut lines = vec![String::new()];
+        lines.extend(
+            split_text_lines(&self.warning, fw.saturating_sub(2).max(1), room, self.style.ascii)
+                .into_iter()
+                .map(|l| format!("  {l}")),
+        );
+        lines.push(String::new());
+        let light = FooterLight {
+            hover: frame::footer_hover(&footer, self.cursor.hover),
+            selected: Vec::new(),
+        };
+        let mut map = RowMap::default();
+        let lines = frame::complete_frame(&lines, &footer, fw, self.style, &|l: &str, _| l.to_owned(), &light, &mut map);
+        Frame { lines, map }
+    }
+
+    fn enter(&mut self) -> Option<Flow<bool>> {
+        Some(Flow::Done(Some(true)))
     }
 }
