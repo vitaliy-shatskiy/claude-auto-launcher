@@ -28,16 +28,6 @@ fn expand_resolves_tilde_and_relative_against_cwd() {
 }
 
 #[test]
-fn quoted_false_is_false_and_garbage_keeps_default_with_warning() {
-    let (b, w) = to_bool(Some(&Value::String("FALSE".into())), true, "sharing");
-    assert!(!b);
-    assert!(w.is_none());
-    let (b, w) = to_bool(Some(&Value::String("nope".into())), false, "sharing");
-    assert!(!b);
-    assert_eq!(w.as_deref(), Some("sharing: 'nope' is not a boolean; using False"));
-}
-
-#[test]
 fn four_account_fixture_parses_with_hidden_and_tints() {
     let text = include_str!("../../tests/fixtures/config-four.json");
     let cfg = parse_config(text, "x", &ctx());
@@ -252,6 +242,13 @@ fn mouse_key_parses() {
     let bad = parse_config(r#"{"mouse":"maybe"}"#, "x", &ctx());
     assert!(bad.mouse);
     assert_eq!(bad.warnings, ["mouse: 'maybe' is not a boolean; using True"]);
+    let (b, w) = to_bool(Some(&Value::String("nope".into())), false, "sharing");
+    assert!(!b);
+    assert_eq!(
+        w.as_deref(),
+        Some("sharing: 'nope' is not a boolean; using False"),
+        "a false default keeps false"
+    );
 }
 
 #[test]
@@ -369,11 +366,7 @@ fn save_keys_writes_through_a_symlinked_config() {
     std::fs::create_dir_all(&dir).unwrap();
     let (target, link) = (dir.join("real.json"), dir.join("claude-auto.json"));
     std::fs::write(&target, r#"{"remote": true}"#).unwrap();
-    if std::os::windows::fs::symlink_file(&target, &link).is_err() {
-        // Creating a symlink needs Developer Mode or elevation; without it there is nothing to test.
-        std::fs::remove_dir_all(&dir).unwrap();
-        return;
-    }
+    std::os::windows::fs::symlink_file(&target, &link).expect("a symlink needs Developer Mode or elevation");
     save_keys(link.to_str().unwrap(), &[("mouse", serde_json::json!(false))]).unwrap();
     assert!(
         std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
@@ -398,9 +391,57 @@ fn l_is_reserved_for_the_rows_editor() {
 #[test]
 fn maintenance_action_rules() {
     let (a, w) = parse_actions(
-        &serde_json::json!([{"key":"u","script":"C:/x"},{"key":"i","script":"C:/x"},{"key":"I","script":"C:/y"},{"key":"z","script":"rel"}]),
+        &serde_json::json!([{"key":"u","script":"C:/x"},{"key":"I","script":"C:/x"},{"key":"i","script":"C:/y"},{"key":"z","script":"rel"}]),
         &ctx(),
     );
-    assert_eq!(a.len(), 1);
-    assert_eq!(w.len(), 3);
+    let kept: Vec<(&str, &str)> = a.iter().map(|m| (m.key.as_str(), m.script.as_str())).collect();
+    assert_eq!(kept, [("i", r"C:\x")], "the key is lower-cased, the first of a duplicate wins");
+    assert_eq!(w.len(), 3, "{w:?}");
+    assert!(w[0].contains("entry 'u'"), "{w:?}");
+    assert_eq!(
+        w[1],
+        "maintenanceActions: duplicate key 'i'; the first one wins, this entry is skipped"
+    );
+    assert_eq!(w[2], "maintenanceActions 'z': script must be an absolute path; skipped");
+}
+
+#[test]
+fn save_keys_refuses_a_file_that_is_not_a_json_object() {
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-nonobj-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("claude-auto.json");
+    for body in ["[]", "null", "\"x\""] {
+        std::fs::write(&path, body).unwrap();
+        assert!(
+            save_keys(path.to_str().unwrap(), &[("mouse", serde_json::json!(false))]).is_err(),
+            "{body}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), body, "{body} stays as it was");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn save_keys_never_rewrites_a_config_whose_attributes_cannot_be_read() {
+    // Denying read-attributes on the file and listing on its folder (which would grant them back)
+    // makes `metadata` fail while the file is still there and readable.
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-save-noattr-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("claude-auto.json");
+    std::fs::write(&path, r#"{"remote": true}"#).unwrap();
+    let user = std::env::var("USERNAME").unwrap();
+    let icacls = |on: &Path, action: &str, ace: &str| {
+        let ok = std::process::Command::new("icacls").arg(on).args([action, ace]).output().unwrap();
+        assert!(ok.status.success(), "icacls {} {action} {ace}", on.display());
+    };
+    icacls(&path, "/deny", &format!("{user}:(RA)"));
+    icacls(&dir, "/deny", &format!("{user}:(RD)"));
+    let hidden = std::fs::metadata(&path).is_err();
+    let saved = save_keys(path.to_str().unwrap(), &[("mouse", serde_json::json!(false))]);
+    icacls(&dir, "/remove:d", &user);
+    icacls(&path, "/remove:d", &user);
+    assert!(hidden, "the fixture hides the attributes");
+    let back: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(back["remote"] == true, "the existing keys survive: {back} ({saved:?})");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -336,11 +336,17 @@ fn launch_mode_table_is_valid_and_case_insensitive() {
         [] as [std::string::String; 0]
     );
     assert_eq!(launch_mode("RESUME").map(|m| m.flag), Some("--resume"));
-    let clash = [LaunchMode {
-        hotkey: Some('w'),
-        ..LAUNCH_MODES[1]
-    }];
-    assert_eq!(launch_mode_table_errors(&clash, &PROJECT_SCREEN_OWN_KEYS).len(), 1);
+    for k in ['w', 'h'] {
+        let clash = [LaunchMode {
+            hotkey: Some(k),
+            ..LAUNCH_MODES[1]
+        }];
+        assert_eq!(
+            launch_mode_table_errors(&clash, &PROJECT_SCREEN_OWN_KEYS).len(),
+            1,
+            "a mode on the project screen's {k} is refused"
+        );
+    }
 }
 
 #[test]
@@ -350,15 +356,6 @@ fn the_hide_keys_collide_with_no_project_screen_or_launch_mode_key() {
         assert!(LAUNCH_MODES.iter().all(|m| m.hotkey != Some(k)), "{k} is no launch-mode hotkey");
         assert_eq!(PROJECT_SCREEN_OWN_KEYS.iter().filter(|c| **c == k).count(), 1, "{k} is one key");
     }
-    let h = [LaunchMode {
-        hotkey: Some('h'),
-        ..LAUNCH_MODES[1]
-    }];
-    assert_eq!(
-        launch_mode_table_errors(&h, &PROJECT_SCREEN_OWN_KEYS).len(),
-        1,
-        "a mode on h is refused"
-    );
 }
 
 #[test]

@@ -257,13 +257,7 @@ fn junctioned_roots_share_one_cache_file() {
     std::fs::create_dir_all(&phys).unwrap();
     let link = t.0.join("accountA");
     std::fs::create_dir_all(&link).unwrap();
-    let ok = std::process::Command::new("cmd")
-        .args(["/c", "mklink", "/J"])
-        .arg(link.join("projects"))
-        .arg(&phys)
-        .output()
-        .is_ok_and(|o| o.status.success());
-    assert!(ok, "mklink /J ran");
+    crate::env::win_fs::create_junction(&link.join("projects"), &phys).unwrap();
     let expect = physical_dir(&t.0.join("physical")).join("claude-auto-rs-sessions.json");
     assert_eq!(cache_path(&link.join("projects")), expect);
     assert_eq!(cache_path(&phys), expect);

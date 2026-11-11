@@ -199,17 +199,23 @@ mod tests {
 
     impl Fixture {
         fn new(name: &str, files: &[(&str, &str)], patterns: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("privacy-scan-{name}-{}", std::process::id()));
-            if dir.exists() {
-                std::fs::remove_dir_all(&dir).unwrap();
-            }
-            let repo = dir.join("repo");
+            let f = Self::patterns_only(name, patterns);
+            let repo = f.repo();
             std::fs::create_dir_all(&repo).unwrap();
             let ok = Command::new("git").arg("init").arg("-q").arg(&repo).status().unwrap();
             assert!(ok.success(), "git init");
             for (rel, body) in files {
                 std::fs::write(repo.join(rel), body).unwrap();
             }
+            f
+        }
+        /// Only the pattern file, no repository: for a test that never reaches `git`.
+        fn patterns_only(name: &str, patterns: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("privacy-scan-{name}-{}", std::process::id()));
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir).unwrap();
+            }
+            std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("patterns.txt"), patterns).unwrap();
             Self { dir }
         }
@@ -289,29 +295,29 @@ mod tests {
 
     #[test]
     fn unreadable_pattern_file_could_not_run() {
-        let f = Fixture::new("nolist", &[("a.txt", "x")], "");
+        let f = Fixture::patterns_only("nolist", "");
         let missing = f.dir.join("missing.txt");
         assert!(load_patterns(Some("plantuser"), Some(&missing)).is_err());
     }
 
     #[test]
     fn bad_regex_could_not_run_without_quoting_it() {
-        let f = Fixture::new("badre", &[("a.txt", "x")], "ok\nsecret(\n");
+        let f = Fixture::patterns_only("badre", "ok\nsecret(\n");
         let Verdict::CouldNotRun(msg) = f.scan(None) else {
             panic!("expected could-not-run")
         };
-        assert!(!msg.contains("secret"), "{msg}");
+        assert!(!msg.contains("secret") && msg.contains("not a valid regex"), "{msg}");
     }
 
     #[test]
     fn no_patterns_could_not_run() {
-        let f = Fixture::new("empty", &[("a.txt", "x")], "# only a comment\n\n");
-        assert!(matches!(f.scan(Some("")), Verdict::CouldNotRun(_)));
+        let f = Fixture::patterns_only("empty", "# only a comment\n\n");
+        assert!(matches!(f.scan(Some("")), Verdict::CouldNotRun(m) if m.starts_with("no patterns")));
     }
 
     #[test]
     fn not_a_git_repo_could_not_run() {
-        let f = Fixture::new("nogit", &[("a.txt", "x")], "plantedsecret");
+        let f = Fixture::patterns_only("nogit", "plantedsecret");
         let p = load_patterns(None, Some(&f.list())).unwrap();
         assert!(matches!(scan(&f.dir.join("nowhere"), &p), Verdict::CouldNotRun(_)));
     }

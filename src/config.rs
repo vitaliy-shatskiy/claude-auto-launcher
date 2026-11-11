@@ -630,7 +630,9 @@ pub fn save_rows(path: &str, rows: &[RowName], hidden: &BTreeMap<RowName, String
 /// is a temp file renamed over the old one, next to a symlink's target so the link survives: two
 /// launchers saving at once leave the last writer's file.
 pub(crate) fn update_config(path: &str, edit: impl FnOnce(&mut serde_json::Map<String, Value>)) -> std::io::Result<()> {
-    let mut obj = if Path::new(path).exists() {
+    // `try_exists`, not `exists`: a file whose metadata fails must never be taken for missing and
+    // replaced by `{}`.
+    let mut obj = if Path::new(path).try_exists()? {
         let bytes = std::fs::read(path)?;
         let text = std::str::from_utf8(&bytes).map_err(|e| std::io::Error::other(format!("{path} is not UTF-8 ({e})")))?;
         match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).map_err(std::io::Error::other)? {

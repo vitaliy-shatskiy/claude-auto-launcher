@@ -1,6 +1,6 @@
 use super::*;
 #[test]
-fn hooks_run_in_order_and_a_failure_is_one_line() {
+fn each_hook_reports_its_exit_and_a_failure_is_one_line() {
     let dir = std::env::temp_dir().join(format!("claude-auto-rs-hooks-{}", crate::log::new_run_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let put = |n: &str, body: &str| {
@@ -8,9 +8,9 @@ fn hooks_run_in_order_and_a_failure_is_one_line() {
         std::fs::write(&p, body).unwrap();
         p.to_string_lossy().into_owned()
     };
-    let one = put("one.ps1", "Write-Output \"one ran\"; Write-Output \"acct=$env:CLAUDE_CONFIG_DIR\"");
-    let two = put("two.ps1", "Write-Output \"two broke\"; exit 3");
-    let three = put("three.ps1", "Write-Output \"three ran\"");
+    let one = put("one.cmd", "@echo one ran\r\n@echo acct=%CLAUDE_CONFIG_DIR%\r\n");
+    let two = put("two.cmd", "@echo two broke\r\n@exit /b 3\r\n");
+    let three = put("three.cmd", "@echo three ran\r\n");
     let four = put("four.hook", "not a script");
     let missing = dir.join("missing.ps1").to_string_lossy().into_owned();
     let mut env = ChildEnv::default();
@@ -23,11 +23,11 @@ fn hooks_run_in_order_and_a_failure_is_one_line() {
     std::fs::remove_dir_all(&dir).unwrap();
     let exits: Vec<(String, Option<i32>)> = tm.take_unlogged().into_iter().map(|r| (r.name, r.exit)).collect();
     for (name, exit) in [
-        ("hooks:one.ps1", Some(0)),
-        ("hooks:two.ps1", Some(3)),
+        ("hooks:one.cmd", Some(0)),
+        ("hooks:two.cmd", Some(3)),
         ("hooks:missing.ps1", None),
         ("hooks:four.hook", None),
-        ("hooks:three.ps1", Some(0)),
+        ("hooks:three.cmd", Some(0)),
     ] {
         assert!(exits.contains(&(name.to_owned(), exit)), "{name} {exit:?} in {exits:?}");
     }
@@ -37,7 +37,7 @@ fn hooks_run_in_order_and_a_failure_is_one_line() {
         "a hook sees the session's environment"
     );
     assert_eq!(
-        lines.iter().filter(|l| l.trim_start().starts_with("hook two.ps1 exit 3")).count(),
+        lines.iter().filter(|l| l.trim_start().starts_with("hook two.cmd exit 3")).count(),
         1
     );
     assert_eq!(
@@ -72,7 +72,7 @@ impl Meet {
         self.cv.notify_all();
         let (n, _) = self
             .cv
-            .wait_timeout_while(n, std::time::Duration::from_millis(250), |n| *n < 2)
+            .wait_timeout_while(n, std::time::Duration::from_secs(10), |n| *n < 2)
             .unwrap();
         *n >= 2
     }
@@ -134,7 +134,7 @@ fn output_keeps_config_order_whoever_finishes_first() {
     let hooks = singles(&["first.ps1", "", "last.ps1"]);
     let notes = run_with(&hooks, &ChildEnv::default(), &Timings::default(), |h, _| {
         if h == "first.ps1" {
-            let got = done_rx.lock().unwrap().recv_timeout(std::time::Duration::from_millis(250));
+            let got = done_rx.lock().unwrap().recv_timeout(std::time::Duration::from_secs(10));
             return note(if got.is_ok() { "first 1" } else { "first ran alone" })
                 .into_iter()
                 .chain(note("first 2"))

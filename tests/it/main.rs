@@ -318,6 +318,10 @@ fn preview_steps_rows_into_launch_arguments() {
         out.contains("launch args        : --model fable --effort xhigh --advisor fable"),
         "{out}"
     );
-    assert!(out.contains("CLAUDE_CONFIG_DIR  : "), "{out}");
+    let personal = d.join("home").join(".claude-acct2");
+    assert!(
+        out.contains(&format!("CLAUDE_CONFIG_DIR  : {}", personal.display())),
+        "the personal root of config-four.json: {out}"
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }

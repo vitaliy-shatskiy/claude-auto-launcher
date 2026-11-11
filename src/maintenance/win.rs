@@ -182,6 +182,7 @@ mod tests {
 
     #[test]
     fn a_non_https_url_is_refused_without_a_request() {
-        assert!(https_get("http://example.invalid/x", 100).is_err());
+        let r = https_get("http://example.invalid/x", 100);
+        assert!(matches!(&r, Err(FetchFailed::Reason(m)) if m == "only https URLs"), "{r:?}");
     }
 }

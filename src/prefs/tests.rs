@@ -161,7 +161,7 @@ fn save_writes_nothing_while_another_holder_owns_the_mutex() {
 }
 
 #[test]
-fn mutex_name_matches_the_powershell_launcher() {
+fn one_prefs_file_maps_to_one_pinned_mutex_name() {
     // Get-PrefsMutexName (claude-auto\Prefs.ps1 on main) for the same paths: both launchers must
     // take one mutex for one file.
     assert_eq!(

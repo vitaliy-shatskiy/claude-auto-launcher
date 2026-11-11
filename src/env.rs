@@ -10,7 +10,7 @@ mod mirror;
 mod models;
 mod secrets;
 mod sharing;
-mod win_fs;
+pub(crate) mod win_fs;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

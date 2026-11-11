@@ -72,16 +72,15 @@ fn width_60_keeps_hash_version_and_size_whole() {
 
 #[test]
 fn short_or_missing_hashes_render() {
-    for i in [
-        info(false, Some("ab12c"), Some("de34f")),
-        InstallInfo {
-            bin_path: BIN.into(),
-            ..InstallInfo::default()
-        },
-    ] {
-        let f = maintenance_frame(&i, (78, 24), "", plain(), &[], -1);
-        assert_eq!(count(&f.lines, "Exception") + count(&f.lines, "error"), 0);
-    }
+    let f = maintenance_frame(&info(false, Some("ab12c"), Some("de34f")), (78, 24), "", plain(), &[], -1);
+    assert_eq!(count(&f.lines, "hash        ab12c"), 1, "a short installed hash is drawn whole");
+    assert_eq!(count(&f.lines, "hash        de34f"), 1, "a short newest hash is drawn whole");
+    let bare = InstallInfo {
+        bin_path: BIN.into(),
+        ..InstallInfo::default()
+    };
+    let f = maintenance_frame(&bare, (78, 24), "", plain(), &[], -1);
+    assert_eq!(count(&f.lines, "Exception") + count(&f.lines, "error"), 0);
     let f = maintenance_frame(&InstallInfo::default(), (78, 24), "", plain(), &[], -1);
     assert_eq!(count(&f.lines, "missing") + count(&f.lines, "none downloaded"), 2);
 }
