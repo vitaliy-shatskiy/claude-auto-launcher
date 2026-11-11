@@ -13,7 +13,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   goes back with no message. Only a full path (`C:\...`, `\\server\share\`) is listed. Network
   folders are listed only on Tab (`no answer in 1000 ms` for a dead share; a late answer is still
   used, one listing per folder). A missing folder asks `create <path>? enter yes / esc no`: one
-  level, never on a network path; only Enter answers it, a click or a cursor move drops it.
+  level, never on a network path; only Enter answers it, a click or a cursor move drops it. In
+  preview mode the yes creates nothing and says `preview - nothing was created`.
 - Project search: space-separated words must all match; a pasted path matches as typed. Ranked
   name starts with a word, then name contains it, then path; hidden projects last; matches
   underlined. Enter in the open filter runs the highlighted row and the arrows move while typing;

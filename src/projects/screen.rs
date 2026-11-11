@@ -3,7 +3,6 @@
 //! check, and the path navigator the free-path row opens in the same screen.
 
 use std::cell::RefCell;
-use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
@@ -17,8 +16,8 @@ use super::{Project, ProjectChoice};
 use crate::frame::{Frame, Style};
 use crate::input::{KeyPress, is_hotkey_exact, vk};
 use crate::launch::LAUNCH_MODES;
-use crate::ui::screen_loop::{Cursor, Flow, Screen, run};
-use crate::ui::{Hit, Term, UiStop};
+use crate::ui::screen_loop::{Cursor, Flow, Screen};
+use crate::ui::{Hit, Term};
 
 /// What one `h` press does to a project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +67,7 @@ pub(crate) struct ProjectScreen<'a> {
     lister: Lister,
     limit: Duration,
     drives: DriveCache,
+    preview: bool,
 }
 
 impl std::fmt::Debug for ProjectScreen<'_> {
@@ -104,11 +104,17 @@ impl<'a> ProjectScreen<'a> {
             lister: list_dirs,
             limit: NETWORK_LIMIT,
             drives: DriveCache::new(),
+            preview: false,
         }
     }
 
     pub(crate) fn with_hiding(self, hiding: Option<&'a Hiding<'a>>) -> Self {
         Self { hiding, ..self }
+    }
+
+    /// Preview mode: the navigator never creates a folder.
+    pub(crate) fn with_preview(self, preview: bool) -> Self {
+        Self { preview, ..self }
     }
 
     /// The listed projects: a hand-hidden one is hidden like a rule-hidden one; the show-hidden
@@ -194,7 +200,9 @@ impl<'a> ProjectScreen<'a> {
         if row.kind == RowKind::Path {
             self.list_index = self.cursor.index;
             self.cursor.index = 0;
-            self.nav = Some(Navigator::new(self.lister, self.limit));
+            let mut nav = Navigator::new(self.lister, self.limit);
+            nav.preview = self.preview;
+            self.nav = Some(nav);
             return Flow::Continue;
         }
         let target = row.path.clone();
@@ -551,21 +559,6 @@ impl Screen for ProjectScreen<'_> {
         }
         m
     }
-}
-
-/// Runs the screen until a pick or a cancel.
-pub(crate) fn run_screen(
-    term: &mut dyn Term,
-    projects: &[Project],
-    cwd: &Path,
-    initial_action: &str,
-    style: Style,
-    clock: &dyn Fn() -> i64,
-    hiding: Option<&Hiding<'_>>,
-) -> Result<Option<ProjectChoice>, UiStop> {
-    let cwd = cwd.to_string_lossy();
-    let mut screen = ProjectScreen::new(projects, &cwd, initial_action, style, clock).with_hiding(hiding);
-    run(&mut screen, term)
 }
 
 #[cfg(test)]

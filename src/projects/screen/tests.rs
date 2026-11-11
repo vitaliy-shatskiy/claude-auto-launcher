@@ -4,8 +4,10 @@ use super::*;
 use crate::input::{Event, MouseEvent};
 use crate::projects::registry::tests::Tree;
 use crate::projects::select::tests::proj;
+use crate::ui::UiStop;
 use crate::ui::{Activation, PreviewTerm};
 use std::collections::VecDeque;
+use std::path::Path;
 
 /// Scripted events, a fixed size, a canned answer for the free path, and every frame kept.
 struct Script {
@@ -45,6 +47,21 @@ impl Term for Script {
         self.asked += 1;
         self.answer.clone()
     }
+}
+
+/// Runs the screen until a pick or a cancel.
+fn run_screen(
+    term: &mut dyn Term,
+    projects: &[Project],
+    cwd: &Path,
+    initial_action: &str,
+    style: Style,
+    clock: &dyn Fn() -> i64,
+    hiding: Option<&Hiding<'_>>,
+) -> Result<Option<ProjectChoice>, UiStop> {
+    let cwd = cwd.to_string_lossy();
+    let mut screen = ProjectScreen::new(projects, &cwd, initial_action, style, clock).with_hiding(hiding);
+    crate::ui::screen_loop::run(&mut screen, term)
 }
 
 fn key(k: &str) -> Event {
@@ -496,6 +513,27 @@ fn only_enter_answers_the_create_question() {
         .0
         .unwrap();
     assert_eq!(yes.path, fresh, "Enter on the question creates");
+}
+
+/// Preview writes nothing: the create question's yes only says so.
+#[test]
+fn preview_never_creates_a_folder() {
+    let f = fx();
+    let fresh = format!(r"{}\root\preview-new", f.tree.0.display());
+    let ev = with_path(&["s", "s", "s", "Enter"], &fresh, &["Enter", "Enter", "Escape", "Escape"]);
+    let mut t = Script {
+        inner: PreviewTerm::new((80, 24), VecDeque::new(), true),
+        q: ev.into(),
+        answer: String::new(),
+        asked: 0,
+    };
+    let c = clock;
+    let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: false, ascii: true }, &c).with_preview(true);
+    let out = crate::ui::screen_loop::run(&mut s, &mut t).unwrap();
+    assert!(out.is_none(), "nothing picked");
+    assert!(!Path::new(&fresh).exists(), "preview created the folder");
+    let frames = t.inner.frames.unwrap();
+    assert!(frames.iter().any(|fr| fr.join("\n").contains("preview - nothing was created")));
 }
 
 /// The y of the navigator's first row (the use row).

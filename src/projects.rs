@@ -190,9 +190,14 @@ pub fn run_project_screen(
     cwd: &Path,
     style: Style,
     hiding: &Hiding<'_>,
+    preview: bool,
 ) -> Result<Option<ProjectChoice>, UiStop> {
     let clock = || registry::unix_ms(SystemTime::now());
-    screen::run_screen(term, projects, cwd, "new", style, &clock, Some(hiding))
+    let cwd = cwd.to_string_lossy();
+    let mut s = screen::ProjectScreen::new(projects, &cwd, "new", style, &clock)
+        .with_hiding(Some(hiding))
+        .with_preview(preview);
+    crate::ui::screen_loop::run(&mut s, term)
 }
 
 #[cfg(test)]

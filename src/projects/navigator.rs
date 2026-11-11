@@ -25,6 +25,8 @@ pub(crate) type Lister = fn(&str) -> Listing;
 type Listing = Result<Vec<String>, String>;
 
 const FULL_PATH_HINT: &str = r"type a full path (C:\... or \\server\share\)";
+/// Preview writes nothing: the create question's yes only says so, and the navigator stays.
+const PREVIEW_NOTE: &str = "preview - nothing was created";
 
 /// One navigator row, in cursor order: use, up, then the folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +59,8 @@ pub(crate) struct Navigator {
     pub hint: String,
     /// D5: the folder Enter creates; Esc drops the question.
     pub confirm: Option<String>,
+    /// Preview mode: `create` never touches the disk.
+    pub preview: bool,
     pub rows: Vec<NavRow>,
     drives: DriveCache,
     roots: Option<Vec<String>>,
@@ -153,6 +157,7 @@ impl Navigator {
             notice: String::new(),
             hint: String::new(),
             confirm: None,
+            preview: false,
             rows: Vec::new(),
             drives: DriveCache::new(),
             roots: None,
@@ -416,6 +421,10 @@ impl Navigator {
     /// D5: one level, `create_dir`, never `create_dir_all`.
     fn create(&mut self) -> NavStep {
         let Some(path) = self.confirm.take() else { return NavStep::Stay };
+        if self.preview {
+            PREVIEW_NOTE.clone_into(&mut self.notice);
+            return NavStep::Stay;
+        }
         match std::fs::create_dir(&path) {
             Ok(()) => NavStep::Pick(path),
             Err(e) => {

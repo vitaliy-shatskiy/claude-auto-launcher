@@ -132,7 +132,8 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         state = next;
         let via_project = state.action == PROJECT_ACTION;
         if opens_project_screen(run.cfg.project_screen, &state.action) {
-            let Some(chosen) = projects::run_project_screen(term.as_mut(), &project_list, &run.ctx.cwd, style, &hiding)? else {
+            let Some(chosen) = projects::run_project_screen(term.as_mut(), &project_list, &run.ctx.cwd, style, &hiding, run.preview)?
+            else {
                 if run.preview {
                     break UiEnd::PreviewPickerCancelled;
                 }
