@@ -10,7 +10,7 @@ node docs/media/draw.mjs
 New-Item -ItemType Directory -Force -Path 'target/vhs' | Out-Null
 
 # Each tape frames its window on a backdrop of its own size: the launcher's orange fading to the dark page.
-$tapes = [ordered]@{ 'launch-screen' = '2092x912'; 'launch-walk' = '1472x592'; 'sessions-walk' = '1472x640' }
+$tapes = [ordered]@{ 'launch-screen' = '2092x912'; 'launch-walk' = '1472x592'; 'sessions-walk' = '1472x640'; 'navigator-walk' = '1472x640' }
 foreach ($e in $tapes.GetEnumerator()) {
     $w, $h = $e.Value -split 'x'
     $grad = "gradients=s=$($e.Value):c0=0x5a2a1a:c1=0x131922:x0=0:y0=0:x1=${w}:y1=${h}:nb_colors=2:type=linear"

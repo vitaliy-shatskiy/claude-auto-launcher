@@ -216,6 +216,13 @@ drives on an empty field, with a `use this folder` row and a `..` row. Only a fu
 1000 ms` for a dead share; a later `tab` picks up a late answer). A missing folder whose parent
 exists asks `create <path>? enter yes / esc no`: one level, never on a network path; a click or a
 cursor move drops the question.
+
+<p align="center">
+  <a href="docs/media/navigator-walk.mp4"><img alt="The path navigator: the demo drive's folders listed under the typed path, h filters them to harbor-api, tab completes it, a missing docs folder asks create? enter yes / esc no, esc says no and esc again returns to the project list" src="docs/media/navigator-walk.gif" width="100%"></a>
+  <br>
+  <sub>Type or pick a folder in the screen: tab completes, and a missing folder is created only after a yes.</sub>
+</p>
+
 Scratch directories (under the temp folder or a profile's `jobs\<id>\tmp`) are left out and counted
 in the title, and so is a project only headless sessions (`claude -p`, the SDKs) ever ran in, a git
 root included (`hideHeadlessProjects`). Headless sessions are left out of the picker the same way.
