@@ -14,7 +14,7 @@
     <img alt="Rust 1.99" src="https://img.shields.io/badge/Rust-1.99-B7410E">
   </p>
 
-  <p><a href="#quick-start">Quick start</a> · <a href="#what-you-get">What you get</a> · <a href="#usage">Usage</a> · <a href="#configuration">Configuration</a> · <a href="#development">Development</a></p>
+  <p><a href="#quick-start">Quick start</a> · <a href="#what-you-get">What you get</a> · <a href="#requirements">Requirements</a> · <a href="#usage">Usage</a> · <a href="#configuration">Configuration</a> · <a href="#development">Development</a></p>
 </div>
 
 <br>
@@ -22,7 +22,7 @@
 <p align="center">
   <img alt="The launch screen: account tabs with five-hour usage, then model Opus, effort xhigh, advisor opus and permission auto picked for the main account" src="docs/media/launch-screen.png" width="100%">
   <br>
-  <sub>The launch screen on three demo accounts: each tab carries its five-hour usage and brings back its own choices.</sub>
+  <sub>The launch screen on three demo accounts: each tab brings back its own choices and shows its five-hour usage once something writes it (see <b>Files it writes</b>).</sub>
 </p>
 
 > [!IMPORTANT]
@@ -37,8 +37,9 @@ cd claude-auto-launcher
 cargo build --release --locked
 ```
 
-Copy `target\release\claude-auto.exe` to a folder on your PATH and run `claude-auto`. Details
-and requirements under [Install](#install).
+Copy `target\release\claude-auto.exe` to a folder on your PATH and run `claude-auto`. Or take the
+release exe: [Install](#install). [Requirements](#requirements) first. Want your own Claude Code to
+set it up? Hand it [docs/setup-with-claude-code.md](docs/setup-with-claude-code.md).
 
 ## What you get
 
@@ -47,7 +48,7 @@ and requirements under [Install](#install).
     <td width="50%" valign="top">
       <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-accounts-dark.svg"><img alt="" src="docs/media/feature-accounts-light.svg" width="48" height="48"></picture><br>
       <b>Several accounts, one launcher</b><br>
-      A tab per account with its five-hour usage. Each account remembers its own model, effort, advisor and permission.
+      A tab per account, each remembering its own model, effort, advisor and permission. Usage bars appear when your statusline writes them.
     </td>
     <td width="50%" valign="top">
       <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-rows-dark.svg"><img alt="" src="docs/media/feature-rows-light.svg" width="48" height="48"></picture><br>
@@ -93,19 +94,58 @@ and requirements under [Install](#install).
   </tr>
 </table>
 
+## Requirements
+
+- Windows 10 or 11, x64. The C runtime is linked in: no VC++ redistributable needed.
+- A real console: Windows Terminal, conhost or an IDE terminal. With redirected input there are no
+  screens and claude starts on the default account; with no console window a short text prompt
+  asks for the account instead.
+- Claude Code's native install with `claude` on PATH (`~\.local\bin\claude.exe`). An npm install
+  launches, but maintenance `u` update, `r` rename swap, `p` prune, the automatic update and the
+  model names read out of `claude.exe` need the native one; the maintenance screen then says
+  `not a native install`.
+- Network for the automatic update: before every launch screen the launcher asks
+  `https://downloads.claude.ai/claude-code-releases/<channel>` (5 s timeout, answer cached 30
+  minutes; the channel is `autoUpdatesChannel` in `~/.claude/settings.json`, default `latest`) and
+  runs `claude update` when the channel is newer. `CLAUDE_AUTO_NO_UPDATE=1` turns it off.
+- Sharing (opt-in) only: Developer Mode on (or one elevated run) for the `CLAUDE.md` symlink, and
+  every account root on the same drive as `~/.claude` (hardlinks).
+- PowerShell 7 (`pwsh`) only for `.ps1` launch hooks and for `maintenanceActions` (always run
+  through `pwsh -File`); Node.js only for `.js`/`.mjs` launch hooks.
+- Building from source: Rust through `rustup` with the MSVC host toolchain and the Visual Studio C++
+  build tools. `rust-toolchain.toml` pins the version and the `clippy` and `rustfmt` components.
+
+A secondary account's session runs with `CLAUDE_CONFIG_DIR=<its root>`; on the canonical account
+(`~/.claude`) the variable is removed from the session.
+
 ## Install
 
-Needs Windows and Claude Code (`claude` on PATH). To build: Rust through `rustup` with the MSVC host
-toolchain. `rust-toolchain.toml` pins the version and the `clippy` and `rustfmt` components.
+From the [latest release](https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/latest),
+into a folder of your own, hash checked, on the user PATH:
 
-```
-cargo build --release --locked
+```powershell
+$dir = Join-Path $env:LOCALAPPDATA 'Programs\claude-auto'
+New-Item -ItemType Directory -Force $dir | Out-Null
+$base = 'https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/latest/download'
+Invoke-WebRequest "$base/claude-auto.exe" -OutFile "$dir\claude-auto.exe"
+Invoke-WebRequest "$base/claude-auto.exe.sha256" -OutFile "$dir\claude-auto.exe.sha256"
+$want = (Get-Content "$dir\claude-auto.exe.sha256" -Raw).Split(' ')[0].Trim()
+$have = (Get-FileHash "$dir\claude-auto.exe" -Algorithm SHA256).Hash.ToLower()
+if ($have -ne $want) { throw 'hash mismatch: do not run it' }
+Unblock-File "$dir\claude-auto.exe"
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (($userPath -split ';') -notcontains $dir) {
+  [Environment]::SetEnvironmentVariable('Path', ((@($userPath -split ';' | Where-Object { $_ }) + $dir) -join ';'), 'User')
+}
 ```
 
-The binary is `target\release\claude-auto.exe`. Copy it to a folder on your PATH. There is no
-installer. Or take `claude-auto.exe` from the
-[latest release](https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/latest) and
-check it against the `.sha256` file beside it.
+Open a new terminal and run `claude-auto --launcher-version`. Releases also carry a build
+attestation: `gh attestation verify claude-auto.exe -R vitaliy-shatskiy/claude-auto-launcher`.
+
+From source: `cargo build --release --locked`, then copy `target\release\claude-auto.exe` to a
+folder on your PATH. There is no installer.
+
+A second account: pick its tab, start a session, type `/login` once in it.
 
 To update, replace the file. A running launcher holds it: rename the old one first
 (`claude-auto.exe` → `claude-auto.old.exe`), copy the new one in, delete the old one later. From
@@ -113,19 +153,21 @@ To update, replace the file. A running launcher holds it: rename the old one fir
 leave it and copy `claude-auto.exe` into it. Config, prefs and caches carry over. With no config file the launcher runs one `work` account on `~/.claude`.
 
 The launch screen is tested against Claude Code `2.1.316`. A much older or newer CLI may accept
-different flags. Node.js or PowerShell 7 is needed only for `.js`/`.mjs` or `.ps1` launch hooks and
-for `maintenanceActions` scripts (always run through `pwsh -File`).
+different flags.
 
 ## Usage
 
 ```
 claude-auto                              # the screens, then claude
-claude-auto --model opus "fix the build" # the screens, then claude with these arguments added
+claude-auto --model opus "fix the build" # no screens: claude on the default account with exactly these arguments
 claude-auto --launcher-version           # the launcher's own version
 ```
 
-Every argument goes to `claude` untouched, except the launcher's own `--launcher-version`,
-`--launcher-debug` and `--launcher-timings`. `--version` belongs to the CLI.
+With any argument there are no screens: claude starts on the default account (the canonical one,
+or the first shown one when it is hidden) with exactly those arguments. The launcher's own
+`--launcher-version`, `--launcher-debug` and `--launcher-timings [--days N]` count only as the whole
+command line; anywhere else they go to claude too. The launcher has no `--help` of its own:
+`claude-auto --help` and `--version` are claude's.
 
 ### Keys
 
@@ -138,12 +180,40 @@ Every argument goes to `claude` untouched, except the launcher's own `--launcher
 | Screen | Keys |
 |---|---|
 | **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices · `enter` next (with `projectScreen: "onDemand"`: launch) · `u` maintenance · `esc` quit |
-| **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `h` hide or show the project (saved to `hiddenProjects`) · `v` list the hidden projects, marked · `esc` back |
+| **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `h` hide or show the project (saved to `hiddenProjects`) · `v` list the hidden projects, marked · `esc` back one step |
+| **Project filter** (`/`) | type words · `↑`/`↓` move while typing · `←`/`→` the action · `enter` runs the highlighted row (`no project matches` when none) · `esc` clears |
+| **Path navigator** (`enter a path...`) | type a path · `↑`/`↓` move · `enter` or `→` enters the folder (on `use this folder`: picks it) · `←` up one folder · `backspace` on an empty segment goes up · `ctrl+backspace` drops a segment · `tab` completes, a second `tab` cycles · `esc` back to the list |
 | **Session picker** | `enter` open · `f` fork · `tab` this project or every project · `/` filter · `esc` back |
-| **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · `l` launch rows editor: `w`/`s` row, `ctrl+w`/`ctrl+s` or `alt+↑`/`alt+↓` move it, `ctrl+x` or `space` hide/show (not `account`; a hidden row stays in place while editing, dimmed), `a`/`d` or `←`/`→` the value a hidden row launches with, `enter` save to `rows` and `hiddenValues` (shown on return to the launch screen), `esc` cancel; with `remote` off the remote entry reads `off in config` and takes no key · one key per `maintenanceActions` entry · `esc` back |
-| **Mouse** | hover highlights · click selects · click the highlighted row to run it · click a footer button to press its key · wheel scrolls |
+| **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · `l` launch rows editor · one key per `maintenanceActions` entry · `esc` back |
+| **Rows editor** (`l`) | `w`/`s` row · `ctrl+w`/`ctrl+s` or `alt+↑`/`alt+↓` move it · `ctrl+x` or `space` hide/show (not `account`) · `a`/`d` or `←`/`→` the value a hidden row launches with · `enter` save to `rows` and `hiddenValues` · `esc` cancel |
+| **Mouse** | hover highlights · a click selects a row, a second click on that row runs it · click a footer button to press its key · wheel scrolls |
 
-The project screen lists the current directory first, then known projects from `~/.claude/projects`.
+- A row the keyboard or the wheel moved to never runs on one click: it takes a click to select it
+  first (project screen, session picker, path navigator).
+- Project screen `esc` steps back one level: an open filter, then a kept filter, then the hidden
+  view, then the launch screen. The footer names the keys of the state you are in (`v back` in
+  the hidden view, `esc clear` with a kept filter, the navigator's own keys).
+- Rows editor: a hidden row stays in place while editing, dimmed. A click selects a row, a second
+  click on a hidden row's value steps it; footer buttons `[^w] up`, `[^s] down`, `[^x] show/hide`,
+  `[enter] save`, `[esc] cancel`. A save shows on return to the launch screen. With `remote` off
+  the remote entry reads `off in config` and takes no key.
+- The held-session warning (another claude holds the session you picked) has clickable
+  `[enter] go on` and `[esc] back` buttons.
+
+The project screen lists the current directory first, then known projects from `~/.claude/projects`
+only (a project only a secondary account ever ran in, with sharing off, is not listed; the session
+picker reads the chosen account's own `<root>\projects`, or the canonical one with sharing on).
+Picking a row checks the folder without waiting on an offline network share; a file path is
+refused.
+
+Search (`/`): space-separated words must all match; a pasted path (`C:\src\x`, a UNC path) matches
+as typed. Name starts with a word first, then name contains it, then path; hidden projects last;
+matched text underlined.
+
+The path navigator lists the typed parent's subfolders, filtered by the last segment, and the
+drives on an empty field, with a `use this folder` row and a `..` row. Network folders are listed
+only on `tab` (`no answer in 1000 ms` for a dead share). A missing folder whose parent exists asks
+`create <path>? enter yes / esc no`: one level, never on a network path.
 Scratch directories (under the temp folder or a profile's `jobs\<id>\tmp`) are left out and counted
 in the title, and so is a project only headless sessions (`claude -p`, the SDKs) ever ran in, a git
 root included (`hideHeadlessProjects`). Headless sessions are left out of the picker the same way.
@@ -170,8 +240,8 @@ mouse off.
 │   + enter a path...                                                                             │
 │   action  ● [new] ○ continue ○ resume ○ worktree                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
-  [/] filter   ┊  [h] hide      ┊  [v] hidden  ┊  [esc] back
+  w/s move      ┊  a/d action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume
+  [t] worktree  ┊  [/] filter  ┊  [h] hide     ┊  [v] hidden    ┊  [esc] back
 
 ╭─ resume ─ 5 sessions ───────────────────────────────────────────────────────────────────────────╮
 │   project-1  snippet 1 about t… 7 min │ project-2                                               │
@@ -186,15 +256,13 @@ mouse off.
 ```
 </details>
 
-> [!NOTE]
-> The maintenance screen is not covered by preview mode: its actions run against your real Claude
-> Code install even during a preview run.
-
 ### Preview mode
 
 Preview mode drives the screens from a key script and prints the command it would run. Nothing is
-launched, no real Claude is needed and nothing is written outside one projects cache in `%TEMP%`. Point every file it reads at throwaway
-copies:
+launched and nothing is written outside one projects cache in `%TEMP%`: no update check, no
+sharing repair, no hooks, no secrets, and maintenance actions answer `preview - nothing was run`.
+A `claude` must still resolve on PATH (an empty `claude.cmd` in a PATH folder will do). Point every
+file it reads at throwaway copies:
 
 ```powershell
 $t = Join-Path $env:TEMP 'claude-auto-demo'
@@ -223,14 +291,13 @@ exit 1 ran out of keys before a launch or a quit.
 | `CLAUDE_AUTO_NO_UPDATE=1` | skips the release-channel check and the update it would run before the launch screen |
 | `CLAUDE_AUTO_INPUT_TRACE=1` | logs every raw input record to `~/.claude/claude-auto-logs/input-<date>-<pid>.log` |
 | `CLAUDE_AUTO_ASCII=1` | forces ASCII box drawing (otherwise auto-detected from the console code page) |
-| `CLAUDE_AUTO_PREVIEW=1` | drives the whole UI and prints the `claude` command it would run, without running it. The maintenance screen is the one exception |
+| `CLAUDE_AUTO_PREVIEW=1` | drives the whole UI and prints the `claude` command it would run, without running it |
 | `CLAUDE_AUTO_PREVIEW_KEYS` | a key script for a preview run, e.g. `Enter,r,Enter` |
 | `CLAUDE_AUTO_PREVIEW_SIZE` | the preview's terminal size, e.g. `100x30` (default `78x24`) |
 | `CLAUDE_AUTO_PROJECTS_ROOT` | the projects directory the project screen and the picker read, instead of `~/.claude/projects` (a test seam) |
 | `CLAUDE_AUTO_RATE_LIMITS_DIR` | where the usage records are read, instead of `~/.claude/rate-limits` (a test seam) |
 | `CLAUDE_AUTO_DEBUG=1` | debug mode, see below. `footer` adds a timing line under the screen |
-| `CLAUDE_NO_ROAM=1` | never routes a session through the companion server, even with `remote: true` |
-| `CLAUDE_REMOTE_ROOT` | path to the (unpublished) `remote-control-claude-code` checkout |
+| `CLAUDE_NO_ROAM=1`, `CLAUDE_REMOTE_ROOT` | author setup only, see [Optional author setup](#optional-author-setup) |
 | `CLAUDE_AUTO_MIRROR_EXCLUDE`, `CLAUDE_AUTO_MIRROR_SECRETS=0` | the MCP mirror's exclude list and credential opt-out (see [Multi-account sharing](#multi-account-sharing)) |
 | `NO_COLOR`, `TERM=dumb` | disable colour output |
 
@@ -283,46 +350,67 @@ two-account starting point.
 
 | key | type | default | notes |
 |---|---|---|---|
-| `accounts[]` | `{key, root, label, tint, hidden, archived}` | one `work` account | key 1-8 chars, unique (a shared first letter is fine: the no-UI prompt advertises the shortest unique prefix). root absolute, exactly one must resolve to `~/.claude` (the canonical account). tint one of Green/Magenta/Cyan/Blue/Yellow/Red. hidden omits it from the tab strip and the no-UI prompt's text, though it stays typeable there. archived makes the launcher ignore it entirely (no tab, no prompt entry, no relink or junction, no limits, not restored from prefs) and is refused with a warning on the canonical account, while its key still counts for uniqueness. Breaking any one of these rules discards the WHOLE roster: the warning names the culprit and its value, and every account falls back to the single default `work` account |
+| `accounts[]` | `{key, root, label, tint, hidden, archived}` | one `work` account | see [Accounts](#accounts) below |
 | `sharing` | bool | `false` | forced off with fewer than two accounts. Read [Multi-account sharing](#multi-account-sharing) before turning it on |
-| `remote` | bool | `false` | **the companion it needs is not published**: `crc.cmd` on PATH plus a `remote-control-claude-code` checkout (`CLAUDE_REMOTE_ROOT`). Leave it off unless you have written your own. Adds a Remote row to the launch screen and a second prompt in the no-UI fallback |
+| `remote` | bool | `false` | keep it off: author setup only, see [Optional author setup](#optional-author-setup) |
 | `riderMcp` | `auto`\|`on`\|`off` | `auto` | `auto` scans for Rider's MCP port only while Rider is running |
 | `extraMcpConfigs[]` | paths | `["~/.claude/mcp-shared.json"]` | must be absolute. A relative entry is skipped with a warning |
-| `secretsRoot` | path | `~/.claude-secrets` | must be absolute. Read only when vsec is not found. See [Secrets](#secrets) |
-| `vsecPath` | path | `""` | the `vsec` secrets tool (`vsec.exe` or a `.cmd` shim); empty = `CLAUDE_AUTO_VSEC`, then PATH. Must be absolute. See [Secrets](#secrets) |
+| `secretsRoot` | path | `~/.claude-secrets` | must be absolute. See [Secrets](#secrets) |
+| `vsecPath` | path | `""` | author setup only, see [Optional author setup](#optional-author-setup) |
 | `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice with the chosen project as the working directory, each best-effort. Must be absolute. Entries run at the same time; an entry that is an array of paths runs them in order (`["a.ps1", ["b.ps1", "c.ps1"]]`) |
 | `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p l` (`l` is the launch rows editor). `script` is required and must be absolute. An entry failing either check is skipped with a warning |
 | `rows[]` | row names | every row | the launch rows in drawing order: `account`, `remote`, `model`, `effort`, `advisor`, `permission`, `mode`. An unlisted row is hidden and launches with its `hiddenValues` entry, else its default (`mode` = normal), never a remembered choice. `account` is always shown, first when unlisted. `remote` keeps its place here while the `remote` key is off and shows once it is on. Duplicates: the first wins; unknown names are named in one warning. Edit it on the maintenance screen with `l` (`ctrl+w`/`ctrl+s` move, `ctrl+x` hide, `a`/`d` hidden value, `enter` save); the launch screen shows it on return |
-| `hiddenValues` | object | none | row name -> the value that row launches with while hidden, e.g. `{"effort": "high", "model": "fable"}`: the same claude arguments as picking it on a shown row. Values are the row's own: `model` takes the row keys `haiku`, `sonnet1m`, `opus1m`, `fable` (after `modelOrder`), `remote` only `on` or `off`; `account` takes none. Saving in the rows editor keeps only hidden rows' entries: a shown row's entry and a bad entry are removed. A hidden row never takes a remembered value, a hidden row never takes a remembered value, not even from another account tab this run. An unknown row or value warns and is skipped. A model the account lacks falls back as a remembered one does: to `default` |
+| `hiddenValues` | object | none | row name -> the value that row launches with while hidden, e.g. `{"effort": "high", "model": "fable"}`: the same claude arguments as picking it on a shown row. Values: [the table below](#row-values); `account` takes none. Saving in the rows editor keeps only hidden rows' entries: a shown row's entry and a bad entry are removed. A hidden row never takes a remembered value, not even from another account tab this run. An unknown row or value warns and is skipped. A model the account lacks falls back as a remembered one does: to `default` |
 | `modelOrder[]` | family names | `["haiku","sonnet","opus","fable"]` | the model row after `default`, in this order. An unlisted family is hidden. Unknown names warn |
 | `hiddenProjects[]` | paths | `[]` | projects the project screen leaves out. `h` appends the project's path, or removes every entry that expands to it; the other entries stay as written. A save that fails keeps the change for that run and says why. Absolute, case-insensitive; a path that no longer exists is kept. A filter or `v` still finds them |
 | `hideHeadlessProjects` | bool | `true` | a project with no interactive session (only `sdk-*` transcripts) is hidden even when it is a git root. `false` keeps a headless git root listed |
 | `projectScreen` | `always`\|`onDemand` | `always` | `onDemand`: Enter on the launch screen starts in the launch directory, and an `action` row (`new`, `project`, `continue`, `resume`, `worktree`, never remembered) picks what it does; `project` opens the project screen for that launch, Esc returns |
 | `mouse` | bool | `true` | `false` arms no mouse input. `CLAUDE_AUTO_NO_MOUSE=1` turns it off whatever this says |
 
+#### Accounts
+
+- `key`: 1-8 characters, unique ignoring case (a shared first letter is fine: the no-UI prompt
+  advertises the shortest unique prefix).
+- `root`: absolute; exactly one account's root must be `~/.claude` (the canonical account).
+- `tint`: Green, Magenta, Cyan, Blue, Yellow or Red. Anything else falls back to Green with a
+  warning.
+- `hidden`: left out of the tab strip and the no-UI prompt's text, still typeable there.
+- `archived`: ignored entirely (no tab, no prompt entry, no relink or junction, no limits, not
+  restored from prefs), while its key still counts for uniqueness. On the canonical account it is
+  refused with a warning and the account stays live.
+
+Only these discard the WHOLE roster, falling back to the single default `work` account with a
+warning naming the culprit: an empty list, a key outside 1-8 characters, a duplicate key, a root
+that is not absolute, or not exactly one canonical root.
+
+#### Row values
+
+| Row | Values |
+|---|---|
+| `model` | `default`, then the families in `modelOrder`: `haiku`, `sonnet1m`, `opus1m`, `fable` |
+| `effort` | `default`, `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` |
+| `advisor` | `default`, `fable`, `opus`, `off` |
+| `permission` | `default`, `plan`, `auto`, `acceptEdits`, `bypass` (= `bypassPermissions`) |
+| `mode` | `normal`, `safe` |
+| `remote` | `on`, `off` (author setup only) |
+
 </details>
 
 ### Secrets
 
-With a `vsec` secrets tool (config `vsecPath`, else env `CLAUDE_AUTO_VSEC`, else `vsec.exe` or
-`vsec.cmd` on PATH), the launcher runs `vsec launch-env --cwd <project>` windowless and sets the
-variables it returns (JSON `{vars:[{name,value}], loaded, notes}`) on the session. Names that are no
-valid variable name, or that the system owns (`PATH`, `TEMP`, ...), are refused. If vsec is found
-but fails (non-zero exit, unreadable output, or a configured path that does not exist), the session
-starts with no secrets and one yellow line saying why; the files below are not read then, so two
-sources are never mixed.
-
-Without vsec, the launcher reads `secretsRoot` itself and prints `secrets from files (vsec not
-found)`. `secretsRoot` is a directory of per-project subdirectories whose files become environment variables
-of the launched session (file name = variable name, content = value). `.md` files and empty files
-are skipped. Three tiers apply in order, each later one overriding the earlier: `shared/`,
-`<slug>/org/` (opted in with a junction, never automatic), then `<slug>/` for the chosen project.
+The launcher reads `secretsRoot`; when it found anything it prints `secrets from files (vsec not
+found)`. `secretsRoot` is
+a directory of per-project subdirectories whose files become environment variables of the launched
+session (file name = variable name, content = value). `.md` files and empty files are skipped.
+`shared/` applies first, then `<slug>/` for the chosen project overrides it. Names that are no
+valid variable name, or that the system owns (`PATH`, `TEMP`, ...), are refused.
 
 ### Multi-account sharing
 
 `sharing: true` (two or more accounts, off by default) hardlinks `settings.json` and
 `statusline.js`, symlinks `CLAUDE.md`, and junctions `projects`, `plugins`, `hooks`, `agents`,
-`skills`, `rules`, `sessions`, `file-history`, `session-env`, `tasks` and `shell-snapshots` from
+`skills`, `output-styles`, `rules`, `sessions`, `file-history`, `session-env`, `tasks` and
+`shell-snapshots` from
 every secondary account's root back to the canonical (`~/.claude`) one, repaired on every launch.
 
 > [!WARNING]
@@ -332,8 +420,10 @@ every secondary account's root back to the canonical (`~/.claude`) one, repaired
 >   `<file>.pre-relink.<yyyyMMdd-HHmmss>`. A `CLAUDE.md` copy equal to the canonical one is
 >   replaced and saved as `CLAUDE.md.pre-symlink.<yyyyMMdd-HHmmss>`.
 > - Enabling it CREATES every secondary account's root directory on the next launch.
-> - Each junction it creates gets two `icacls` deny ACEs, so removing one later needs
->   `icacls <path> /L /remove:d "<user>"` before a plain delete works.
+> - Each junction it creates gets an `icacls` deny-delete ACE (`(DE)`, set with `/L` on the link
+>   itself), and the secondary account's root one deny-delete-child ACE (`(DC)`), so Claude Code
+>   cannot delete the link. Removing a junction later needs `icacls <junction> /L /remove:d
+>   "<DOMAIN\user>"` and `icacls <root> /remove:d "<DOMAIN\user>"` first.
 > - The MCP mirror copies user- and project-scoped server definitions from the canonical account
 >   into the others verbatim, secrets included (a server's `env` and `headers`).
 >   `CLAUDE_AUTO_MIRROR_SECRETS=0` copies servers without those two fields and keeps the target's
@@ -345,6 +435,9 @@ needed.
 
 <details><summary><b>Files it writes</b></summary>
 
+- `~/.claude/claude-auto.json` (or `CLAUDE_AUTO_CONFIG`) - the config itself: the rows editor saves
+  `rows` and `hiddenValues`, `h` saves `hiddenProjects`. Every other key is kept; a file that is not
+  UTF-8 JSON, or whose file attributes cannot be read, is refused, never rewritten.
 - `~/.claude/claude-auto-prefs.json` - remembered account, model, effort, advisor, permission and
   remote choices.
 - `~/.claude/launcher-logs/*.jsonl` - one file per day, 14-day retention. Records each launch: the
@@ -365,8 +458,9 @@ needed.
   one set per launcher that started it (`remote: true` only), not swept.
 - `<file>.pre-relink` and its dated copies beside a shared file a sharing repair replaced.
 
-The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer
-(`{"fiveHour": 34, "sevenDay": 61, "atMs": <epoch ms>}`). Nothing in this repo writes that file.
+The launch screen's usage bars read `~/.claude/rate-limits/<key>.json`
+(`{"fiveHour": 34, "sevenDay": 61, "atMs": <epoch ms>}`). Nothing in this repo writes that file:
+without a writer of your own (a statusline script, say) the bars stay empty.
 
 </details>
 
@@ -379,9 +473,9 @@ The launch screen's usage bars need a `~/.claude/rate-limits/<key>.json` writer
 in-use executable. That is what `r` (rename swap) is for: it renames the running binary aside and
 installs the new build in its place.
 
-**The whole roster collapsed to one `work` account.** Any single invalid account discards the entire
-roster by design. The warning at launch names the culprit and its value. The usual cause is a
-Windows path in JSON: `"C:\Users\me\.claude"` is invalid JSON escaping.
+**The whole roster collapsed to one `work` account.** One of the rules under [Accounts](#accounts)
+broke: the warning at launch names the culprit and its value. The usual cause is a Windows path in
+JSON: `"C:\Users\me\.claude"` is invalid JSON escaping.
 
 **The box drawing is mojibake.** Set `CLAUDE_AUTO_ASCII=1`, or switch the console to UTF-8.
 
@@ -400,10 +494,28 @@ Nothing is installed outside your own user profile, and there is no uninstaller.
 2. Delete the clone.
 3. Optional, to remove the state too: the `claude-auto-*.json` files, `launcher-logs/` and
    `claude-auto-logs/` under `~/.claude` (full list under **Files it writes**).
-4. **Only if you ever set `sharing: true`**: lift the two deny ACEs on each junction it created
-   (`icacls <path> /L /remove:d "<user>"`), then remove the junction.
+4. **Only if you ever set `sharing: true`**: lift the deny ACEs, then remove the junctions. Per
+   junction `icacls <junction> /L /remove:d "<DOMAIN\user>"`, per secondary root
+   `icacls <root> /remove:d "<DOMAIN\user>"` (`whoami` prints `<DOMAIN\user>`).
 
 </details>
+
+## Optional author setup
+
+The author's own machine has three pieces that are not part of this repo and not published. The
+launcher works fully without them: leave their keys at the defaults.
+
+- **`vsec`**, a private secrets tool. Found through config `vsecPath`, env `CLAUDE_AUTO_VSEC`, or
+  `vsec.exe`/`vsec.cmd` on PATH, it replaces the `secretsRoot` walk: the launcher runs
+  `vsec launch-env --cwd <project>` windowless and sets the variables it returns (JSON
+  `{vars:[{name,value}], loaded, notes}`). If vsec is found but fails, the session starts with no
+  secrets and one yellow line saying why; the files are not read then.
+- **The `<slug>/org/` secrets tier**: a junction at `secretsRoot\<slug>\org`, read between
+  `shared/` and `<slug>/`. Never created automatically.
+- **`remote: true`**: routes a session through an unpublished companion (`crc.cmd` on PATH plus a
+  `remote-control-claude-code` checkout found through `CLAUDE_REMOTE_ROOT`). It adds a Remote row to
+  the launch screen and a second prompt to the no-UI fallback. `CLAUDE_NO_ROAM=1` keeps a session
+  off it even with `remote: true`.
 
 ## Development
 
@@ -423,6 +535,9 @@ cargo clippy --all-targets --locked -- -D warnings
   against a fake home and a fake `claude`.
 - A privacy scan keeps personal data out of the tracked files, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - CI (`.github/workflows/ci.yml`, a Windows runner) runs fmt, clippy and test, all `--locked`.
+- Releases: `.github/workflows/release.yml`, run by hand for an existing tag, builds the exe with the
+  C runtime linked in (`.cargo/config.toml`), publishes it with its `.sha256` and a build
+  attestation, and takes the release notes from that version's `CHANGELOG.md` section.
 - The images in this README are drawn by scripts in [docs/media](docs/media/README.md).
 - The launcher began as a PowerShell script and was ported to Rust: [PORTING.md](PORTING.md).
 

@@ -4,6 +4,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- Project screen: `enter a path...` opens an in-screen path navigator instead of a console line:
+  a text field, the typed parent's folders filtered as you type, the drives on an empty field, and
+  `use this folder` and `..` rows. Enter or right enters a folder, left goes up, Backspace on an
+  empty segment goes up, Ctrl+Backspace drops a segment, Tab completes and a second Tab cycles, Esc
+  goes back with no message. Network folders are listed only on Tab (`no answer in 1000 ms` for a
+  dead share). A missing folder asks `create <path>? enter yes / esc no`: one level, never on a
+  network path.
+- Project search: space-separated words must all match; a pasted path matches as typed. Ranked
+  name starts with a word, then name contains it, then path; hidden projects last; matches
+  underlined. Enter in the open filter runs the highlighted row and the arrows move while typing;
+  with no match Enter says `no project matches`.
+- Rows editor (maintenance `l`): a click selects a row, a second click on a hidden row's value
+  steps it; footer buttons `[^w] up`, `[^s] down`, `[^x] show/hide`, `[enter] save`, `[esc] cancel`;
+  the a/d hint is a line in the body.
+- Held-session warning: clickable `[enter] go on` and `[esc] back` buttons.
+- README: Requirements, install steps with a hash check, row values, and
+  `docs/setup-with-claude-code.md`, a guide to hand to your own Claude Code.
+
+### Changed
+
+- A click selects a row and a second click on that row runs it; a row the keyboard or the wheel
+  moved to never runs on one click (project screen, session picker, path navigator).
+- Project screen Esc steps back one level: open filter, kept filter, hidden view, then the launch
+  screen. The footer follows the state: the filter shows `up/down move · left/right action ·
+  enter run · esc clear`, the hidden view `v back`, a kept filter `esc clear`, the navigator its
+  own keys. The `w/s move` and `a/d action` hints stay at 78 to 120 columns.
+- Choosing a project never hangs on an offline network share; a file path is refused.
+- Release builds link the C runtime statically: no VC++ redistributable needed.
+- Release notes come from the version's CHANGELOG section.
+
+### Fixed
+
+- The config writer (rows editor, `h`) refuses a config whose file attributes cannot be read; it
+  could replace such a file with one holding only the saved key.
+
 ## [0.7.3] — 2026-11-11
 
 ### Added
