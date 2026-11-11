@@ -7,13 +7,13 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use super::Project;
 use super::paths::{DriveCache, is_scratch_key, on_network, path_present, project_key, scratch_key, scratch_keys};
+use super::{Phase, Project, Registry};
 
 /// What one build reads, all injected so a suite owns its tree.
 #[derive(Debug, Clone)]
@@ -60,7 +60,10 @@ fn transcripts(dir: &Path) -> Vec<Transcript> {
             let path = e.path();
             let name = e.file_name().to_string_lossy().into_owned();
             let is_jsonl = path.extension().is_some_and(|x| x.eq_ignore_ascii_case("jsonl"));
-            let meta = fs::metadata(&path).ok().filter(|m| m.is_file() && is_jsonl)?;
+            // The enumeration's own record: no open per file (most of a warm build's time). A
+            // link still resolves to its target as before.
+            let meta = e.metadata().ok().filter(|m| !m.is_symlink()).or_else(|| fs::metadata(&path).ok());
+            let meta = meta.filter(|m| m.is_file() && is_jsonl)?;
             Some(Transcript {
                 path,
                 name,
@@ -228,25 +231,62 @@ struct SlugRow {
     interactive: bool,
 }
 
+/// Times `f` as the phase `name`.
+fn timed<T>(phases: &mut Vec<Phase>, name: &'static str, f: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let out = f();
+    phases.push(Phase {
+        name,
+        start,
+        end: Instant::now(),
+    });
+    out
+}
+
+/// Every slug folder with its transcripts, newest first; a folder without one is left out.
+fn scan(root: &Path) -> Option<Vec<(String, Vec<Transcript>)>> {
+    let dirs = fs::read_dir(root).ok()?;
+    Some(
+        dirs.flatten()
+            .filter(|d| d.path().is_dir())
+            .map(|d| (d.file_name().to_string_lossy().into_owned(), transcripts(&d.path())))
+            .filter(|(_, ts)| !ts.is_empty())
+            .collect(),
+    )
+}
+
 /// Builds the registry. Never fails: a missing root is an empty list.
-pub(crate) fn build_registry(inp: &RegistryInput<'_>) -> Vec<Project> {
-    let Ok(dirs) = fs::read_dir(inp.projects_root) else {
-        return Vec::new();
+pub(crate) fn build_registry(inp: &RegistryInput<'_>) -> Registry {
+    let mut phases = Vec::new();
+    let Some(folders) = timed(&mut phases, "scan", || scan(inp.projects_root)) else {
+        return Registry {
+            projects: Vec::new(),
+            phases,
+        };
     };
-    let cache = read_cache(inp.cache_path);
+    let cache = timed(&mut phases, "cache read", || read_cache(inp.cache_path));
     let mut fresh = Map::new();
+    let rows = timed(&mut phases, "derive", || derive(inp, &folders, &cache, &mut fresh));
+    timed(&mut phases, "cache write", || write_cache(inp.cache_path, &fresh));
+    Registry {
+        projects: merge(rows),
+        phases,
+    }
+}
+
+/// One row per slug folder whose path is known, with the cache entries this build keeps.
+fn derive(
+    inp: &RegistryInput<'_>,
+    folders: &[(String, Vec<Transcript>)],
+    cache: &Map<String, Value>,
+    fresh: &mut Map<String, Value>,
+) -> Vec<SlugRow> {
     let mut drives = DriveCache::new();
     let (temp_keys, profile_keys) = scratch_keys(inp.temp_roots, inp.profile_roots);
     let mut rows = Vec::new();
-    for d in dirs.flatten() {
-        let dir = d.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let slug = d.file_name().to_string_lossy().into_owned();
-        let ts = transcripts(&dir);
+    for (slug, ts) in folders {
         let Some(newest) = ts.first() else { continue };
-        let interactive = interactive_transcript(&slug, &ts, &cache, &mut fresh);
+        let interactive = interactive_transcript(slug, ts, cache, fresh);
         let activity = interactive.unwrap_or(newest).modified;
         let key = format!("{slug}|{}", ticks(newest.modified));
         let cached_path = cache
@@ -288,15 +328,14 @@ pub(crate) fn build_registry(inp: &RegistryInput<'_>) -> Vec<Project> {
                 path,
                 slug: slug.clone(),
                 slugs: vec![slug.clone()],
-                worktree: slug_worktree(&slug),
+                worktree: slug_worktree(slug),
                 last_activity_ms: Some(unix_ms(activity)),
                 hidden: headless_hidden || scratch,
             },
             interactive: interactive.is_some(),
         });
     }
-    write_cache(inp.cache_path, &fresh);
-    merge(rows)
+    rows
 }
 
 /// One real directory is one row: every slug kept, hidden only when every slug is, dated by its

@@ -55,6 +55,7 @@ fn build(root: &Path, cache: &Path, temp: &[String], profiles: &[String]) -> Vec
         profile_roots: profiles,
         hide_headless: false,
     })
+    .projects
 }
 
 #[test]
@@ -73,7 +74,8 @@ fn headless_git_root_is_hidden() {
         temp_roots: &[],
         profile_roots: &[],
         hide_headless: true,
-    });
+    })
+    .projects;
     let hidden = |reg: &[Project], slug: &str| reg.iter().find(|p| p.slug == slug).unwrap().hidden;
     assert!(hidden(&on, "Gr"), "only sdk-* transcripts: hidden even in a git root");
     assert!(!hidden(&on, "Mx"), "an interactive session keeps it listed");
@@ -126,6 +128,31 @@ fn a_cache_hit_answers_without_rereading() {
     assert_eq!(build(&root, &cache, &[], &[])[0].path, p1);
     write_at(&f, &user(&p2, None), when);
     assert_eq!(build(&root, &cache, &[], &[])[0].path, p1, "same mtime: the cache answers");
+}
+
+#[test]
+fn a_warm_cache_lists_what_a_cold_scan_lists_after_append_new_and_delete() {
+    let t = Tree::new("warm");
+    let root = t.0.join("projects");
+    let (wa, wb, wc, wn) = (t.dir("wa"), t.dir("wb"), t.dir("wc"), t.dir("wn"));
+    write_at(&root.join("A").join("s.jsonl"), &user(&wa, Some("cli")), ago(10));
+    write_at(&root.join("B").join("s.jsonl"), &user(&wb, Some("cli")), ago(60));
+    write_at(&root.join("C").join("s.jsonl"), &user(&wc, Some("cli")), ago(5));
+    let warm = t.0.join("warm.json");
+    assert_eq!(slugs(&build(&root, &warm, &[], &[])), "C,A,B");
+    // Given: a session appended (its file closed again, as Claude Code writes), a new folder, a
+    // deleted folder.
+    let mut f = File::options().append(true).open(root.join("B").join("s.jsonl")).unwrap();
+    std::io::Write::write_all(&mut f, b"{\"type\":\"assistant\"}\n").unwrap();
+    drop(f);
+    write_at(&root.join("N").join("s.jsonl"), &user(&wn, Some("cli")), ago(30));
+    fs::remove_dir_all(root.join("C")).unwrap();
+    // When: the same tree is built over the warm cache and from nothing.
+    let from_cache = build(&root, &warm, &[], &[]);
+    let cold = build(&root, &t.0.join("cold.json"), &[], &[]);
+    // Then: the same rows, the appended session first by its new activity.
+    assert_eq!(from_cache, cold);
+    assert_eq!(slugs(&from_cache), "B,A,N");
 }
 
 #[test]

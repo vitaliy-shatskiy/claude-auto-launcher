@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Changed
+
+- The launch screen no longer waits for the project list: the registry is built on a background
+  thread while the launch screen is up, and Enter waits only for what is left of that one build.
+  A warm build reads each transcript's time from the folder listing instead of opening every file
+  (about 3x faster on 500 folders). Debug timings split `load:project` into `registry:scan`,
+  `registry:cache read`, `registry:derive`, `registry:cache write`, plus `wait:project`.
+
 ## [0.8.0] — 2026-11-11
 
 ### Added

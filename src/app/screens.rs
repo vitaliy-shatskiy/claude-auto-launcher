@@ -13,6 +13,7 @@ use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore};
 use crate::layout::split_text_lines;
 use crate::out;
 use crate::prefs;
+use crate::timing::Timings;
 use crate::types::VersionInfo;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{ConsoleTerm, PreviewTerm, Term, UiStop, parse_preview_keys, parse_preview_size};
@@ -87,15 +88,17 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let merged = prefs::merge_prefs(&mut state, &prefs_file, &roster, now_ms());
     tm.end(prefs_span);
     tm.end(load);
-    let load = tm.begin(&["load", "project"]);
     let cache = run.preview.then(|| {
         let tmp = std::env::temp_dir();
+        let _s = tm.scope(&["preview cache sweep"]);
         projects::remove_stale_preview_cache(&tmp);
         tmp.join(format!("claude-auto-projects-preview-{}.json", std::process::id()))
     });
     let account_roots: Vec<String> = run.cfg.accounts.iter().map(|a| a.root.clone()).collect();
     let roots = projects::launcher_profile_roots(&run.ctx.home, var("CLAUDE_CONFIG_DIR").as_deref(), &account_roots);
-    let project_list = projects::project_registry(cache.as_deref(), &roots, run.cfg.hide_headless_projects);
+    // The scan runs while the launch screen is up; the start selection waits for it after Enter.
+    let (build_cache, hide) = (cache.clone(), run.cfg.hide_headless_projects);
+    let mut prefetch = projects::Prefetch::start(move || projects::project_registry(build_cache.as_deref(), &roots, hide));
     // An unwritable or refused config keeps the change for this run only; the screen says why.
     let save_hidden = |path: &str, change: projects::HideChange| -> Result<(), String> {
         if run.preview {
@@ -107,9 +110,8 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         paths: std::cell::RefCell::new(run.cfg.hidden_projects.clone()),
         save: &save_hidden,
     };
-    let project_source = projects::set_launch_start_project(&mut state, &run.ctx.cwd, &project_list);
-    let preselect = state.project.clone();
-    tm.end(load);
+    let mut project_source = String::new();
+    let mut preselect = String::new();
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
     let mut chosen_how: Option<String>;
     let mut rows_store = ConfigRows { run };
@@ -130,10 +132,16 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             break UiEnd::Cancelled;
         };
         state = next;
+        let project_list = registry(&mut prefetch, tm);
+        // Deferred from before the launch screen: the rule reads only the cwd and the project the
+        // final tab remembers, so applying it once here equals applying it on every tab switch.
+        if state.start.is_none() {
+            project_source = projects::set_launch_start_project(&mut state, &run.ctx.cwd, project_list);
+            preselect.clone_from(&state.project);
+        }
         let via_project = state.action == PROJECT_ACTION;
         if opens_project_screen(run.cfg.project_screen, &state.action) {
-            let Some(chosen) = projects::run_project_screen(term.as_mut(), &project_list, &run.ctx.cwd, style, &hiding, run.preview)?
-            else {
+            let Some(chosen) = projects::run_project_screen(term.as_mut(), project_list, &run.ctx.cwd, style, &hiding, run.preview)? else {
                 if run.preview {
                     break UiEnd::PreviewPickerCancelled;
                 }
@@ -145,7 +153,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             state.action.clone_from(&chosen.action);
             chosen_how = Some(chosen.how);
         } else {
-            start_in_cwd(&mut state, &run.ctx.cwd, &project_list);
+            start_in_cwd(&mut state, &run.ctx.cwd, project_list);
             chosen_how = Some("cwd".into());
         }
         // Back on the launch screen after a pick, the action row still says `project`.
@@ -239,6 +247,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         }
         back_to(&mut state);
     };
+    prefetch.finish();
     if let Some(c) = cache
         && c.exists()
         && std::fs::remove_file(&c).is_err()
@@ -246,6 +255,22 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         // A stale per-PID cache is swept by the next preview.
     }
     Ok(outcome)
+}
+
+/// The prefetched registry. The first call records the build (`load:project`, its `registry:*`
+/// steps, measured on the build's thread) and how long the screen waited for it (`wait:project`).
+fn registry<'a>(prefetch: &'a mut projects::Prefetch, tm: &Timings) -> &'a [projects::Project] {
+    let (reg, waited) = prefetch.get();
+    if let Some(w) = waited {
+        if let (Some(first), Some(last)) = (reg.phases.first(), reg.phases.last()) {
+            let load = tm.add(&["load", "project"], None, first.start, last.end, None);
+            for p in &reg.phases {
+                tm.add(&["registry", p.name], Some(load), p.start, p.end, None);
+            }
+        }
+        tm.add(&["wait", "project"], None, w.start, w.end, None);
+    }
+    &reg.projects
 }
 
 /// Config `rows` and `hiddenValues` on disk, re-read each time.

@@ -5,6 +5,7 @@
 mod nav_view;
 mod navigator;
 mod paths;
+mod prefetch;
 mod registry;
 mod screen;
 mod select;
@@ -12,7 +13,7 @@ mod view;
 mod win;
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use serde_json::Value;
 
@@ -22,6 +23,7 @@ use crate::launch::LaunchState;
 use crate::ui::{Term, UiStop};
 
 pub use paths::project_key;
+pub use prefetch::{Prefetch, Waited};
 pub(crate) use registry::path_from_transcript;
 pub use screen::{HideChange, Hiding};
 
@@ -50,6 +52,21 @@ pub struct Project {
     pub hidden: bool,
 }
 
+/// One timed step of a registry build, for the debug spans (`registry:<name>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Phase {
+    pub name: &'static str,
+    pub start: Instant,
+    pub end: Instant,
+}
+
+/// A registry build: the rows and where its time went.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Registry {
+    pub projects: Vec<Project>,
+    pub phases: Vec<Phase>,
+}
+
 /// What the project screen returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectChoice {
@@ -70,7 +87,7 @@ fn home() -> PathBuf {
 /// `~\.claude\projects`; the cache is `cache_path` (preview: its own per-PID file), else
 /// `claude-auto-projects.json` beside the root. `profile_roots`: every account root a job tmp
 /// directory can sit under. Never fails: an unreadable root is an empty list.
-pub fn project_registry(cache_path: Option<&Path>, profile_roots: &[String], hide_headless: bool) -> Vec<Project> {
+pub fn project_registry(cache_path: Option<&Path>, profile_roots: &[String], hide_headless: bool) -> Registry {
     let home = home();
     let root = std::env::var_os("CLAUDE_AUTO_PROJECTS_ROOT")
         .filter(|v| !v.is_empty())
