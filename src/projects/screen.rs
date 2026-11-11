@@ -242,9 +242,20 @@ impl<'a> ProjectScreen<'a> {
         true
     }
 
-    /// No row matches the filter: Enter would run the current directory the cursor parked on.
+    /// No row matches the filter and the cursor is on the current directory: Enter would run it.
+    /// The free-path row still opens the navigator.
     fn no_match(&self) -> bool {
-        !self.filter.trim().is_empty() && !self.rows.iter().any(|r| r.kind == RowKind::Project || r.matched)
+        let on_cwd = usize::try_from(self.cursor.index)
+            .ok()
+            .and_then(|i| self.rows.get(i))
+            .is_some_and(|r| r.kind == RowKind::Cwd);
+        on_cwd && !self.filter.trim().is_empty() && !self.rows.iter().any(|r| r.kind == RowKind::Project || r.matched)
+    }
+
+    /// D5: the create question takes a deliberate yes (Enter or its footer button); a click or a
+    /// cursor move drops it. `true` = there was one.
+    fn drop_question(&mut self) -> bool {
+        self.nav.as_mut().is_some_and(|n| n.confirm.take().is_some())
     }
 
     /// The filter box owns every key while it is open, but the arrows (they move the cursor and
@@ -380,6 +391,21 @@ impl Screen for ProjectScreen<'_> {
         Some(i32::try_from(n).unwrap_or(0))
     }
 
+    fn up(&mut self) -> bool {
+        self.drop_question();
+        false
+    }
+
+    fn down(&mut self) -> bool {
+        self.drop_question();
+        false
+    }
+
+    fn wheel(&mut self, _delta: i32) -> bool {
+        self.drop_question();
+        false
+    }
+
     fn has_left_right(&self) -> bool {
         true
     }
@@ -495,6 +521,7 @@ impl Screen for ProjectScreen<'_> {
                 }
             }
             Hit::ListRow(r) => {
+                self.drop_question();
                 if self.rows().is_some_and(|n| *r < n) {
                     self.cursor.index = *r;
                 }
@@ -504,8 +531,12 @@ impl Screen for ProjectScreen<'_> {
         Flow::Continue
     }
 
-    /// A second click on the row a click selected is Enter's gesture (D1).
+    /// A second click on the row a click selected is Enter's gesture (D1), but never the create
+    /// question's yes: a click while it shows only drops it.
     fn activate(&mut self, _hit: &Hit) -> Option<Flow<ProjectChoice>> {
+        if self.drop_question() {
+            return Some(Flow::Continue);
+        }
         if self.nav.is_some() {
             return Some(self.nav_enter("mouse"));
         }

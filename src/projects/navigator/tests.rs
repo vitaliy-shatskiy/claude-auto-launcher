@@ -201,3 +201,80 @@ fn a_folder_that_cannot_be_listed_says_so_and_still_offers_use_and_up() {
     assert_eq!(n.rows, [NavRow::Use(r"C:\locked".into()), NavRow::Up]);
     assert!(n.status().contains("permission denied"));
 }
+
+#[test]
+fn a_listing_error_stays_on_the_next_frames() {
+    let mut n = Navigator::new(denied, NETWORK_LIMIT);
+    typed(&mut n, r"C:\locked\");
+    n.refresh();
+    n.refresh();
+    assert!(n.status().contains("permission denied"), "{}", n.status());
+}
+
+static RELATIVE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[expect(clippy::unnecessary_wraps, reason = "the Lister signature")]
+fn counting_relative(_: &str) -> Result<Vec<String>, String> {
+    RELATIVE_CALLS.fetch_add(1, Ordering::SeqCst);
+    Ok(vec!["one".into()])
+}
+
+#[test]
+fn only_a_full_path_is_listed() {
+    for t in [r"\Windows\", r"src\", r"C:src\", r"..\"] {
+        let mut n = Navigator::new(counting_relative, NETWORK_LIMIT);
+        typed(&mut n, t);
+        n.tab();
+        assert_eq!(RELATIVE_CALLS.load(Ordering::SeqCst), 0, "{t} was listed");
+        assert!(n.status().contains("type a full path"), "{t}: {}", n.status());
+    }
+    let mut n = Navigator::new(counting_relative, NETWORK_LIMIT);
+    typed(&mut n, r"C:\x\");
+    assert_eq!(RELATIVE_CALLS.load(Ordering::SeqCst), 1, "a full local path is listed");
+}
+
+#[test]
+fn a_symlink_to_a_file_is_not_a_folder() {
+    let (t, root) = tree("nav-link");
+    let file = t.0.join(r"root\file.txt");
+    std::fs::write(&file, "x").unwrap();
+    std::os::windows::fs::symlink_file(&file, t.0.join(r"root\to-file")).unwrap();
+    std::os::windows::fs::symlink_dir(t.0.join(r"root\alpha"), t.0.join(r"root\to-dir")).unwrap();
+    assert_eq!(list_dirs(&root).unwrap(), ["alpha", "alpine", "beta", "to-dir"]);
+}
+
+static SLOW_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Opened by the test: the slow share answers only then.
+static SLOW_GATE: (std::sync::Mutex<bool>, std::sync::Condvar) = (std::sync::Mutex::new(false), std::sync::Condvar::new());
+
+#[expect(clippy::unnecessary_wraps, reason = "the Lister signature")]
+fn slow_share(_: &str) -> Result<Vec<String>, String> {
+    SLOW_CALLS.fetch_add(1, Ordering::SeqCst);
+    let (lock, cv) = &SLOW_GATE;
+    let mut open = lock.lock().unwrap();
+    while !*open {
+        open = cv.wait(open).unwrap();
+    }
+    Ok(vec!["late".into()])
+}
+
+#[test]
+fn a_slow_share_keeps_one_worker_and_its_late_answer_is_used() {
+    let share = r"\\claude-auto-slow-604\share\";
+    let mut n = Navigator::new(slow_share, Duration::from_millis(10));
+    typed(&mut n, share);
+    n.tab();
+    assert!(n.notice.contains("no answer"), "{}", n.notice);
+    n.notice.clear();
+    n.refresh();
+    n.tab();
+    assert_eq!(SLOW_CALLS.load(Ordering::SeqCst), 1, "a second Tab waits on the same worker");
+    let (lock, cv) = &SLOW_GATE;
+    *lock.lock().unwrap() = true;
+    cv.notify_all();
+    n.limit = Duration::from_secs(5);
+    n.notice.clear();
+    n.tab();
+    assert_eq!(n.text, format!(r"{share}late\"), "the late answer completes");
+    assert_eq!(SLOW_CALLS.load(Ordering::SeqCst), 1);
+}

@@ -10,13 +10,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   a text field, the typed parent's folders filtered as you type, the drives on an empty field, and
   `use this folder` and `..` rows. Enter or right enters a folder, left goes up, Backspace on an
   empty segment goes up, Ctrl+Backspace drops a segment, Tab completes and a second Tab cycles, Esc
-  goes back with no message. Network folders are listed only on Tab (`no answer in 1000 ms` for a
-  dead share). A missing folder asks `create <path>? enter yes / esc no`: one level, never on a
-  network path.
+  goes back with no message. Only a full path (`C:\...`, `\\server\share\`) is listed. Network
+  folders are listed only on Tab (`no answer in 1000 ms` for a dead share; a late answer is still
+  used, one listing per folder). A missing folder asks `create <path>? enter yes / esc no`: one
+  level, never on a network path; only Enter answers it, a click or a cursor move drops it.
 - Project search: space-separated words must all match; a pasted path matches as typed. Ranked
   name starts with a word, then name contains it, then path; hidden projects last; matches
   underlined. Enter in the open filter runs the highlighted row and the arrows move while typing;
-  with no match Enter says `no project matches`.
+  with no match Enter on the current directory says `no project matches`.
 - Rows editor (maintenance `l`): a click selects a row, a second click on a hidden row's value
   steps it; footer buttons `[^w] up`, `[^s] down`, `[^x] show/hide`, `[enter] save`, `[esc] cancel`;
   the a/d hint is a line in the body.

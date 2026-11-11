@@ -463,6 +463,70 @@ fn navigator_rows_take_a_click_then_a_second_click() {
     assert_eq!(picked.path, f.beta, "the second click entered beta, Enter used it");
 }
 
+/// D5: the create question is answered only by Enter (or its footer button); a click or a cursor
+/// move drops it, so a double-click never creates a folder.
+#[test]
+fn only_enter_answers_the_create_question() {
+    let f = fx();
+    let use_y = opening_nav_row0(&f);
+    let path_row = ["s", "s", "s", "Enter"];
+    let missing = |tag: &str| format!(r"{}\root\{tag}", f.tree.0.display());
+    let click = || mouse(6, use_y, true, false);
+    let cases: [(&str, Vec<Event>); 3] = [
+        ("double", vec![key("Enter"), click(), click()]),
+        ("triple", vec![click(), click(), click()]),
+        ("moved", keys(&["Enter", "DownArrow", "UpArrow", "Enter"])),
+    ];
+    for (tag, gesture) in cases {
+        let path = missing(tag);
+        let mut ev = with_path(&path_row, &path, &[]);
+        ev.extend(gesture);
+        ev.extend(keys(&["Escape", "Escape", "Escape"]));
+        let (out, t) = drive_with(&f.projects, &f.cwd, "new", ev, "");
+        assert!(out.is_none(), "{tag}: launched");
+        assert!(!Path::new(&path).exists(), "{tag}: created without a yes");
+        let frames = t.inner.frames.unwrap();
+        assert!(
+            frames.iter().any(|fr| fr.join("\n").contains("yes, create it")),
+            "{tag}: the question showed"
+        );
+    }
+    let fresh = missing("yes");
+    let yes = drive_with(&f.projects, &f.cwd, "new", with_path(&path_row, &fresh, &["Enter", "Enter"]), "")
+        .0
+        .unwrap();
+    assert_eq!(yes.path, fresh, "Enter on the question creates");
+}
+
+/// The y of the navigator's first row (the use row).
+fn opening_nav_row0(f: &Fx) -> i32 {
+    let c = clock;
+    let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: false, ascii: true }, &c);
+    s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
+    s.nav.as_mut().unwrap().text = format!(r"{}\root\x", f.tree.0.display());
+    s.before();
+    s.draw((80, 24)).map.list.unwrap().first_row_y
+}
+
+/// With no match, Enter on the free-path row still opens the navigator.
+#[test]
+fn no_match_still_opens_the_free_path_row() {
+    let f = fx();
+    let (out, t) = drive_with(
+        &f.projects,
+        &f.cwd,
+        "new",
+        keys(&["/", "z", "q", "DownArrow", "Enter", "Escape", "Escape", "Escape"]),
+        "",
+    );
+    assert!(out.is_none());
+    let frames = t.inner.frames.unwrap();
+    assert!(
+        frames.iter().any(|fr| fr.join("\n").contains("drop segment")),
+        "the navigator opened"
+    );
+}
+
 #[test]
 fn a_vanished_row_is_refused_and_the_hotkey_still_sets_the_field() {
     let f = fx();

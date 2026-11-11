@@ -181,7 +181,7 @@ command line; anywhere else they go to claude too. The launcher has no `--help` 
 |---|---|
 | **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices · `enter` next (with `projectScreen: "onDemand"`: launch) · `u` maintenance · `esc` quit |
 | **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `h` hide or show the project (saved to `hiddenProjects`) · `v` list the hidden projects, marked · `esc` back one step |
-| **Project filter** (`/`) | type words · `↑`/`↓` move while typing · `←`/`→` the action · `enter` runs the highlighted row (`no project matches` when none) · `esc` clears |
+| **Project filter** (`/`) | type words · `↑`/`↓` move while typing · `←`/`→` the action · `enter` runs the highlighted row (`no project matches` on the current directory when nothing matches) · `esc` clears |
 | **Path navigator** (`enter a path...`) | type a path · `↑`/`↓` move · `enter` or `→` enters the folder (on `use this folder`: picks it) · `←` up one folder · `backspace` on an empty segment goes up · `ctrl+backspace` drops a segment · `tab` completes, a second `tab` cycles · `esc` back to the list |
 | **Session picker** | `enter` open · `f` fork · `tab` this project or every project · `/` filter · `esc` back |
 | **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · `l` launch rows editor · one key per `maintenanceActions` entry · `esc` back |
@@ -211,9 +211,11 @@ as typed. Name starts with a word first, then name contains it, then path; hidde
 matched text underlined.
 
 The path navigator lists the typed parent's subfolders, filtered by the last segment, and the
-drives on an empty field, with a `use this folder` row and a `..` row. Network folders are listed
-only on `tab` (`no answer in 1000 ms` for a dead share). A missing folder whose parent exists asks
-`create <path>? enter yes / esc no`: one level, never on a network path.
+drives on an empty field, with a `use this folder` row and a `..` row. Only a full path
+(`C:\...`, `\\server\share\`) is listed. Network folders are listed only on `tab` (`no answer in
+1000 ms` for a dead share; a later `tab` picks up a late answer). A missing folder whose parent
+exists asks `create <path>? enter yes / esc no`: one level, never on a network path; a click or a
+cursor move drops the question.
 Scratch directories (under the temp folder or a profile's `jobs\<id>\tmp`) are left out and counted
 in the title, and so is a project only headless sessions (`claude -p`, the SDKs) ever ran in, a git
 root included (`hideHeadlessProjects`). Headless sessions are left out of the picker the same way.

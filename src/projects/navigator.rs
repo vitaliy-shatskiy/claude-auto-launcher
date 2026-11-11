@@ -2,9 +2,13 @@
 //! the subfolders of the typed parent under it, Tab completion, and the create-folder confirm
 //! (D5). A network folder is listed only on Tab, on a worker thread with a time limit.
 
+use std::collections::HashMap;
+use std::os::windows::fs::MetadataExt;
 use std::path::Path;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
+
+use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
 
 use super::paths::{DriveCache, path_present_with};
 use super::win::{self, DriveClass};
@@ -17,7 +21,10 @@ const READ_CAP: usize = 10_000;
 pub(crate) const NETWORK_LIMIT: Duration = Duration::from_secs(1);
 
 /// Lists the subfolder names of a folder; `Err` says why it could not.
-pub(crate) type Lister = fn(&str) -> Result<Vec<String>, String>;
+pub(crate) type Lister = fn(&str) -> Listing;
+type Listing = Result<Vec<String>, String>;
+
+const FULL_PATH_HINT: &str = r"type a full path (C:\... or \\server\share\)";
 
 /// One navigator row, in cursor order: use, up, then the folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +64,8 @@ pub(crate) struct Navigator {
     listed: Option<(String, Result<Vec<String>, String>)>,
     /// Tab's candidates for one parent and the one shown, so a second Tab cycles.
     tab: Option<(String, Vec<String>, usize)>,
+    /// Network listings still running, one worker per parent as typed.
+    pending: HashMap<String, Receiver<Listing>>,
     lister: Lister,
     limit: Duration,
     classify: fn(char) -> DriveClass,
@@ -101,13 +110,14 @@ fn matching(names: &[String], seg: &str) -> Vec<String> {
     starts.into_iter().chain(holds).cloned().collect()
 }
 
-/// The real lister: subfolders (junctions included, never followed), an entry that cannot be
-/// read skipped, sorted case-insensitively.
-pub(crate) fn list_dirs(parent: &str) -> Result<Vec<String>, String> {
+/// The real lister: subfolders (junctions and folder links included, never followed; a link to
+/// a file is not one), an entry that cannot be read skipped, sorted case-insensitively.
+pub(crate) fn list_dirs(parent: &str) -> Listing {
     let entries = std::fs::read_dir(parent).map_err(|e| format!("cannot list it: {}", e.kind()))?;
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() || t.is_symlink()))
+        // On Windows the entry's metadata comes from the directory read itself: no disk access.
+        .filter(|e| e.metadata().is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0))
         .filter_map(|e| e.file_name().into_string().ok())
         .take(READ_CAP)
         .collect();
@@ -115,21 +125,24 @@ pub(crate) fn list_dirs(parent: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// Lists on a worker thread and waits at most `limit`: a share that never answers keeps its
-/// own detached thread, never the screen.
-fn list_with_limit(parent: &str, lister: Lister, limit: Duration) -> Result<Vec<String>, String> {
+/// Lists on a worker thread: a share that never answers keeps its own detached thread, never
+/// the screen.
+fn spawn_listing(parent: &str, lister: Lister) -> Result<Receiver<Listing>, String> {
     let (tx, rx) = mpsc::channel();
     let p = parent.to_owned();
     std::thread::Builder::new()
         .name("claude-auto-list".into())
-        // A send fails only when the screen stopped waiting: nothing is left to tell.
+        // A send fails only when the screen dropped the navigator: nothing is left to tell.
         .spawn(move || tx.send(lister(&p)).unwrap_or_default())
         .map_err(|e| format!("cannot list it: {e}"))?;
-    match rx.recv_timeout(limit) {
-        Ok(r) => r,
-        Err(RecvTimeoutError::Timeout) => Err(format!("no answer in {} ms", limit.as_millis())),
-        Err(RecvTimeoutError::Disconnected) => Err("the listing failed".into()),
-    }
+    Ok(rx)
+}
+
+/// `X:\...` or `\\...`: anything else (`\a`, `a\`, `C:a`) would be read against the launcher's
+/// own folder, on the screen's thread.
+fn full_path(parent: &str) -> bool {
+    let mut c = parent.chars();
+    parent.starts_with(r"\\") || matches!((c.next(), c.next(), c.next()), (Some(l), Some(':'), Some('\\')) if l.is_ascii_alphabetic())
 }
 
 impl Navigator {
@@ -145,6 +158,7 @@ impl Navigator {
             roots: None,
             listed: None,
             tab: None,
+            pending: HashMap::new(),
             lister,
             limit,
             classify: win::drive_class,
@@ -188,15 +202,21 @@ impl Navigator {
         if let Some((p, r)) = &self.listed
             && p == parent
         {
+            if let Err(e) = r {
+                e.clone_into(&mut self.hint);
+            }
             return r.clone().unwrap_or_default();
         }
-        let network = self.network(parent);
-        if network && !tab {
-            "a network folder: tab lists it".clone_into(&mut self.hint);
+        if !full_path(parent) {
+            FULL_PATH_HINT.clone_into(&mut self.hint);
             return Vec::new();
         }
+        let network = self.network(parent);
         let r = if network {
-            list_with_limit(parent, self.lister, self.limit)
+            let Some(r) = self.network_listing(parent, tab) else {
+                return Vec::new();
+            };
+            r
         } else {
             (self.lister)(parent)
         };
@@ -208,6 +228,34 @@ impl Navigator {
             e.clone_into(&mut self.hint);
         }
         r.unwrap_or_default()
+    }
+
+    /// A network parent's listing: the worker already asked for it is checked first, so a late
+    /// answer is used and a parent never has two; a new worker starts only on Tab, and only Tab
+    /// waits (`limit`). `None` = nothing to show yet.
+    fn network_listing(&mut self, parent: &str, tab: bool) -> Option<Listing> {
+        if !self.pending.contains_key(parent) {
+            if !tab {
+                "a network folder: tab lists it".clone_into(&mut self.hint);
+                return None;
+            }
+            match spawn_listing(parent, self.lister) {
+                Ok(rx) => self.pending.insert(parent.to_owned(), rx),
+                Err(e) => return Some(Err(e)),
+            };
+        }
+        let wait = if tab { self.limit } else { Duration::ZERO };
+        let r = match self.pending.get(parent)?.recv_timeout(wait) {
+            Ok(r) => r,
+            Err(RecvTimeoutError::Timeout) if tab => return Some(Err(format!("no answer in {} ms", wait.as_millis()))),
+            Err(RecvTimeoutError::Timeout) => {
+                "still listing: tab waits for it".clone_into(&mut self.hint);
+                return None;
+            }
+            Err(RecvTimeoutError::Disconnected) => Err("the listing failed".into()),
+        };
+        self.pending.remove(parent);
+        Some(r)
     }
 
     /// Where the cursor parks after the text changed: on the use row when the segment is empty
