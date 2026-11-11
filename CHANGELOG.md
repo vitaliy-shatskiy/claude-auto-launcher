@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-11-11
+
 ### Fixed
 
 - A power cut during a save can no longer leave `claude-auto.json` or the prefs file empty: both
