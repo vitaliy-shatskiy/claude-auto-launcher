@@ -508,43 +508,6 @@ mod tests {
         }
     }
 
-    /// Scripted events, mouse included.
-    struct Scripted {
-        inner: PreviewTerm,
-        q: std::collections::VecDeque<Event>,
-    }
-
-    impl Term for Scripted {
-        fn size(&mut self) -> (usize, usize) {
-            (100, 30)
-        }
-        fn paint(&mut self, lines: &[String]) {
-            self.inner.paint(lines);
-        }
-        fn wait(&mut self, _s: (usize, usize)) -> Result<Event, crate::ui::UiStop> {
-            self.q.pop_front().ok_or(crate::ui::UiStop::KeysExhausted)
-        }
-        fn window_top(&mut self) -> i32 {
-            0
-        }
-        fn input_pending(&mut self) -> bool {
-            false
-        }
-        fn record_time(&self) -> Option<u64> {
-            None
-        }
-        fn last_activation(&mut self) -> &mut Option<crate::ui::Activation> {
-            self.inner.last_activation()
-        }
-        fn drain(&mut self) {}
-        fn logger(&self) -> &crate::log::Logger {
-            self.inner.logger()
-        }
-        fn read_line(&mut self, _prompt: &str) -> String {
-            String::new()
-        }
-    }
-
     fn press((x, y): (i32, i32)) -> Event {
         Event::Mouse(MouseEvent {
             x,
@@ -561,10 +524,7 @@ mod tests {
 
     fn run_events(cur: &RowsConfig, events: Vec<Event>) -> Option<RowsChoice> {
         let mut e = RowsEditor::new(cur, Style { color: false, ascii: true });
-        let mut t = Scripted {
-            inner: PreviewTerm::new((100, 30), std::collections::VecDeque::default(), true),
-            q: events.into(),
-        };
+        let mut t = crate::ui::script_term::ScriptTerm::new((100, 30), events);
         crate::ui::screen_loop::run(&mut e, &mut t).unwrap()
     }
 

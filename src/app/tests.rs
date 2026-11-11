@@ -46,42 +46,7 @@ fn debug_mode_draws_the_held_warning_exactly_as_off() {
     assert_eq!(held_frames(Timings::on(Instant::now())), held_frames(Timings::default()));
 }
 
-/// Scripted events, mouse included, for the held warning.
-struct HeldEvents {
-    inner: crate::ui::PreviewTerm,
-    q: std::collections::VecDeque<crate::input::Event>,
-}
-
-impl crate::ui::Term for HeldEvents {
-    fn size(&mut self) -> (usize, usize) {
-        (80, 24)
-    }
-    fn paint(&mut self, lines: &[String]) {
-        self.inner.paint(lines);
-    }
-    fn wait(&mut self, _s: (usize, usize)) -> Result<crate::input::Event, crate::ui::UiStop> {
-        self.q.pop_front().ok_or(crate::ui::UiStop::KeysExhausted)
-    }
-    fn window_top(&mut self) -> i32 {
-        0
-    }
-    fn input_pending(&mut self) -> bool {
-        false
-    }
-    fn record_time(&self) -> Option<u64> {
-        None
-    }
-    fn last_activation(&mut self) -> &mut Option<crate::ui::Activation> {
-        self.inner.last_activation()
-    }
-    fn drain(&mut self) {}
-    fn logger(&self) -> &Logger {
-        self.inner.logger()
-    }
-    fn read_line(&mut self, _prompt: &str) -> String {
-        String::new()
-    }
-}
+use crate::ui::script_term::ScriptTerm;
 
 /// Clicks the held warning's footer button `label` after one empty draw found where it sits.
 fn click_held(label: &str) -> Result<bool, crate::ui::UiStop> {
@@ -99,10 +64,7 @@ fn click_held(label: &str) -> Result<bool, crate::ui::UiStop> {
         buttons: 1,
         ..MouseEvent::default()
     });
-    let mut t = HeldEvents {
-        inner: crate::ui::PreviewTerm::new((80, 24), std::collections::VecDeque::default(), true),
-        q: [press].into(),
-    };
+    let mut t = ScriptTerm::new((80, 24), [press]);
     screens::confirm_held(&mut t, Some("held by pid 1"), style)
 }
 
@@ -125,10 +87,10 @@ fn a_click_off_the_held_buttons_does_nothing() {
         buttons: 1,
         ..MouseEvent::default()
     });
-    let mut t = HeldEvents {
-        inner: crate::ui::PreviewTerm::new((80, 24), std::collections::VecDeque::default(), true),
-        q: [press, Event::Key(crate::input::KeyPress::named(crate::input::vk::ENTER))].into(),
-    };
+    let mut t = ScriptTerm::new(
+        (80, 24),
+        [press, Event::Key(crate::input::KeyPress::named(crate::input::vk::ENTER))],
+    );
     let style = crate::frame::Style { color: false, ascii: true };
     assert_eq!(
         screens::confirm_held(&mut t, Some("held by pid 1"), style),

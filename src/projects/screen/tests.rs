@@ -5,49 +5,8 @@ use crate::input::{Event, MouseEvent};
 use crate::projects::registry::tests::Tree;
 use crate::projects::select::tests::proj;
 use crate::ui::UiStop;
-use crate::ui::{Activation, PreviewTerm};
-use std::collections::VecDeque;
+use crate::ui::script_term::ScriptTerm as Script;
 use std::path::Path;
-
-/// Scripted events, a fixed size, a canned answer for the free path, and every frame kept.
-struct Script {
-    inner: PreviewTerm,
-    q: VecDeque<Event>,
-    answer: String,
-    asked: usize,
-}
-
-impl Term for Script {
-    fn size(&mut self) -> (usize, usize) {
-        (80, 24)
-    }
-    fn paint(&mut self, lines: &[String]) {
-        self.inner.paint(lines);
-    }
-    fn wait(&mut self, _s: (usize, usize)) -> Result<Event, UiStop> {
-        self.q.pop_front().ok_or(UiStop::KeysExhausted)
-    }
-    fn window_top(&mut self) -> i32 {
-        0
-    }
-    fn input_pending(&mut self) -> bool {
-        false
-    }
-    fn record_time(&self) -> Option<u64> {
-        None
-    }
-    fn last_activation(&mut self) -> &mut Option<Activation> {
-        self.inner.last_activation()
-    }
-    fn drain(&mut self) {}
-    fn logger(&self) -> &crate::log::Logger {
-        self.inner.logger()
-    }
-    fn read_line(&mut self, _prompt: &str) -> String {
-        self.asked += 1;
-        self.answer.clone()
-    }
-}
 
 /// Runs the screen until a pick or a cancel.
 fn run_screen(
@@ -120,12 +79,7 @@ fn clock() -> i64 {
 }
 
 fn drive_with(ps: &[Project], cwd: &str, initial: &str, events: Vec<Event>, answer: &str) -> (Option<ProjectChoice>, Script) {
-    let mut t = Script {
-        inner: PreviewTerm::new((80, 24), VecDeque::new(), true),
-        q: events.into(),
-        answer: answer.into(),
-        asked: 0,
-    };
+    let mut t = Script::new((80, 24), events).answering(answer);
     let c = clock;
     let out = run_screen(&mut t, ps, Path::new(cwd), initial, Style { color: false, ascii: true }, &c, None).unwrap();
     (out, t)
@@ -164,12 +118,7 @@ fn run_events_with_config(f: &Fx, config: &str, events: Vec<Event>) -> Vec<Vec<S
 }
 
 fn run_hiding(f: &Fx, hiding: &Hiding<'_>, events: Vec<Event>) -> Vec<Vec<String>> {
-    let mut t = Script {
-        inner: PreviewTerm::new((80, 24), VecDeque::new(), true),
-        q: events.into(),
-        answer: String::new(),
-        asked: 0,
-    };
+    let mut t = Script::new((80, 24), events);
     let c = clock;
     let style = Style { color: false, ascii: true };
     assert!(
@@ -521,12 +470,7 @@ fn preview_never_creates_a_folder() {
     let f = fx();
     let fresh = format!(r"{}\root\preview-new", f.tree.0.display());
     let ev = with_path(&["s", "s", "s", "Enter"], &fresh, &["Enter", "Enter", "Escape", "Escape"]);
-    let mut t = Script {
-        inner: PreviewTerm::new((80, 24), VecDeque::new(), true),
-        q: ev.into(),
-        answer: String::new(),
-        asked: 0,
-    };
+    let mut t = Script::new((80, 24), ev);
     let c = clock;
     let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: false, ascii: true }, &c).with_preview(true);
     let out = crate::ui::screen_loop::run(&mut s, &mut t).unwrap();

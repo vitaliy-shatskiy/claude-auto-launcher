@@ -2,6 +2,8 @@
 //! writes, the event wait, hit-testing a click against a row map, and the scripted preview term.
 
 pub mod screen_loop;
+#[cfg(test)]
+pub(crate) mod script_term;
 
 use std::collections::VecDeque;
 
