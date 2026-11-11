@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-11-11
+
 ### Changed
 
 - The launch screen no longer waits for the project list: the registry is built on a background
