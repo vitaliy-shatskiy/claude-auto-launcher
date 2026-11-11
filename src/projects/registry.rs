@@ -61,9 +61,7 @@ fn transcripts(dir: &Path) -> Vec<Transcript> {
             let name = e.file_name().to_string_lossy().into_owned();
             let is_jsonl = path.extension().is_some_and(|x| x.eq_ignore_ascii_case("jsonl"));
             // The enumeration's own record: no open per file (most of a warm build's time). A
-            // link still resolves to its target as before. Assumes the writer closes the file
-            // after each append (Claude Code does): NTFS updates the listing's time of a file
-            // held open only lazily, so a held-open transcript could read older here.
+            // link still resolves to its target as before.
             let meta = e.metadata().ok().filter(|m| !m.is_symlink()).or_else(|| fs::metadata(&path).ok());
             let meta = meta.filter(|m| m.is_file() && is_jsonl)?;
             Some(Transcript {
@@ -74,6 +72,13 @@ fn transcripts(dir: &Path) -> Vec<Transcript> {
         })
         .collect();
     out.sort_by_key(|t| std::cmp::Reverse(t.modified));
+    // NTFS updates the listing's time of a file held open by its writer only lazily (hours
+    // behind). The newest transcript sets last activity, so it alone is re-read by path.
+    if let Some(newest) = out.first_mut()
+        && let Ok(t) = fs::metadata(&newest.path).and_then(|m| m.modified())
+    {
+        newest.modified = newest.modified.max(t);
+    }
     out
 }
 

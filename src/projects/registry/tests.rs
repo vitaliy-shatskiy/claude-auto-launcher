@@ -267,12 +267,26 @@ fn a_symlinked_transcript_is_still_listed() {
     let target = t.0.join("elsewhere").join("s.jsonl");
     write_at(&target, &user(&w, Some("cli")), ago(5));
     fs::create_dir_all(root.join("L")).unwrap();
-    if std::os::windows::fs::symlink_file(&target, root.join("L").join("s.jsonl")).is_err() {
-        // No symlink privilege (no Developer Mode, not elevated): nothing to test here.
-        return;
-    }
+    std::os::windows::fs::symlink_file(&target, root.join("L").join("s.jsonl")).expect("a symlink needs Developer Mode or elevation");
     let rows = build(&root, &t.0.join("c.json"), &[], &[]);
     assert_eq!(slugs(&rows), "L", "the link resolves to its target's time and contents");
+}
+
+#[test]
+fn a_transcript_held_open_by_its_writer_reads_its_fresh_time() {
+    use std::io::Write as _;
+    // Given: a transcript last closed an hour ago, now appended through a handle still open.
+    let t = Tree::new("held");
+    let file = t.0.join("s.jsonl");
+    write_at(&file, "{}\n", ago(60));
+    let mut writer = File::options().append(true).open(&file).unwrap();
+    writer.write_all(b"{}\n").unwrap();
+    writer.flush().unwrap();
+    // When: the folder is listed while the writer still holds the file.
+    let newest = transcripts(&t.0).remove(0).modified;
+    // Then: the time is the append's, not the listing's stale one.
+    assert!(newest > ago(5), "{:?} old", SystemTime::now().duration_since(newest));
+    drop(writer);
 }
 
 #[test]

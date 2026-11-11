@@ -25,9 +25,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Fixed
 
-- An exit (an error, a finished preview) waits for the background registry build, so its cache
-  write is never cut off; day-old cache temps an earlier cut left are swept. A registry build that
-  panics is logged (`error`, `where=registry`) and prints nothing over the screen.
+- Esc, a cancel or an error exit no longer waits for the background registry build: its cache
+  write is temp + rename, and day-old cache temps an exit left are swept. Only a preview waits for
+  it (its per-run cache file is removed right after). A registry build that panics is logged
+  (`error`, `where=registry`) and prints nothing over the screen.
+- A stuck update wait can be left: Esc or Ctrl+C while `checking for a Claude Code update...` is
+  shown quits without launching (claude never starts mid-update), and during `u` returns to the
+  launch screen without opening maintenance.
+- A project whose newest transcript is held open by its writer no longer shows a last activity
+  hours old: that one file's time is re-read by path (the folder listing lags on NTFS).
+- The model catalog is read before the update check starts, so the check's re-read after an
+  install never writes the catalog cache at the same time.
 
 ## [0.8.0] — 2026-11-11
 
