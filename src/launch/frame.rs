@@ -27,8 +27,6 @@ pub struct LaunchFrameInput<'a> {
     pub default_advisor_label: &'a str,
     pub default_labels: &'a DefaultLabels,
     pub style: Style,
-    /// One line under the rows about the last row edit ('' none).
-    pub notice: &'a str,
 }
 
 /// One limit as label, percent and an age of its own, in drawing order: five hour, seven day,
@@ -297,9 +295,6 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         };
         lines.push(format!("  * restored ({when}), ctrl+r resets"));
     }
-    if !inp.notice.is_empty() {
-        lines.push(format!("  {}", inp.notice));
-    }
     let footer = launch_footer(&g, fw, inp.style.color);
     let light = FooterLight {
         hover: frame::footer_hover(&footer, state.hover),
@@ -311,32 +306,19 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
 }
 
 /// The footer: arrows are not clickable ("w/s" names two directions), every single action is.
-/// Too narrow for all: `^w/^s move` and `^x hide` go first (the `o` editor names them too), then
-/// the hint footer's own tiers.
 pub fn launch_footer(g: &Glyphs, width: usize, color: bool) -> Footer {
-    let all = [
-        Hint::plain("w/s", "row"),
-        Hint::plain("a/d", "value"),
-        Hint::key("enter", "next", "Enter"),
-        Hint::plain("^w/^s", "move"),
-        Hint::plain("^x", "hide"),
-        Hint::ch("o", "rows", 'o'),
-        Hint::ch("u", "maintenance", 'u'),
-        Hint::key("esc", "quit", "Escape"),
-    ];
-    let whole = |hints: &[Hint]| {
-        let f = new_hint_footer(hints, g, width, !color);
-        let n = f.lines.iter().map(|l| l.spans.len()).sum::<usize>();
-        (f.lines.len() == 1 && n == hints.len()).then_some(f)
-    };
-    let short: Vec<Hint> = all
-        .iter()
-        .filter(|h| !matches!(h.token.as_str(), "^w/^s" | "^x"))
-        .cloned()
-        .collect();
-    whole(&all)
-        .or_else(|| whole(&short))
-        .unwrap_or_else(|| new_hint_footer(&short, g, width, !color))
+    new_hint_footer(
+        &[
+            Hint::plain("w/s", "row"),
+            Hint::plain("a/d", "value"),
+            Hint::key("enter", "next", "Enter"),
+            Hint::ch("u", "maintenance", 'u'),
+            Hint::key("esc", "quit", "Escape"),
+        ],
+        g,
+        width,
+        !color,
+    )
 }
 
 #[expect(

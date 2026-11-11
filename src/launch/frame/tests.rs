@@ -66,7 +66,6 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
         default_advisor_label: "default",
         default_labels: c.labels,
         style: c.style,
-        notice: "",
     };
     launch_frame(r, &inp).lines.join("\n")
 }
@@ -185,7 +184,6 @@ fn narrow_tier_draws_compact_rows_and_one_limit_line() {
         default_advisor_label: "default",
         default_labels: &labels,
         style: Style { color: false, ascii: true },
-        notice: "",
     };
     let f = launch_frame(&r, &inp);
     assert!(f.lines.iter().all(|l| display_width(l) <= 49), "{:#?}", f.lines);
@@ -224,7 +222,6 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
             color: false,
             ascii: false,
         },
-        notice: "",
     };
     launch_frame(r, &inp)
 }
@@ -322,7 +319,6 @@ fn row_map_points_at_the_drawn_lines() {
         default_advisor_label: "default",
         default_labels: &labels,
         style: Style { color: false, ascii: true },
-        notice: "",
     };
     let f = launch_frame(&r, &inp);
     for hit in &f.map.rows {
@@ -337,41 +333,22 @@ fn row_map_points_at_the_drawn_lines() {
             assert!(drawn.contains(&c.value) || hit.name == "Model", "{drawn} vs {}", c.value);
         }
     }
-    assert_eq!(f.map.footer.len(), 4, "enter, o, u, esc are clickable");
+    assert_eq!(f.map.footer.len(), 3, "enter, u, esc are clickable");
 }
 
 #[test]
-fn footer_drops_move_and_hide_before_the_row_and_value_hints() {
+fn footer_names_no_row_editing_keys() {
     let r = four();
     let s = r.new_state();
     let limits = golden_limits();
-    let all = [
-        "w/s row",
-        "a/d value",
-        "[enter] next",
-        "^w/^s move",
-        "^x hide",
-        "[o] rows",
-        "[u] maintenance",
-        "[esc] quit",
-    ];
-    let shown = |width: usize| {
+    let base = ["w/s row", "a/d value", "[enter] next", "[u] maintenance", "[esc] quit"];
+    for width in [100, 120] {
         let f = frame_at(&r, &s, &limits, width);
         let rule = f.lines.iter().rposition(|l| l.contains('─')).unwrap();
         let text = f.lines[rule + 1..].join("\n");
-        all.into_iter().filter(|h| text.contains(h)).collect::<Vec<_>>()
-    };
-    assert_eq!(shown(120), all, "120: everything fits");
-    assert_eq!(
-        shown(100),
-        ["w/s row", "a/d value", "[enter] next", "[o] rows", "[u] maintenance", "[esc] quit"],
-        "100: move and hide go first"
-    );
-    assert_eq!(
-        shown(50),
-        ["[enter] next", "[o] rows", "[u] maintenance", "[esc] quit"],
-        "narrow: the buttons alone"
-    );
+        assert!(base.iter().all(|h| text.contains(h)), "{width}: {text}");
+        assert!(!["^w/^s", "^x", "[o]"].iter().any(|h| text.contains(h)), "{width}: {text}");
+    }
 }
 
 #[test]
@@ -420,7 +397,6 @@ fn too_small_terminal_gets_the_size_frame() {
         default_advisor_label: "default",
         default_labels: &d,
         style: Style { color: false, ascii: true },
-        notice: "",
     };
     assert_eq!(
         launch_frame(&r, &inp).lines.first().map(String::as_str),

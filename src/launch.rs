@@ -232,16 +232,6 @@ impl Roster {
         }
     }
 
-    /// The config rows on screen in order (the action row is no config row).
-    pub fn shown_config_rows(&self) -> Vec<RowName> {
-        self.rows.iter().map(|r| r.name).filter(|n| CONFIG_ROWS.contains(n)).collect()
-    }
-
-    /// Whether this run has the row at all, shown or set aside (Remote has none when it is off).
-    pub fn knows(&self, name: RowName) -> bool {
-        self.rows.iter().chain(&self.spare).any(|r| r.name == name)
-    }
-
     fn action_slot(&self) -> usize {
         self.rows
             .iter()

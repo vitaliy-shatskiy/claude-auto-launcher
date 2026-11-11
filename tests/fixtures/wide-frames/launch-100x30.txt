@@ -11,4 +11,4 @@
    mode        ● [normal] ○ safe
 
   ───────────────────────────────────────────────────────────────────────────────────────────────
-  w/s row  ┊  a/d value  ┊  [enter] next  ┊  [o] rows  ┊  [u] maintenance  ┊  [esc] quit
+  w/s row  ┊  a/d value  ┊  [enter] next  ┊  [u] maintenance  ┊  [esc] quit

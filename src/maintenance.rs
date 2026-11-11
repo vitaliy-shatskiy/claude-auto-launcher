@@ -4,7 +4,7 @@
 
 mod install;
 mod release;
-pub(crate) mod rows;
+mod rows;
 mod screen;
 mod win;
 

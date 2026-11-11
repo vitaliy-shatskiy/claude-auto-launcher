@@ -1,14 +1,15 @@
 //! The launch-rows editor behind the maintenance screen's `l`: which launch rows show and in what
-//! order, saved as config `rows`. w/s cursor, shift+w/s move, space show/hide, enter save, esc cancel.
+//! order, saved as config `rows`. w/s cursor, ctrl+w/s (alt+up/down) move, ctrl+x or space
+//! show/hide, enter save, esc cancel. A hidden row keeps its place, dimmed.
 
 use crate::frame::{
     FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
     too_small_frame,
 };
-use crate::input::{KeyPress, is_hotkey_exact, vk};
+use crate::input::{KeyPress, vk};
 use crate::launch::{CONFIG_ROWS, RowName};
 use crate::layout::new_box;
-use crate::theme::glyphs;
+use crate::theme::{DIM_CLOSE, DIM_OPEN, glyphs};
 use crate::ui::Term;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 
@@ -97,12 +98,12 @@ impl Screen for RowsEditor {
             .enumerate()
             .map(|(i, (row, on))| {
                 let mark = if i == self.index() { g.cursor } else { ' ' };
-                let state = if *on { g.on } else { g.off };
-                format!(
-                    " {mark} {state} {:<12}{}",
-                    row.as_str().to_lowercase(),
-                    if *on { "shown" } else { "hidden" }
-                )
+                let name = row.as_str().to_lowercase();
+                if *on {
+                    format!(" {mark} {} {name:<12}shown", g.on)
+                } else {
+                    format!(" {mark} {DIM_OPEN}{} {name:<12}hidden{DIM_CLOSE}", g.off)
+                }
             })
             .collect();
         body.push(String::new());
@@ -117,8 +118,8 @@ impl Screen for RowsEditor {
         let footer = new_hint_footer(
             &[
                 Hint::plain("w/s", "row"),
-                Hint::plain("W/S", "move"),
-                Hint::plain("space", "show/hide"),
+                Hint::plain("^w/^s", "move"),
+                Hint::plain("^x", "hide"),
                 Hint::key("enter", "save", "Enter"),
                 Hint::key("esc", "cancel", "Escape"),
             ],
@@ -145,19 +146,16 @@ impl Screen for RowsEditor {
         Some(Flow::Done(Some(self.rows())))
     }
 
-    /// Shift+w/s (or shift+arrows) move the row; space shows or hides it. Ahead of the loop's own
-    /// w/s, which would only move the cursor.
+    /// ctrl+w/s move the row, matched on the virtual key (any layout); alt+up/down too, as ctrl+s
+    /// is XOFF on some terminals. ctrl+x or space shows or hides it. Ahead of the loop's own w/s.
+    /// Never shift+w/s: a split mouse report arrives as shift+letter.
     fn on_key(&mut self, key: &KeyPress, _term: &mut dyn Term) -> bool {
         self.notice = "";
-        if is_hotkey_exact(key, 'W') || (key.shift && key.is(vk::UP)) {
-            self.shift(-1);
+        if key.is_ctrl(vk::W) || key.is_ctrl(vk::S) || (key.alt && (key.is(vk::UP) || key.is(vk::DOWN))) {
+            self.shift(if key.is(vk::W) || key.is(vk::UP) { -1 } else { 1 });
             return true;
         }
-        if is_hotkey_exact(key, 'S') || (key.shift && key.is(vk::DOWN)) {
-            self.shift(1);
-            return true;
-        }
-        if key.ch == ' ' || key.is(vk::SPACE) {
+        if key.is_ctrl(vk::X) || key.ch == ' ' || key.is(vk::SPACE) {
             self.toggle();
             return true;
         }
@@ -176,36 +174,30 @@ mod tests {
         crate::ui::screen_loop::run(&mut e, &mut t).unwrap()
     }
 
-    fn shifted(c: char) -> KeyPress {
-        KeyPress {
-            shift: true,
-            ..KeyPress::char(c)
-        }
+    fn keys(s: &str) -> Vec<KeyPress> {
+        parse_preview_keys(s).unwrap().into()
+    }
+
+    const FIRST_SIX: [RowName; 6] = [
+        RowName::Account,
+        RowName::Remote,
+        RowName::Model,
+        RowName::Effort,
+        RowName::Advisor,
+        RowName::Permission,
+    ];
+
+    #[test]
+    fn ctrl_x_hides_a_row_and_enter_saves_the_shown_ones() {
+        assert_eq!(edit(None, keys("s,s,s,s,s,s,Ctrl+X,Enter")).unwrap(), FIRST_SIX);
+        assert_eq!(edit(None, keys("s,s,s,s,s,s,Spacebar,Enter")).unwrap(), FIRST_SIX, "space too");
     }
 
     #[test]
-    fn space_hides_a_row_and_enter_saves_the_shown_ones() {
-        let keys: Vec<KeyPress> = parse_preview_keys("s,s,s,s,s,s,Spacebar,Enter").unwrap().into();
-        let out = edit(None, keys).unwrap();
-        assert_eq!(
-            out,
-            [
-                RowName::Account,
-                RowName::Remote,
-                RowName::Model,
-                RowName::Effort,
-                RowName::Advisor,
-                RowName::Permission
-            ]
-        );
-    }
-
-    #[test]
-    fn shift_s_moves_a_row_down_and_hidden_rows_follow_the_shown_ones() {
-        let mut keys: Vec<KeyPress> = parse_preview_keys("s").unwrap().into();
-        keys.push(shifted('S'));
-        keys.extend(parse_preview_keys("Enter").unwrap());
-        let out = edit(Some(&[RowName::Account, RowName::Model, RowName::Effort]), keys).unwrap();
+    fn ctrl_s_moves_a_row_down_and_ctrl_w_up_and_hidden_rows_follow_the_shown_ones() {
+        let out = edit(Some(&[RowName::Account, RowName::Model, RowName::Effort]), keys("s,Ctrl+S,Enter")).unwrap();
+        assert_eq!(out, [RowName::Account, RowName::Effort, RowName::Model]);
+        let out = edit(Some(&[RowName::Account, RowName::Model, RowName::Effort]), keys("s,s,Ctrl+W,Enter")).unwrap();
         assert_eq!(out, [RowName::Account, RowName::Effort, RowName::Model]);
         let e = RowsEditor::new(Some(&[RowName::Mode]), Style { color: false, ascii: true });
         assert_eq!(e.entries.first(), Some(&(RowName::Mode, true)));
@@ -213,9 +205,45 @@ mod tests {
     }
 
     #[test]
+    fn alt_arrows_move_and_shift_letters_do_not() {
+        let alt = |code| KeyPress {
+            alt: true,
+            ..KeyPress::named(code)
+        };
+        let shifted = |c| KeyPress {
+            shift: true,
+            ..KeyPress::char(c)
+        };
+        let mut k = keys("s");
+        k.extend([alt(vk::DOWN), alt(vk::DOWN), alt(vk::UP), shifted('S'), shifted('W')]);
+        k.extend(keys("Enter"));
+        let out = edit(None, k).unwrap();
+        assert_eq!(
+            out.get(..4),
+            Some(&[RowName::Account, RowName::Model, RowName::Remote, RowName::Effort][..])
+        );
+    }
+
+    #[test]
     fn account_cannot_be_hidden_and_escape_cancels() {
-        let out = edit(None, parse_preview_keys("Spacebar,Enter").unwrap().into()).unwrap();
-        assert_eq!(out, CONFIG_ROWS, "space on account changes nothing");
-        assert_eq!(edit(None, parse_preview_keys("Spacebar,Escape").unwrap().into()), None);
+        assert_eq!(edit(None, keys("Ctrl+X,Spacebar,Enter")).unwrap(), CONFIG_ROWS, "account stays");
+        assert_eq!(edit(None, keys("s,Ctrl+X,Escape")), None);
+    }
+
+    #[test]
+    fn a_hidden_row_stays_in_place_dimmed_and_the_footer_names_the_keys() {
+        let mut e = RowsEditor::new(None, Style { color: true, ascii: false });
+        e.cursor.index = 2;
+        e.toggle();
+        let f = e.draw((100, 30));
+        let model = f.lines.iter().position(|l| l.contains("model")).unwrap();
+        let effort = f.lines.iter().position(|l| l.contains("effort")).unwrap();
+        assert!(model < effort, "kept in place");
+        assert!(f.lines[model].contains(crate::theme::DIM), "{:?}", f.lines[model]);
+        assert!(!f.lines[effort].contains(&format!("{}effort", crate::theme::DIM)));
+        let foot = f.lines.last().unwrap();
+        for h in ["w/s", "^w/^s", "move", "^x", "hide", "save", "cancel"] {
+            assert!(foot.contains(h), "{h}: {foot}");
+        }
     }
 }

@@ -9,7 +9,7 @@ use super::{
     CONFIG_ROWS, LaunchState, OptionText, Roster, RowName, availability_snap, is_hidden_row_value, step_launch_value, visible_row_values,
 };
 use crate::frame::{Frame, Style};
-use crate::input::{KeyPress, is_hotkey_exact, vk};
+use crate::input::{KeyPress, vk};
 use crate::prefs::{self, Prefs};
 use crate::types::{DefaultLabels, Limits, VersionInfo};
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
@@ -18,17 +18,11 @@ use crate::ui::{Hit, Term};
 /// The caller's hook: `true` consumed the key (the loop redraws).
 pub type OnKey<'a> = dyn FnMut(&KeyPress, &mut dyn Term) -> bool + 'a;
 
-/// Config `rows` behind the launch screen's row keys; the seam that keeps tests off the file.
+/// Config `rows` as the launch screen reads it; the seam that keeps tests off the file.
 pub trait RowsStore {
     /// `rows` as the file holds it now; `None` = every row.
     fn load(&mut self) -> Option<Vec<RowName>>;
-    /// Writes `rows`, every other key untouched.
-    fn save(&mut self, rows: &[RowName]) -> Result<(), String>;
 }
-
-/// Opens the rows editor. Lower case and matched exactly: Shift + a letter is what a split mouse
-/// report looks like.
-const ROWS_KEY: char = 'o';
 
 /// What the frame is drawn from besides the state.
 #[derive(Debug, Clone)]
@@ -52,9 +46,8 @@ pub struct LaunchScreen<'a> {
     cursor: Cursor,
     on_key: &'a mut OnKey<'a>,
     store: Option<&'a mut dyn RowsStore>,
-    /// `rows` as last read or written: a change on disk (maintenance `l`) is applied on return.
+    /// `rows` as last read: a change on disk (maintenance `l`) is applied on return.
     disk: Option<Vec<RowName>>,
-    notice: String,
 }
 
 impl std::fmt::Debug for LaunchScreen<'_> {
@@ -88,11 +81,10 @@ impl<'a> LaunchScreen<'a> {
             on_key,
             store: None,
             disk: None,
-            notice: String::new(),
         }
     }
 
-    /// Row edits save to `store`; without one they hold for this run.
+    /// `rows` read from `store` now and after the caller's hook: a change shows on return.
     #[must_use]
     pub fn with_rows(mut self, store: &'a mut dyn RowsStore) -> Self {
         self.disk = store.load();
@@ -125,19 +117,6 @@ impl<'a> LaunchScreen<'a> {
         self.cursor.index = i32::try_from(self.state.row).unwrap_or(0);
     }
 
-    /// `rows` as the config holds it after an edit: the shown config rows, and Remote kept where
-    /// the file had it while the feature is off (this run has no Remote row to show or hide).
-    fn config_rows(&self) -> Vec<RowName> {
-        let mut rows = self.roster.shown_config_rows();
-        let before = self.disk.as_deref().unwrap_or(&CONFIG_ROWS);
-        if !self.roster.knows(RowName::Remote)
-            && let Some(i) = before.iter().position(|r| *r == RowName::Remote)
-        {
-            rows.insert(i.min(rows.len()), RowName::Remote);
-        }
-        rows
-    }
-
     /// Shows `rows` at once: a row that left the screen launches with its default, as a row
     /// hidden at start does; the cursor stays on its row, or the next shown one.
     fn apply(&mut self, rows: &[RowName], keep: Option<RowName>) {
@@ -154,64 +133,6 @@ impl<'a> LaunchScreen<'a> {
         let at = keep.and_then(|k| self.roster.rows.iter().position(|r| r.name == k));
         self.state.row = at.unwrap_or(self.state.row).min(last);
         self.cursor.index = i32::try_from(self.state.row).unwrap_or(0);
-    }
-
-    /// Writes the rows on screen; a refusal keeps them for this run and says why.
-    fn save(&mut self) {
-        let rows = self.config_rows();
-        let Some(store) = self.store.as_deref_mut() else { return };
-        match store.save(&rows) {
-            Ok(()) => self.disk = Some(rows),
-            Err(e) => self.notice = format!("rows for this run only: {e}"),
-        }
-    }
-
-    /// ctrl+w / ctrl+s (alt+up / alt+down): the selected config row swaps with the next shown one that way.
-    fn move_row(&mut self, up: bool) {
-        let shown = self.roster.shown_config_rows();
-        let Some(cur) = self.roster.rows.get(self.state.row).map(|r| r.name) else {
-            return;
-        };
-        let Some(i) = shown.iter().position(|r| *r == cur) else { return };
-        let Some(other) = (if up { i.checked_sub(1) } else { i.checked_add(1) }).and_then(|j| shown.get(j).copied()) else {
-            return;
-        };
-        let mut rows = self.config_rows();
-        if let (Some(a), Some(b)) = (rows.iter().position(|r| *r == cur), rows.iter().position(|r| *r == other)) {
-            rows.swap(a, b);
-        }
-        self.apply(&rows, Some(cur));
-        self.save();
-    }
-
-    /// ctrl+x: the selected config row leaves the screen; account never does.
-    fn hide_row(&mut self) {
-        let Some(cur) = self.roster.rows.get(self.state.row).map(|r| r.name) else {
-            return;
-        };
-        if cur == RowName::Account {
-            "account cannot be hidden".clone_into(&mut self.notice);
-            return;
-        }
-        let mut rows = self.config_rows();
-        if !rows.contains(&cur) {
-            return;
-        }
-        rows.retain(|r| *r != cur);
-        self.apply(&rows, None);
-        self.save();
-    }
-
-    /// `o`: the rows editor over the rows as they stand; a save shows on return.
-    fn edit_rows(&mut self, term: &mut dyn Term) {
-        let current = self.config_rows();
-        let mut editor = crate::maintenance::rows::RowsEditor::new(Some(&current), self.view.style);
-        // A lost console (`Err`) leaves the rows as they are; the loop's next wait returns it.
-        if let Ok(Some(rows)) = crate::ui::screen_loop::run(&mut editor, term) {
-            let keep = self.roster.rows.get(self.state.row).map(|r| r.name);
-            self.apply(&rows, keep);
-            self.save();
-        }
     }
 
     /// After the caller's hook (maintenance `l` may have saved `rows`): a changed file shows now.
@@ -259,7 +180,6 @@ impl Screen for LaunchScreen<'_> {
             default_advisor_label: &self.view.default_advisor_label,
             default_labels: self.labels(),
             style: self.view.style,
-            notice: &self.notice,
         };
         launch_frame(self.roster, &inp)
     }
@@ -319,10 +239,9 @@ impl Screen for LaunchScreen<'_> {
         Flow::Continue
     }
 
-    /// The caller's hook first, then ctrl+r and the row keys ctrl+w/s/x (matched on the virtual
-    /// key, so any layout works), then `o`.
+    /// The caller's hook first (then a `rows` maintenance `l` saved shows), then ctrl+r (matched
+    /// on the virtual key, so any layout works).
     fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
-        self.notice.clear();
         if (self.on_key)(key, term) {
             self.reload_rows();
             return true;
@@ -330,19 +249,6 @@ impl Screen for LaunchScreen<'_> {
         if key.is_ctrl(vk::R) {
             prefs::reset_tab(&mut self.state, self.roster);
             self.cursor.index = i32::try_from(self.state.row).unwrap_or(0);
-            return true;
-        }
-        // alt+up/down too: ctrl+s is XOFF on some terminals.
-        if key.is_ctrl(vk::W) || key.is_ctrl(vk::S) || (key.alt && (key.is(vk::UP) || key.is(vk::DOWN))) {
-            self.move_row(key.is(vk::W) || key.is(vk::UP));
-            return true;
-        }
-        if key.is_ctrl(vk::X) {
-            self.hide_row();
-            return true;
-        }
-        if is_hotkey_exact(key, ROWS_KEY) {
-            self.edit_rows(term);
             return true;
         }
         false
@@ -570,8 +476,6 @@ mod tests {
         disk: Option<Vec<RowName>>,
         pending: Option<Vec<RowName>>,
         loads: usize,
-        saved: Vec<Vec<RowName>>,
-        fail: Option<&'static str>,
     }
 
     impl RowsStore for FakeStore {
@@ -583,14 +487,6 @@ mod tests {
                 self.disk = Some(p);
             }
             self.disk.clone()
-        }
-        fn save(&mut self, rows: &[RowName]) -> Result<(), String> {
-            if let Some(e) = self.fail {
-                return Err(e.into());
-            }
-            self.saved.push(rows.to_vec());
-            self.disk = Some(rows.to_vec());
-            Ok(())
         }
     }
 
@@ -612,130 +508,18 @@ mod tests {
     const ALL: [RowName; 7] = crate::launch::CONFIG_ROWS;
 
     #[test]
-    fn ctrl_s_moves_the_row_down_and_saves() {
+    fn row_keys_change_no_rows_on_the_launch_screen() {
         let mut r = four();
         let mut store = FakeStore::default();
         let st = r.new_state();
-        let (out, frames) = edit(&mut r, st, &mut store, "DownArrow,DownArrow,Ctrl+S,Enter");
-        let want = [
-            RowName::Account,
-            RowName::Remote,
-            RowName::Effort,
-            RowName::Model,
-            RowName::Advisor,
-            RowName::Permission,
-            RowName::Mode,
-        ];
-        assert_eq!(names(&r), want);
-        assert_eq!(store.saved.last().map(Vec::as_slice), Some(&want[..]), "rows on disk");
-        assert_eq!(out.unwrap().row, 3, "the cursor follows the row");
-        let last = frames.last().unwrap();
-        let y = |w: &str| last.iter().position(|l| l.contains(w)).unwrap();
-        assert!(y("effort") < y("model"), "drawn at once");
-    }
-
-    #[test]
-    fn ctrl_x_hides_mode_launches_normal_and_saves() {
-        let mut r = four();
-        let mut store = FakeStore::default();
-        let mut st = r.new_state();
-        st.mode = "safe".into();
-        let keys = "DownArrow,DownArrow,DownArrow,DownArrow,DownArrow,DownArrow,Ctrl+X,Enter";
+        let keys = "DownArrow,DownArrow,Ctrl+S,Ctrl+W,Ctrl+X,o,Enter";
         let (out, frames) = edit(&mut r, st, &mut store, keys);
-        let out = out.unwrap();
-        assert_eq!(out.mode, "normal");
-        assert!(r.row(RowName::Mode).is_none());
-        assert_eq!(store.saved.last().map(Vec::as_slice), ALL.get(..6), "rows on disk lack mode");
-        assert!(!crate::launch::launch_args(&r, &out, None, false, None, "", "").contains(&"--safe-mode".to_owned()));
-        assert!(!frames.last().unwrap().iter().any(|l| l.contains("normal")), "gone at once");
-        assert_eq!(out.row, 5, "the cursor stays on a shown row");
-    }
-
-    #[test]
-    fn row_keys_keep_account_and_the_ends_and_a_failed_save_holds_for_this_run() {
-        let mut r = four();
-        let mut store = FakeStore::default();
-        let st = r.new_state();
-        let (_, frames) = edit(&mut r, st, &mut store, "Ctrl+X,Ctrl+W,Enter");
-        assert_eq!(names(&r), ALL, "account stays; the first row goes no higher");
-        assert_eq!(store.saved, [] as [Vec<RowName>; 0]);
-        assert!(frames.get(1).unwrap().iter().any(|l| l.contains("account cannot be hidden")));
-        let mut store = FakeStore {
-            fail: Some("access denied"),
-            ..FakeStore::default()
-        };
-        let st = r.new_state();
-        let (out, frames) = edit(&mut r, st, &mut store, "DownArrow,DownArrow,Ctrl+X,Enter");
-        assert!(r.row(RowName::Model).is_none(), "kept for this run");
-        assert_eq!(names(&r).get(out.unwrap().row), Some(&RowName::Effort), "the next shown row");
+        assert_eq!(out.unwrap().row, 2, "the cursor stays");
+        assert_eq!(names(&r), ALL);
         assert!(
-            frames
-                .last()
-                .unwrap()
-                .iter()
-                .any(|l| l.contains("rows for this run only: access denied"))
+            !frames.iter().any(|f| f.iter().any(|l| l.contains("launch rows"))),
+            "no editor here: maintenance l has it"
         );
-    }
-
-    #[test]
-    fn ctrl_x_on_the_action_row_writes_nothing() {
-        let mut r = four();
-        r.add_action_row();
-        let mut store = FakeStore::default();
-        let st = r.new_state();
-        let (out, _) = edit(&mut r, st, &mut store, "DownArrow,DownArrow,Ctrl+X,Enter");
-        assert!(out.is_some());
-        assert_eq!(store.saved, [] as [Vec<RowName>; 0]);
-        assert!(r.row(RowName::Action).is_some());
-    }
-
-    #[test]
-    fn alt_down_moves_the_row_down() {
-        let mut r = four();
-        let v = view();
-        let p = Prefs::default();
-        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
-        let mut store = FakeStore::default();
-        let st = r.new_state();
-        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook).with_rows(&mut store);
-        let alt = |code| KeyPress {
-            alt: true,
-            ..KeyPress::named(code)
-        };
-        let keys = [
-            KeyPress::named(vk::DOWN),
-            KeyPress::named(vk::DOWN),
-            alt(vk::DOWN),
-            alt(vk::UP),
-            alt(vk::DOWN),
-            KeyPress::named(vk::ENTER),
-        ];
-        let mut t = PreviewTerm::new((100, 30), keys.into(), true);
-        assert_eq!(run(&mut s, &mut t).unwrap().unwrap().row, 3, "the cursor follows the row");
-        drop(s);
-        assert_eq!(names(&r).get(2..4), Some(&[RowName::Effort, RowName::Model][..]));
-        assert_eq!(store.saved.len(), 3);
-    }
-
-    #[test]
-    fn o_shows_a_hidden_row_again_without_restart() {
-        let mut r = four();
-        let shown = ALL.get(..6).unwrap().to_vec();
-        r.apply_rows(&shown);
-        let mut store = FakeStore {
-            disk: Some(shown),
-            ..FakeStore::default()
-        };
-        let st = r.new_state();
-        let (out, frames) = edit(&mut r, st, &mut store, "o,s,s,s,s,s,s,Spacebar,Enter,Enter");
-        assert!(out.is_some());
-        assert_eq!(names(&r), ALL, "mode is back");
-        assert_eq!(store.saved.last().map(Vec::as_slice), Some(&ALL[..]));
-        assert!(
-            frames.iter().any(|f| f.iter().any(|l| l.contains("launch rows"))),
-            "the editor opened"
-        );
-        assert!(frames.last().unwrap().iter().any(|l| l.contains("normal")), "drawn on return");
     }
 
     #[test]
@@ -749,18 +533,5 @@ mod tests {
         let (out, _) = edit(&mut r, st, &mut store, "u,Enter");
         assert!(out.is_some());
         assert_eq!(names(&r), [RowName::Account, RowName::Mode]);
-    }
-
-    #[test]
-    fn shift_o_opens_nothing() {
-        let mut r = four();
-        let mut store = FakeStore::default();
-        let st = r.new_state();
-        let (out, frames) = edit(&mut r, st, &mut store, "O,Enter");
-        assert!(out.is_some());
-        assert!(
-            !frames.iter().any(|f| f.iter().any(|l| l.contains("launch rows"))),
-            "a split mouse report"
-        );
     }
 }

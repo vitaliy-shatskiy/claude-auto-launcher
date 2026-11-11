@@ -13,4 +13,4 @@
 
   ------------------------------------------------------------------------------------------------
   * restored (2 min ago), ctrl+r resets
-  w/s row  :  a/d value  :  [enter] next  :  ^w/^s move  :  ^x hide  :  [o] rows  :  [u] maintenance  :  [esc] quit
+  w/s row  :  a/d value  :  [enter] next  :  [u] maintenance  :  [esc] quit

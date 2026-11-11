@@ -247,7 +247,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     Ok(outcome)
 }
 
-/// Config `rows` on disk, re-read each time; a preview reads it and writes nothing.
+/// Config `rows` on disk, re-read each time.
 struct ConfigRows<'a> {
     run: &'a Run,
 }
@@ -255,13 +255,6 @@ struct ConfigRows<'a> {
 impl RowsStore for ConfigRows<'_> {
     fn load(&mut self) -> Option<Vec<RowName>> {
         crate::config::read_config(&self.run.cfg.path, &self.run.ctx).rows
-    }
-
-    fn save(&mut self, rows: &[RowName]) -> Result<(), String> {
-        if self.run.preview {
-            return Ok(());
-        }
-        crate::config::save_rows(&self.run.cfg.path, rows).map_err(|e| e.to_string())
     }
 }
 

@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Changed
+
+- Row editing moved from the launch screen to the maintenance rows editor (`l`): `ctrl+w`/`ctrl+s`
+  (or `alt+up`/`alt+down`) move the row, `ctrl+x` (or `space`) hides it, `enter` saves, `esc`
+  cancels; a hidden row stays in place, dimmed. Shift+`w`/`s` no longer move (a split mouse report
+  arrives as shift+letter). The launch screen drops `ctrl+w`/`ctrl+s`/`ctrl+x` and `o`; its footer
+  is back to five hints.
+
 ## [0.7.1] — 2026-11-10
 
 ### Added
