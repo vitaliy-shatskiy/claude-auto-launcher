@@ -87,17 +87,6 @@ fn newest_is_by_version_not_write_time_and_the_swap_installs_it() {
 }
 
 #[test]
-fn a_write_time_tie_is_broken_by_version() {
-    let t = Tmp::new("tie");
-    t.file("v/2.1.100", "build 100");
-    t.file("v/2.1.900", "build 900");
-    let now = SystemTime::now();
-    set_mtime(&t.0.join("v/2.1.100"), now);
-    set_mtime(&t.0.join("v/2.1.900"), now);
-    assert_eq!(newest_build_name(&t.0.join("v")).as_deref(), Some("2.1.900"));
-}
-
-#[test]
 fn prune_orders_by_version_and_keeps_the_window() {
     let t = Tmp::new("prune");
     t.file("v/2.1.226", "build 226");

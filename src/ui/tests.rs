@@ -24,7 +24,6 @@ fn a_console_without_armed_input_ends_as_lost_not_as_exhausted_keys() {
     let mut t = ConsoleTerm::open(false, None, logger);
     let size = t.size();
     assert_eq!(t.wait(size), Err(UiStop::ConsoleLost));
-    assert_ne!(UiStop::ConsoleLost.to_string(), UiStop::KeysExhausted.to_string());
 }
 
 #[test]

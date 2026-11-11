@@ -117,13 +117,18 @@ fn matching(names: &[String], seg: &str) -> Vec<String> {
 /// The real lister: subfolders (junctions and folder links included, never followed; a link to
 /// a file is not one), an entry that cannot be read skipped, sorted case-insensitively.
 pub(crate) fn list_dirs(parent: &str) -> Listing {
+    list_dirs_capped(parent, READ_CAP)
+}
+
+/// `list_dirs` reading at most `cap` folders (a test passes a small cap).
+fn list_dirs_capped(parent: &str, cap: usize) -> Listing {
     let entries = std::fs::read_dir(parent).map_err(|e| format!("cannot list it: {}", e.kind()))?;
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
         // On Windows the entry's metadata comes from the directory read itself: no disk access.
         .filter(|e| e.metadata().is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0))
         .filter_map(|e| e.file_name().into_string().ok())
-        .take(READ_CAP)
+        .take(cap)
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
     Ok(names)

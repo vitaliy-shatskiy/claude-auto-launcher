@@ -421,6 +421,22 @@ fn save_keys_refuses_a_file_that_is_not_a_json_object() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Removes this user's deny entries from a path on drop, so a test that panics while they are on
+/// never leaves a folder nobody can list or delete.
+struct Undeny<'a>(&'a Path, &'a str);
+
+impl Drop for Undeny<'_> {
+    fn drop(&mut self) {
+        let removed = std::process::Command::new("icacls")
+            .arg(self.0)
+            .args(["/remove:d", self.1])
+            .output();
+        if !removed.is_ok_and(|o| o.status.success()) {
+            // Nothing more to do in a drop; the folder name says which test left it.
+        }
+    }
+}
+
 #[test]
 fn save_keys_never_rewrites_a_config_whose_attributes_cannot_be_read() {
     // Denying read-attributes on the file and listing on its folder (which would grant them back)
@@ -435,11 +451,13 @@ fn save_keys_never_rewrites_a_config_whose_attributes_cannot_be_read() {
         assert!(ok.status.success(), "icacls {} {action} {ace}", on.display());
     };
     icacls(&path, "/deny", &format!("{user}:(RA)"));
+    let file_deny = Undeny(&path, &user);
     icacls(&dir, "/deny", &format!("{user}:(RD)"));
+    let dir_deny = Undeny(&dir, &user);
     let hidden = std::fs::metadata(&path).is_err();
     let saved = save_keys(path.to_str().unwrap(), &[("mouse", serde_json::json!(false))]);
-    icacls(&dir, "/remove:d", &user);
-    icacls(&path, "/remove:d", &user);
+    // The folder's deny goes first: the file's is removed through the folder.
+    drop((dir_deny, file_deny));
     assert!(hidden, "the fixture hides the attributes");
     let back: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert!(back["remote"] == true, "the existing keys survive: {back} ({saved:?})");

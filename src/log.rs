@@ -192,6 +192,49 @@ mod tests {
     }
 
     #[test]
+    fn prune_deletes_only_launcher_logs_older_than_the_window() {
+        // Given: launcher logs 15 and 13 days old, an upper-case old one, and old files of other names.
+        let dir = std::env::temp_dir().join(format!("claude-auto-rs-prune-{}", new_run_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let day = Duration::from_hours(24);
+        let files = [
+            ("claude-auto-2026-01-01.jsonl", 15),
+            ("CLAUDE-AUTO-2026-01-02.JSONL", 15),
+            ("claude-auto-2026-01-03.jsonl", 13),
+            ("other-2026-01-01.jsonl", 15),
+            ("claude-auto-2026-01-01.txt", 15),
+        ];
+        for (name, days) in files {
+            let p = dir.join(name);
+            std::fs::write(&p, "{}").unwrap();
+            let when = SystemTime::now() - day * days;
+            std::fs::File::options()
+                .write(true)
+                .open(&p)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(when))
+                .unwrap();
+        }
+        // When: the 14-day window is pruned.
+        prune(&dir, 14);
+        // Then: only the two old launcher logs are gone.
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        std::fs::remove_dir_all(&dir).unwrap_or_default();
+        assert_eq!(
+            left,
+            [
+                "claude-auto-2026-01-01.txt",
+                "claude-auto-2026-01-03.jsonl",
+                "other-2026-01-01.jsonl"
+            ]
+        );
+    }
+
+    #[test]
     fn disabled_logger_writes_nothing() {
         let l = Logger {
             root: std::env::temp_dir().join("claude-auto-rs-never"),

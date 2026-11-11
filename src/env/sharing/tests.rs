@@ -246,7 +246,8 @@ fn a_relink_refused_mid_way_leaves_the_file_in_place() {
 }
 
 struct SymlinkCase {
-    t: Tree,
+    /// Held so the folder lives as long as the case.
+    _tree: Tree,
     work: PathBuf,
     root: PathBuf,
     canon: PathBuf,
@@ -262,7 +263,7 @@ impl SymlinkCase {
         write(&canon, "# global");
         write(&other, "# other");
         Self {
-            t,
+            _tree: t,
             work,
             root,
             canon,
@@ -325,7 +326,6 @@ fn claude_md_symlink_is_created_repointed_and_left_alone() {
     c.run();
     assert_eq!(c.state(), c.linked(), "a symlink to another file is re-pointed");
     assert_eq!(read(&c.other), "# other", "and the wrong target itself is untouched");
-    assert!(c.t.0.exists());
 }
 
 #[test]

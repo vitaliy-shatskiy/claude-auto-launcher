@@ -31,6 +31,22 @@ fn tree(name: &str) -> (Tree, String) {
 }
 
 #[test]
+fn a_large_parent_is_read_only_up_to_the_cap() {
+    // Given: a parent with five folders and a file.
+    let t = Tree::new("nav-cap");
+    for d in ["a", "b", "c", "d", "e"] {
+        t.dir(d);
+    }
+    std::fs::write(t.0.join("f.txt"), "").unwrap();
+    let parent = t.0.to_string_lossy().into_owned();
+    // When: it is read with a cap of three.
+    let capped = list_dirs_capped(&parent, 3).unwrap();
+    // Then: three folders (the file never counts), and the real cap reads them all.
+    assert_eq!(capped.len(), 3, "{capped:?}");
+    assert_eq!(list_dirs(&parent).unwrap(), ["a", "b", "c", "d", "e"]);
+}
+
+#[test]
 fn an_empty_field_lists_the_drives_present() {
     let mut n = nav();
     n.refresh();
