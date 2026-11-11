@@ -1,6 +1,7 @@
 //! The launch-rows editor behind the maintenance screen's `l`: which launch rows show and in what
 //! order, saved as config `rows`. w/s cursor, ctrl+w/s (alt+up/down) move, ctrl+x or space
-//! show/hide, enter save, esc cancel. A hidden row keeps its place, dimmed.
+//! show/hide, enter save, esc cancel. A hidden row stays in place while editing, dimmed; `rows`
+//! holds only the shown rows, so on reopen the hidden ones follow them in the default order.
 
 use crate::frame::{
     FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
@@ -215,9 +216,10 @@ mod tests {
             ..KeyPress::char(c)
         };
         let mut k = keys("s");
-        k.extend([alt(vk::DOWN), alt(vk::DOWN), alt(vk::UP), shifted('S'), shifted('W')]);
+        k.extend([alt(vk::DOWN), alt(vk::DOWN), alt(vk::UP), shifted('S')]);
         k.extend(keys("Enter"));
         let out = edit(None, k).unwrap();
+        assert_eq!(out.get(2), Some(&RowName::Remote), "shift+s left remote where alt put it");
         assert_eq!(
             out.get(..4),
             Some(&[RowName::Account, RowName::Model, RowName::Remote, RowName::Effort][..])

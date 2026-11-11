@@ -130,7 +130,7 @@ Every argument goes to `claude` untouched, except the launcher's own `--launcher
 ### Keys
 
 <p align="center">
-  <a href="docs/media/launch-walk.mp4"><img alt="A keyboard walk: switching between three accounts brings back each one's model, effort, advisor and permission, then the model, effort and advisor rows are stepped" src="docs/media/launch-walk.gif" width="100%"></a>
+  <a href="docs/media/launch-walk.mp4"><img alt="A keyboard walk: switching between three accounts brings back each one's model, effort, advisor and permission, then the model, effort and advisor rows are stepped; in the maintenance rows editor the advisor row moves up and mode is hidden, and the launch screen shows the new order" src="docs/media/launch-walk.gif" width="100%"></a>
   <br>
   <sub>Switching accounts brings back each one's choices, then the model, effort and advisor rows are stepped.</sub>
 </p>
@@ -140,7 +140,7 @@ Every argument goes to `claude` untouched, except the launcher's own `--launcher
 | **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices · `enter` next (with `projectScreen: "onDemand"`: launch) · `u` maintenance · `esc` quit |
 | **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `h` hide or show the project (saved to `hiddenProjects`) · `v` list the hidden projects, marked · `esc` back |
 | **Session picker** | `enter` open · `f` fork · `tab` this project or every project · `/` filter · `esc` back |
-| **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · `l` launch rows editor: `w`/`s` row, `ctrl+w`/`ctrl+s` or `alt+↑`/`alt+↓` move it, `ctrl+x` or `space` hide/show (not `account`; a hidden row stays in place, dimmed), `enter` save to `rows` (shown on return to the launch screen), `esc` cancel · one key per `maintenanceActions` entry · `esc` back |
+| **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · `l` launch rows editor: `w`/`s` row, `ctrl+w`/`ctrl+s` or `alt+↑`/`alt+↓` move it, `ctrl+x` or `space` hide/show (not `account`; a hidden row stays in place while editing, dimmed), `enter` save to `rows` (shown on return to the launch screen), `esc` cancel · one key per `maintenanceActions` entry · `esc` back |
 | **Mouse** | hover highlights · click selects · click the highlighted row to run it · click a footer button to press its key · wheel scrolls |
 
 The project screen lists the current directory first, then known projects from `~/.claude/projects`.

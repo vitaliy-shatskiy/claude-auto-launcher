@@ -512,10 +512,18 @@ mod tests {
         let mut r = four();
         let mut store = FakeStore::default();
         let st = r.new_state();
-        let keys = "DownArrow,DownArrow,Ctrl+S,Ctrl+W,Ctrl+X,o,Enter";
-        let (out, frames) = edit(&mut r, st, &mut store, keys);
-        assert_eq!(out.unwrap().row, 2, "the cursor stays");
-        assert_eq!(names(&r), ALL);
+        // One key per run: a move and its reverse in one run would cancel out.
+        for keys in [
+            "DownArrow,DownArrow,Ctrl+S,Enter",
+            "DownArrow,DownArrow,Ctrl+W,Enter",
+            "DownArrow,DownArrow,Ctrl+X,Enter",
+        ] {
+            let st = r.new_state();
+            let (out, _) = edit(&mut r, st, &mut store, keys);
+            assert_eq!(out.unwrap().row, 2, "{keys}: the cursor stays");
+            assert_eq!(names(&r), ALL, "{keys}");
+        }
+        let (_, frames) = edit(&mut r, st, &mut store, "o,Enter");
         assert!(
             !frames.iter().any(|f| f.iter().any(|l| l.contains("launch rows"))),
             "no editor here: maintenance l has it"
