@@ -77,6 +77,8 @@ impl Term for UpdateTerm {
             return Ok(Event::Idle);
         }
         if self.frames().len() == self.painted && self.cap > 0 {
+            // A real idle poll takes ~60 ms; 1 ms keeps a check that answers under load in reach.
+            std::thread::sleep(std::time::Duration::from_millis(1));
             self.cap -= 1;
             return Ok(Event::Idle);
         }
@@ -155,7 +157,7 @@ fn the_answer_redraws_header_and_model_row_and_keeps_the_selection() {
     let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
     let st = r.new_state();
     // Given: haiku picked on the model row while the check runs.
-    let mut t = UpdateTerm::new("DownArrow,DownArrow,RightArrow", go, 1_000_000, "Enter");
+    let mut t = UpdateTerm::new("DownArrow,DownArrow,RightArrow", go, 5000, "Enter");
     // When: the check answers a new version and new labels.
     let out = {
         let mut s = LaunchScreen::new(&mut r, st, &vw, &p, 0, &mut hook).with_update(&w);
@@ -175,14 +177,15 @@ fn an_answer_that_changes_nothing_draws_nothing() {
     let (mut r, vw, p) = (four(), view(), Prefs::default());
     let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
     let st = r.new_state();
-    let mut t = UpdateTerm::new("", go, 1_000_000, "Enter");
+    let mut t = UpdateTerm::new("", go, 5000, "Enter");
     {
         let mut s = LaunchScreen::new(&mut r, st, &vw, &p, 0, &mut hook).with_update(&w);
         run(&mut s, &mut t).unwrap().unwrap();
     }
     assert_eq!(t.frames().len(), 1, "only the first frame");
     // The check did answer: the idle polls saw it and drew nothing.
-    w.borrow_mut().finish(|| {});
+    assert!(w.borrow().applied().is_some(), "the screen never read the answer");
+    w.borrow_mut().finish(|| {}, || false).unwrap();
     assert!(matches!(w.borrow().outcome(), Some(Ok(_))));
 }
 
@@ -191,7 +194,7 @@ fn an_answer_already_in_shows_in_the_first_frame() {
     // An update that finished while the project screen was open shows on return.
     let (go, w) = cell_check(v("2.1.1"), found(v("2.1.2"), None));
     go.send(()).unwrap();
-    w.borrow_mut().finish(|| {});
+    w.borrow_mut().finish(|| {}, || false).unwrap();
     let (mut r, vw, p) = (four(), view(), Prefs::default());
     let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
     let st = r.new_state();

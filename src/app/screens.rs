@@ -3,11 +3,11 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-use crate::background::Background;
+use crate::background::{Background, Left};
 use crate::config::{PathCtx, ProjectScreen};
 use crate::frame::{self, FooterLight, Frame, Hint, RowMap, Style};
 use crate::input::console::ConsoleInput;
-use crate::input::{KeyPress, is_hotkey};
+use crate::input::{Event, KeyPress, is_hotkey, vk};
 use crate::launch::LaunchState;
 use crate::launch::PROJECT_ACTION;
 use crate::launch::launch_mode;
@@ -38,6 +38,15 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let version: VersionInfo = maintenance::read_version();
     let canonical_root = run.cfg.canonical().map(|a| a.root.clone()).unwrap_or_default();
     let account_dirs: Vec<(String, String)> = run.cfg.accounts.iter().map(|a| (a.key.clone(), a.root.clone())).collect();
+    let mut roster = run.roster.clone();
+    // Read before the check starts: an install re-reads the catalog, and its cache write is plain.
+    let labels = {
+        let _s = tm.scope(&["model catalog"]);
+        env::model_family_labels(run.preview)
+    };
+    if let Some(labels) = labels {
+        roster.set_model_labels(&labels);
+    }
     // The check runs behind the launch screen; Enter waits for what is left of it. Declared before
     // the console so an exit drops the console first, then settles the check.
     let update = RefCell::new(if !run.preview && var("CLAUDE_AUTO_NO_UPDATE").as_deref() != Some("1") {
@@ -53,14 +62,6 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     } else {
         maintenance::UpdateWatch::off(version.clone())
     });
-    let mut roster = run.roster.clone();
-    let labels = {
-        let _s = tm.scope(&["model catalog"]);
-        env::model_family_labels(run.preview)
-    };
-    if let Some(labels) = labels {
-        roster.set_model_labels(&labels);
-    }
     let accounts = tm.begin(&["accounts"]);
     let rate_dir = var("CLAUDE_AUTO_RATE_LIMITS_DIR").map_or_else(|| run.ctx.home.join(".claude").join("rate-limits"), PathBuf::from);
     let defaults = label_defaults(&canonical_root, &account_dirs);
@@ -109,7 +110,10 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let roots = projects::launcher_profile_roots(&run.ctx.home, var("CLAUDE_CONFIG_DIR").as_deref(), &account_roots);
     // The scan runs while the launch screen is up; the start selection waits for it after Enter.
     let (build_cache, hide) = (cache.clone(), run.cfg.hide_headless_projects);
-    let mut prefetch = Background::start("registry", move || projects::project_registry(build_cache.as_deref(), &roots, hide));
+    let prefetch = Background::start("registry", move || projects::project_registry(build_cache.as_deref(), &roots, hide));
+    // A cancel or an error exit never waits for the build: its cache write is temp + rename. A
+    // preview joins it: its per-PID cache file is removed below.
+    let mut prefetch = if run.preview { prefetch } else { prefetch.unjoined() };
     // An unwritable or refused config keeps the change for this run only; the screen says why.
     let save_hidden = |path: &str, change: projects::HideChange| -> Result<(), String> {
         if run.preview {
@@ -268,12 +272,11 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let mut outcome = outcome;
     let launching = matches!(outcome, UiEnd::Launch(_));
     let mut watch = update.into_inner();
-    wait_for_update(
-        launching,
-        &mut watch,
-        tm,
-        status(term.as_mut(), run.preview, "checking for a Claude Code update..."),
-    );
+    if wait_on_screen(launching, &mut watch, tm, term.as_mut(), run.preview).is_err() {
+        // Esc or Ctrl+C during the wait: claude never starts mid-update, and the exit waits for nothing.
+        watch.abandon();
+        outcome = UiEnd::Cancelled;
+    }
     // The launch reads its defaults from the view: an install moved them.
     if let (UiEnd::Launch(o), Some(Ok(found))) = (&mut outcome, watch.outcome()) {
         o.view.apply(found);
@@ -290,18 +293,56 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     Ok(outcome)
 }
 
-/// Claude never starts mid-update: a launch waits for the check (its fetch is bounded by 5 s). A
-/// quit leaves a check that is only talking to the network and waits only for a running install.
-/// Either wait is `wait:update`.
-pub(super) fn wait_for_update(launching: bool, update: &mut maintenance::UpdateWatch, tm: &Timings, on_slow: impl FnOnce()) {
-    let waited = if launching { update.finish(on_slow) } else { update.quit(on_slow) };
+/// Claude never starts mid-update: a launch waits for the check (`WinHTTP` allows 5 s per phase,
+/// four phases; `claude update` has no limit). A quit leaves a check that is only talking to the
+/// network and waits only for a running install. Either wait is `wait:update`; `left` (Esc,
+/// Ctrl+C) ends it unread.
+pub(super) fn wait_for_update(
+    launching: bool,
+    update: &mut maintenance::UpdateWatch,
+    tm: &Timings,
+    on_slow: impl FnOnce(),
+    left: impl FnMut() -> bool,
+) -> Result<(), Left> {
+    let waited = if launching {
+        update.finish(on_slow, left)
+    } else {
+        update.quit_or_leave(on_slow, left)
+    }?;
     if let Some(w) = waited {
         tm.add(&["wait", "update"], None, w.start, w.end, None);
     }
+    Ok(())
+}
+
+/// `wait_for_update` on the console: the status line once it outlasts `SLOW`, then Esc or Ctrl+C
+/// leaves it (the raw console reads Ctrl+C as a key, so nothing else could).
+pub(super) fn wait_on_screen(
+    launching: bool,
+    update: &mut maintenance::UpdateWatch,
+    tm: &Timings,
+    term: &mut dyn Term,
+    preview: bool,
+) -> Result<(), Left> {
+    let term = RefCell::new(term);
+    wait_for_update(
+        launching,
+        update,
+        tm,
+        || status(&mut **term.borrow_mut(), preview, "checking for a Claude Code update...")(),
+        || leave_key(&mut **term.borrow_mut()),
+    )
+}
+
+/// One poll of the console: Esc or Ctrl+C. Other input during the wait is dropped.
+fn leave_key(term: &mut dyn Term) -> bool {
+    let size = term.size();
+    matches!(term.wait(size), Ok(Event::Key(k)) if k.is(vk::ESCAPE) || k.is_ctrl(vk::C))
 }
 
 /// `u`: maintenance opens only once the background check is done, so its update keys never run
-/// beside the check's own `claude update`.
+/// beside the check's own `claude update`. Leaving the wait goes back to the launch screen; the
+/// check runs on and the next Enter or `u` waits for it again.
 pub(super) fn open_maintenance(
     update: &RefCell<maintenance::UpdateWatch>,
     tm: &Timings,
@@ -309,13 +350,9 @@ pub(super) fn open_maintenance(
     preview: bool,
     open: impl FnOnce(&mut dyn Term),
 ) {
-    wait_for_update(
-        true,
-        &mut update.borrow_mut(),
-        tm,
-        status(term, preview, "checking for a Claude Code update..."),
-    );
-    open(term);
+    if wait_on_screen(true, &mut update.borrow_mut(), tm, term, preview).is_ok() {
+        open(term);
+    }
 }
 
 /// The `default (X)` labels: the canonical root's model and advisor, every account's defaults.

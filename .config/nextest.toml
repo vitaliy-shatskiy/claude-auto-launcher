@@ -1,0 +1,3 @@
+# A test that hangs (a fake job never released) is killed after 30 s instead of stalling the run.
+[profile.default]
+slow-timeout = { period = "10s", terminate-after = 3 }

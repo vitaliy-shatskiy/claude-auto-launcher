@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
-use crate::background::{Background, Waited};
+use crate::background::{Background, Left, Waited};
 use crate::env::Note;
 use crate::types::{LabelDefaults, VersionInfo};
 
@@ -102,21 +102,32 @@ impl UpdateWatch {
     }
 
     /// Waits for a check still running (after Enter, before maintenance); `on_slow` shows a status
-    /// line when that takes a while. The wait, if this call waited.
-    pub(crate) fn finish(&mut self, on_slow: impl FnOnce()) -> Option<Waited> {
-        self.job.as_mut().and_then(|j| j.wait(on_slow).1)
+    /// line when that takes a while. The wait, if this call waited; `left` (Esc, Ctrl+C) ends it
+    /// and the check runs on, unread.
+    pub(crate) fn finish(&mut self, on_slow: impl FnOnce(), left: impl FnMut() -> bool) -> Result<Option<Waited>, Left> {
+        self.job.as_mut().map_or(Ok(None), |j| j.wait_or_leave(on_slow, left))
     }
 
     /// Quit without a launch: a check only talking to the network is left behind (its cache write
     /// is temp + rename); a running install is waited for.
     pub(crate) fn quit(&mut self, on_slow: impl FnOnce()) -> Option<Waited> {
+        self.quit_or_leave(on_slow, || false).unwrap_or_default()
+    }
+
+    /// `quit` whose wait for a running install the user can leave (`left`).
+    pub(crate) fn quit_or_leave(&mut self, on_slow: impl FnOnce(), left: impl FnMut() -> bool) -> Result<Option<Waited>, Left> {
         if self.gate.close() {
-            if let Some(j) = self.job.as_mut() {
-                j.detach();
-            }
-            return None;
+            self.abandon();
+            return Ok(None);
         }
-        self.finish(on_slow)
+        self.finish(on_slow, left)
+    }
+
+    /// The process exits without the answer: nothing waits for the check, now or on drop.
+    pub(crate) fn abandon(&mut self) {
+        if let Some(j) = self.job.as_mut() {
+            j.detach();
+        }
     }
 
     /// What the check had to say: its lines, or the panic that ended it.
@@ -139,7 +150,9 @@ impl Drop for UpdateWatch {
 pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::time::Duration;
 
     fn v(installed: &str) -> VersionInfo {
         VersionInfo {
@@ -159,13 +172,16 @@ pub(crate) mod tests {
         }
     }
 
+    /// A fake job's longest run: a test that never lets it go fails instead of hanging.
+    pub(crate) const BOUND: Duration = Duration::from_secs(3);
+
     /// A fake slow checker that only talks to the network: it answers `answer` once the test
-    /// sends on the returned gate.
+    /// sends on the returned gate (or after `BOUND`).
     pub(crate) fn slow_check(shown: VersionInfo, answer: UpdateFound) -> (Sender<()>, UpdateWatch) {
         let (go, gate) = channel::<()>();
         let gate = Arc::new(Mutex::new(gate));
         let watch = UpdateWatch::start(shown, move |_| {
-            gate.lock().unwrap().recv().unwrap_or_default();
+            gate.lock().unwrap().recv_timeout(BOUND).unwrap_or_default();
             answer
         });
         (go, watch)
@@ -182,7 +198,7 @@ pub(crate) mod tests {
             let installing = g.begin_install();
             began.lock().unwrap().send(installing).unwrap();
             if installing {
-                gate.lock().unwrap().recv().unwrap_or_default();
+                gate.lock().unwrap().recv_timeout(BOUND).unwrap_or_default();
             }
             answer
         });
@@ -195,7 +211,7 @@ pub(crate) mod tests {
         assert!(w.news().is_none(), "still running");
         assert!(w.applied().is_none());
         go.send(()).unwrap();
-        w.finish(|| {});
+        w.finish(|| {}, || false).unwrap();
         assert_eq!(w.news().map(|f| f.version.clone()), Some(v("2.1.2")));
         assert!(w.news().is_none(), "told once");
         assert_eq!(w.applied().map(|f| f.version.clone()), Some(v("2.1.2")));
@@ -205,7 +221,7 @@ pub(crate) mod tests {
     fn an_unchanged_answer_is_no_news() {
         let (go, mut w) = slow_check(v("2.1.1"), found(v("2.1.1"), None));
         go.send(()).unwrap();
-        w.finish(|| {});
+        w.finish(|| {}, || false).unwrap();
         assert!(w.news().is_none(), "nothing to redraw");
     }
 
@@ -213,7 +229,7 @@ pub(crate) mod tests {
     fn finish_waits_for_an_unfinished_check() {
         let (go, mut w) = slow_check(v("2.1.1"), found(v("2.1.2"), None));
         let release = std::thread::spawn(move || go.send(()).unwrap());
-        assert!(w.finish(|| {}).is_some(), "Enter waited for the check");
+        assert!(w.finish(|| {}, || false).unwrap().is_some(), "Enter waited for the check");
         assert!(matches!(w.outcome(), Some(Ok(f)) if f.version == v("2.1.2")));
         release.join().unwrap();
     }
@@ -248,10 +264,40 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_quit_and_an_install_never_both_win_the_gate() {
+        // Given: fresh gates, one install and one quit racing for each, released together by a
+        // spin barrier (a blocking barrier wakes the two too far apart to overlap).
+        const ROUNDS: usize = 20_000;
+        let gates: Arc<Vec<InstallGate>> = Arc::new((0..ROUNDS).map(|_| InstallGate::default()).collect());
+        let arrived = Arc::new(AtomicUsize::new(0));
+        let race = |gates: &[InstallGate], arrived: &AtomicUsize, win: &dyn Fn(&InstallGate) -> bool| -> Vec<bool> {
+            gates
+                .iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    arrived.fetch_add(1, Ordering::SeqCst);
+                    while arrived.load(Ordering::SeqCst) < 2 * (i + 1) {
+                        std::hint::spin_loop();
+                    }
+                    win(g)
+                })
+                .collect()
+        };
+        let (theirs, their_count) = (Arc::clone(&gates), Arc::clone(&arrived));
+        // When: the check begins its install while the launcher quits.
+        let installer = std::thread::spawn(move || race(&theirs, &their_count, &InstallGate::begin_install));
+        let quits = race(&gates, &arrived, &InstallGate::close);
+        let installs = installer.join().unwrap();
+        // Then: never both: a quit that waits for nothing never leaves an install running.
+        let both = quits.iter().zip(&installs).filter(|(q, i)| **q && **i).count();
+        assert_eq!(both, 0, "rounds where the quit and the install both won");
+    }
+
+    #[test]
     fn off_never_waits_and_has_no_news() {
         let mut w = UpdateWatch::off(v("2.1.1"));
         assert!(w.news().is_none());
-        assert_eq!(w.finish(|| panic!("no status")), None);
+        assert_eq!(w.finish(|| panic!("no status"), || false), Ok(None));
         assert!(w.outcome().is_none());
     }
 }

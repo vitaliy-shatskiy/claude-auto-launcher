@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::VersionInfo;
 
 #[test]
 fn prefixes_are_shortest_unique() {
@@ -219,48 +220,87 @@ fn a_tab_switch_then_a_neutral_cwd_starts_in_the_arriving_tabs_remembered_projec
     std::fs::remove_dir_all(&dir).unwrap_or_default();
 }
 
-#[test]
-fn maintenance_opens_only_after_the_background_check() {
-    use crate::maintenance::watch::tests::found;
-    use crate::maintenance::watch::tests::slow_install;
-    use crate::timing::{DebugMode, Timings};
-    use crate::types::VersionInfo;
-    let tm = Timings::new(DebugMode::Quiet, std::time::Instant::now());
-    // Given: the check's own `claude update` is running when `u` is pressed.
-    let (started, go, w) = slow_install(found(VersionInfo::default(), None));
-    assert!(started.recv().unwrap());
-    let update = std::cell::RefCell::new(w);
+fn quiet_timings() -> Timings {
+    Timings::new(crate::timing::DebugMode::Quiet, Instant::now())
+}
+
+fn no_keys() -> crate::ui::PreviewTerm {
+    crate::ui::PreviewTerm::new((80, 25), std::collections::VecDeque::new(), true)
+}
+
+/// `u` while the check is out: maintenance opens only once the check answered.
+fn opens_after(update: &std::cell::RefCell<crate::maintenance::UpdateWatch>, go: std::sync::mpsc::Sender<()>) -> Option<bool> {
     let release = std::thread::spawn(move || go.send(()).unwrap());
-    let mut t = crate::ui::PreviewTerm::new((80, 25), std::collections::VecDeque::new(), true);
     let mut opened_after_check = None;
-    // When: maintenance opens.
-    screens::open_maintenance(&update, &tm, &mut t, true, |_| {
+    screens::open_maintenance(update, &quiet_timings(), &mut no_keys(), true, |_| {
         opened_after_check = Some(update.borrow().outcome().is_some());
     });
-    // Then: the install had finished before any maintenance key could run another.
-    assert_eq!(opened_after_check, Some(true));
     release.join().unwrap();
+    opened_after_check
 }
 
 #[test]
-fn a_launch_waits_for_an_unfinished_update_check_and_a_cancel_does_not() {
+fn maintenance_opens_only_after_the_background_install() {
+    use crate::maintenance::watch::tests::{found, slow_install};
+    // Given: the check's own `claude update` is running when `u` is pressed.
+    let (started, go, w) = slow_install(found(VersionInfo::default(), None));
+    assert!(started.recv().unwrap());
+    // When: maintenance opens. Then: the install had finished before any maintenance key could run another.
+    assert_eq!(opens_after(&std::cell::RefCell::new(w), go), Some(true));
+}
+
+#[test]
+fn maintenance_opens_only_after_the_background_network_check() {
     use crate::maintenance::watch::tests::{found, slow_check};
-    use crate::timing::{DebugMode, Timings};
-    use crate::types::VersionInfo;
-    let tm = Timings::new(DebugMode::Quiet, std::time::Instant::now());
-    // Given: checks still talking to the network when the launch screen ends.
-    let (go_quit, mut quit) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
+    // Given: the check is still talking to the network when `u` is pressed.
+    let (go, w) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
+    // When: maintenance opens. Then: the check had answered first.
+    assert_eq!(opens_after(&std::cell::RefCell::new(w), go), Some(true));
+}
+
+#[test]
+fn a_cancel_does_not_wait_for_an_update_check_on_the_network() {
+    use crate::maintenance::watch::tests::{found, slow_check};
+    let tm = quiet_timings();
+    // Given: a check still talking to the network when a cancel ends the UI.
     let (go, mut w) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
-    // When: a cancel ends the UI, nothing waits.
-    let release_quit = std::thread::spawn(move || go_quit.send(()).unwrap());
-    screens::wait_for_update(false, &mut quit, &tm, || {});
-    assert!(quit.outcome().is_none(), "the cancel did not read the check");
-    release_quit.join().unwrap();
-    // When: Enter launches while it is still running.
+    // When: the cancel quits.
+    screens::wait_for_update(false, &mut w, &tm, || {}, || false).unwrap();
+    // Then: nothing waited (the check is let go only afterwards).
+    assert!(w.outcome().is_none(), "the cancel did not read the check");
+    drop(go);
+}
+
+#[test]
+fn a_launch_waits_for_an_unfinished_update_check() {
+    use crate::maintenance::watch::tests::{found, slow_check};
+    let tm = quiet_timings();
+    // Given: a check still talking to the network when Enter launches.
+    let (go, mut w) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
     let release = std::thread::spawn(move || go.send(()).unwrap());
-    screens::wait_for_update(true, &mut w, &tm, || {});
+    // When: the launch waits.
+    screens::wait_for_update(true, &mut w, &tm, || {}, || false).unwrap();
     // Then: the check answered before claude would start, and the wait is a span.
     assert!(matches!(w.outcome(), Some(Ok(_))));
     assert!(tm.spans().iter().any(|s| s.name.contains("update")), "{:?}", tm.spans());
     release.join().unwrap();
+}
+
+#[test]
+fn escape_leaves_a_stuck_update_wait_and_maintenance_stays_shut() {
+    use crate::maintenance::watch::tests::{found, slow_install};
+    // Given: an install that does not end while the launch waits for it.
+    let (started, go, w) = slow_install(found(VersionInfo::default(), None));
+    assert!(started.recv().unwrap());
+    let update = std::cell::RefCell::new(w);
+    let esc = || crate::ui::PreviewTerm::new((80, 25), crate::ui::parse_preview_keys("Escape").unwrap(), true);
+    // When: Escape during the `u` wait, then during the launch wait.
+    let mut opened = false;
+    screens::open_maintenance(&update, &quiet_timings(), &mut esc(), false, |_| opened = true);
+    let left = screens::wait_on_screen(true, &mut update.borrow_mut(), &quiet_timings(), &mut esc(), false);
+    // Then: neither waited for the answer, maintenance never opened, the launch was left.
+    assert!(!opened, "maintenance opened mid-update");
+    assert_eq!(left, Err(crate::background::Left));
+    assert!(update.borrow().outcome().is_none(), "the wait read the check");
+    drop(go);
 }
