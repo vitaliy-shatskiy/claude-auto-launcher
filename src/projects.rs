@@ -5,7 +5,6 @@
 mod nav_view;
 mod navigator;
 mod paths;
-mod prefetch;
 mod registry;
 mod screen;
 mod select;
@@ -23,7 +22,6 @@ use crate::launch::LaunchState;
 use crate::ui::{Term, UiStop};
 
 pub use paths::project_key;
-pub use prefetch::{Prefetch, Waited};
 pub(crate) use registry::path_from_transcript;
 pub use screen::{HideChange, Hiding};
 

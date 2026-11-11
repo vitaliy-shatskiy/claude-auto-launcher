@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::background::Background;
 use crate::config::{PathCtx, ProjectScreen};
 use crate::frame::{self, FooterLight, Frame, Hint, RowMap, Style};
 use crate::input::console::ConsoleInput;
@@ -11,6 +12,8 @@ use crate::launch::PROJECT_ACTION;
 use crate::launch::launch_mode;
 use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore};
 use crate::layout::split_text_lines;
+use crate::log::Logger;
+use crate::log_data;
 use crate::out;
 use crate::prefs;
 use crate::timing::Timings;
@@ -31,11 +34,15 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let tm = &run.logger.timings;
     tm.set_style(style.color, style.ascii);
     let load = tm.begin(&["load", "launch"]);
-    let mut version: VersionInfo = maintenance::read_version();
-    if !run.preview && var("CLAUDE_AUTO_NO_UPDATE").as_deref() != Some("1") {
-        let _s = tm.scope(&["update check"]);
-        maintenance::update_before_launch(&mut version);
-    }
+    let version: VersionInfo = maintenance::read_version();
+    // The check runs behind the launch screen; Enter waits for what is left of it. Declared before
+    // the console so an exit drops the console first, then joins the check.
+    let mut update = if !run.preview && var("CLAUDE_AUTO_NO_UPDATE").as_deref() != Some("1") {
+        let installed = version.clone();
+        maintenance::UpdateWatch::start(version.clone(), move || maintenance::check_update(installed))
+    } else {
+        maintenance::UpdateWatch::off(version.clone())
+    };
     let mut roster = run.roster.clone();
     let labels = {
         let _s = tm.scope(&["model catalog"]);
@@ -98,7 +105,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let roots = projects::launcher_profile_roots(&run.ctx.home, var("CLAUDE_CONFIG_DIR").as_deref(), &account_roots);
     // The scan runs while the launch screen is up; the start selection waits for it after Enter.
     let (build_cache, hide) = (cache.clone(), run.cfg.hide_headless_projects);
-    let mut prefetch = projects::Prefetch::start(move || projects::project_registry(build_cache.as_deref(), &roots, hide));
+    let mut prefetch = Background::start("registry", move || projects::project_registry(build_cache.as_deref(), &roots, hide));
     // An unwritable or refused config keeps the change for this run only; the screen says why.
     let save_hidden = |path: &str, change: projects::HideChange| -> Result<(), String> {
         if run.preview {
@@ -127,12 +134,18 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             }
             false
         };
-        let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook).with_rows(&mut rows_store);
+        let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
+            .with_rows(&mut rows_store)
+            .with_update(&mut update);
         let Some(next) = crate::ui::screen_loop::run(&mut screen, term.as_mut())? else {
             break UiEnd::Cancelled;
         };
         state = next;
-        let project_list = registry(&mut prefetch, tm);
+        let project_list = registry(
+            &mut prefetch,
+            &run.logger,
+            status(term.as_mut(), run.preview, "loading projects..."),
+        );
         // Deferred from before the launch screen: the rule reads only the cwd and the project the
         // final tab remembers, so applying it once here equals applying it on every tab switch.
         if state.start.is_none() {
@@ -247,7 +260,16 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         }
         back_to(&mut state);
     };
-    prefetch.finish();
+    let launching = matches!(outcome, UiEnd::Launch(_));
+    wait_for_update(
+        launching,
+        &mut update,
+        tm,
+        status(term.as_mut(), run.preview, "checking for a Claude Code update..."),
+    );
+    drop(prefetch);
+    drop(term);
+    report_update(&update, &run.logger);
     if let Some(c) = cache
         && c.exists()
         && std::fs::remove_file(&c).is_err()
@@ -257,20 +279,68 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     Ok(outcome)
 }
 
-/// The prefetched registry. The first call records the build (`load:project`, its `registry:*`
-/// steps, measured on the build's thread) and how long the screen waited for it (`wait:project`).
-fn registry<'a>(prefetch: &'a mut projects::Prefetch, tm: &Timings) -> &'a [projects::Project] {
-    let (reg, waited) = prefetch.get();
-    if let Some(w) = waited {
-        if let (Some(first), Some(last)) = (reg.phases.first(), reg.phases.last()) {
-            let load = tm.add(&["load", "project"], None, first.start, last.end, None);
-            for p in &reg.phases {
-                tm.add(&["registry", p.name], Some(load), p.start, p.end, None);
+/// Claude never starts mid-update: a launch waits for the check (its fetch is bounded by 5 s) and
+/// records `wait:update`; a cancel leaves the check to the drop's join.
+pub(super) fn wait_for_update(launching: bool, update: &mut maintenance::UpdateWatch, tm: &Timings, on_slow: impl FnOnce()) {
+    if !launching {
+        return;
+    }
+    if let Some(w) = update.finish(on_slow) {
+        tm.add(&["wait", "update"], None, w.start, w.end, None);
+    }
+}
+
+/// A one-line frame for a wait after Enter that outlasts `background::SLOW`; none in preview,
+/// whose printed frames a harness compares.
+fn status<'t>(term: &'t mut dyn Term, preview: bool, text: &'t str) -> impl FnOnce() + 't {
+    move || {
+        if !preview {
+            term.paint(&[String::new(), format!("  {text}")]);
+        }
+    }
+}
+
+/// The check's span (measured on its thread) and the lines it held back while the screen was up,
+/// printed now that the console is back; a check that panicked is logged instead.
+fn report_update(update: &maintenance::UpdateWatch, logger: &Logger) {
+    match update.outcome() {
+        Some(Ok(found)) => {
+            logger.timings.add(&["update check"], None, found.span.0, found.span.1, None);
+            for n in &found.lines {
+                out::line(&n.text, n.fg);
             }
         }
-        tm.add(&["wait", "project"], None, w.start, w.end, None);
+        Some(Err(e)) => {
+            logger.write("error", log_data! { "where" => "update check", "message" => e });
+        }
+        None => {}
     }
-    &reg.projects
+}
+
+/// The prefetched registry. The first call records the build (`load:project`, its `registry:*`
+/// steps, measured on the build's thread) and how long the screen waited for it (`wait:project`);
+/// a build that panicked is logged once and is an empty list: an optional step never fails a launch.
+fn registry<'a>(prefetch: &'a mut Background<projects::Registry>, logger: &Logger, on_slow: impl FnOnce()) -> &'a [projects::Project] {
+    let tm = &logger.timings;
+    let (answer, waited) = prefetch.wait(on_slow);
+    let Some(w) = waited else {
+        return answer.as_ref().map_or(&[], |r| &r.projects);
+    };
+    match answer {
+        Ok(reg) => {
+            if let (Some(first), Some(last)) = (reg.phases.first(), reg.phases.last()) {
+                let load = tm.add(&["load", "project"], None, first.start, last.end, None);
+                for p in &reg.phases {
+                    tm.add(&["registry", p.name], Some(load), p.start, p.end, None);
+                }
+            }
+        }
+        Err(e) => {
+            logger.write("error", log_data! { "where" => "registry", "message" => e });
+        }
+    }
+    tm.add(&["wait", "project"], None, w.start, w.end, None);
+    answer.as_ref().map_or(&[], |r| &r.projects)
 }
 
 /// Config `rows` and `hiddenValues` on disk, re-read each time.

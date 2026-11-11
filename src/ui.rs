@@ -101,7 +101,8 @@ impl std::error::Error for UiStop {}
 pub trait Term {
     fn size(&mut self) -> (usize, usize);
     fn paint(&mut self, lines: &[String]);
-    /// `Wait-KeyOrResize`: the next event; `Resize` when the size moved from `size`.
+    /// `Wait-KeyOrResize`: the next event; `Resize` when the size moved from `size`; `Idle` after
+    /// one empty poll (~60 ms) so a screen can look at background work.
     fn wait(&mut self, size: (usize, usize)) -> Result<Event, UiStop>;
     fn window_top(&mut self) -> i32;
     /// One non-blocking look: is another record already waiting?
@@ -198,25 +199,24 @@ impl Term for ConsoleTerm {
     }
 
     fn wait(&mut self, size: (usize, usize)) -> Result<Event, UiStop> {
-        loop {
-            if self.size() != size {
-                return Ok(Event::Resize);
-            }
-            let Some(input) = self.input.as_mut() else {
-                return Err(UiStop::ConsoleLost);
-            };
-            if let Some(ev) = input.read_event(60) {
-                return Ok(ev);
-            }
-            let pending = input.pending();
-            input.flush_trace();
-            if let Some(a) = self.activation.as_mut()
-                && a.queued
-                && !pending
-            {
-                a.queued = false;
-            }
+        if self.size() != size {
+            return Ok(Event::Resize);
         }
+        let Some(input) = self.input.as_mut() else {
+            return Err(UiStop::ConsoleLost);
+        };
+        if let Some(ev) = input.read_event(60) {
+            return Ok(ev);
+        }
+        let pending = input.pending();
+        input.flush_trace();
+        if let Some(a) = self.activation.as_mut()
+            && a.queued
+            && !pending
+        {
+            a.queued = false;
+        }
+        Ok(Event::Idle)
     }
 
     fn window_top(&mut self) -> i32 {

@@ -181,3 +181,60 @@ fn answers_resolve_by_full_key_or_longest_prefix() {
     assert_eq!(resolve_account_answer("", &p, "work"), "work");
     assert_eq!(resolve_account_answer("x", &p, "work"), "work");
 }
+
+#[test]
+fn a_tab_switch_then_a_neutral_cwd_starts_in_the_arriving_tabs_remembered_project() {
+    use crate::launch::screen::{LaunchScreen, LaunchView};
+    use crate::ui::{PreviewTerm, Term};
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-tab-{}", crate::log::new_run_id()));
+    let (pa, pb) = (dir.join("alpha"), dir.join("beta"));
+    std::fs::create_dir_all(&pa).unwrap();
+    std::fs::create_dir_all(&pb).unwrap();
+    // Given: tab work remembers alpha, tab personal beta; the launcher runs outside any project.
+    let prefs = crate::prefs::parse_prefs(
+        &serde_json::json!({ "Version": 2, "Profiles": { "personal": { "Project": pb.to_string_lossy(), "SavedAtMs": 0 } } }).to_string(),
+    );
+    let mut r = crate::launch::tests::four();
+    let mut st = r.new_state();
+    st.project = pa.to_string_lossy().into_owned();
+    let view = LaunchView {
+        limits: crate::types::Limits::new(),
+        version: crate::types::VersionInfo::default(),
+        default_model_label: "default".into(),
+        default_advisor_label: "default".into(),
+        labels_by_account: std::collections::BTreeMap::new(),
+        style: crate::frame::Style { color: false, ascii: true },
+    };
+    let mut hook = |_: &crate::input::KeyPress, _: &mut dyn Term| false;
+    let mut t = PreviewTerm::new((100, 30), crate::ui::parse_preview_keys("RightArrow,Enter").unwrap(), true);
+    // When: the account row moves to personal, Enter, then the deferred start rule runs.
+    let mut state = {
+        let mut s = LaunchScreen::new(&mut r, st, &view, &prefs, 0, &mut hook);
+        crate::ui::screen_loop::run(&mut s, &mut t).unwrap().unwrap()
+    };
+    let source = crate::projects::set_launch_start_project(&mut state, Path::new(r"C:\Users\someone\Desktop"), &[]);
+    // Then: the final tab's project, recorded as remembered.
+    assert_eq!(state.account, "personal");
+    assert_eq!((state.project.as_str(), source.as_str()), (pb.to_str().unwrap(), "remembered"));
+    std::fs::remove_dir_all(&dir).unwrap_or_default();
+}
+
+#[test]
+fn a_launch_waits_for_an_unfinished_update_check_and_a_cancel_does_not() {
+    use crate::maintenance::watch::tests::{found, slow_check};
+    use crate::timing::{DebugMode, Timings};
+    use crate::types::VersionInfo;
+    let tm = Timings::new(DebugMode::Quiet, std::time::Instant::now());
+    // Given: a check still out when the launch screen ends.
+    let (go, mut w) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
+    // When: a cancel ends the UI, nothing waits.
+    screens::wait_for_update(false, &mut w, &tm, || {});
+    assert!(w.outcome().is_none(), "the cancel did not read the check");
+    // When: Enter launches while it is still running.
+    let release = std::thread::spawn(move || go.send(()).unwrap());
+    screens::wait_for_update(true, &mut w, &tm, || {});
+    // Then: the check answered before claude would start, and the wait is a span.
+    assert!(matches!(w.outcome(), Some(Ok(_))));
+    assert!(tm.spans().iter().any(|s| s.name.contains("update")), "{:?}", tm.spans());
+    release.join().unwrap();
+}

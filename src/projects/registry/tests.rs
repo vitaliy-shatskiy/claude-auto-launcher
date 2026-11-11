@@ -141,7 +141,8 @@ fn a_warm_cache_lists_what_a_cold_scan_lists_after_append_new_and_delete() {
     let warm = t.0.join("warm.json");
     assert_eq!(slugs(&build(&root, &warm, &[], &[])), "C,A,B");
     // Given: a session appended (its file closed again, as Claude Code writes), a new folder, a
-    // deleted folder.
+    // deleted folder. The close is the assumption the listing-time read rests on: NTFS moves the
+    // listing's time of a file still held open only lazily.
     let mut f = File::options().append(true).open(root.join("B").join("s.jsonl")).unwrap();
     std::io::Write::write_all(&mut f, b"{\"type\":\"assistant\"}\n").unwrap();
     drop(f);
@@ -223,6 +224,55 @@ fn stale_preview_caches_pruned_by_exact_name() {
     for (n, _, kept) in names {
         assert_eq!(t.0.join(n).exists(), kept, "{n}");
     }
+}
+
+#[test]
+fn a_cut_off_cache_write_is_swept_a_day_later() {
+    // Given: temps an exit left between write and rename, beside a preview cache and the real one.
+    let t = Tree::new("temps");
+    let now = SystemTime::now();
+    let old = now - Duration::from_hours(48);
+    let names = [
+        ("claude-auto-projects-preview-111.json.111-00ab12.tmp", old, false),
+        ("claude-auto-projects-preview-222.json.222-00ab12.tmp", now, true),
+        ("claude-auto-projects-preview-333.json.333-zz.tmp", old, true),
+        ("other.json.111-00ab12.tmp", old, true),
+    ];
+    for (n, when, _) in names {
+        write_at(&t.0.join(n), "{}", when);
+    }
+    let real = t.0.join("claude-auto-projects.json");
+    write_at(&t.0.join("claude-auto-projects.json.42-0f0f0f.tmp"), "{}", old);
+    write_at(&t.0.join("claude-auto-projects.json.43-0f0f0f.tmp"), "{}", now);
+    // When: a preview sweeps the temp folder, and a build writes the real cache.
+    remove_stale_preview_cache_at(&t.0, now);
+    write_cache(&real, &Map::new());
+    // Then: only the day-old temps of those caches are gone.
+    for (n, _, kept) in names {
+        assert_eq!(t.0.join(n).exists(), kept, "{n}");
+    }
+    assert!(!t.0.join("claude-auto-projects.json.42-0f0f0f.tmp").exists());
+    assert!(
+        t.0.join("claude-auto-projects.json.43-0f0f0f.tmp").exists(),
+        "a fresh temp may be another run's write"
+    );
+    assert!(real.exists());
+}
+
+#[test]
+fn a_symlinked_transcript_is_still_listed() {
+    let t = Tree::new("link");
+    let root = t.0.join("projects");
+    let w = t.dir("w");
+    let target = t.0.join("elsewhere").join("s.jsonl");
+    write_at(&target, &user(&w, Some("cli")), ago(5));
+    fs::create_dir_all(root.join("L")).unwrap();
+    if std::os::windows::fs::symlink_file(&target, root.join("L").join("s.jsonl")).is_err() {
+        // No symlink privilege (no Developer Mode, not elevated): nothing to test here.
+        return;
+    }
+    let rows = build(&root, &t.0.join("c.json"), &[], &[]);
+    assert_eq!(slugs(&rows), "L", "the link resolves to its target's time and contents");
 }
 
 #[test]

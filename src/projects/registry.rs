@@ -61,7 +61,9 @@ fn transcripts(dir: &Path) -> Vec<Transcript> {
             let name = e.file_name().to_string_lossy().into_owned();
             let is_jsonl = path.extension().is_some_and(|x| x.eq_ignore_ascii_case("jsonl"));
             // The enumeration's own record: no open per file (most of a warm build's time). A
-            // link still resolves to its target as before.
+            // link still resolves to its target as before. Assumes the writer closes the file
+            // after each append (Claude Code does): NTFS updates the listing's time of a file
+            // held open only lazily, so a held-open transcript could read older here.
             let meta = e.metadata().ok().filter(|m| !m.is_symlink()).or_else(|| fs::metadata(&path).ok());
             let meta = meta.filter(|m| m.is_file() && is_jsonl)?;
             Some(Transcript {
@@ -218,9 +220,10 @@ fn write_cache(path: &Path, fresh: &Map<String, Value>) {
         return;
     };
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    remove_stale_cache_temps(path, SystemTime::now());
     let tmp = PathBuf::from(format!("{}.{}-{:06x}.tmp", path.display(), std::process::id(), nonce & 0x00FF_FFFF));
     if fs::write(&tmp, text).is_err() || fs::rename(&tmp, path).is_err() {
-        // Best effort: a temp file that cannot be removed is swept by nobody and harms nothing.
+        // Best effort: a temp that cannot be removed now is swept by a write a day later.
         fs::remove_file(&tmp).unwrap_or_default();
     }
 }
@@ -369,23 +372,58 @@ fn merge(rows: Vec<SlugRow>) -> Vec<Project> {
     merged
 }
 
-/// `Remove-StalePreviewProjectsCache`: only the exact name a preview writes, older than a day.
-pub(crate) fn remove_stale_preview_cache_at(dir: &Path, now: SystemTime) {
+/// A `write_cache` temp of the cache named `cache`: `<cache>.<pid>-<hex>.tmp`. An exit between
+/// the write and the rename leaves one behind.
+fn is_cache_temp(name: &str, cache: &str) -> bool {
+    name.strip_prefix(cache)
+        .and_then(|r| r.strip_prefix('.'))
+        .and_then(|r| r.strip_suffix(".tmp"))
+        .and_then(|r| r.split_once('-'))
+        .is_some_and(|(pid, hex)| {
+            !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) && !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+}
+
+/// The day-old temps beside `cache` that an exit cut off; younger ones may be another run's write.
+pub(crate) fn remove_stale_cache_temps(cache: &Path, now: SystemTime) {
+    let (Some(dir), Some(name)) = (cache.parent(), cache.file_name().map(|n| n.to_string_lossy().into_owned())) else {
+        return;
+    };
     let Ok(rd) = fs::read_dir(dir) else { return };
     let cutoff = now.checked_sub(Duration::from_hours(24)).unwrap_or(UNIX_EPOCH);
     for e in rd.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let ours = name
-            .strip_prefix("claude-auto-projects-preview-")
+        if is_cache_temp(&e.file_name().to_string_lossy(), &name) && modified_before(&e, cutoff) {
+            fs::remove_file(e.path()).unwrap_or_default();
+        }
+    }
+}
+
+fn modified_before(e: &fs::DirEntry, cutoff: SystemTime) -> bool {
+    e.metadata()
+        .ok()
+        .filter(fs::Metadata::is_file)
+        .and_then(|m| m.modified().ok())
+        .is_some_and(|m| m < cutoff)
+}
+
+/// `Remove-StalePreviewProjectsCache`: only the exact names a preview writes (its cache and that
+/// cache's temps), older than a day.
+pub(crate) fn remove_stale_preview_cache_at(dir: &Path, now: SystemTime) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    let cutoff = now.checked_sub(Duration::from_hours(24)).unwrap_or(UNIX_EPOCH);
+    let preview_cache = |n: &str| {
+        n.strip_prefix("claude-auto-projects-preview-")
             .and_then(|r| r.strip_suffix(".json"))
-            .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
-        let old = e
-            .metadata()
-            .ok()
-            .filter(fs::Metadata::is_file)
-            .and_then(|m| m.modified().ok())
-            .is_some_and(|m| m < cutoff);
-        if ours && old {
+            .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+    };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let ours = preview_cache(&name)
+            || name.split_once(".json.").is_some_and(|(stem, _)| {
+                let cache = format!("{stem}.json");
+                preview_cache(&cache) && is_cache_temp(&name, &cache)
+            });
+        if ours && modified_before(&e, cutoff) {
             // Best effort: a file another process holds is pruned by a later run.
             fs::remove_file(e.path()).unwrap_or_default();
         }

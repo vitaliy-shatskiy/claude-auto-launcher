@@ -123,6 +123,10 @@ pub trait Screen {
     fn silent(&self) -> bool {
         false
     }
+    /// No input for one poll: `true` when background work changed what the screen shows.
+    fn idle(&mut self) -> bool {
+        false
+    }
 }
 
 /// Two records of one gesture land within a few ms; 500 ms is far under any human second click.
@@ -264,9 +268,15 @@ fn run_loop<S: Screen>(
             }
         }
         g.settle = false;
-        let ev = term.wait(size)?;
+        // An idle poll goes back to waiting unless the screen has something new to draw.
+        let ev = loop {
+            match term.wait(size)? {
+                Event::Idle if !screen.idle() => {}
+                e => break e,
+            }
+        };
         let key = match ev {
-            Event::Resize => continue,
+            Event::Resize | Event::Idle => continue,
             Event::Key(k) if tm.is_on() && k.is(vk::F12) => {
                 view::show_timings(term, tm)?;
                 continue;

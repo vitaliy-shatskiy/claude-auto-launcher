@@ -11,6 +11,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   A warm build reads each transcript's time from the folder listing instead of opening every file
   (about 3x faster on 500 folders). Debug timings split `load:project` into `registry:scan`,
   `registry:cache read`, `registry:derive`, `registry:cache write`, plus `wait:project`.
+- The launch screen no longer waits for the Claude Code update check: the check (and `claude
+  update` when a newer build is out) runs on a background thread, the screen draws at once with
+  the installed version and redraws the header and model row in place when the check changes
+  them, keeping the selection. Enter waits for a check still running, so claude never starts
+  mid-update (`wait:update`); its messages print after the screen closes.
+- A wait after Enter longer than 150 ms shows `loading projects...` or `checking for a Claude Code
+  update...` instead of a frozen frame.
+- The run log's `preselect` and `projectSource` now describe the start project of the final tab
+  (the rule runs once after Enter).
+
+### Fixed
+
+- An exit (an error, a finished preview) waits for the background registry build, so its cache
+  write is never cut off; day-old cache temps an earlier cut left are swept. A registry build that
+  panics is logged (`error`, `where=registry`) and prints nothing over the screen.
 
 ## [0.8.0] — 2026-11-11
 

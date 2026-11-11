@@ -3,6 +3,7 @@
 //! map and the porting record live in PORTING.md.
 
 pub mod app;
+pub mod background;
 pub mod config;
 pub mod env;
 pub mod frame;

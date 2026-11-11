@@ -94,6 +94,8 @@ pub enum Event {
     Key(KeyPress),
     Mouse(MouseEvent),
     Resize,
+    /// No input within one poll: a screen may look at its background work (the update check).
+    Idle,
 }
 
 const KEY_NAMES: &[(&str, u16)] = &[

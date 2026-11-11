@@ -11,6 +11,7 @@ use super::{
 use crate::config::RowsConfig;
 use crate::frame::{Frame, Style};
 use crate::input::{KeyPress, vk};
+use crate::maintenance::UpdateWatch;
 use crate::prefs::{self, Prefs};
 use crate::types::{DefaultLabels, Limits, VersionInfo};
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
@@ -50,6 +51,8 @@ pub struct LaunchScreen<'a> {
     store: Option<&'a mut dyn RowsStore>,
     /// `rows` and `hiddenValues` as last read: a change on disk (maintenance `l`) is applied on return.
     disk: RowsConfig,
+    /// The update check running behind the screen: its answer redraws the header and model row.
+    update: Option<&'a mut UpdateWatch>,
 }
 
 impl std::fmt::Debug for LaunchScreen<'_> {
@@ -83,6 +86,7 @@ impl<'a> LaunchScreen<'a> {
             on_key,
             store: None,
             disk: RowsConfig::default(),
+            update: None,
         }
     }
 
@@ -92,6 +96,26 @@ impl<'a> LaunchScreen<'a> {
         self.disk = store.load();
         self.store = Some(store);
         self
+    }
+
+    /// The update check behind the screen; an answer already in shows in the first frame.
+    #[must_use]
+    pub(crate) fn with_update(mut self, update: &'a mut UpdateWatch) -> Self {
+        self.update = Some(update);
+        self.take_update();
+        self
+    }
+
+    /// Applies the check's answer once it is in; `true` when the screen must redraw. Only the
+    /// labels move: the selection stays, and `before` snaps a model gone unavailable as always.
+    fn take_update(&mut self) -> bool {
+        let Some(found) = self.update.as_deref_mut().and_then(UpdateWatch::news) else {
+            return false;
+        };
+        if let Some(labels) = &found.labels {
+            self.roster.set_model_labels(labels);
+        }
+        true
     }
 
     fn labels(&self) -> &'a DefaultLabels {
@@ -178,7 +202,7 @@ impl Screen for LaunchScreen<'_> {
             width: size.0,
             height: size.1,
             limits: &self.view.limits,
-            version: &self.view.version,
+            version: self.update.as_deref().map_or(&self.view.version, UpdateWatch::version),
             restored: None,
             default_model_label: &self.view.default_model_label,
             default_advisor_label: &self.view.default_advisor_label,
@@ -208,6 +232,10 @@ impl Screen for LaunchScreen<'_> {
 
     fn enter(&mut self) -> Option<Flow<LaunchState>> {
         Some(Flow::Done(Some(self.state.clone())))
+    }
+
+    fn idle(&mut self) -> bool {
+        self.take_update()
     }
 
     /// A click on a row selects it; on an option cell it walks to that value through the same
@@ -573,3 +601,6 @@ mod tests {
         assert_eq!(out.model, "default", "an unpinned hidden row keeps its default");
     }
 }
+
+#[cfg(test)]
+mod update_tests;

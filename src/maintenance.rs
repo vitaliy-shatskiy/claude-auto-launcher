@@ -6,16 +6,20 @@ mod install;
 mod release;
 mod rows;
 mod screen;
+pub(crate) mod watch;
 mod win;
+
+pub(crate) use watch::{UpdateFound, UpdateWatch};
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::config::{Config, PathCtx, RowsConfig};
+use crate::env::Note;
 use crate::frame::Style;
 use crate::launch::RowName;
-use crate::out::{self, Fg};
+use crate::out::Fg;
 use crate::types::VersionInfo;
 use crate::ui::{Term, UiStop};
 use install::{Install, InstallInfo, Pruned};
@@ -145,10 +149,24 @@ fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// The pre-UI update check: ask the release channel (cached 30 minutes) and install a newer
-/// build now, so the model catalog read after it describes the build that will run. Never in
-/// preview, never with `CLAUDE_AUTO_NO_UPDATE=1` (the caller checks both).
-pub fn update_before_launch(version: &mut VersionInfo) {
+/// The update check, on its own thread while the launch screen is up: ask the release channel
+/// (cached 30 minutes) and install a newer build, then re-read the model catalog so it describes
+/// the build that will run. Its lines are printed after the screen closes. Never in preview,
+/// never with `CLAUDE_AUTO_NO_UPDATE=1` (the caller checks both).
+pub(crate) fn check_update(mut version: VersionInfo) -> UpdateFound {
+    let start = std::time::Instant::now();
+    let mut lines = Vec::new();
+    let labels = check_into(&mut version, &mut lines);
+    UpdateFound {
+        version,
+        labels,
+        lines,
+        span: (start, std::time::Instant::now()),
+    }
+}
+
+/// The check itself; `Some` labels when an install ran and the catalog was re-read.
+fn check_into(version: &mut VersionInfo, lines: &mut Vec<Note>) -> Option<BTreeMap<String, String>> {
     let home = PathCtx::from_env().home;
     let claude_dir = home.join(".claude");
     let channel = release::auto_updates_channel(&claude_dir.join("settings.json"));
@@ -156,34 +174,36 @@ pub fn update_before_launch(version: &mut VersionInfo) {
     let remote = match release::remote_version(&channel, &cache, now_ms(), &mut |url| win::https_get(url, 5000)) {
         Ok(r) => r,
         Err(e) => {
-            if let Some(line) = release::skipped_line(&e) {
-                out::line(&line, Fg::DarkYellow);
-            }
-            return;
+            lines.extend(release::skipped_line(&e).map(|l| Note::new(l, Fg::DarkYellow)));
+            return None;
         }
     };
+    let mut labels = None;
     if release::update_available(version.installed.as_deref(), remote.as_deref()) {
-        out::line(
-            &format!(
+        lines.push(Note::new(
+            format!(
                 "  Claude Code {} is out (installed {}) - updating so the model list is current...",
                 remote.as_deref().unwrap_or_default(),
                 version.installed.as_deref().unwrap_or_default()
             ),
             Fg::DarkGray,
-        );
+        ));
         let upd = Install::from_env(false).update(|| claude_output(&["update"]));
         *version = read_version();
         if version.installed == remote {
-            out::line(
-                &format!("  updated to {}", version.installed.as_deref().unwrap_or_default()),
+            lines.push(Note::new(
+                format!("  updated to {}", version.installed.as_deref().unwrap_or_default()),
                 Fg::DarkGray,
-            );
+            ));
         } else {
-            out::line(
-                &format!("  update did not finish: {} - press u for maintenance", upd.message),
+            lines.push(Note::new(
+                format!("  update did not finish: {} - press u for maintenance", upd.message),
                 Fg::DarkYellow,
-            );
+            ));
         }
+        let (read, notes) = crate::env::read_model_catalog(false);
+        labels = read;
+        lines.extend(notes);
     }
     // The header names the channel's version when nothing newer has been downloaded yet.
     if let Some(r) = remote
@@ -191,6 +211,7 @@ pub fn update_before_launch(version: &mut VersionInfo) {
     {
         version.newest = Some(r);
     }
+    labels
 }
 
 /// `Invoke-MaintenanceScreen`, opened by `u` from the launch screen and returning to it.

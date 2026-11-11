@@ -112,13 +112,19 @@ pub fn show_timings(term: &mut dyn Term, t: &Timings) -> Result<(), UiStop> {
         let size = term.size();
         term.paint(&timings_frame(&tree, top, size, ascii));
         let page = size.1.saturating_sub(3).max(1);
-        match term.wait(size)? {
+        let ev = loop {
+            match term.wait(size)? {
+                Event::Idle => {}
+                e => break e,
+            }
+        };
+        match ev {
             Event::Key(k) if k.is(vk::ESCAPE) || k.is(vk::ENTER) || k.is(vk::F12) || k.is_ctrl(vk::C) => return Ok(()),
             Event::Key(k) if k.is(vk::UP) => top = top.saturating_sub(1),
             Event::Key(k) if k.is(vk::DOWN) => top = (top + 1).min(tree.len().saturating_sub(1)),
             Event::Key(k) if k.is(vk::PAGE_UP) => top = top.saturating_sub(page),
             Event::Key(k) if k.is(vk::PAGE_DOWN) => top = (top + page).min(tree.len().saturating_sub(1)),
-            Event::Key(_) | Event::Mouse(_) | Event::Resize => {}
+            Event::Key(_) | Event::Mouse(_) | Event::Resize | Event::Idle => {}
         }
     }
 }

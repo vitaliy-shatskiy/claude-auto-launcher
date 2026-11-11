@@ -14,7 +14,7 @@ pub(crate) mod win_fs;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use serde_json::Value;
 
@@ -203,19 +203,29 @@ pub fn mcp_config_paths(cfg: &Config, preview: bool) -> Vec<String> {
     paths
 }
 
-/// The catalog of this run, set once by `model_family_labels`; `None` inside = static labels.
-static CATALOG: OnceLock<Option<models::Catalog>> = OnceLock::new();
+/// The catalog of this run, replaced by each read (the update check re-reads it after an
+/// install); `None` inside = static labels. A static: `friendly_model_name` callers carry no context.
+static CATALOG: RwLock<Option<models::Catalog>> = RwLock::new(None);
 
 /// `Initialize-ModelCatalog` + `Get-ModelFamilyLabels`: family -> display name read out of the
 /// installed claude.exe, cached per binary. `None` keeps the static row labels.
 pub fn model_family_labels(preview: bool) -> Option<BTreeMap<String, String>> {
+    let (labels, notes) = read_model_catalog(preview);
+    print(&notes);
+    labels
+}
+
+/// `model_family_labels` without printing: its line comes back for a caller whose screen is up.
+pub(crate) fn read_model_catalog(preview: bool) -> (Option<BTreeMap<String, String>>, Vec<Note>) {
     let home = home();
-    let cat = CATALOG.get_or_init(|| {
-        let loaded = models::load(&models::bin_path(&home), &home.join(r".claude\claude-auto-models.json"), preview);
-        print(&catalog_note(loaded.as_ref()).into_iter().collect::<Vec<_>>());
-        loaded.map(|c| c.0)
-    });
-    cat.as_ref().map(|c| models::family_labels(Some(c)).into_iter().collect())
+    let loaded = models::load(&models::bin_path(&home), &home.join(r".claude\claude-auto-models.json"), preview);
+    let notes = catalog_note(loaded.as_ref()).into_iter().collect();
+    let cat = loaded.map(|c| c.0);
+    let labels = cat.as_ref().map(|c| models::family_labels(Some(c)).into_iter().collect());
+    if let Ok(mut slot) = CATALOG.write() {
+        *slot = cat;
+    }
+    (labels, notes)
 }
 
 /// The line `claude-auto.ps1` prints after a catalog rescan; a cache hit says nothing.
@@ -231,7 +241,9 @@ fn catalog_note(loaded: Option<&(models::Catalog, models::Source)>) -> Option<No
 
 /// `Get-FriendlyModelName`: a raw `--model` value to the label the model row shows for it.
 pub fn friendly_model_name(raw: &str) -> String {
-    models::friendly(raw, CATALOG.get().and_then(Option::as_ref))
+    CATALOG
+        .read()
+        .map_or_else(|_| models::friendly(raw, None), |c| models::friendly(raw, c.as_ref()))
 }
 
 fn read_settings(path: &Path) -> Option<Value> {
