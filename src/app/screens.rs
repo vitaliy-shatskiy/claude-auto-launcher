@@ -1,5 +1,6 @@
 //! The UI sequence of one launch: launch screen, project screen, held-session warning, picker.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use crate::background::Background;
@@ -17,7 +18,7 @@ use crate::log_data;
 use crate::out;
 use crate::prefs;
 use crate::timing::Timings;
-use crate::types::VersionInfo;
+use crate::types::{LabelDefaults, VersionInfo};
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{ConsoleTerm, PreviewTerm, Term, UiStop, parse_preview_keys, parse_preview_size};
 use crate::{env, maintenance, projects, sessions, sys, theme};
@@ -35,14 +36,23 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     tm.set_style(style.color, style.ascii);
     let load = tm.begin(&["load", "launch"]);
     let version: VersionInfo = maintenance::read_version();
+    let canonical_root = run.cfg.canonical().map(|a| a.root.clone()).unwrap_or_default();
+    let account_dirs: Vec<(String, String)> = run.cfg.accounts.iter().map(|a| (a.key.clone(), a.root.clone())).collect();
     // The check runs behind the launch screen; Enter waits for what is left of it. Declared before
-    // the console so an exit drops the console first, then joins the check.
-    let mut update = if !run.preview && var("CLAUDE_AUTO_NO_UPDATE").as_deref() != Some("1") {
-        let installed = version.clone();
-        maintenance::UpdateWatch::start(version.clone(), move || maintenance::check_update(installed))
+    // the console so an exit drops the console first, then settles the check.
+    let update = RefCell::new(if !run.preview && var("CLAUDE_AUTO_NO_UPDATE").as_deref() != Some("1") {
+        let (installed, root, dirs) = (version.clone(), canonical_root.clone(), account_dirs.clone());
+        maintenance::UpdateWatch::start(version.clone(), move |gate| {
+            let mut found = maintenance::check_update(installed, gate);
+            // An install re-read the catalog: `default (X)` names the new build's models.
+            if found.labels.is_some() {
+                found.defaults = Some(label_defaults(&root, &dirs));
+            }
+            found
+        })
     } else {
         maintenance::UpdateWatch::off(version.clone())
-    };
+    });
     let mut roster = run.roster.clone();
     let labels = {
         let _s = tm.scope(&["model catalog"]);
@@ -52,20 +62,14 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         roster.set_model_labels(&labels);
     }
     let accounts = tm.begin(&["accounts"]);
-    let canonical_root = run.cfg.canonical().map(|a| a.root.clone()).unwrap_or_default();
-    let settings = |root: &str| Path::new(root).join("settings.json");
     let rate_dir = var("CLAUDE_AUTO_RATE_LIMITS_DIR").map_or_else(|| run.ctx.home.join(".claude").join("rate-limits"), PathBuf::from);
+    let defaults = label_defaults(&canonical_root, &account_dirs);
     let view = LaunchView {
         limits: env::rate_limit_summary(&run.cfg.accounts, &rate_dir, now_ms()),
         version,
-        default_model_label: env::default_model_label(&settings(&canonical_root)),
-        default_advisor_label: env::default_advisor_label(&settings(&canonical_root)),
-        labels_by_account: run
-            .cfg
-            .accounts
-            .iter()
-            .map(|a| (a.key.clone(), env::default_labels(&settings(&a.root))))
-            .collect(),
+        default_model_label: defaults.model,
+        default_advisor_label: defaults.advisor,
+        labels_by_account: defaults.by_account,
         style,
     };
     tm.end(accounts);
@@ -126,17 +130,18 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let outcome = loop {
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
             if is_hotkey(k, 'u') {
-                if maintenance::run_screen(t, &run.cfg, style).is_err() {
-                    return true;
-                }
-                t.drain();
+                open_maintenance(&update, tm, t, run.preview, |t| {
+                    if maintenance::run_screen(t, &run.cfg, style).is_ok() {
+                        t.drain();
+                    }
+                });
                 return true;
             }
             false
         };
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
             .with_rows(&mut rows_store)
-            .with_update(&mut update);
+            .with_update(&update);
         let Some(next) = crate::ui::screen_loop::run(&mut screen, term.as_mut())? else {
             break UiEnd::Cancelled;
         };
@@ -260,16 +265,22 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         }
         back_to(&mut state);
     };
+    let mut outcome = outcome;
     let launching = matches!(outcome, UiEnd::Launch(_));
+    let mut watch = update.into_inner();
     wait_for_update(
         launching,
-        &mut update,
+        &mut watch,
         tm,
         status(term.as_mut(), run.preview, "checking for a Claude Code update..."),
     );
+    // The launch reads its defaults from the view: an install moved them.
+    if let (UiEnd::Launch(o), Some(Ok(found))) = (&mut outcome, watch.outcome()) {
+        o.view.apply(found);
+    }
     drop(prefetch);
     drop(term);
-    report_update(&update, &run.logger);
+    report_update(&watch, &run.logger);
     if let Some(c) = cache
         && c.exists()
         && std::fs::remove_file(&c).is_err()
@@ -279,14 +290,44 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     Ok(outcome)
 }
 
-/// Claude never starts mid-update: a launch waits for the check (its fetch is bounded by 5 s) and
-/// records `wait:update`; a cancel leaves the check to the drop's join.
+/// Claude never starts mid-update: a launch waits for the check (its fetch is bounded by 5 s). A
+/// quit leaves a check that is only talking to the network and waits only for a running install.
+/// Either wait is `wait:update`.
 pub(super) fn wait_for_update(launching: bool, update: &mut maintenance::UpdateWatch, tm: &Timings, on_slow: impl FnOnce()) {
-    if !launching {
-        return;
-    }
-    if let Some(w) = update.finish(on_slow) {
+    let waited = if launching { update.finish(on_slow) } else { update.quit(on_slow) };
+    if let Some(w) = waited {
         tm.add(&["wait", "update"], None, w.start, w.end, None);
+    }
+}
+
+/// `u`: maintenance opens only once the background check is done, so its update keys never run
+/// beside the check's own `claude update`.
+pub(super) fn open_maintenance(
+    update: &RefCell<maintenance::UpdateWatch>,
+    tm: &Timings,
+    term: &mut dyn Term,
+    preview: bool,
+    open: impl FnOnce(&mut dyn Term),
+) {
+    wait_for_update(
+        true,
+        &mut update.borrow_mut(),
+        tm,
+        status(term, preview, "checking for a Claude Code update..."),
+    );
+    open(term);
+}
+
+/// The `default (X)` labels: the canonical root's model and advisor, every account's defaults.
+fn label_defaults(canonical_root: &str, accounts: &[(String, String)]) -> LabelDefaults {
+    let settings = |root: &str| Path::new(root).join("settings.json");
+    LabelDefaults {
+        model: env::default_model_label(&settings(canonical_root)),
+        advisor: env::default_advisor_label(&settings(canonical_root)),
+        by_account: accounts
+            .iter()
+            .map(|(key, root)| (key.clone(), env::default_labels(&settings(root))))
+            .collect(),
     }
 }
 

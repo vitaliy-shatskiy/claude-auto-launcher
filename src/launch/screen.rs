@@ -11,11 +11,12 @@ use super::{
 use crate::config::RowsConfig;
 use crate::frame::{Frame, Style};
 use crate::input::{KeyPress, vk};
-use crate::maintenance::UpdateWatch;
+use crate::maintenance::{UpdateFound, UpdateWatch};
 use crate::prefs::{self, Prefs};
 use crate::types::{DefaultLabels, Limits, VersionInfo};
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
+use std::cell::RefCell;
 
 /// The caller's hook: `true` consumed the key (the loop redraws).
 pub type OnKey<'a> = dyn FnMut(&KeyPress, &mut dyn Term) -> bool + 'a;
@@ -43,7 +44,8 @@ pub struct LaunchView {
 pub struct LaunchScreen<'a> {
     pub roster: &'a mut Roster,
     pub state: LaunchState,
-    pub view: &'a LaunchView,
+    /// A copy: the update check's answer changes it in place.
+    pub view: LaunchView,
     pub prefs: &'a Prefs,
     pub now_ms: i64,
     cursor: Cursor,
@@ -52,7 +54,7 @@ pub struct LaunchScreen<'a> {
     /// `rows` and `hiddenValues` as last read: a change on disk (maintenance `l`) is applied on return.
     disk: RowsConfig,
     /// The update check running behind the screen: its answer redraws the header and model row.
-    update: Option<&'a mut UpdateWatch>,
+    update: Option<&'a RefCell<UpdateWatch>>,
 }
 
 impl std::fmt::Debug for LaunchScreen<'_> {
@@ -65,6 +67,27 @@ impl std::fmt::Debug for LaunchScreen<'_> {
 }
 
 static NO_LABELS: std::sync::LazyLock<DefaultLabels> = std::sync::LazyLock::new(DefaultLabels::new);
+
+fn labels_of<'v>(view: &'v LaunchView, account: &str) -> &'v DefaultLabels {
+    view.labels_by_account.get(account).unwrap_or(&NO_LABELS)
+}
+
+fn available_of<'v>(view: &'v LaunchView, account: &str) -> Option<&'v [String]> {
+    view.limits.get(account).and_then(|l| l.available_models.as_deref())
+}
+
+impl LaunchView {
+    /// The update check's answer: the header's versions and, after an install, the `default (X)`
+    /// labels read against the new catalog.
+    pub(crate) fn apply(&mut self, found: &UpdateFound) {
+        self.version.clone_from(&found.version);
+        if let Some(d) = &found.defaults {
+            self.default_model_label.clone_from(&d.model);
+            self.default_advisor_label.clone_from(&d.advisor);
+            self.labels_by_account.clone_from(&d.by_account);
+        }
+    }
+}
 
 impl<'a> LaunchScreen<'a> {
     pub fn new(
@@ -79,7 +102,7 @@ impl<'a> LaunchScreen<'a> {
         Self {
             roster,
             state,
-            view,
+            view: view.clone(),
             prefs,
             now_ms,
             cursor,
@@ -100,39 +123,46 @@ impl<'a> LaunchScreen<'a> {
 
     /// The update check behind the screen; an answer already in shows in the first frame.
     #[must_use]
-    pub(crate) fn with_update(mut self, update: &'a mut UpdateWatch) -> Self {
+    pub(crate) fn with_update(mut self, update: &'a RefCell<UpdateWatch>) -> Self {
         self.update = Some(update);
         self.take_update();
+        self.apply_update();
         self
     }
 
     /// Applies the check's answer once it is in; `true` when the screen must redraw. Only the
     /// labels move: the selection stays, and `before` snaps a model gone unavailable as always.
     fn take_update(&mut self) -> bool {
-        let Some(found) = self.update.as_deref_mut().and_then(UpdateWatch::news) else {
-            return false;
-        };
+        let news = self.update.is_some_and(|u| u.borrow_mut().news().is_some());
+        if news {
+            self.apply_update();
+        }
+        news
+    }
+
+    /// The answer a screen was handed: header, model-row labels, `default (X)` labels.
+    fn apply_update(&mut self) {
+        let Some(update) = self.update else { return };
+        let watch = update.borrow();
+        let Some(found) = watch.applied() else { return };
         if let Some(labels) = &found.labels {
             self.roster.set_model_labels(labels);
         }
-        true
+        self.view.apply(found);
     }
 
-    fn labels(&self) -> &'a DefaultLabels {
-        self.view.labels_by_account.get(&self.state.account).unwrap_or(&NO_LABELS)
+    fn labels(&self) -> &DefaultLabels {
+        labels_of(&self.view, &self.state.account)
     }
 
-    fn available(&self) -> Option<&'a [String]> {
-        self.view
-            .limits
-            .get(&self.state.account)
-            .and_then(|l| l.available_models.as_deref())
+    fn available(&self) -> Option<&[String]> {
+        available_of(&self.view, &self.state.account)
     }
 
     /// One walk of the stepper, and the tab switch the account row is.
     fn walk(&mut self, delta: i64, count: usize) {
         let leaving = self.state.account.clone();
-        let ctx = OptionText::plain(self.available(), self.labels());
+        let ctx = OptionText::plain(available_of(&self.view, &leaving), labels_of(&self.view, &leaving));
         for _ in 0..count {
             step_launch_value(self.roster, &mut self.state, delta, &ctx);
         }
@@ -202,7 +232,7 @@ impl Screen for LaunchScreen<'_> {
             width: size.0,
             height: size.1,
             limits: &self.view.limits,
-            version: self.update.as_deref().map_or(&self.view.version, UpdateWatch::version),
+            version: &self.view.version,
             restored: None,
             default_model_label: &self.view.default_model_label,
             default_advisor_label: &self.view.default_advisor_label,

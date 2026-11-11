@@ -1,28 +1,59 @@
 //! The update check as the launch screen sees it (`UpdateWatch`): started at process start, read
-//! without blocking while the screen is up, waited for after Enter so claude never starts
-//! mid-update.
+//! without blocking while the screen is up, waited for after Enter (and before maintenance) so
+//! claude never starts mid-update and two updates never run at once. A quit drops a check that
+//! is only talking to the network, never a running install (`InstallGate`).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 use crate::background::{Background, Waited};
 use crate::env::Note;
-use crate::types::VersionInfo;
+use crate::types::{LabelDefaults, VersionInfo};
 
-/// What the check found: the header's versions, the catalog labels re-read after an install
-/// (`None`: no install ran), the lines it prints once the screen is gone, and its own span.
+/// What the check found: the header's versions, the catalog labels and `default (X)` labels
+/// re-read after an install (`None`: no install ran), the lines it prints once the screen is
+/// gone, and its own span.
 #[derive(Debug, Clone)]
 pub(crate) struct UpdateFound {
     pub(crate) version: VersionInfo,
     pub(crate) labels: Option<BTreeMap<String, String>>,
+    pub(crate) defaults: Option<LabelDefaults>,
     pub(crate) lines: Vec<Note>,
     pub(crate) span: (Instant, Instant),
+}
+
+const OPEN: u8 = 0;
+const INSTALLING: u8 = 1;
+const CLOSED: u8 = 2;
+
+/// Who goes first, the check's install or the user's quit: whichever flips it from open.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct InstallGate(Arc<AtomicU8>);
+
+impl InstallGate {
+    /// The check is about to run `claude update`: `false` = the launcher is quitting, skip it.
+    pub(crate) fn begin_install(&self) -> bool {
+        self.0
+            .compare_exchange(OPEN, INSTALLING, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// The launcher quits: `true` = no install runs or will run, so nothing needs waiting for.
+    fn close(&self) -> bool {
+        match self.0.compare_exchange(OPEN, CLOSED, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => true,
+            Err(now) => now == CLOSED,
+        }
+    }
 }
 
 /// The check in flight, or none (preview, `CLAUDE_AUTO_NO_UPDATE=1`).
 #[derive(Debug)]
 pub(crate) struct UpdateWatch {
     job: Option<Background<UpdateFound>>,
+    gate: InstallGate,
     /// The versions the screen drew first.
     shown: VersionInfo,
     /// The answer was handed to a screen once already.
@@ -30,9 +61,13 @@ pub(crate) struct UpdateWatch {
 }
 
 impl UpdateWatch {
-    pub(crate) fn start(shown: VersionInfo, check: impl FnOnce() -> UpdateFound + Send + Clone + 'static) -> Self {
+    /// Starts `check` on its own thread; it asks the gate before installing.
+    pub(crate) fn start(shown: VersionInfo, check: impl FnOnce(&InstallGate) -> UpdateFound + Send + Clone + 'static) -> Self {
+        let gate = InstallGate::default();
+        let theirs = gate.clone();
         Self {
-            job: Some(Background::start("update", check)),
+            job: Some(Background::start("update", move || check(&theirs))),
+            gate,
             shown,
             told: false,
         }
@@ -41,6 +76,7 @@ impl UpdateWatch {
     pub(crate) fn off(shown: VersionInfo) -> Self {
         Self {
             job: None,
+            gate: InstallGate::default(),
             shown,
             told: false,
         }
@@ -60,15 +96,27 @@ impl UpdateWatch {
         self.found().filter(|f| f.version != *shown || f.labels.is_some())
     }
 
-    /// The versions the header shows now.
-    pub(crate) fn version(&self) -> &VersionInfo {
-        self.found().filter(|_| self.told).map_or(&self.shown, |f| &f.version)
+    /// The answer a screen was already handed: every later screen draws from it too.
+    pub(crate) fn applied(&self) -> Option<&UpdateFound> {
+        self.found().filter(|_| self.told)
     }
 
-    /// After Enter: waits for a check still running; `on_slow` shows a status line when that
-    /// takes a while. The wait, if this call waited.
+    /// Waits for a check still running (after Enter, before maintenance); `on_slow` shows a status
+    /// line when that takes a while. The wait, if this call waited.
     pub(crate) fn finish(&mut self, on_slow: impl FnOnce()) -> Option<Waited> {
         self.job.as_mut().and_then(|j| j.wait(on_slow).1)
+    }
+
+    /// Quit without a launch: a check only talking to the network is left behind (its cache write
+    /// is temp + rename); a running install is waited for.
+    pub(crate) fn quit(&mut self, on_slow: impl FnOnce()) -> Option<Waited> {
+        if self.gate.close() {
+            if let Some(j) = self.job.as_mut() {
+                j.detach();
+            }
+            return None;
+        }
+        self.finish(on_slow)
     }
 
     /// What the check had to say: its lines, or the panic that ended it.
@@ -80,11 +128,18 @@ impl UpdateWatch {
     }
 }
 
+impl Drop for UpdateWatch {
+    /// An error exit quits the same way, without a status line.
+    fn drop(&mut self) {
+        self.quit(|| {});
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::sync::mpsc::{Sender, channel};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
+    use std::sync::mpsc::{Receiver, Sender, channel};
 
     fn v(installed: &str) -> VersionInfo {
         VersionInfo {
@@ -98,32 +153,52 @@ pub(crate) mod tests {
         UpdateFound {
             version,
             labels,
+            defaults: None,
             lines: Vec::new(),
             span: (now, now),
         }
     }
 
-    /// A fake slow checker: it answers `answer` once the test sends on the returned gate.
+    /// A fake slow checker that only talks to the network: it answers `answer` once the test
+    /// sends on the returned gate.
     pub(crate) fn slow_check(shown: VersionInfo, answer: UpdateFound) -> (Sender<()>, UpdateWatch) {
         let (go, gate) = channel::<()>();
         let gate = Arc::new(Mutex::new(gate));
-        let watch = UpdateWatch::start(shown, move || {
-            gate.lock().unwrap().recv().unwrap();
+        let watch = UpdateWatch::start(shown, move |_| {
+            gate.lock().unwrap().recv().unwrap_or_default();
             answer
         });
         (go, watch)
+    }
+
+    /// A fake checker that starts an install: `started` fires once it holds the gate, then it
+    /// runs until the test sends on `go`.
+    pub(crate) fn slow_install(answer: UpdateFound) -> (Receiver<bool>, Sender<()>, UpdateWatch) {
+        let (go, gate) = channel::<()>();
+        let (began, started) = channel::<bool>();
+        let gate = Arc::new(Mutex::new(gate));
+        let began = Arc::new(Mutex::new(began));
+        let watch = UpdateWatch::start(VersionInfo::default(), move |g| {
+            let installing = g.begin_install();
+            began.lock().unwrap().send(installing).unwrap();
+            if installing {
+                gate.lock().unwrap().recv().unwrap_or_default();
+            }
+            answer
+        });
+        (started, go, watch)
     }
 
     #[test]
     fn news_comes_once_when_the_check_changed_something() {
         let (go, mut w) = slow_check(v("2.1.1"), found(v("2.1.2"), None));
         assert!(w.news().is_none(), "still running");
-        assert_eq!(w.version(), &v("2.1.1"));
+        assert!(w.applied().is_none());
         go.send(()).unwrap();
         w.finish(|| {});
         assert_eq!(w.news().map(|f| f.version.clone()), Some(v("2.1.2")));
         assert!(w.news().is_none(), "told once");
-        assert_eq!(w.version(), &v("2.1.2"));
+        assert_eq!(w.applied().map(|f| f.version.clone()), Some(v("2.1.2")));
     }
 
     #[test]
@@ -132,7 +207,6 @@ pub(crate) mod tests {
         go.send(()).unwrap();
         w.finish(|| {});
         assert!(w.news().is_none(), "nothing to redraw");
-        assert_eq!(w.version(), &v("2.1.1"));
     }
 
     #[test]
@@ -142,6 +216,35 @@ pub(crate) mod tests {
         assert!(w.finish(|| {}).is_some(), "Enter waited for the check");
         assert!(matches!(w.outcome(), Some(Ok(f)) if f.version == v("2.1.2")));
         release.join().unwrap();
+    }
+
+    #[test]
+    fn a_quit_leaves_a_check_that_only_talks_to_the_network() {
+        let (go, mut w) = slow_check(v("2.1.1"), found(v("2.1.2"), None));
+        let release = std::thread::spawn(move || go.send(()).unwrap());
+        assert_eq!(w.quit(|| {}), None, "no wait");
+        assert!(w.outcome().is_none(), "the answer was never read");
+        release.join().unwrap();
+    }
+
+    #[test]
+    fn a_quit_waits_for_a_running_install() {
+        let (started, go, mut w) = slow_install(found(v("2.1.2"), None));
+        assert!(started.recv().unwrap(), "the install began before the quit");
+        let release = std::thread::spawn(move || go.send(()).unwrap());
+        assert!(w.quit(|| {}).is_some(), "the quit waited for the install");
+        assert!(matches!(w.outcome(), Some(Ok(_))));
+        release.join().unwrap();
+    }
+
+    #[test]
+    fn an_install_after_a_quit_never_starts() {
+        let gate = InstallGate::default();
+        assert!(gate.close());
+        assert!(!gate.begin_install(), "the check skips the install");
+        let running = InstallGate::default();
+        assert!(running.begin_install());
+        assert!(!running.close(), "a quit must wait");
     }
 
     #[test]

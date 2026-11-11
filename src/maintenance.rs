@@ -9,7 +9,7 @@ mod screen;
 pub(crate) mod watch;
 mod win;
 
-pub(crate) use watch::{UpdateFound, UpdateWatch};
+pub(crate) use watch::{InstallGate, UpdateFound, UpdateWatch};
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -153,20 +153,21 @@ fn now_ms() -> i64 {
 /// (cached 30 minutes) and install a newer build, then re-read the model catalog so it describes
 /// the build that will run. Its lines are printed after the screen closes. Never in preview,
 /// never with `CLAUDE_AUTO_NO_UPDATE=1` (the caller checks both).
-pub(crate) fn check_update(mut version: VersionInfo) -> UpdateFound {
+pub(crate) fn check_update(mut version: VersionInfo, gate: &InstallGate) -> UpdateFound {
     let start = std::time::Instant::now();
     let mut lines = Vec::new();
-    let labels = check_into(&mut version, &mut lines);
+    let labels = check_into(&mut version, gate, &mut lines);
     UpdateFound {
         version,
         labels,
+        defaults: None,
         lines,
         span: (start, std::time::Instant::now()),
     }
 }
 
 /// The check itself; `Some` labels when an install ran and the catalog was re-read.
-fn check_into(version: &mut VersionInfo, lines: &mut Vec<Note>) -> Option<BTreeMap<String, String>> {
+fn check_into(version: &mut VersionInfo, gate: &InstallGate, lines: &mut Vec<Note>) -> Option<BTreeMap<String, String>> {
     let home = PathCtx::from_env().home;
     let claude_dir = home.join(".claude");
     let channel = release::auto_updates_channel(&claude_dir.join("settings.json"));
@@ -179,7 +180,8 @@ fn check_into(version: &mut VersionInfo, lines: &mut Vec<Note>) -> Option<BTreeM
         }
     };
     let mut labels = None;
-    if release::update_available(version.installed.as_deref(), remote.as_deref()) {
+    // A launcher already quitting never starts an install it would then have to wait for.
+    if release::update_available(version.installed.as_deref(), remote.as_deref()) && gate.begin_install() {
         lines.push(Note::new(
             format!(
                 "  Claude Code {} is out (installed {}) - updating so the model list is current...",

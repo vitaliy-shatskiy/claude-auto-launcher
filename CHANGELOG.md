@@ -14,8 +14,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - The launch screen no longer waits for the Claude Code update check: the check (and `claude
   update` when a newer build is out) runs on a background thread, the screen draws at once with
   the installed version and redraws the header and model row in place when the check changes
-  them, keeping the selection. Enter waits for a check still running, so claude never starts
-  mid-update (`wait:update`); its messages print after the screen closes.
+  them (the `default (X)` labels too), keeping the selection. Enter waits for a check still
+  running, so claude never starts mid-update (`wait:update`); its messages print after the screen
+  closes. Esc quits at once unless `claude update` itself is running, and `u` opens maintenance
+  only after the check, so two updates never run at once.
 - A wait after Enter longer than 150 ms shows `loading projects...` or `checking for a Claude Code
   update...` instead of a frozen frame.
 - The run log's `preselect` and `projectSource` now describe the start project of the final tab

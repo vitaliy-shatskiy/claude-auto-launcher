@@ -25,6 +25,15 @@ pub type Limits = BTreeMap<String, LimitRecord>;
 /// (`Get-DefaultLabels`, Env.ps1).
 pub type DefaultLabels = BTreeMap<String, String>;
 
+/// The `default (X)` labels of the launch screen: the canonical root's model and advisor, and
+/// every account's resolved defaults (`Get-DefaultLabels` per root).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LabelDefaults {
+    pub model: String,
+    pub advisor: String,
+    pub by_account: BTreeMap<String, DefaultLabels>,
+}
+
 /// Installed and newest Claude Code versions for the header (`Get-InstalledClaudeVersion`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VersionInfo {

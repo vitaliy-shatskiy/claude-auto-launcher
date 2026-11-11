@@ -133,6 +133,14 @@ impl<T: Send + 'static> Background<T> {
         (done, waited)
     }
 
+    /// Leaves an unread job behind: no wait, now or on drop; its answer is never read.
+    pub fn detach(&mut self) {
+        if self.done.is_none() {
+            self.rx = None;
+            self.handle = None;
+        }
+    }
+
     /// The answer if `poll` or `wait` already read it.
     pub fn done(&self) -> Option<&Answer<T>> {
         self.done.as_ref()

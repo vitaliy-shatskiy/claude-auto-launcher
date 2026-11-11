@@ -220,16 +220,42 @@ fn a_tab_switch_then_a_neutral_cwd_starts_in_the_arriving_tabs_remembered_projec
 }
 
 #[test]
+fn maintenance_opens_only_after_the_background_check() {
+    use crate::maintenance::watch::tests::found;
+    use crate::maintenance::watch::tests::slow_install;
+    use crate::timing::{DebugMode, Timings};
+    use crate::types::VersionInfo;
+    let tm = Timings::new(DebugMode::Quiet, std::time::Instant::now());
+    // Given: the check's own `claude update` is running when `u` is pressed.
+    let (started, go, w) = slow_install(found(VersionInfo::default(), None));
+    assert!(started.recv().unwrap());
+    let update = std::cell::RefCell::new(w);
+    let release = std::thread::spawn(move || go.send(()).unwrap());
+    let mut t = crate::ui::PreviewTerm::new((80, 25), std::collections::VecDeque::new(), true);
+    let mut opened_after_check = None;
+    // When: maintenance opens.
+    screens::open_maintenance(&update, &tm, &mut t, true, |_| {
+        opened_after_check = Some(update.borrow().outcome().is_some());
+    });
+    // Then: the install had finished before any maintenance key could run another.
+    assert_eq!(opened_after_check, Some(true));
+    release.join().unwrap();
+}
+
+#[test]
 fn a_launch_waits_for_an_unfinished_update_check_and_a_cancel_does_not() {
     use crate::maintenance::watch::tests::{found, slow_check};
     use crate::timing::{DebugMode, Timings};
     use crate::types::VersionInfo;
     let tm = Timings::new(DebugMode::Quiet, std::time::Instant::now());
-    // Given: a check still out when the launch screen ends.
+    // Given: checks still talking to the network when the launch screen ends.
+    let (go_quit, mut quit) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
     let (go, mut w) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
     // When: a cancel ends the UI, nothing waits.
-    screens::wait_for_update(false, &mut w, &tm, || {});
-    assert!(w.outcome().is_none(), "the cancel did not read the check");
+    let release_quit = std::thread::spawn(move || go_quit.send(()).unwrap());
+    screens::wait_for_update(false, &mut quit, &tm, || {});
+    assert!(quit.outcome().is_none(), "the cancel did not read the check");
+    release_quit.join().unwrap();
     // When: Enter launches while it is still running.
     let release = std::thread::spawn(move || go.send(()).unwrap());
     screens::wait_for_update(true, &mut w, &tm, || {});
