@@ -31,6 +31,17 @@ jobs:
         run: |
           $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           if ("v$v" -ne $env:TAG) { throw "tag $env:TAG does not match Cargo.toml version $v" }
+      # The release body is the tag's CHANGELOG section: from its heading to the next `## [` or the
+      # link definitions at the end. No section, no release.
+      - name: Release notes from CHANGELOG
+        shell: pwsh
+        run: |
+          $v = [regex]::Escape($env:TAG.TrimStart('v'))
+          $text = [IO.File]::ReadAllText("$PWD/CHANGELOG.md") -replace "`r`n", "`n"
+          $m = [regex]::Match($text, "(?ms)^## \[$v\][^\n]*\n(.*?)(?=^## \[|^\[[^\]\n]+\]: |\z)")
+          $notes = $m.Groups[1].Value.Trim()
+          if (-not $m.Success -or -not $notes) { throw "CHANGELOG.md has no section for $env:TAG" }
+          [IO.File]::WriteAllText("$PWD/release-notes.md", "$notes`n")
       - name: Install the pinned toolchain
         shell: pwsh
         run: rustup toolchain install
@@ -52,4 +63,4 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:TAG dist\claude-auto.exe dist\claude-auto.exe.sha256 --verify-tag --title "claude-auto $($env:TAG.TrimStart('v'))" --notes-from-tag
+        run: gh release create $env:TAG dist\claude-auto.exe dist\claude-auto.exe.sha256 --verify-tag --title "claude-auto $($env:TAG.TrimStart('v'))" --notes-file release-notes.md
