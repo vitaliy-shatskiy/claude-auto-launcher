@@ -1,5 +1,5 @@
 # A keyboard walk over the launch screen: switch accounts (each brings its remembered choices),
-# then step model, effort and advisor, move a row, hide mode and show it again in the rows editor.
+# then step model, effort and advisor; in maintenance's rows editor move a row and hide mode.
 # Esc quits before anything is launched.
 # Run from the repository root after `cargo build --release`:  vhs docs/media/launch-walk.tape
 # The demo home from demo-setup.ps1 is a throwaway folder under %TEMP%: no real config, prefs or
@@ -60,26 +60,24 @@ Sleep 900ms
 Left
 Sleep 1.2s
 
-# Row editing: ctrl+w moves advisor up, ctrl+s moves it back down; ctrl+x hides mode, o shows it
-# again.
+# Row editing lives in maintenance: u, then l opens the rows editor; ctrl+w moves advisor above
+# effort, ctrl+x hides mode (it stays in place, dimmed), enter saves, esc back to the launch screen.
+Type "u"
+Sleep 1.2s
+Type "l"
+Sleep 1s
+Type "ssss"
+Sleep 600ms
 Ctrl+W
-Sleep 900ms
-Ctrl+S
-Sleep 900ms
-Down
-Sleep 300ms
-Down
+Sleep 1.2s
+Type "sss"
 Sleep 600ms
 Ctrl+X
 Sleep 1.2s
-Type "o"
-Sleep 1s
-Type "ssssss"
-Sleep 500ms
-Space
-Sleep 900ms
 Enter
 Sleep 1.5s
+Escape
+Sleep 2s
 
 Escape
 Sleep 1s

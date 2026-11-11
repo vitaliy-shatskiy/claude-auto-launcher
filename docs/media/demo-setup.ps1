@@ -47,6 +47,17 @@ subst "${letter}:" $work
 if ($LASTEXITCODE -ne 0) { throw "demo-setup: subst ${letter}: failed with $LASTEXITCODE" }
 $env:CLAUDE_AUTO_DEMO_DRIVE = "${letter}:"
 
+# Maintenance prints where `claude` resolves: the installed one, linked under the demo drive, so
+# the walk shows no path of the recording machine.
+$real = Get-Command claude.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($real) {
+    $bin = Join-Path $work '.bin'
+    New-Item -ItemType Directory -Force -Path $bin | Out-Null
+    try { New-Item -ItemType HardLink -Path (Join-Path $bin 'claude.exe') -Target $real.Source | Out-Null }
+    catch { Copy-Item -LiteralPath $real.Source -Destination $bin }
+    $env:PATH = "${letter}:\.bin;$env:PATH"
+}
+
 # Invented sessions from demo-sessions.json, each dated its minutes ago.
 # The main account's own root: sharing is off in the demo roster, so its picker reads here.
 $projectsRoot = Join-Path $t '.claude' -AdditionalChildPath 'projects'
@@ -72,7 +83,7 @@ foreach ($s in (Get-Content -Raw -LiteralPath 'docs/media/demo-sessions.json' | 
 }
 
 $env:USERPROFILE = $t
-# A copy: the walk's row edits (ctrl+x, the o editor) save to the config.
+# A copy: the walk's row edits (maintenance l) save to the config.
 $env:CLAUDE_AUTO_CONFIG = Join-Path $t 'config.json'
 Copy-Item -LiteralPath 'docs/media/demo-config.json' -Destination $env:CLAUDE_AUTO_CONFIG
 $env:CLAUDE_AUTO_PREFS = Join-Path $t 'prefs.json'
