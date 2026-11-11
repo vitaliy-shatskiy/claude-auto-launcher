@@ -4,12 +4,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-11-11
+
 ### Added
 
 - Config `hiddenValues`: the value a hidden row launches with (`{"effort": "high"}`), the same
   claude arguments as picking it on a shown row; unset rows keep their default. The rows editor
-  (maintenance `l`) sets it with `a`/`d` on a hidden row, which reads `hidden -> <value>`, and
-  saves it with `rows`. `remote` takes only `on` or `off`. A bad row or value warns and is skipped.
+  (maintenance `l`) sets it with `a`/`d` on a hidden row, which reads `hidden -> <label>`
+  (`claude default` when unset), and saves it with `rows`, dropping entries of shown rows. `model`
+  takes the row keys (`haiku`, `sonnet1m`, `opus1m`, `fable`), `remote` only `on` or `off`. A bad
+  row or value warns and is skipped.
 
 ### Fixed
 
