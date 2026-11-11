@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-11
+
 ### Added
 
 - Project screen: `enter a path...` opens an in-screen path navigator instead of a console line:
