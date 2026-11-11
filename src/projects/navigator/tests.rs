@@ -144,9 +144,17 @@ fn counting(_: &str) -> Result<Vec<String>, String> {
     Ok(vec!["one".into(), "two".into()])
 }
 
+static NEVER_GATE: (std::sync::Mutex<bool>, std::sync::Condvar) = (std::sync::Mutex::new(false), std::sync::Condvar::new());
+
+/// A share that never answers while the test runs; bounded, so a Tab that waited for it would get
+/// an empty answer after 3 s and no notice instead of hanging the run.
 #[expect(clippy::unnecessary_wraps, reason = "the Lister signature")]
 fn never_answers(_: &str) -> Result<Vec<String>, String> {
-    std::thread::sleep(Duration::from_secs(30));
+    let (lock, cv) = &NEVER_GATE;
+    drop(
+        cv.wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |open| !*open)
+            .unwrap(),
+    );
     Ok(Vec::new())
 }
 
@@ -181,10 +189,8 @@ fn a_network_folder_is_listed_only_on_tab_and_used_unprobed() {
 fn an_offline_share_costs_one_time_limit_never_a_hang() {
     let mut n = Navigator::new(never_answers, Duration::from_millis(30));
     typed(&mut n, r"\\claude-auto-offline-604\share\");
-    let t0 = std::time::Instant::now();
     n.tab();
-    assert!(t0.elapsed() < Duration::from_secs(5), "Tab waited for the share");
-    assert!(n.notice.contains("no answer in 30 ms"), "{}", n.notice);
+    assert!(n.notice.contains("no answer in 30 ms"), "Tab waited for the share: {}", n.notice);
     n.refresh();
     assert_eq!(folders(&n), Vec::<String>::new());
     assert!(n.status().contains("no answer"), "the notice outlives the next frame");

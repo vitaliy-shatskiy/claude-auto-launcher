@@ -6,7 +6,7 @@ fn fixture(name: &str) -> PathBuf {
 
 fn standalone(p: &Path) -> Session {
     let pp = p.parent().and_then(project_path_from_transcript);
-    summarize(p, pp.as_deref(), true).unwrap()
+    summarize(p, pp.as_deref(), true, MAX_BYTES).unwrap()
 }
 
 struct Tmp(PathBuf);
@@ -282,7 +282,12 @@ fn pre_filter_changes_how_many_lines_are_parsed_never_the_summary() {
     files.push(fixture("tree/C--Users-someone-Projects-Demo/aaaa1111.jsonl"));
     assert!(files.len() >= 9);
     for f in &files {
-        assert_eq!(summarize(f, None, false), summarize(f, None, true), "{}", f.display());
+        assert_eq!(
+            summarize(f, None, false, MAX_BYTES),
+            summarize(f, None, true, MAX_BYTES),
+            "{}",
+            f.display()
+        );
     }
     let t = tmp("pf");
     let spaced = put(
@@ -290,7 +295,7 @@ fn pre_filter_changes_how_many_lines_are_parsed_never_the_summary() {
         "s.jsonl",
         "{\"type\": \"user\", \"message\": {\"content\": \"spaced key prompt\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"text\", \"text\": \"spaced key reply\"}]}}\n",
     );
-    let s = summarize(&spaced, Some(r"C:\src\pf"), true).unwrap();
+    let s = summarize(&spaced, Some(r"C:\src\pf"), true, MAX_BYTES).unwrap();
     assert_eq!(
         (s.title.as_str(), s.last_assistant.as_str()),
         ("spaced key prompt", "spaced key reply")
@@ -300,7 +305,10 @@ fn pre_filter_changes_how_many_lines_are_parsed_never_the_summary() {
         "e.jsonl",
         "{\"\\u0074ype\":\"user\",\"message\":{\"content\":\"escaped key prompt\"}}\n",
     );
-    assert_eq!(summarize(&esc, Some(r"C:\src\pf"), true).unwrap().title, "escaped key prompt");
+    assert_eq!(
+        summarize(&esc, Some(r"C:\src\pf"), true, MAX_BYTES).unwrap().title,
+        "escaped key prompt"
+    );
 }
 
 #[test]
@@ -317,7 +325,7 @@ fn headless_summaries_are_marked() {
             &format!("hs-{e}.jsonl"),
             &format!("{{\"type\":\"user\"{entry},\"message\":{{\"content\":\"hello there\"}}}}\n"),
         );
-        assert_eq!(summarize(&p, None, true).unwrap().headless, want, "entrypoint '{e}'");
+        assert_eq!(summarize(&p, None, true, MAX_BYTES).unwrap().headless, want, "entrypoint '{e}'");
     }
 }
 
@@ -327,7 +335,7 @@ fn capped_count_is_a_flag_beside_an_int() {
     let head = (["one", "two", "three"].map(|w| format!(r#"{{"type":"user","message":{{"content":"prompt {w}"}}}}"#))).join("\n");
     let pad = format!(
         r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{}"}}]}}}}"#,
-        "p".repeat(1 << 20)
+        "p".repeat(1 << 10)
     );
     let tail = r#"{"type":"user","message":{"content":"prompt four"}}"#;
     let big = put(
@@ -335,7 +343,7 @@ fn capped_count_is_a_flag_beside_an_int() {
         "g.jsonl",
         &format!("{head}\n{}{tail}\n", format!("{pad}\n").repeat(5)),
     );
-    let s = summarize(&big, None, true).unwrap();
+    let s = summarize(&big, None, true, 2 << 10).unwrap();
     assert_eq!((s.prompt_count, s.prompt_count_capped), (3, true));
-    assert_eq!(prompt_detail(&big, 16 << 20), (4, false));
+    assert_eq!(prompt_detail(&big, 16 << 10), (4, false));
 }

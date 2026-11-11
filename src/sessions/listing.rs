@@ -80,8 +80,9 @@ pub(crate) fn project_path_from_transcript(dir: &Path) -> Option<String> {
     crate::projects::path_from_transcript(&newest)
 }
 
-/// `Get-ClaudeSessionSummary`. `pre_filter` false parses every line (the suite's control).
-pub(crate) fn summarize(path: &Path, project_path: Option<&str>, pre_filter: bool) -> Option<Session> {
+/// `Get-ClaudeSessionSummary`. `pre_filter` false parses every line (the suite's control); the
+/// prompt count reads at most `max_bytes` (`MAX_BYTES`; a test passes a small cap).
+pub(crate) fn summarize(path: &Path, project_path: Option<&str>, pre_filter: bool, max_bytes: usize) -> Option<Session> {
     let meta = std::fs::metadata(path).ok()?;
     let session_id = path.file_stem()?.to_string_lossy().into_owned();
     let slug = path.parent()?.file_name()?.to_string_lossy().into_owned();
@@ -109,7 +110,7 @@ pub(crate) fn summarize(path: &Path, project_path: Option<&str>, pre_filter: boo
         .filter_map(|l| parse_line(l))
         .find_map(|r| user_prompt(&r));
     let (last_user, last_assistant, recent) = walk_tail(path, pre_filter);
-    let (count, capped) = prompt_detail(path, MAX_BYTES);
+    let (count, capped) = prompt_detail(path, max_bytes);
     let title = title
         .or_else(|| last_user.clone())
         .unwrap_or_else(|| format!("(no prompt) {}", short_id(&session_id)));
@@ -368,7 +369,7 @@ impl SessionCache {
                 s.project = clean_text(&project_path.as_deref().map_or_else(|| slug_names(&s.slug).0, leaf));
                 s
             } else {
-                let Some(s) = summarize(f, project_path.as_deref(), true) else {
+                let Some(s) = summarize(f, project_path.as_deref(), true, MAX_BYTES) else {
                     continue;
                 };
                 s

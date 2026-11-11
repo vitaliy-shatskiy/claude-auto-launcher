@@ -6,7 +6,10 @@ pub(crate) struct Tree(pub PathBuf);
 impl Tree {
     pub(crate) fn new(tag: &str) -> Self {
         let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let d = std::env::temp_dir().join(format!("cap-rs-{tag}-{}-{n}", std::process::id()));
+        // Under `target/tmp`, not %TEMP%: the navigator lists a tree's parent, and %TEMP% can hold
+        // hundreds of thousands of folders.
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("tmp");
+        let d = base.join(format!("cap-rs-{tag}-{}-{n}", std::process::id()));
         fs::create_dir_all(&d).unwrap();
         Self(d)
     }
