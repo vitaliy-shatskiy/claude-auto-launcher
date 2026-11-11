@@ -194,10 +194,10 @@ impl Screen for RowsEditor {
         ));
         let footer = new_hint_footer(
             &[
-                Hint::plain("w/s", "row"),
+                // w/s (the cursor on every screen) yields its place to a/d: six hints overflow 78 columns.
+                Hint::plain("a/d", "value"),
                 Hint::plain("^w/^s", "move"),
                 Hint::plain("^x", "hide"),
-                Hint::plain("a/d", "value"),
                 Hint::key("enter", "save", "Enter"),
                 Hint::key("esc", "cancel", "Escape"),
             ],
@@ -429,8 +429,14 @@ mod tests {
         assert!(f.lines[model].contains(crate::theme::DIM), "{:?}", f.lines[model]);
         assert!(!f.lines[effort].contains(&format!("{}effort", crate::theme::DIM)));
         let foot = f.lines.last().unwrap();
-        for h in ["w/s", "^w/^s", "move", "^x", "hide", "a/d", "value", "save", "cancel"] {
+        for h in ["a/d", "value", "^w/^s", "move", "^x", "hide", "save", "cancel"] {
             assert!(foot.contains(h), "{h}: {foot}");
         }
+        let narrow = e.draw((78, 24));
+        let foot = narrow.lines.last().unwrap();
+        assert!(
+            ["a/d", "value", "move", "cancel"].iter().all(|h| foot.contains(h)),
+            "one line at 78 columns: {foot}"
+        );
     }
 }
