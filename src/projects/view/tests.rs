@@ -38,6 +38,7 @@ fn view<'a>(ps: &'a [Project], index: usize, cwd: &'a str, w: usize, h: usize) -
         index,
         filter: "",
         typing: false,
+        show_hidden: false,
         cwd,
         width: w,
         height: h,
@@ -244,10 +245,97 @@ fn action_field_radio_cells_and_compact_form() {
     assert_eq!(step_project_action("not-an-action", 0), "new");
     let f80 = project_frame(&view(&ps, 0, r"C:\cwd", 80, 24));
     assert!(
-        !text(&f80).contains("a/d action") && text(&f80).contains("[esc] back"),
-        "a footer too wide keeps its buttons only"
+        text(&f80).contains("a/d action") && text(&f80).contains("[esc] back"),
+        "a footer too wide keeps its buttons and the kept hints"
     );
     assert_eq!(f80.map.footer_lines, 2);
+}
+
+/// Item 5: w/s and a/d survive every width from 78 to 120, beside every button.
+#[test]
+fn the_move_and_action_hints_survive_78_to_120_columns() {
+    let ps = vec![proj("A", r"C:\w\alpha", "alpha")];
+    for w in [78, 100, 120] {
+        let f = project_frame(&view(&ps, 0, r"C:\cwd", w, 24));
+        let fy = usize::try_from(f.map.footer_y.unwrap()).unwrap();
+        let footer = f.lines[fy..].join("\n");
+        for hint in [
+            "w/s move",
+            "a/d action",
+            "[enter] run",
+            "[c] continue",
+            "[/] filter",
+            "[h] hide",
+            "[v] hidden",
+            "[esc] back",
+        ] {
+            assert!(footer.contains(hint), "{w}: {hint} in\n{footer}");
+        }
+        assert!(f.lines.iter().all(|l| display_width(l) < w), "{w}: fits");
+    }
+}
+
+/// Item 4: the footer names the keys of the state it is in.
+#[test]
+fn the_footer_follows_filter_kept_filter_and_hidden_view() {
+    let ps = vec![proj("A", r"C:\w\alpha", "alpha")];
+    let footer = |v: ProjectView<'_>| {
+        let f = project_frame(&v);
+        let fy = usize::try_from(f.map.footer_y.unwrap()).unwrap();
+        (f.lines[fy..].join("\n"), f.map.footer)
+    };
+    let (open, spans) = footer(ProjectView {
+        filter: "al",
+        typing: true,
+        ..view(&ps, 0, r"C:\cwd", 78, 24)
+    });
+    assert!(
+        open.contains("[enter] run") && open.contains("[esc] clear") && open.contains("up/down move"),
+        "{open}"
+    );
+    assert!(!open.contains("[c]") && !open.contains("[/]"), "{open}");
+    assert!(
+        spans.iter().all(|s| s.ch.is_none()),
+        "no button of an open filter types a character"
+    );
+    let (kept, _) = footer(ProjectView {
+        filter: "al",
+        ..view(&ps, 0, r"C:\cwd", 78, 24)
+    });
+    assert!(kept.contains("[esc] clear") && kept.contains("[/] filter"), "{kept}");
+    let (hidden, _) = footer(ProjectView {
+        show_hidden: true,
+        ..view(&ps, 0, r"C:\cwd", 78, 24)
+    });
+    assert!(hidden.contains("[v] back") && !hidden.contains("[v] hidden"), "{hidden}");
+}
+
+/// Item 6: the matched text is marked in the name and the path, never in the mark or the age.
+#[test]
+fn filter_matches_are_highlighted_in_name_and_path() {
+    let ps = vec![Project {
+        last_activity_ms: Some(NOW - 4 * MIN),
+        ..proj("A", r"C:\w\alpha-min", "alpha-min")
+    }];
+    let f = project_frame(&ProjectView {
+        filter: "MIN al",
+        style: Style { color: true, ascii: false },
+        ..view(&ps, 1, r"C:\cwd", 120, 24)
+    });
+    let y = usize::try_from(f.map.list.clone().unwrap().row_ys[1]).unwrap();
+    let row = &f.lines[y];
+    assert_eq!(
+        row.matches(MATCH_ON).count(),
+        4,
+        "al and min in the name, al and min in the path: {row:?}"
+    );
+    assert!(!row.contains(&format!("4 {MATCH_ON}")), "not the age: {row:?}");
+    let plain_frame = project_frame(&ProjectView {
+        filter: "al",
+        ..view(&ps, 1, r"C:\cwd", 120, 24)
+    });
+    assert!(!text(&plain_frame).contains(['\u{6}', '\u{e}']), "colour off leaves no marker");
+    assert_eq!(mark_matches("   alpha", &["al".into()], 3, usize::MAX), "   \u{6}al\u{e}pha");
 }
 
 #[test]

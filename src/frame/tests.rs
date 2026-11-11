@@ -38,6 +38,23 @@ fn project_hints() -> Vec<Hint> {
 }
 
 #[test]
+fn a_kept_plain_hint_survives_a_narrow_footer_unclickable() {
+    let mut hints = launch_hints();
+    hints[0] = Hint::plain("w/s", "row").kept();
+    let f = new_hint_footer(&hints, &glyphs(true), 49, true);
+    let text: Vec<&str> = f.lines.iter().map(|l| l.text.as_str()).collect();
+    assert!(text.iter().any(|l| l.contains("w/s row")), "{text:?}");
+    assert!(!text.iter().any(|l| l.contains("a/d value")), "an unkept plain hint still drops");
+    let ws = f
+        .lines
+        .iter()
+        .flat_map(|l| &l.spans)
+        .find(|s| s.key_end - s.key_start == 2)
+        .unwrap();
+    assert_eq!((ws.start, ws.ch, ws.key.as_str()), (-1, None, ""), "kept is never a button");
+}
+
+#[test]
 fn a_narrow_footer_drops_the_plain_hints_and_keeps_one_line() {
     let f = new_hint_footer(&launch_hints(), &glyphs(true), 49, true);
     assert_eq!(

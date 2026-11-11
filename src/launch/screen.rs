@@ -290,26 +290,6 @@ mod tests {
         run(&mut s, &mut t).unwrap()
     }
 
-    fn frames(keys: &str, timings: crate::timing::Timings) -> Vec<Vec<String>> {
-        let mut r = four();
-        let v = view();
-        let p = Prefs::default();
-        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
-        let st = r.new_state();
-        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook);
-        let keys = crate::ui::parse_preview_keys(keys).unwrap();
-        let mut t = PreviewTerm::new((100, 30), keys, true).with_logger(crate::log::Logger::silent(timings));
-        assert!(run(&mut s, &mut t).unwrap().is_some());
-        t.frames.unwrap()
-    }
-
-    #[test]
-    fn debug_mode_draws_the_launch_screen_exactly_as_off() {
-        let keys = "DownArrow,RightArrow,Enter";
-        let on = crate::timing::Timings::on(std::time::Instant::now());
-        assert_eq!(frames(keys, on), frames(keys, crate::timing::Timings::default()));
-    }
-
     #[test]
     fn enter_alone_keeps_every_default() {
         let s = drive("Enter").unwrap();

@@ -7,7 +7,7 @@ use regex::Regex;
 
 use super::Project;
 use super::paths::project_key;
-use super::select::{Row, RowKind, project_count, project_rows};
+use super::select::{Row, RowKind, filter_words, project_count, project_rows};
 use crate::frame::{
     self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioSpec, RowMap, Style, TWO_PANE_WIDTH,
     new_hint_footer, new_radio_row,
@@ -117,6 +117,8 @@ pub(crate) struct ProjectView<'a> {
     pub index: usize,
     pub filter: &'a str,
     pub typing: bool,
+    /// The `v` view: every project listed, the hidden ones marked.
+    pub show_hidden: bool,
     pub cwd: &'a str,
     pub width: usize,
     pub height: usize,
@@ -133,10 +135,20 @@ pub(crate) struct ProjectView<'a> {
     pub hover_value: &'a str,
 }
 
-fn footer_hints() -> Vec<Hint> {
+/// The footer follows the state: an open filter names only what works while typing (every
+/// button a named key, so a click on one is never typed into the filter).
+fn footer_hints(v: &ProjectView<'_>) -> Vec<Hint> {
+    if v.typing {
+        return vec![
+            Hint::plain("up/down", "move").kept(),
+            Hint::plain("left/right", "action").kept(),
+            Hint::key("enter", "run", "Enter"),
+            Hint::key("esc", "clear", "Escape"),
+        ];
+    }
     let mut h = vec![
-        Hint::plain("w/s", "move"),
-        Hint::plain("a/d", "action"),
+        Hint::plain("w/s", "move").kept(),
+        Hint::plain("a/d", "action").kept(),
         Hint::key("enter", "run", "Enter"),
     ];
     h.extend(
@@ -146,8 +158,8 @@ fn footer_hints() -> Vec<Hint> {
     );
     h.push(Hint::ch("/", "filter", '/'));
     h.push(Hint::ch("h", "hide", 'h'));
-    h.push(Hint::ch("v", "hidden", 'v'));
-    h.push(Hint::key("esc", "back", "Escape"));
+    h.push(Hint::ch("v", if v.show_hidden { "back" } else { "hidden" }, 'v'));
+    h.push(Hint::key("esc", if v.filter.is_empty() { "back" } else { "clear" }, "Escape"));
     h
 }
 
@@ -172,6 +184,66 @@ fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
     t
 }
 
+/// Filter-match markers, resolved after layout like the dim ones (C0, zero cells wide).
+const MATCH_OPEN: char = '\u{6}';
+const MATCH_CLOSE: char = '\u{e}';
+/// Underline and the accent, closed without a Reset so a dim tail or a hover band stays on.
+const MATCH_ON: &str = "\x1b[4m\x1b[38;5;209m";
+const MATCH_OFF: &str = "\x1b[24m\x1b[39m";
+
+fn fold(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+/// Marks every case-insensitive occurrence of a filter word among the visible characters
+/// `from..to` of a finished row (control characters are markers and skipped).
+fn mark_matches(row: &str, words: &[String], from: usize, to: usize) -> String {
+    let chars: Vec<char> = row.chars().collect();
+    let shown: Vec<char> = chars.iter().copied().filter(|c| !c.is_control()).map(fold).collect();
+    let to = to.min(shown.len());
+    let mut hit = vec![false; shown.len()];
+    for w in words {
+        let w: Vec<char> = w.chars().map(fold).collect();
+        if w.is_empty() || from + w.len() > to {
+            continue;
+        }
+        for s in from..=to - w.len() {
+            if shown.get(s..s + w.len()) == Some(w.as_slice()) {
+                hit.iter_mut().skip(s).take(w.len()).for_each(|h| *h = true);
+            }
+        }
+    }
+    if !hit.contains(&true) {
+        return row.to_owned();
+    }
+    let mut out = String::new();
+    let (mut at, mut open) = (0, false);
+    for c in chars {
+        if !c.is_control() {
+            let h = hit.get(at).copied().unwrap_or(false);
+            if h != open {
+                out.push(if h { MATCH_OPEN } else { MATCH_CLOSE });
+                open = h;
+            }
+            at += 1;
+        }
+        out.push(c);
+    }
+    if open {
+        out.push(MATCH_CLOSE);
+    }
+    out
+}
+
+/// The match markers to colour, or to nothing with colour off.
+fn add_match_color(line: &str, enabled: bool) -> String {
+    if enabled {
+        line.replace(MATCH_OPEN, MATCH_ON).replace(MATCH_CLOSE, MATCH_OFF)
+    } else {
+        line.replace([MATCH_OPEN, MATCH_CLOSE], "")
+    }
+}
+
 /// One list row's text: project, cwd, or the free-path row.
 fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &ProjectView<'_>, g: &Glyphs) -> String {
     let ascii = v.style.ascii;
@@ -193,7 +265,7 @@ fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &Pr
                 hover: hovered,
                 ..ListRow::default()
             };
-            if r.kind == RowKind::Cwd && age.is_empty() {
+            let row = if r.kind == RowKind::Cwd && age.is_empty() {
                 new_list_row(&ListRow {
                     tail,
                     dim_tail: true,
@@ -216,7 +288,12 @@ fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &Pr
                     age_gutter: true,
                     ..base
                 })
-            }
+            };
+            // The mark and the age are never matched: only name and path are.
+            let shown: String = row.chars().filter(|c| !c.is_control()).collect();
+            let to = if age.is_empty() { None } else { shown.rfind(&age) }
+                .map_or(usize::MAX, |b| shown.get(..b).map_or(0, |h| h.chars().count()));
+            mark_matches(&row, &filter_words(v.filter), mark.chars().count(), to)
         }
         RowKind::Path => {
             let name = limit_line(&theme::strip_ctl(&r.name), inner.saturating_sub(mark.chars().count() + 3), ascii);
@@ -281,7 +358,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let g = glyphs(v.style.ascii);
     let fw = frame::frame_width(v.width);
     let rows = project_rows(v.projects, v.filter, v.cwd);
-    let footer = new_hint_footer(&footer_hints(), &g, fw, !v.style.color);
+    let footer = new_hint_footer(&footer_hints(v), &g, fw, !v.style.color);
     let wide = v.width >= TWO_PANE_WIDTH;
     let detail = usize::from(!wide);
     let body_rows = v.height.saturating_sub(6 + detail + footer.lines.len()).max(3);
@@ -305,12 +382,13 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         body.push(if path.is_empty() {
             String::new()
         } else {
-            format!(
+            let line = format!(
                 "   {}{}{}",
                 theme::DIM_OPEN,
                 limit_path(&path, inner.saturating_sub(4), v.style.ascii),
                 theme::DIM_CLOSE
-            )
+            );
+            mark_matches(&line, &filter_words(v.filter), 3, usize::MAX)
         });
     }
 
@@ -366,7 +444,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         hover: frame::footer_hover(&footer, v.hover),
         selected,
     };
-    let painter = |l: &str, enabled: bool| add_picker_color(l, enabled, &g);
+    let painter = |l: &str, enabled: bool| add_match_color(&add_picker_color(l, enabled, &g), enabled);
     let lines = frame::complete_frame(&lines, &footer, fw, v.style, &painter, &light, &mut map);
     Frame { lines, map }
 }

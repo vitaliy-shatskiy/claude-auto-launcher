@@ -31,20 +31,6 @@ fn keys(k: &[&str]) -> PreviewTerm {
     PreviewTerm::new((100, 30), q, true)
 }
 
-fn picker_frames(timings: crate::timing::Timings) -> Vec<Vec<String>> {
-    let first = vec![row("a", "x", 1), row("b", "x", 2)];
-    let mut s = PickerScreen::new(first, None, 0, &[], "", style(), clock());
-    let mut t = keys(&["DownArrow", "Enter"]).with_logger(crate::log::Logger::silent(timings));
-    assert!(run(&mut s, &mut t).unwrap().is_some());
-    t.frames.unwrap()
-}
-
-#[test]
-fn debug_mode_draws_the_picker_exactly_as_off() {
-    let on = crate::timing::Timings::on(std::time::Instant::now());
-    assert_eq!(picker_frames(on), picker_frames(crate::timing::Timings::default()));
-}
-
 #[test]
 fn overlap_is_not_the_end_and_offsets_count_fetched_rows() {
     let pages = [vec![row("a", "x", 1), row("b", "x", 1)], vec![row("b", "x", 1)], vec![]];

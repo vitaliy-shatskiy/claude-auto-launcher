@@ -31,6 +31,8 @@ pub struct Hint {
     /// The `ConsoleKey` name a click stands in for ('' when `ch` carries it).
     pub key: String,
     pub ch: Option<char>,
+    /// A plain hint that stays when a narrow footer drops the plain ones.
+    pub keep: bool,
 }
 
 impl Hint {
@@ -41,7 +43,14 @@ impl Hint {
             clickable: false,
             key: String::new(),
             ch: None,
+            keep: false,
         }
+    }
+
+    /// Kept on a narrow footer, beside the buttons.
+    #[must_use]
+    pub fn kept(self) -> Self {
+        Self { keep: true, ..self }
     }
 
     pub fn key(token: &str, label: &str, key: &str) -> Self {
@@ -51,6 +60,7 @@ impl Hint {
             clickable: true,
             key: key.into(),
             ch: None,
+            keep: false,
         }
     }
 
@@ -61,6 +71,7 @@ impl Hint {
             clickable: true,
             key: String::new(),
             ch: Some(ch),
+            keep: false,
         }
     }
 }
@@ -91,8 +102,8 @@ pub struct Footer {
 
 /// `New-HintFooter`: one list drives what is printed, where it can be clicked and which key a
 /// click means. All hints on one line when they fit `width` (0 = never wrap); else the plain
-/// (not clickable) hints drop, and the buttons left go on one line or into an aligned grid with
-/// the most columns that fit. A hint is never split.
+/// (not clickable) hints drop, except the kept ones, and what is left goes on one line or into an
+/// aligned grid with the most columns that fit. A hint is never split.
 pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) -> Footer {
     let sep = format!("  {}  ", g.hint_sep);
     let token_of = |h: &Hint| {
@@ -115,7 +126,7 @@ pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) ->
     let one_line =
         |hs: &[&Hint]| 2 + hs.iter().map(|h| display_width(&piece_of(h))).sum::<usize>() + display_width(&sep) * hs.len().saturating_sub(1);
     let all: Vec<&Hint> = hints.iter().collect();
-    let buttons: Vec<&Hint> = hints.iter().filter(|h| h.clickable).collect();
+    let buttons: Vec<&Hint> = hints.iter().filter(|h| h.clickable || h.keep).collect();
     let (shown, columns) = if width == 0 || one_line(&all) <= width || buttons.is_empty() {
         (all, hints.len().max(1))
     } else if one_line(&buttons) <= width {

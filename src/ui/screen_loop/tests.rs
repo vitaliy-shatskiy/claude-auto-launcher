@@ -17,7 +17,9 @@ impl Screen for List {
     fn cursor(&mut self) -> &mut Cursor {
         &mut self.c
     }
-    fn draw(&mut self, _size: (usize, usize)) -> Frame {
+    fn draw(&mut self, size: (usize, usize)) -> Frame {
+        let mut lines = vec![String::new(); 10];
+        lines[0] = format!("{}x{}", size.0, size.1);
         let footer = vec![FooterSpan {
             start: 2,
             end: 8,
@@ -28,7 +30,7 @@ impl Screen for List {
             line: 0,
         }];
         Frame {
-            lines: vec![String::new(); 10],
+            lines,
             map: RowMap {
                 list: Some(ListMap {
                     first_row_y: 1,
@@ -298,12 +300,68 @@ fn row_one() -> List {
     }
 }
 
+/// D1: a click that selects row 1 first (one more frame painted), so the next click on it acts.
+fn selected_first(q: Vec<(Event, u64, usize)>) -> Clocked {
+    let mut all = vec![(click(5, 2), 100, 0)];
+    all.extend(q.into_iter().map(|(e, at, paints)| (e, at, paints + 1)));
+    clocked(all)
+}
+
+/// D1: the cursor sits on the row (keyboard or start), but one click only selects it.
+#[test]
+fn d1_a_click_on_a_cursor_row_no_click_selected_only_selects() {
+    let mut s = row_one();
+    let mut t = term(vec![click(5, 2), Event::Key(KeyPress::named(vk::ENTER))]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 0, "one click on a keyboard-placed cursor acted");
+    let mut s = row_one();
+    let mut t = term(vec![click(5, 2), click(5, 2), Event::Key(KeyPress::named(vk::ENTER))]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 1, "the second click on the selected row acts");
+}
+
+/// D1: a key between the two clicks drops the selection; keyboard Enter is unchanged.
+#[test]
+fn d1_a_key_between_two_clicks_drops_the_selection() {
+    let mut s = List {
+        c: Cursor::at(0),
+        n: 3,
+        acts: 0,
+    };
+    let mut t = term(vec![
+        click(5, 2),
+        Event::Key(KeyPress::named(vk::DOWN)),
+        Event::Key(KeyPress::named(vk::UP)),
+        click(5, 2),
+        Event::Key(KeyPress::named(vk::ENTER)),
+    ]);
+    assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+    assert_eq!(s.acts, 0);
+}
+
+/// Debug mode (timings on, no footer) paints every frame exactly as off: one check for every
+/// screen, since they all draw through this loop.
+#[test]
+fn debug_mode_draws_exactly_as_off() {
+    let frames = |mut t: Events| {
+        let mut s = List {
+            c: Cursor::at(0),
+            n: 3,
+            acts: 0,
+        };
+        assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
+        t.inner.frames.unwrap()
+    };
+    let keys = || vec![Event::Key(KeyPress::named(vk::DOWN)), Event::Key(KeyPress::named(vk::ENTER))];
+    assert_eq!(frames(timed(keys())), frames(term(keys())));
+}
+
 /// CS-224 a: the twin queued during a handler slower than the window is read late. It is still
 /// the twin, because it was waiting when the loop was ready again.
 #[test]
 fn cs224a_twin_queued_during_a_slow_activation_is_dropped() {
     let mut s = row_one();
-    let mut t = clocked(vec![(click(5, 2), 1000, 0), (click(5, 2), 1700, 2), enter_at(9000)]);
+    let mut t = selected_first(vec![(click(5, 2), 1000, 0), (click(5, 2), 1700, 2), enter_at(9000)]);
     assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
     assert_eq!(s.acts, 1, "the twin read 700 ms late acted again");
 }
@@ -312,7 +370,7 @@ fn cs224a_twin_queued_during_a_slow_activation_is_dropped() {
 #[test]
 fn cs224a_a_press_after_the_redraw_acts_again() {
     let mut s = row_one();
-    let mut t = clocked(vec![(click(5, 2), 1000, 0), (click(5, 2), 1700, 3), enter_at(9000)]);
+    let mut t = selected_first(vec![(click(5, 2), 1000, 0), (click(5, 2), 1700, 3), enter_at(9000)]);
     assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
     assert_eq!(s.acts, 2);
 }
@@ -330,7 +388,8 @@ fn carried_activation(t: &mut Clocked) {
 #[test]
 fn cs224a_twin_queued_before_the_next_screen_opens_is_dropped() {
     let mut s = row_one();
-    let mut t = clocked(vec![(click(5, 2), 1700, 0), enter_at(9000)]);
+    // A twin taken as a press would select row 1, and the later click would then act.
+    let mut t = clocked(vec![(click(5, 2), 1700, 0), (click(5, 2), 9000, 0), enter_at(9500)]);
     carried_activation(&mut t);
     assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
     assert_eq!(s.acts, 0);
@@ -340,7 +399,7 @@ fn cs224a_twin_queued_before_the_next_screen_opens_is_dropped() {
 #[test]
 fn cs224a_twin_queued_during_the_next_screens_first_draw_is_dropped() {
     let mut s = row_one();
-    let mut t = clocked(vec![(click(5, 2), 1700, 1), enter_at(9000)]);
+    let mut t = clocked(vec![(click(5, 2), 1700, 1), (click(5, 2), 9000, 0), enter_at(9500)]);
     carried_activation(&mut t);
     assert_eq!(run(&mut s, &mut t), Ok(Some(1)));
     assert_eq!(s.acts, 0, "the twin read after a slow first draw acted on the new screen");
@@ -350,7 +409,7 @@ fn cs224a_twin_queued_during_the_next_screens_first_draw_is_dropped() {
 #[test]
 fn cs224b_third_and_fourth_records_of_one_gesture_are_dropped() {
     let mut s = row_one();
-    let mut t = clocked(vec![
+    let mut t = selected_first(vec![
         (click(5, 2), 1000, 0),
         (click(5, 2), 1700, 2),
         (click(5, 2), 1710, 2),
@@ -391,7 +450,7 @@ fn type_ahead_keys_after_a_carried_activation_all_run() {
 #[test]
 fn a_real_click_behind_queued_motion_acts() {
     let mut s = row_one();
-    let mut t = clocked(vec![
+    let mut t = selected_first(vec![
         (click(5, 2), 1000, 0),
         (hover(5, 2), 1600, 2),
         (hover(5, 3), 1650, 2),
@@ -406,7 +465,7 @@ fn a_real_click_behind_queued_motion_acts() {
 #[test]
 fn a_twin_queued_behind_motion_during_the_handler_is_dropped() {
     let mut s = row_one();
-    let mut t = clocked(vec![
+    let mut t = selected_first(vec![
         (click(5, 2), 1000, 0),
         (hover(5, 2), 1600, 2),
         (click(5, 2), 1700, 2),

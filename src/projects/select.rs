@@ -7,26 +7,48 @@ use std::path::Path;
 use super::Project;
 use super::paths::{DriveCache, path_present, project_key};
 
-/// `Select-ProjectMatch`: a literal, case-insensitive substring of "name path worktree" (a pasted
-/// path must match as typed). No filter: the hidden rows are left out, except the cwd's own. A
-/// filter: the visible matches first, the hidden ones after, each in registry order.
+/// The filter's words, lower-cased, each stripped of the quotes a pasted path carries.
+pub(crate) fn filter_words(filter: &str) -> Vec<String> {
+    filter
+        .split_whitespace()
+        .map(|w| w.trim_matches('"').to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// `Select-ProjectMatch`: every word a literal, case-insensitive substring of "name path
+/// worktree" (a pasted path must match as typed). No filter: the hidden rows are left out, except
+/// the cwd's own. A filter: a name starting with a word first, then a name holding one, then a
+/// path match; the hidden ones after all visible ones; registry order (recency) within a rank.
 pub(crate) fn select_match<'a>(projects: &'a [Project], filter: &str, cwd: &str) -> Vec<&'a Project> {
-    let f = filter.trim();
-    if f.is_empty() {
+    let words = filter_words(filter);
+    if words.is_empty() {
         let cwd_key = project_key(cwd);
         return projects
             .iter()
             .filter(|p| !p.hidden || (!cwd_key.is_empty() && project_key(&p.path) == cwd_key))
             .collect();
     }
-    let needle = f.to_lowercase();
-    let hits = projects.iter().filter(|p| {
-        format!("{} {} {}", p.name, p.path, p.worktree.as_deref().unwrap_or_default())
-            .to_lowercase()
-            .contains(&needle)
-    });
-    let (hidden, shown): (Vec<&Project>, Vec<&Project>) = hits.partition(|p| p.hidden);
-    shown.into_iter().chain(hidden).collect()
+    let mut hits: Vec<(bool, u8, &Project)> = projects
+        .iter()
+        .filter(|p| {
+            let hay = format!("{} {} {}", p.name, p.path, p.worktree.as_deref().unwrap_or_default()).to_lowercase();
+            words.iter().all(|w| hay.contains(w.as_str()))
+        })
+        .map(|p| {
+            let name = p.name.to_lowercase();
+            let rank = if words.iter().any(|w| name.starts_with(w.as_str())) {
+                0
+            } else if words.iter().any(|w| name.contains(w.as_str())) {
+                1
+            } else {
+                2
+            };
+            (p.hidden, rank, p)
+        })
+        .collect();
+    hits.sort_by_key(|(hidden, rank, _)| (*hidden, *rank));
+    hits.into_iter().map(|(_, _, p)| p).collect()
 }
 
 /// The kind of a project-screen row.
@@ -202,6 +224,34 @@ pub(crate) mod tests {
         assert_eq!(select_match(&ps, "", "").len(), 2);
         assert_eq!(select_match(&ps, r"C:\w\alpha", "").len(), 1, "a pasted path");
         assert_eq!(select_match(&ps, "[", "").len(), 0, "a bracket is literal and matches nothing");
+    }
+
+    #[test]
+    fn every_word_must_match_and_a_quoted_pasted_path_still_does() {
+        let ps = vec![
+            proj("A", r"C:\Program Files\app", "app"),
+            proj("U", r"\\srv\share\repo", "repo"),
+            proj("B", r"D:\w\beta", "beta"),
+        ];
+        let names = |f: &str| select_match(&ps, f, "").iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(r#""C:\Program Files\app""#), ["app"], "quotes and a space from a paste");
+        assert_eq!(names(r"\\srv\share"), ["repo"], "UNC as typed");
+        assert_eq!(names(r"d:\ beta"), ["beta"]);
+        assert_eq!(names("beta app"), [] as [&str; 0], "one word missing is no match");
+    }
+
+    #[test]
+    fn ranking_name_start_then_name_then_path_hidden_last_recency_kept() {
+        let mut ps = vec![
+            proj("P", r"C:\api\one", "one"),
+            proj("C", r"C:\w\my-api", "my-api"),
+            proj("H", r"C:\w\api-old", "api-old"),
+            proj("S", r"C:\w\api-new", "api-new"),
+            proj("S2", r"C:\w\api-two", "api-two"),
+        ];
+        ps[2].hidden = true;
+        let names: Vec<&str> = select_match(&ps, "api", "").iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["api-new", "api-two", "my-api", "one", "api-old"]);
     }
 
     #[test]

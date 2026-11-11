@@ -114,35 +114,6 @@ fn drive_with(ps: &[Project], cwd: &str, initial: &str, events: Vec<Event>, answ
     (out, t)
 }
 
-fn project_frames(f: &Fx, timings: crate::timing::Timings) -> Vec<Vec<String>> {
-    let mut t = Script {
-        inner: PreviewTerm::new((80, 24), VecDeque::new(), true).with_logger(crate::log::Logger::silent(timings)),
-        q: keys(&["s", "Enter"]).into(),
-        answer: String::new(),
-        asked: 0,
-    };
-    let c = clock;
-    let out = run_screen(
-        &mut t,
-        &f.projects,
-        Path::new(&f.cwd),
-        "new",
-        Style { color: false, ascii: true },
-        &c,
-        None,
-    )
-    .unwrap();
-    assert!(out.is_some());
-    t.inner.frames.unwrap()
-}
-
-#[test]
-fn debug_mode_draws_the_project_screen_exactly_as_off() {
-    let f = fx();
-    let on = crate::timing::Timings::on(std::time::Instant::now());
-    assert_eq!(project_frames(&f, on), project_frames(&f, crate::timing::Timings::default()));
-}
-
 fn drive(f: &Fx, ks: &[&str]) -> Option<ProjectChoice> {
     drive_with(&f.projects, &f.cwd, "new", keys(ks), "").0
 }
@@ -234,7 +205,7 @@ fn h_changes_only_its_own_entry_and_keeps_the_rest_as_written() {
     let on_disk =
         || -> Value { serde_json::from_str::<Value>(&std::fs::read_to_string(config).unwrap()).unwrap()["hiddenProjects"].clone() };
 
-    run_with_config(&f, config, &["v", "s", "h", "Escape"]);
+    run_with_config(&f, config, &["v", "s", "h", "Escape", "Escape"]);
     assert_eq!(on_disk(), kept, "unhide removes the entry whose expansion matches, nothing else");
 
     run_with_config(&f, config, &["s", "h", "Escape"]);
@@ -534,6 +505,96 @@ fn mouse_click_moves_second_click_commits_and_values_walk() {
     .0
     .unwrap();
     assert_eq!((committed.action.as_str(), committed.path.as_str()), ("continue", f.alpha.as_str()));
+}
+
+/// D4: Enter in the open filter runs the highlighted row; the arrows move while typing.
+#[test]
+fn enter_and_arrows_work_inside_the_filter() {
+    let f = fx();
+    assert_eq!(drive(&f, &["/", "a", "l", "p", "Enter"]).unwrap().path, f.alpha);
+    assert_eq!(
+        drive(&f, &["/", "r", "o", "o", "t", "DownArrow", "Enter"]).unwrap().path,
+        f.beta,
+        "the down arrow moved, it was not typed"
+    );
+    let (out, t) = drive_with(&f.projects, &f.cwd, "new", keys(&["/", "z", "q", "Enter", "Escape", "Escape"]), "");
+    assert!(out.is_none(), "Enter on no match never runs the current directory");
+    assert!(t.inner.frames.unwrap()[4].join("\n").contains("no project matches"));
+}
+
+/// Item 3: Esc clears a kept filter, leaves the hidden view, and only then ends the screen.
+#[test]
+fn escape_steps_back_one_level() {
+    let f = fx();
+    let gone = f.tree.0.join("vanished").to_string_lossy().into_owned();
+    let mut ps = f.projects.clone();
+    ps.insert(0, proj("V", &gone, "vanished"));
+    // Enter on a vanished row is refused: the filter closes and stays.
+    let (out, t) = drive_with(&ps, &f.cwd, "new", keys(&["/", "v", "a", "n", "Enter", "Escape", "Escape"]), "");
+    assert!(out.is_none());
+    let frames = t.inner.frames.unwrap();
+    let n = frames.len();
+    assert!(frames[n - 2].join("\n").contains("filter: van"), "the kept filter");
+    assert!(
+        !frames[n - 1].join("\n").contains("filter:"),
+        "the first Esc cleared it, the screen stayed"
+    );
+    let (out, t) = drive_with(&f.projects, &f.cwd, "new", keys(&["v", "Escape", "Escape"]), "");
+    assert!(out.is_none());
+    assert_eq!(t.inner.frames.unwrap().len(), 3, "v, then Esc back to the list, then Esc out");
+}
+
+/// Item 4: a click on a footer button of the open filter is a key, never typed into the filter.
+#[test]
+fn a_footer_click_in_the_open_filter_is_never_typed() {
+    let f = fx();
+    let c = clock;
+    let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: false, ascii: true }, &c);
+    s.cursor.typing = true;
+    s.before();
+    let map = s.draw((80, 24)).map;
+    let fy = map.footer_y.unwrap();
+    let esc = map.footer.iter().find(|s| s.key == "Escape").unwrap();
+    let (out, t) = drive_with(
+        &f.projects,
+        &f.cwd,
+        "new",
+        vec![
+            key("/"),
+            key("a"),
+            mouse(esc.start, fy + i32::try_from(esc.line).unwrap(), true, false),
+            key("Escape"),
+        ],
+        "",
+    );
+    assert!(out.is_none());
+    let last = t.inner.frames.unwrap().last().unwrap().join("\n");
+    assert!(!last.contains("filter:"), "the click was Esc: the filter is cleared\n{last}");
+}
+
+/// D1: the keyboard puts the cursor on alpha; one click there selects, it never starts a session.
+#[test]
+fn one_click_on_a_keyboard_cursor_row_starts_nothing() {
+    let f = fx();
+    let ys = opening_map(&f).list.unwrap().row_ys;
+    let (out, _) = drive_with(
+        &f.projects,
+        &f.cwd,
+        "new",
+        vec![key("s"), mouse(4, ys[1], true, false), key("Escape")],
+        "",
+    );
+    assert!(out.is_none(), "a click on the keyboard cursor launched");
+    let picked = drive_with(
+        &f.projects,
+        &f.cwd,
+        "new",
+        vec![key("s"), mouse(4, ys[1], true, false), key("Enter")],
+        "",
+    )
+    .0
+    .unwrap();
+    assert_eq!(picked.path, f.alpha, "keyboard Enter still runs the cursor row");
 }
 
 #[test]

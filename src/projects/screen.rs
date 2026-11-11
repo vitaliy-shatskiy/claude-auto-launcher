@@ -202,17 +202,30 @@ impl<'a> ProjectScreen<'a> {
         Flow::Done(Some(Outcome::Picked(choice(target, &self.action, how, slugs))))
     }
 
-    /// The filter box owns every key while it is open. Its two ways of closing are logged with the
-    /// LENGTH of the filter, never its text.
-    fn type_filter(&mut self, key: &KeyPress, term: &dyn Term) {
+    /// No row matches the filter: Enter would run the current directory the cursor parked on.
+    fn no_match(&self) -> bool {
+        !self.filter.trim().is_empty() && !self.rows.iter().any(|r| r.kind == RowKind::Project || r.matched)
+    }
+
+    /// The filter box owns every key while it is open, but the arrows (they move the cursor and
+    /// step the field) and Enter (D4: it runs the highlighted row, handed back as `false`). Its
+    /// ways of closing are logged with the LENGTH of the filter, never its text.
+    fn type_filter(&mut self, key: &KeyPress, term: &dyn Term) -> bool {
+        if [vk::UP, vk::DOWN, vk::LEFT, vk::RIGHT].iter().any(|k| key.is(*k)) {
+            return false;
+        }
         if key.is(vk::ENTER) {
+            if self.no_match() {
+                "no project matches".clone_into(&mut self.notice);
+                return true;
+            }
             self.cursor.typing = false;
             self.log(
                 term,
                 "Enter",
-                &[("filter", json!("close")), ("filterLength", json!(self.filter.chars().count()))],
+                &[("filter", json!("run")), ("filterLength", json!(self.filter.chars().count()))],
             );
-            return;
+            return false;
         }
         if key.is(vk::ESCAPE) || key.is_ctrl(vk::C) {
             self.log(
@@ -223,18 +236,19 @@ impl<'a> ProjectScreen<'a> {
             self.cursor.typing = false;
             self.filter.clear();
             self.cursor.index = 0;
-            return;
+            return true;
         }
         if key.is(vk::BACKSPACE) {
             self.filter.pop();
             self.cursor.index = self.park();
-            return;
+            return true;
         }
         // Any printable char: a Windows folder name may hold `~` (8.3 names), brackets, `+`, `@`.
         if key.ch != '\0' && !key.ch.is_control() {
             self.filter.push(key.ch);
             self.cursor.index = self.park();
         }
+        true
     }
 
     fn log(&self, term: &dyn Term, key: &str, extra: &[(&str, Value)]) {
@@ -289,6 +303,7 @@ impl Screen for ProjectScreen<'_> {
             index: usize::try_from(self.cursor.index).unwrap_or(0),
             filter: &self.filter,
             typing: self.cursor.typing,
+            show_hidden: self.show_hidden,
             cwd: &self.cwd,
             width: size.0,
             height: size.1,
@@ -324,6 +339,21 @@ impl Screen for ProjectScreen<'_> {
         Some(self.commit("enter"))
     }
 
+    /// Esc steps back one level: a kept filter is cleared, the hidden view returns to the list,
+    /// and only then the screen ends (an open filter is cleared by the filter box itself).
+    fn escape(&mut self) -> Option<Flow<Outcome>> {
+        if !self.filter.is_empty() {
+            self.filter.clear();
+            self.cursor.index = 0;
+            return Some(Flow::Continue);
+        }
+        if self.show_hidden {
+            self.show_hidden = false;
+            return Some(Flow::Continue);
+        }
+        None
+    }
+
     fn hotkeys(&self) -> &[char] {
         &self.hotkeys
     }
@@ -352,8 +382,7 @@ impl Screen for ProjectScreen<'_> {
     fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
         self.notice.clear();
         if self.cursor.typing {
-            self.type_filter(key, term);
-            return true;
+            return self.type_filter(key, term);
         }
         if is_hotkey_exact(key, HIDE_KEY) {
             self.toggle_hide();
