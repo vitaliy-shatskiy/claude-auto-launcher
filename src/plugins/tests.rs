@@ -330,6 +330,51 @@ fn without_may_run_no_plugin_is_called() {
     assert_eq!(fake.calls.lock().unwrap().len(), 0, "preview and --launcher-options start nothing");
 }
 
+// --- protocol 1 tolerance: v1 may gain optional fields ---
+
+#[test]
+fn unknown_fields_in_every_answer_are_ignored() {
+    let mut describe = ticket();
+    describe["later"] = json!({"a": 1});
+    describe["rows"][0]["tooltip"] = json!("x");
+    describe["actions"][0]["chord"] = json!("ctrl");
+    let fake = Fake::with(&[
+        ("describe", describe),
+        ("preLaunch", json!({"env":{"TICKET":"ABC-1"},"cwd":"C:/x","later":[1]})),
+        ("action", json!({"message":"opened","level":"info"})),
+        ("projects", json!([{"path":r"C:\jira\ABC","icon":"j"}])),
+        ("sessions", json!([{"id":"s-1","tags":["a"]}])),
+    ]);
+    let plugins = loaded(&fake);
+    assert_eq!((plugins.list[0].desc.rows.len(), plugins.list[0].desc.actions.len()), (1, 1));
+    let state = four().new_state();
+    let mut w = Vec::new();
+    let out = pre_launch::run(&plugins, &|i| plugins.choice(i, &state, None), &fake, &mut w);
+    let want = pre_launch::Extra {
+        env: vec![("TICKET".into(), "ABC-1".into())],
+        args: Vec::new(),
+    };
+    assert_eq!(out, pre_launch::Outcome::Go(want));
+    assert_eq!(action::run(&plugins, 0, 'j', &json!({}), &fake), Some("tick: opened".into()));
+    assert_eq!(projects::collect(&plugins, &fake, &mut w).len(), 1);
+    assert_eq!(sessions::collect(&plugins, "", &fake, &mut w).len(), 1);
+    assert_eq!(w, Vec::<String>::new());
+}
+
+#[test]
+fn a_newer_protocol_is_used_for_the_v1_fields_with_one_warning() {
+    let mut describe = ticket();
+    describe["protocol"] = json!(2);
+    describe["screens"] = json!(["maintenance"]);
+    let fake = Fake::with(&[("describe", describe)]);
+    let (p, w) = load(&[spec("tick", r"C:\p\tick.exe")], None, &fake, true);
+    assert_eq!(p.list.first().map(|l| l.desc.rows.len()), Some(1), "its v1 row is used");
+    assert_eq!(
+        w,
+        ["plugin tick speaks protocol 2; this launcher speaks 1 and uses only the protocol 1 fields"]
+    );
+}
+
 // --- temp directories ---
 
 fn dir(name: &str) -> PathBuf {

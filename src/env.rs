@@ -189,11 +189,6 @@ pub fn repair_shared_profiles(cfg: &Config, preview: bool) {
 #[cfg(not(feature = "sharing"))]
 pub fn repair_shared_profiles(_cfg: &Config, _preview: bool) {}
 
-/// `Invoke-LaunchHooks`: each configured hook, best-effort, one line on failure.
-pub fn run_launch_hooks(hooks: &[Vec<String>]) {
-    run_launch_hooks_with_env(hooks, &ChildEnv::default(), &crate::timing::Timings::default());
-}
-
 /// `Invoke-LaunchHooks` with the session's environment (`CLAUDE_CONFIG_DIR`, secrets): the
 /// PowerShell launcher set those in its own process, so its hooks saw them. `tm` on: a span per
 /// hook under the open `hooks` span.

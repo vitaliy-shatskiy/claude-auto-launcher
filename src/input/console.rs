@@ -158,10 +158,6 @@ impl ConsoleInput {
         (self.mouse, self.output_redirected, self.trace.path.clone())
     }
 
-    pub fn is_closed(&self) -> bool {
-        self.closed
-    }
-
     /// Milliseconds (monotonic) at which the terminal delivered the last record.
     pub fn last_record_ms(&self) -> Option<u64> {
         self.last_record_ms

@@ -44,6 +44,8 @@ pub struct Action {
 /// A checked `describe` answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Description {
+    /// The protocol the plugin answered with: 1, or a newer one read for its v1 fields only.
+    pub protocol: u64,
     pub rows: Vec<Row>,
     pub actions: Vec<Action>,
     /// Hook verbs it asked for (`preLaunch`, `postLaunch`).
@@ -133,18 +135,22 @@ fn verbs(v: Option<&Value>, kind: Kind, field: &str, warnings: &mut Vec<String>)
     out
 }
 
-/// A `describe` answer, checked. `Err` = the whole answer is unusable (wrong protocol, not an
-/// object); a bad row or action is dropped and named in the warnings.
+/// A `describe` answer, checked. `Err` = the whole answer is unusable (no protocol or one below 1,
+/// not an object); a bad row or action is dropped and named in the warnings. A newer protocol is
+/// read for the fields protocol 1 knows: v1 only gains optional fields, and unknown ones are ignored.
 pub fn parse(v: &Value) -> Result<(Description, Vec<String>), String> {
     if !v.is_object() {
         return Err("describe: not an object".into());
     }
-    let protocol = v.get("protocol").and_then(Value::as_u64);
-    if protocol != Some(PROTOCOL) {
-        return Err(format!("describe: protocol {protocol:?}, this launcher speaks {PROTOCOL}"));
-    }
+    let raw = v.get("protocol").and_then(Value::as_u64);
+    let Some(protocol) = raw.filter(|p| *p >= PROTOCOL) else {
+        return Err(format!("describe: protocol {raw:?}, this launcher speaks {PROTOCOL}"));
+    };
     let mut warnings = Vec::new();
-    let mut d = Description::default();
+    let mut d = Description {
+        protocol,
+        ..Description::default()
+    };
     for r in v.get("rows").and_then(Value::as_array).into_iter().flatten().take(MAX_ROWS) {
         match row(r) {
             Ok(r) if d.rows.iter().any(|x| x.name.eq_ignore_ascii_case(&r.name)) => warnings.push(format!("row {}: duplicate", r.name)),
@@ -186,9 +192,16 @@ mod tests {
     }
 
     #[test]
-    fn another_protocol_is_refused_whole() {
-        assert!(parse(&json!({"protocol": 2, "rows": []})).is_err());
-        assert!(parse(&json!([])).is_err());
+    fn no_protocol_or_one_below_1_is_refused_whole() {
+        for bad in [json!({"rows": []}), json!({"protocol": 0}), json!({"protocol": "1"}), json!([])] {
+            assert!(parse(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_newer_protocol_parses_and_says_which() {
+        let (d, w) = parse(&json!({"protocol": 3, "hooks": ["preLaunch"]})).unwrap();
+        assert_eq!((d.protocol, d.hooks, w), (3, vec!["preLaunch"], Vec::<String>::new()));
     }
 
     #[test]

@@ -4,6 +4,11 @@ Protocol 1 of the plugin processes (README, Plugins). One file per verb; `VERBS`
 is the registry `describe` checks hook and source names against. A new verb = a new file with its
 `VERB` constant plus one line in `VERBS`, and its call site in `app`.
 
+Compatibility: v1 may gain optional fields; a plugin must ignore unknown fields. Every request
+carries `"protocol": 1` (added in `run::call`, the one place every request passes). Each verb file
+reads only the fields it knows, so an unknown field in an answer is ignored, never a failure; a
+`describe` with a higher `protocol` is read for its v1 fields and `load` warns once.
+
 Invariants:
 
 - Only `config::PluginSpec` entries run, by full path, exactly the file listed: config load and

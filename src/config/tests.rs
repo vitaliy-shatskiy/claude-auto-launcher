@@ -92,6 +92,35 @@ fn a_module_left_out_of_the_build_warns_on_its_key_and_stays_off() {
 }
 
 #[test]
+fn version_one_absent_and_the_schema_pointer_read_quietly() {
+    for text in [r#"{"version": 1}"#, "{}", r#"{"$schema": "https://x/claude-auto.schema.json"}"#] {
+        assert_eq!(parse_config(text, "x", &ctx()).warnings, Vec::<String>::new(), "{text}");
+    }
+}
+
+#[test]
+fn a_newer_version_warns_once_and_reads_the_keys_it_knows() {
+    let cfg = parse_config(r#"{"version": 2, "secretsRoot": "C:/s", "projectScreen": "onDemand"}"#, "x", &ctx());
+    assert_eq!(
+        cfg.warnings,
+        ["config x was written by a newer claude-auto (config version 2; this one reads 1); reading the keys it knows"]
+    );
+    assert_eq!((cfg.secrets_root.as_str(), cfg.project_screen), (r"C:\s", ProjectScreen::OnDemand));
+}
+
+#[test]
+fn a_version_that_is_not_a_positive_whole_number_warns_and_reads_as_one() {
+    for bad in ["0", "\"2\"", "1.5", "-1"] {
+        let cfg = parse_config(&format!(r#"{{"version": {bad}}}"#), "x", &ctx());
+        assert_eq!(
+            cfg.warnings,
+            [format!("version {bad} is not a config version (1, 2, ...); reading it as 1")],
+            "{bad}"
+        );
+    }
+}
+
+#[test]
 fn typo_key_warns_with_suggestion() {
     let cfg = parse_config(r#"{"account": []}"#, "x", &ctx());
     assert_eq!(

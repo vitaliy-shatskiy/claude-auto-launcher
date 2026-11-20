@@ -103,7 +103,7 @@ pub fn call(spec: &PluginSpec, verb: &Verb, input: &Value, kill_grace: Duration)
         }
         return Err(Failure::Start(std::io::Error::other("could not join the job object")));
     }
-    let body = format!("{input}\n");
+    let body = format!("{}\n", with_protocol(input));
     let stdin = child.stdin.take();
     // Its own thread: a plugin that never reads stdin must not block the call.
     std::thread::spawn(move || {
@@ -149,6 +149,16 @@ pub fn call(spec: &PluginSpec, verb: &Verb, input: &Value, kill_grace: Duration)
             Err(Failure::Timeout { ms, pid })
         }
     }
+}
+
+/// The request as sent: `"protocol": 1` first, then the verb's own fields. Added here, the one
+/// place every request passes, so no verb can leave it out.
+fn with_protocol(input: &Value) -> Value {
+    let mut out = serde_json::Map::from_iter([("protocol".to_owned(), Value::from(super::describe::PROTOCOL))]);
+    if let Value::Object(fields) = input {
+        out.extend(fields.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+    Value::Object(out)
 }
 
 /// One JSON object or array; anything else is bad JSON.

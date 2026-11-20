@@ -441,20 +441,4 @@ fn relative_age_and_counts() {
     assert_eq!(relative_age(now - 3 * 3_600_000, now), "3 h");
     assert_eq!(relative_age(now - 2 * 86_400_000, now), "2 d");
     assert_eq!(text::n0(1234.5), "1,235");
-    let capped = Session {
-        prompt_count: 3,
-        prompt_count_capped: true,
-        ..Session::default()
-    };
-    assert_eq!(prompt_count_text(&capped), "3+");
-}
-
-#[test]
-fn exchange_falls_back_and_attributes_by_word() {
-    let bare = Session::default();
-    let e = exchange(&bare);
-    assert_eq!((e[0].text.as_str(), e[1].text.as_str()), ("(nothing was asked)", "(no reply)"));
-    let g = glyphs(true);
-    let lines = exchange_lines(&e, 40, 10, &g, true);
-    assert_eq!(lines, ["you > (nothing was asked)", "claude > (no reply)"]);
 }

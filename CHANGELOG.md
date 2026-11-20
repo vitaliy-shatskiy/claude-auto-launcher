@@ -4,6 +4,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- A JSON Schema for the config, `schema/claude-auto.schema.json` (draft 2020-12): every key the
+  launcher reads, with its type, allowed values, default and description. `config.example.json`
+  points at it with `"$schema"`, which the launcher accepts and ignores. A test keeps the schema's
+  keys, enums and defaults equal to the parser's.
+- Config `version` (optional, default `1`): a file written by a newer claude-auto warns once and
+  is read best-effort; a value that is not a whole number of at least 1 warns and reads as `1`.
+- Plugin protocol 1 is forward-tolerant: every request carries `"protocol": 1`, unknown fields in
+  a plugin's answers are ignored, and a plugin answering `describe` with a higher protocol is used
+  for its protocol 1 fields with one warning (it was refused before). Protocol 1 may gain optional
+  fields; a plugin must ignore fields it does not know.
+- `examples/plugin_git_branch.rs`, an example plugin: `preLaunch` sets `CLAUDE_AUTO_GIT_BRANCH`
+  to the launch directory's branch (read from `.git/HEAD`, no git process), launch-screen key `g`
+  shows the branch and the number of `git status --porcelain` entries (git runs windowless).
+- `deny.toml`: `cargo deny check` (advisories, bans, licences, sources) passes on the dependency
+  tree.
+
 ## [0.9.0] — 2026-11-20
 
 ### Added

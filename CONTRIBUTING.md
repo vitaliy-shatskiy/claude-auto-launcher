@@ -10,7 +10,8 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
-All three exit `0`. CI runs the same three on Windows. Try a screen change in preview mode first
+All three exit `0`. A change to `Cargo.toml` or `Cargo.lock` also passes `cargo deny check`
+(`deny.toml`: advisories, licences, sources). CI runs the same three on Windows. Try a screen change in preview mode first
 (README, [Preview mode](README.md#preview-mode)): it writes nothing and runs no Claude, but a `claude` must resolve on PATH (a stub will do).
 
 `cargo run --example privacy_scan` is the privacy scan (`examples/privacy_scan.rs`, not in the

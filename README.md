@@ -401,10 +401,20 @@ naming it. Windows paths in JSON: write `~/...`, forward slashes, or double ever
 (`C:\\Users\\me\\.claude`). A single backslash fails the whole file. `config.example.json` is a
 two-account starting point.
 
+[`schema/claude-auto.schema.json`](schema/claude-auto.schema.json) is the JSON Schema of this file
+(draft 2020-12): put
+`"$schema": "https://raw.githubusercontent.com/vitaliy-shatskiy/claude-auto-launcher/main/schema/claude-auto.schema.json"`
+at the top, as `config.example.json` does, and an editor completes and checks the keys. The
+launcher ignores `$schema`. `version` (default `1`) is the config format; a file with a higher
+version, written by a newer claude-auto, is read best-effort with one warning: the keys this
+launcher knows apply, the rest warn as unknown.
+
 <details><summary><b>All config keys</b></summary>
 
 | key | type | default | notes |
 |---|---|---|---|
+| `$schema` | URL | none | the editor's schema; ignored by the launcher |
+| `version` | integer | `1` | the config format; higher than the launcher knows = one warning, best-effort read; not a whole number of at least 1 = a warning, read as `1` |
 | `accounts[]` | `{key, root, label, tint, hidden, archived}` | one `work` account | see [Accounts](#accounts) below |
 | `sharing` | bool | `false` | forced off with fewer than two accounts. Read [Multi-account sharing](#multi-account-sharing) before turning it on |
 | `remote` | bool | `false` | keep it off: author setup only, see [Optional author setup](#optional-author-setup) |
@@ -469,7 +479,10 @@ no plugin: they use the cached `describe` answers only.
 "plugins": [{ "name": "sample", "path": "~/tools/plugin_sample.exe", "args": [], "timeoutMs": 3000 }]
 ```
 
-Protocol 1:
+Protocol 1. Every request carries `"protocol": 1` beside the fields below. Protocol 1 may gain
+optional fields in a later launcher: a plugin must ignore a field it does not know, and the
+launcher ignores unknown fields in a plugin's answers. A plugin may answer `describe` with a higher
+`protocol`; the launcher then uses only the protocol 1 fields and warns once.
 
 | verb | stdin | stdout | timeout |
 |---|---|---|---|
@@ -506,6 +519,9 @@ Protocol 1:
 [`examples/plugin_sample.rs`](examples/plugin_sample.rs) is a complete plugin: a `ticket` row whose
 value reaches claude as `SAMPLE_TICKET`, a `j` action, empty sources. `cargo build --example
 plugin_sample`, then list `target/debug/examples/plugin_sample.exe` by its full path.
+[`examples/plugin_git_branch.rs`](examples/plugin_git_branch.rs) is a useful one: `preLaunch`
+sets `CLAUDE_AUTO_GIT_BRANCH` to the launch directory's branch (read from `.git/HEAD`, no git
+process), and `g` on the launch screen shows the branch and the `git status --porcelain` count.
 
 ### Secrets
 

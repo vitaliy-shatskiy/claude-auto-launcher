@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/vitaliy-shatskiy/claude-auto-launcher/main/schema/claude-auto.schema.json",
   "accounts": [
     { "key": "work", "root": "~/.claude", "label": "work account", "tint": "Green" },
     { "key": "second", "root": "~/.claude-second", "label": "second account", "tint": "Magenta" }

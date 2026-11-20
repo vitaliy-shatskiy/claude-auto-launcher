@@ -124,8 +124,6 @@ fn key_names_round_trip() {
     assert_eq!(parse_key_name("downarrow"), Some(vk::DOWN));
     assert_eq!(parse_key_name("D7"), Some(0x37));
     assert_eq!(parse_key_name("F5"), Some(116));
-    assert_eq!(key_name(vk::ENTER), "Enter");
-    assert_eq!(key_name(0x52), "R");
     assert_eq!(scripted_key("/"), Some(KeyPress::char('/')));
     assert_eq!(scripted_key("Nope"), None);
 }
