@@ -256,3 +256,18 @@ fn what_an_action_started_outlives_a_call_that_ended_normally() {
     assert!(killed.is_ok_and(|o| o.status.success()), "the test stops it");
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+#[test]
+fn a_listed_file_with_an_exe_twin_beside_it_is_refused_not_swapped() {
+    let d = scratch("plugin-exe-twin");
+    let listed = cmd(&d, "tick", r#"echo {"protocol":1}"#);
+    // Windows process start tries `<path>.exe` first for a path not ending in `.exe`.
+    let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    std::fs::copy(format!(r"{system}\System32\whoami.exe"), format!("{}.exe", listed.path)).unwrap();
+    let answer = Process.call(&listed, &describe::VERB, &json!({}));
+    assert!(
+        matches!(&answer, Err(Failure::Start(e)) if e.to_string().contains(".exe")),
+        "{answer:?}"
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}

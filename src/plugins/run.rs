@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::Verb;
-use crate::config::PluginSpec;
+use crate::config::{PathProblem, PluginSpec, path_problem};
 use crate::env::CREATE_NO_WINDOW;
 use crate::sys::Job;
 
@@ -79,10 +79,12 @@ impl Runner for Process {
 /// its pipe before the call returns anyway (`KILL_GRACE` for `Process`; a test passes a long one,
 /// so a call that skipped the kill would show as a late return).
 pub fn call(spec: &PluginSpec, verb: &Verb, input: &Value, kill_grace: Duration) -> Result<Value, Failure> {
-    let path = Path::new(&spec.path);
-    if !path.is_file() {
-        return Err(Failure::Missing);
+    match path_problem(&spec.path) {
+        Some(PathProblem::Missing) => return Err(Failure::Missing),
+        Some(why @ PathProblem::ExeTwin) => return Err(Failure::Start(std::io::Error::other(format!("the listed file {why}")))),
+        None => {}
     }
+    let path = Path::new(&spec.path);
     let job = Job::new().ok_or_else(|| Failure::Start(std::io::Error::other("job object refused")))?;
     let mut child = Command::new(path)
         .args(&spec.args)

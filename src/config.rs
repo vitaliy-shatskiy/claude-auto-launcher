@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::launch::{CONFIG_ROWS, MODEL_FAMILY_KEYS, Roster, RowName};
-pub use plugins::{PluginSpec, parse_plugins};
+pub use plugins::{PathProblem, PluginSpec, parse_plugins, path_problem};
 use roster::default_account;
 pub use roster::{Account, parse_roster};
 
