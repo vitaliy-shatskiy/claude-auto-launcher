@@ -110,8 +110,9 @@ fn a_reply_that_lands_after_the_cursor_moved_is_kept_under_its_own_session() {
     let (started, loading) = channel::<()>();
     let (held, started) = (Mutex::new(held), Mutex::new(started));
     let loader: Loader = Arc::new(move |p: &Path, _want: usize| {
-        drop(started.lock().unwrap().send(()));
-        drop(held.lock().unwrap().recv());
+        // Either end may be gone once the test has its answer.
+        let _told = started.lock().unwrap().send(());
+        let _released = held.lock().unwrap().recv();
         one(&p.file_stem().unwrap().to_string_lossy())
     });
     let mut p = ChatPane::new(loader, Timings::default());

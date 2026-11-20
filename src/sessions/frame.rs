@@ -33,8 +33,23 @@ pub struct Clock {
 
 /// A UTC instant's offset from UTC in minutes, by the rules in force at that instant: a message
 /// from before a DST change keeps the offset it was written under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy)]
 pub struct Zone(pub fn(i64) -> i32);
+
+// By address: the frame memo keys on the zone, and one process uses one zone function.
+impl PartialEq for Zone {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::fn_addr_eq(self.0, other.0)
+    }
+}
+
+impl Eq for Zone {}
+
+impl std::hash::Hash for Zone {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self.0 as usize).hash(state);
+    }
+}
 
 impl Zone {
     /// This machine's time zone.
