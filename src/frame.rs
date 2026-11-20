@@ -25,10 +25,10 @@ pub struct Area {
 
 impl Area {
     pub fn of(size: (usize, usize)) -> Self {
-        let side = |n: usize, fallback: usize| if (1..=MAX_REPORTED_CELLS).contains(&n) { n } else { fallback };
+        let sane = |n: usize, fallback: usize| if (1..=MAX_REPORTED_CELLS).contains(&n) { n } else { fallback };
         Self {
-            width: side(size.0, FALLBACK_SIZE.0),
-            height: side(size.1, FALLBACK_SIZE.1),
+            width: sane(size.0, FALLBACK_SIZE.0),
+            height: sane(size.1, FALLBACK_SIZE.1),
         }
     }
 
