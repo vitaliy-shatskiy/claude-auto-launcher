@@ -10,40 +10,30 @@ pub const MIN_HEIGHT: usize = 16;
 pub const TWO_PANE_WIDTH: usize = 100;
 pub const SHORT_PICKER_HEIGHT: usize = 30;
 
-/// The largest drawing area: past it a huge terminal gets a centred page, not stretched rows.
-pub const MAX_AREA_WIDTH: usize = 240;
-pub const MAX_AREA_HEIGHT: usize = 80;
+/// A reported side past this is a broken size report, not a terminal.
+pub const MAX_REPORTED_CELLS: usize = 10_000;
+/// What a broken side falls back to: the console's own default when its size read fails.
+const FALLBACK_SIZE: (usize, usize) = (80, 25);
 
-/// Where every screen draws: the terminal size capped at `MAX_AREA_*`, centred horizontally
-/// (`left` blank columns before it) and anchored at the top.
+/// Where every screen draws: the whole terminal from its top-left cell, so terminal and frame
+/// columns are the same numbers. A side of 0 or past `MAX_REPORTED_CELLS` takes `FALLBACK_SIZE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Area {
-    pub left: usize,
     pub width: usize,
     pub height: usize,
 }
 
 impl Area {
     pub fn of(size: (usize, usize)) -> Self {
-        let width = size.0.min(MAX_AREA_WIDTH);
+        let sane = |n: usize, fallback: usize| if (1..=MAX_REPORTED_CELLS).contains(&n) { n } else { fallback };
         Self {
-            left: (size.0 - width) / 2,
-            width,
-            height: size.1.min(MAX_AREA_HEIGHT),
+            width: sane(size.0, FALLBACK_SIZE.0),
+            height: sane(size.1, FALLBACK_SIZE.1),
         }
     }
 
     pub fn size(self) -> (usize, usize) {
         (self.width, self.height)
-    }
-
-    /// The frame's lines moved right to the area's first column.
-    pub fn place(self, lines: Vec<String>) -> Vec<String> {
-        if self.left == 0 {
-            return lines;
-        }
-        let pad = " ".repeat(self.left);
-        lines.into_iter().map(|l| format!("{pad}{l}")).collect()
     }
 }
 
@@ -57,20 +47,9 @@ pub fn pad_to_bottom(lines: &mut Vec<String>, height: usize, below: usize) {
     }
 }
 
-/// The `‹ a/d ←/→ ›` hint drawn dim after the values of a row that switches with a/d and the
-/// arrows: the footer alone does not tell that the row moves.
-pub fn switch_hint(g: &Glyphs) -> String {
-    let arrows = if g.l_angle == '<' { "<-/->" } else { "\u{2190}/\u{2192}" };
-    format!("{}{} a/d {arrows} {}{}", theme::DIM_OPEN, g.l_angle, g.r_angle, theme::DIM_CLOSE)
-}
-
-/// `line` with the switch hint two cells after it, when the whole fits `max` cells.
-pub fn with_switch_hint(line: String, g: &Glyphs, max: usize) -> String {
-    let hint = switch_hint(g);
-    if display_width(&line) + 2 + display_width(&hint) > max {
-        return line;
-    }
-    format!("{line}  {hint}")
+/// The footer token of the keys that switch a row's value: `a/d ←/→` (`a/d <-/->` in ASCII).
+pub fn switch_keys(g: &Glyphs) -> &'static str {
+    if g.l_angle == '<' { "a/d <-/->" } else { "a/d \u{2190}/\u{2192}" }
 }
 
 /// The last console column is never written (it wraps on some terminals).

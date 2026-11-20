@@ -235,7 +235,7 @@ fn the_box_fills_the_terminal_whatever_the_session_count() {
     }
 }
 
-/// AC5: what a cursor move costs on the console at 250x68 (a 240x68 area, five columns in).
+/// AC5: what a cursor move costs on the console at 250x68.
 #[test]
 fn a_cursor_move_writes_a_fraction_of_a_full_frame() {
     let owned: Vec<Session> = (0..69i64)
@@ -257,7 +257,7 @@ fn a_cursor_move_writes_a_fraction_of_a_full_frame() {
         style: Style { color: true, ascii: false },
         ..view(&s, 0, area.width, area.height)
     };
-    let frame = |v: &PickerView<'_>| area.place(picker_frame(v, &mut Memo::default()).lines);
+    let frame = |v: &PickerView<'_>| picker_frame(v, &mut Memo::default()).lines;
     let a = frame(&base);
     let hovered = frame(&PickerView {
         hover_row: 1,

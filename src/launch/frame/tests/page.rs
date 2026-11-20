@@ -30,8 +30,8 @@ fn page(r: &Roster, state: &LaunchState, size: (usize, usize)) -> (Frame, Vec<St
         },
     };
     let f = launch_frame(r, &inp);
-    let placed = area.place(f.lines.clone());
-    (f, placed)
+    let lines = f.lines.clone();
+    (f, lines)
 }
 
 #[test]
@@ -46,23 +46,26 @@ fn a_160x40_page_spans_the_width_with_the_footer_on_the_last_row() {
 }
 
 #[test]
-fn a_400x150_terminal_draws_a_centred_240x80_page() {
+fn a_400x150_terminal_gets_a_400x150_page_from_the_top_left() {
     let r = four();
     let (_, lines) = page(&r, &real_state(&r), (400, 150));
     assert_golden("launch-400x150", &lines.join("\n"));
-    assert_eq!(lines.len(), 79);
-    let pad = " ".repeat(80);
-    assert!(lines.iter().all(|l| l.is_empty() || l.starts_with(&pad)), "centred");
-    assert!(lines.iter().all(|l| display_width(l) <= 80 + 239), "nothing past the area");
+    assert_eq!(lines.len(), 149, "every row but the headroom one");
+    assert_eq!(display_width(&lines[0]), 399, "the header box spans the terminal from column 0");
+    assert!(lines.iter().all(|l| display_width(l) <= 399), "the last column stays free");
 }
 
 #[test]
-fn the_switch_hint_sits_on_the_cursor_row_only() {
+fn the_switch_keys_sit_in_the_footer_only() {
     let r = four();
     let mut s = real_state(&r);
     s.row = 3;
     let (f, lines) = page(&r, &s, (160, 40));
-    let with_hint: Vec<usize> = (0..lines.len()).filter(|i| lines[*i].contains("a/d \u{2190}/\u{2192}")).collect();
-    let effort = f.map.rows.iter().find(|h| h.name == "Effort").unwrap();
-    assert_eq!(with_hint, [usize::try_from(effort.y).unwrap()], "{lines:#?}");
+    let with_keys: Vec<usize> = (0..lines.len()).filter(|i| lines[*i].contains("a/d")).collect();
+    assert_eq!(with_keys, [usize::try_from(f.map.footer_y.unwrap()).unwrap()], "{lines:#?}");
+    assert!(
+        lines[with_keys[0]].contains("a/d \u{2190}/\u{2192} switch"),
+        "{}",
+        lines[with_keys[0]]
+    );
 }

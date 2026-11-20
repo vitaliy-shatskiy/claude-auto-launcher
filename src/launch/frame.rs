@@ -7,7 +7,7 @@ use regex::Regex;
 use super::{LaunchState, OptionText, Roster, RowName, is_hidden_row_value, visible_row_values};
 use crate::frame::{
     self, CellSpan, Footer, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RadioSpec, RowHit, RowMap, Style, TWO_PANE_WIDTH,
-    measure_cell_spans, new_hint_footer, new_radio_row, with_switch_hint,
+    measure_cell_spans, new_hint_footer, new_radio_row,
 };
 use crate::layout::{display_width, new_box};
 use crate::theme::{self, BarStyle, Glyphs, new_bar};
@@ -253,10 +253,6 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
             );
             cells = Vec::new();
         }
-        // Only the cursor row: a hint on every row would crowd the page.
-        if state.row == i {
-            line = with_switch_hint(line, &g, inner);
-        }
         hits.push((i, row.name.as_str(), body.len(), cells));
         body.push(line);
         if row.name == RowName::Account
@@ -315,8 +311,8 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
 pub fn launch_footer(g: &Glyphs, width: usize, color: bool) -> Footer {
     new_hint_footer(
         &[
-            Hint::plain("w/s", "row"),
-            Hint::plain("a/d", "value"),
+            Hint::plain("w/s", "row").kept(),
+            Hint::plain(frame::switch_keys(g), "switch").kept(),
             Hint::key("enter", "next", "Enter"),
             Hint::ch("u", "maintenance", 'u'),
             Hint::key("esc", "quit", "Escape"),

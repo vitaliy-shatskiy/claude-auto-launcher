@@ -1,5 +1,6 @@
 use super::*;
 use crate::frame::{CellSpan, FooterSpan, ListMap};
+use crate::input::MouseEvent;
 use crate::ui::{Activation, PreviewTerm};
 
 /// A list of `n` rows; Enter and an activation return the index.

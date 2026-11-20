@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use super::{Hit, Term, UiStop};
 use crate::frame::{Area, Frame, RowMap};
-use crate::input::{Event, KeyPress, MouseEvent, is_hotkey, vk};
+use crate::input::{Event, KeyPress, is_hotkey, vk};
 use crate::timing::{SpanId, Timings, view};
 
 mod mouse;
@@ -246,7 +246,6 @@ fn run_loop<S: Screen>(
         ..Guards::default()
     };
     let mut size = term.size();
-    let mut left = 0;
     // A new screen never trusts what the terminal shows: its first paint writes every line.
     term.invalidate();
     let mut deferred = 0;
@@ -263,10 +262,9 @@ fn run_loop<S: Screen>(
             deferred = 0;
             size = term.size();
             let area = Area::of(size);
-            left = i32::try_from(area.left).unwrap_or(0);
             let build = tm.begin(&[&format!("{}.frame.build", screen.name())]);
             let f = screen.draw(view::body_size(tm, area.size()));
-            let lines = area.place(view::with_footer(tm, f.lines, screen.name(), area.size()));
+            let lines = view::with_footer(tm, f.lines, screen.name(), area.size());
             tm.end(build);
             let write = tm.begin(&[&format!("{}.frame.write", screen.name())]);
             term.paint(&lines);
@@ -322,8 +320,7 @@ fn run_loop<S: Screen>(
                 }
                 k
             }
-            // The row map counts from the area's first column.
-            Event::Mouse(m) => match mouse(screen, term, &MouseEvent { x: m.x - left, ..m }, map.as_ref(), &mut g) {
+            Event::Mouse(m) => match mouse(screen, term, &m, map.as_ref(), &mut g) {
                 MouseStep::Redraw(d) => {
                     // A frame an earlier event deferred stays due.
                     need_draw |= d;

@@ -14,7 +14,7 @@ use crate::frame::{
 };
 use crate::launch::{LAUNCH_MODES, launch_mode, step_option};
 use crate::layout::{display_width, limit_line, limit_path, new_box, viewport};
-use crate::list::{ListRow, add_picker_color, new_list_row};
+use crate::list::{Columns, ListRow, add_picker_color, new_list_row};
 use crate::theme::{self, Glyphs, glyphs};
 
 mod marks;
@@ -157,7 +157,7 @@ fn footer_hints(v: &ProjectView<'_>) -> Vec<Hint> {
     }
     let mut h = vec![
         Hint::plain("w/s", "move").kept(),
-        Hint::plain("a/d", "action").kept(),
+        Hint::plain(frame::switch_keys(&glyphs(v.style.ascii)), "action").kept(),
         Hint::key("enter", "run", "Enter"),
     ];
     h.extend(
@@ -194,29 +194,51 @@ fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
     t
 }
 
-/// One list row's text: project, cwd, or the free-path row.
-fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &ProjectView<'_>, g: &Glyphs) -> String {
+/// A project or cwd row's label: the name with its pin, worktree and hidden or missing marks.
+fn label_text(r: &Row, v: &ProjectView<'_>, g: &Glyphs) -> String {
+    let key = project_key(&r.path);
+    let project = r.kind == RowKind::Project;
+    let n = if project && v.marked.contains(&key) {
+        format!("{} (hidden)", r.name)
+    } else if project && v.dimmed.contains(&key) {
+        format!("{} (missing)", r.name)
+    } else {
+        r.name.clone()
+    };
+    let n = if r.worktree { format!("{} {n}", g.worktree) } else { n };
+    if project && v.pinned.contains(&key) {
+        format!("{} {n}", g.up)
+    } else {
+        n
+    }
+}
+
+fn age_text(r: &Row, v: &ProjectView<'_>) -> String {
+    r.last_activity_ms.map(|t| relative_age(t, v.now_ms)).unwrap_or_default()
+}
+
+/// The compact columns of the visible rows: the longest name (at most 40 % of the inner width),
+/// the longest path cut to what is left of `inner`, the widest age.
+fn list_columns(rows: &[Row], inner: usize, v: &ProjectView<'_>, g: &Glyphs) -> Columns {
+    let listed = || rows.iter().filter(|r| r.kind != RowKind::Path);
+    let widest = |w: &dyn Fn(&Row) -> usize| listed().map(w).max().unwrap_or(0);
+    let label = widest(&|r| display_width(&theme::strip_ctl(&label_text(r, v, g)))).min(inner * 2 / 5);
+    let age = widest(&|r| display_width(&age_text(r, v)));
+    let room = inner.saturating_sub(3 + label + 2 + if age > 0 { 1 + age } else { 0 });
+    let tail = widest(&|r| display_width(&theme::strip_ctl(&r.path))).min(room);
+    Columns { label, tail, age }
+}
+
+/// One list row's text: project, cwd, or the free-path row. `cols`: the wide frame's columns.
+fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, cols: Option<Columns>, v: &ProjectView<'_>, g: &Glyphs) -> String {
     let ascii = v.style.ascii;
     let key = project_key(&r.path);
-    let marked = r.kind == RowKind::Project && v.marked.contains(&key);
     let missing = r.kind == RowKind::Project && v.dimmed.contains(&key);
     let pinned = r.kind == RowKind::Project && v.pinned.contains(&key);
-    let named = |n: &str| {
-        let n = if marked {
-            format!("{n} (hidden)")
-        } else if missing {
-            format!("{n} (missing)")
-        } else {
-            n.to_owned()
-        };
-        let n = if r.worktree { format!("{} {n}", g.worktree) } else { n };
-        if pinned { format!("{} {n}", g.up) } else { n }
-    };
-    let age = r.last_activity_ms.map(|t| relative_age(t, v.now_ms)).unwrap_or_default();
+    let age = age_text(r, v);
     match r.kind {
         RowKind::Project | RowKind::Cwd => {
-            let label = named(&r.name);
-            let tail = if wide { r.path.as_str() } else { "" };
+            let label = label_text(r, v, g);
             let base = ListRow {
                 mark,
                 label: &label,
@@ -225,20 +247,14 @@ fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &Pr
                 hover: hovered,
                 ..ListRow::default()
             };
-            let row = if r.kind == RowKind::Cwd && age.is_empty() {
+            let row = if cols.is_some() {
                 new_list_row(&ListRow {
-                    tail,
-                    dim_tail: true,
-                    path_tail: true,
-                    ..base
-                })
-            } else if wide {
-                new_list_row(&ListRow {
-                    tail,
+                    tail: &r.path,
                     age: &age,
                     dim_tail: true,
                     dim_age: true,
                     path_tail: true,
+                    columns: cols,
                     ..base
                 })
             } else {
@@ -280,7 +296,7 @@ struct Window {
     start: usize,
     visible: usize,
     inner: usize,
-    wide: bool,
+    cols: Option<Columns>,
 }
 
 /// The visible rows and the body line of each. Two separator rules, mirrored by
@@ -302,7 +318,7 @@ fn list_body(rows: &[Row], w: &Window, v: &ProjectView<'_>, g: &Glyphs) -> (Vec<
             "   ".to_owned()
         };
         row_ys.push(body.len());
-        body.push(row_text(r, &mark, hover_row == Some(i), w.inner, w.wide, v, g));
+        body.push(row_text(r, &mark, hover_row == Some(i), w.inner, w.cols, v, g));
         if r.kind == RowKind::Cwd && i + 1 < end && rows.get(i + 1).is_some_and(|n| n.kind != RowKind::Path) {
             body.push(String::new());
         }
@@ -334,12 +350,13 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let list_lines = body_rows + 2;
     let (start, visible) = project_viewport(&rows, index, list_lines);
     let inner = fw.saturating_sub(2);
+    let shown = rows.get(start..start + visible).unwrap_or_default();
     let w = Window {
         index,
         start,
         visible,
         inner,
-        wide,
+        cols: wide.then(|| list_columns(shown, inner, v, &g)),
     };
     let (mut body, row_ys) = list_body(&rows, &w, v, &g);
     while body.len() < list_lines {
@@ -362,7 +379,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
 
     let radio = action_radio(v.action, v.hover_value, inner, &g);
     let action_index = body.len();
-    body.push(frame::with_switch_hint(radio.text.clone(), &g, inner));
+    body.push(radio.text.clone());
 
     let lines = new_box(&body, fw, &title(v, &g), &g, v.style.ascii);
     let first_row_y = lines.len() - body.len() - 1;

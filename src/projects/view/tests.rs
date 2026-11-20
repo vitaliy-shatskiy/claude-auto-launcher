@@ -84,6 +84,44 @@ fn plain(f: &Frame) -> Vec<String> {
     f.lines.iter().map(|l| theme::remove_ansi_color(l)).collect()
 }
 
+/// The cell column `needle` starts at in `line`.
+fn col(line: &str, needle: &str) -> usize {
+    display_width(line.split_once(needle).unwrap().0)
+}
+
+#[test]
+fn wide_rows_keep_name_path_and_age_in_compact_columns() {
+    let ps = golden_projects();
+    let lines = plain(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 200, 60)));
+    let row = |name: &str| lines.iter().find(|l| l.contains(name)).unwrap().clone();
+    let longest = r"C:\Users\sample\Desktop\Projects\gamma.worktrees\feature";
+    let path_col = col(&row("gamma"), longest);
+    assert_eq!(col(&row("alpha"), r"C:\Users"), path_col, "paths share one column");
+    assert_eq!(col(&row("delta"), r"D:\src"), path_col);
+    assert_eq!(col(&row("current directory"), r"C:\Users"), path_col, "the cwd row too");
+    assert_eq!(
+        path_col,
+        4 + display_width("current directory") + 2,
+        "two cells after the longest name"
+    );
+    let age_end = |l: &str, age: &str| col(l, age) + display_width(age);
+    let end = path_col + display_width(longest) + 1 + display_width("4 min");
+    assert_eq!(age_end(&row("alpha"), "4 min"), end, "ages right-aligned after the longest path");
+    assert_eq!(age_end(&row("delta"), "23 d"), end);
+}
+
+#[test]
+fn a_long_name_is_capped_at_forty_percent_and_the_path_cut_to_fit() {
+    let mut ps = golden_projects();
+    ps[0].name = "n".repeat(150);
+    let lines = plain(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 120, 30)));
+    let alpha = lines.iter().find(|l| l.contains("nnn")).unwrap();
+    let inner = 120 - 1 - 2;
+    assert_eq!(col(alpha, "C:"), 4 + inner * 2 / 5 + 2, "{alpha}");
+    assert!(alpha.contains('\u{2026}'), "the name ends in an ellipsis: {alpha}");
+    assert!(lines.iter().all(|l| display_width(l) <= 119));
+}
+
 #[test]
 fn golden_project_100x30() {
     let ps = golden_projects();
@@ -115,22 +153,24 @@ fn golden_project_200x60_fills_the_terminal() {
 }
 
 #[test]
-fn golden_project_400x150_draws_a_centred_240x80_page() {
+fn golden_project_400x150_fills_the_terminal_from_the_top_left() {
     let ps = golden_projects();
     let area = frame::Area::of((400, 150));
-    let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", area.width, area.height));
-    let lines = area.place(f.lines);
+    let lines = project_frame(&view(&ps, 1, r"C:\Users\sample\here", area.width, area.height)).lines;
     assert_golden("project-400x150", &lines.join("\n"));
-    assert_eq!(lines.len(), 79);
-    assert!(lines.iter().all(|l| l.starts_with(&" ".repeat(80)) && display_width(l) <= 80 + 239));
+    assert_eq!(lines.len(), 149);
+    assert!(lines[0].starts_with('\u{256D}'), "the box starts at column 0: {}", lines[0]);
+    assert_eq!(display_width(&lines[0]), 399);
 }
 
 #[test]
-fn the_action_row_shows_its_switch_keys() {
+fn the_footer_names_the_action_switch_keys_and_the_action_row_does_not() {
     let ps = golden_projects();
     let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", 100, 30));
     let y = usize::try_from(f.map.action.as_ref().unwrap().y).unwrap();
-    assert!(f.lines[y].contains("\u{2039} a/d \u{2190}/\u{2192} \u{203A}"), "{}", f.lines[y]);
+    assert!(!f.lines[y].contains("a/d"), "{}", f.lines[y]);
+    let fy = usize::try_from(f.map.footer_y.unwrap()).unwrap();
+    assert!(f.lines[fy].contains("a/d \u{2190}/\u{2192} action"), "{}", f.lines[fy]);
 }
 
 fn many(n: usize, prefix: &str) -> Vec<Project> {
@@ -288,7 +328,7 @@ fn action_field_radio_cells_and_compact_form() {
     assert_eq!(step_project_action("not-an-action", 0), "new");
     let f80 = project_frame(&view(&ps, 0, r"C:\cwd", 80, 24));
     assert!(
-        text(&f80).contains("a/d action") && text(&f80).contains("[esc] back"),
+        text(&f80).contains("a/d \u{2190}/\u{2192} action") && text(&f80).contains("[esc] back"),
         "a footer too wide keeps its buttons and the kept hints"
     );
     assert_eq!(f80.map.footer_lines, 3, "0.9.0: the p button wraps the footer to a third line");
@@ -304,7 +344,7 @@ fn the_move_and_action_hints_survive_78_to_120_columns() {
         let footer = f.lines[fy..].join("\n");
         for hint in [
             "w/s move",
-            "a/d action",
+            "a/d \u{2190}/\u{2192} action",
             "[enter] run",
             "[c] continue",
             "[/] filter",

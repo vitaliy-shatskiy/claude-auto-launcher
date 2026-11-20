@@ -28,6 +28,59 @@ pub struct ListRow<'a> {
     pub hover: bool,
     /// One cell of right gutter even with an age (the narrow project rows).
     pub age_gutter: bool,
+    /// Compact columns shared by every row of a list, instead of the tail flushed right.
+    pub columns: Option<Columns>,
+}
+
+/// Cell widths of a compact list: the label padded to `label`, two spaces, the tail padded to
+/// `tail`, a space, the age right-aligned in `age`. A wide frame keeps its rows short this way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Columns {
+    pub label: usize,
+    pub tail: usize,
+    pub age: usize,
+}
+
+fn dim(text: &str, on: bool) -> String {
+    if on && !text.is_empty() {
+        format!("{}{text}{}", theme::DIM_OPEN, theme::DIM_CLOSE)
+    } else {
+        text.to_owned()
+    }
+}
+
+/// A row in compact columns, padded to `width` only under a hover band.
+fn column_row(r: &ListRow<'_>, c: Columns, mark: &str) -> String {
+    let label = limit_line(&theme::strip_ctl(r.label), c.label, r.ascii);
+    let tail_in = theme::strip_ctl(r.tail);
+    // Below 9 cells a path says nothing: dropped, as in the flushed layout.
+    let tail = if tail_in.is_empty() || c.tail <= 8 {
+        String::new()
+    } else if r.path_tail {
+        limit_path(&tail_in, c.tail, r.ascii)
+    } else {
+        limit_line(&tail_in, c.tail, r.ascii)
+    };
+    let age = theme::strip_ctl(r.age);
+    let pad = |n: usize| " ".repeat(n);
+    let mut row = format!("{mark}{label}");
+    let mut used = display_width(mark) + display_width(&label);
+    if !tail.is_empty() || !age.is_empty() {
+        row.push_str(&pad(c.label.saturating_sub(display_width(&label)) + 2));
+        row.push_str(&dim(&tail, r.dim_tail));
+        used += c.label.saturating_sub(display_width(&label)) + 2 + display_width(&tail);
+    }
+    if !age.is_empty() {
+        let gap = c.tail.saturating_sub(display_width(&tail)) + 1 + c.age.saturating_sub(display_width(&age));
+        row.push_str(&pad(gap));
+        row.push_str(&dim(&age, r.dim_age));
+        used += gap + display_width(&age);
+    }
+    if r.hover {
+        theme::add_hover_span(&format!("{row}{}", pad(r.width.saturating_sub(used))))
+    } else {
+        row
+    }
 }
 
 /// Mark + label + pad + tail + age in exactly `width` cells. The label is clamped
@@ -35,11 +88,14 @@ pub struct ListRow<'a> {
 /// arithmetic, so a marked row lays out like an unmarked one.
 pub fn new_list_row(r: &ListRow<'_>) -> String {
     let mark = if r.mark.is_empty() { "   " } else { r.mark };
+    if let Some(c) = r.columns {
+        return column_row(r, c, mark);
+    }
     let label_in = theme::strip_ctl(r.label);
     let tail_in = theme::strip_ctl(r.tail);
     let age = theme::strip_ctl(r.age);
     let age_w = display_width(&age);
-    let mut age_col = if age.is_empty() {
+    let age_col = if age.is_empty() {
         String::new()
     } else if r.trailing_space {
         format!("{age} ")
@@ -53,7 +109,7 @@ pub fn new_list_row(r: &ListRow<'_>) -> String {
     let label = limit_line(&label_in, label_max, r.ascii);
     let label_w = display_width(&label);
     let room = r.width.saturating_sub(mark_w + label_w + age_col_w + 3 + extra);
-    let mut tail = if tail_in.is_empty() || room <= 8 {
+    let tail = if tail_in.is_empty() || room <= 8 {
         String::new()
     } else if r.path_tail {
         limit_path(&tail_in, room, r.ascii)
@@ -65,13 +121,12 @@ pub fn new_list_row(r: &ListRow<'_>) -> String {
         .width
         .saturating_sub(mark_w + label_w + display_width(&tail) + age_col_w + gutter)
         .max(1);
-    if r.dim_tail && !tail.is_empty() {
-        tail = format!("{}{tail}{}", theme::DIM_OPEN, theme::DIM_CLOSE);
-    }
-    if r.dim_age && !age_col.is_empty() {
-        age_col = format!("{}{age_col}{}", theme::DIM_OPEN, theme::DIM_CLOSE);
-    }
-    let row = format!("{mark}{label}{}{tail}{age_col}", " ".repeat(pad));
+    let row = format!(
+        "{mark}{label}{}{}{}",
+        " ".repeat(pad),
+        dim(&tail, r.dim_tail),
+        dim(&age_col, r.dim_age)
+    );
     if r.hover {
         theme::add_hover_span(&format!("{row}{}", " ".repeat(gutter)))
     } else {

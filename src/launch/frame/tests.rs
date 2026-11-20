@@ -384,7 +384,13 @@ fn footer_names_no_row_editing_keys() {
     let r = four();
     let s = r.new_state();
     let limits = golden_limits();
-    let base = ["w/s row", "a/d value", "[enter] next", "[u] maintenance", "[esc] quit"];
+    let base = [
+        "w/s row",
+        "a/d \u{2190}/\u{2192} switch",
+        "[enter] next",
+        "[u] maintenance",
+        "[esc] quit",
+    ];
     for width in [100, 120] {
         let f = frame_at(&r, &s, &limits, width);
         let rule = f.lines.iter().rposition(|l| l.contains('─')).unwrap();
