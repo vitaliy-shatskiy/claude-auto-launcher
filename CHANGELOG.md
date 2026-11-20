@@ -12,6 +12,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   pinned folder that no longer exists stays in the config and is listed dimmed, marked `(missing)`.
   The footer's `p` button takes a third footer line at 78-80 columns.
 
+### Changed
+
+- A launch screen narrower than 100 columns collapses only the rows that do not fit to
+  `‹ value ›`; the rows that fit stay radio lists you can read and click (before, one row too wide
+  collapsed them all).
+
 ## [0.8.2] — 2026-11-11
 
 ### Fixed

@@ -198,8 +198,8 @@ fn narrow_tier_draws_compact_rows_and_one_limit_line() {
         f.lines
     );
     assert!(
-        f.lines.iter().any(|l| l == "   advisor      < default >"),
-        "and every other value row with them: {:#?}",
+        f.lines.iter().any(|l| l == "   mode         * [normal] - safe"),
+        "a row that fits stays a radio list: {:#?}",
         f.lines
     );
     assert!(f.lines.len() < MIN_HEIGHT, "the narrow worst case stays under the minimum height");
@@ -237,27 +237,54 @@ fn value_column(f: &Frame, r: &Roster, name: &str) -> usize {
     at + chars.iter().skip(at).take_while(|c| **c == ' ' || **c == '*').count()
 }
 
+/// The value row named `name`, as drawn.
+fn row_line<'f>(f: &'f Frame, name: &str) -> &'f str {
+    let hit = f.map.rows.iter().find(|h| h.name == name).unwrap();
+    &f.lines[usize::try_from(hit.y).unwrap()]
+}
+
 #[test]
-fn narrow_value_rows_collapse_all_or_none() {
+fn a_narrow_terminal_collapses_only_the_rows_that_do_not_fit() {
     let r = four();
     let limits = golden_limits();
     let s = r.new_state();
-    for width in [50, 58, 60, 70, 80, 90, 99] {
+    for width in [50, 58, 60, 70, 78, 80, 90, 99] {
         let f = frame_at(&r, &s, &limits, width);
-        let rows: Vec<&String> = f
-            .map
-            .rows
-            .iter()
-            .filter(|h| h.name != "Account")
-            .map(|h| &f.lines[usize::try_from(h.y).unwrap()])
-            .collect();
-        let collapsed = rows.iter().filter(|l| l.contains('‹')).count();
-        assert!(collapsed == 0 || collapsed == rows.len(), "{width}: {:#?}", f.lines);
-        if collapsed == 0 {
-            assert!(rows.iter().all(|l| l.contains('●')), "{width}: radio lists: {:#?}", f.lines);
+        for hit in f.map.rows.iter().filter(|h| h.name != "Account") {
+            let line = &f.lines[usize::try_from(hit.y).unwrap()];
+            assert!(
+                line.contains('‹') != line.contains('●'),
+                "{width}: collapsed or a radio list: {line}"
+            );
         }
         assert!(f.lines.iter().all(|l| display_width(l) < width), "{width}: {:#?}", f.lines);
     }
+    // Given 78 columns: effort's seven values do not fit, mode's two do.
+    let f = frame_at(&r, &s, &limits, 78);
+    assert!(row_line(&f, "Effort").contains('‹'), "{:#?}", f.lines);
+    assert!(row_line(&f, "Mode").contains("● [normal] ○ safe"), "{:#?}", f.lines);
+}
+
+#[test]
+fn narrow_and_wide_frames_match_their_goldens() {
+    let plain = four();
+    let mut action = four();
+    action.add_action_row();
+    let s = plain.new_state();
+    let none = Limits::new();
+    for (name, r, width) in [
+        ("launch-78x30", &plain, 78),
+        ("launch-78x30-action", &action, 78),
+        ("launch-100x30-action", &action, 100),
+    ] {
+        let lines = frame_at(r, &r.new_state(), &none, width).lines;
+        assert_golden(name, &lines.join("\n"));
+    }
+    assert_eq!(
+        frame_at(&plain, &s, &none, 100).lines.join("\n"),
+        golden("launch-100x30"),
+        "100 columns: nothing collapses"
+    );
 }
 
 #[test]
