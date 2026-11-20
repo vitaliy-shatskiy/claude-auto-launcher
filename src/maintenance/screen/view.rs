@@ -232,7 +232,10 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
     let list = action_rows(p, &g, style.color);
     let inner = fw.saturating_sub(2);
     let body = if width >= TWO_PANE_WIDTH {
-        let left_w = (list.iter().map(|l| display_width(l)).max().unwrap_or(0) + 2).min(inner * 3 / 5);
+        // Wide enough for any row's hint, so the divider never moves with the selection.
+        let name_w = p.entries.iter().map(|e| display_width(&e.name)).max().unwrap_or(0);
+        let hint_w = p.entries.iter().map(|e| display_width(&e.about)).max().unwrap_or(0);
+        let left_w = (7 + name_w + 2 + hint_w + 2).min(inner * 3 / 5);
         let right_w = inner.saturating_sub(left_w + 1);
         let facts: Vec<String> = panel(p, &g, right_w.saturating_sub(2), room)
             .iter()

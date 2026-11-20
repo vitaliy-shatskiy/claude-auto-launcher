@@ -34,6 +34,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Changed
 
+- One page shell for every screen: a frame from the top row to the footer, the title on its top
+  border (`─ <screen> ─ <facts> ─`), the text three cells in, the key footer under it. The launch
+  screen joins it: its header box and the rule above the footer are gone.
+- Launch screen: the limits are percentages on the top border's right end
+  (`5h 4% · 7d 96% · fable 24% · 5 h ago`), no bar glyphs; the account row is one line. A narrow
+  terminal drops the limits before the frame. The `* restored (…), ctrl+r resets` line is gone:
+  the `*` marks stay and the footer names `ctrl+r reset` when a row was restored.
+- Config and plugin warnings no longer print before the screens: maintenance lists them with
+  where to fix them, and the launch footer badges `u maintenance ⚠ N` in yellow. A start without
+  screens still prints them.
+- Maintenance redesigned: a list of actions (`w`/`s` select, `enter` or the key runs) with short
+  names (`update anyway (rename)`, `delete old builds`, `MCP servers`) and a hint on the selected
+  row only, beside a facts grid (Claude Code version and whether it is the newest, builds on disk,
+  claude-auto and its self-update, warnings, the last action). Hashes are no longer shown. A long
+  action shows a live step line (what the command last printed and the seconds so far), then
+  `done` or `failed: <reason>`. `m` MCP servers ends with `N of M connected` and the server lines.
 - Every screen fills the whole terminal from its top-left corner at any size (0.9.0 centred a
   240x80 page on a larger terminal); clicks count from column 0. A size report of 0 or over
   10000 cells on a side is taken as 80x25 on that side.
@@ -48,6 +64,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Fixed
 
+- Maintenance `m` (and `d`, `u`, the custom actions) no longer hang after the command finished:
+  the output was read to the pipe's end, and an MCP server `claude mcp list` started inherited the
+  pipe and held it open after `claude` exited. The read now ends a second after the exit.
 - The session picker opened late (seconds on a cold disk) after every update: it now shows its
   rows at once, titled by their first prompt, and fills in titles and message counts as a
   background scan finishes them; an update no longer discards the session summary cache.
