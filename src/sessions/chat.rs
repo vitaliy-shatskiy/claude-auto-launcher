@@ -82,16 +82,7 @@ pub fn read_chat(r: &mut (impl Read + Seek), len: u64, want: usize, cap: u64) ->
             take_message(line, &mut newest_first);
         }
     }
-    let n = newest_first.len();
-    let messages = newest_first
-        .into_iter()
-        .enumerate()
-        .rev()
-        .map(|(i, (mut m, _))| {
-            m.text = bounded(&m.text, i == 0 && n > 0);
-            m
-        })
-        .collect();
+    let messages = newest_first.into_iter().rev().map(|(m, _)| m).collect();
     ChatLoad {
         messages,
         bytes_read: read,
@@ -99,7 +90,8 @@ pub fn read_chat(r: &mut (impl Read + Seek), len: u64, want: usize, cap: u64) ->
 }
 
 /// The text kept for the pane: its head, or its tail for the newest message (shown from its end).
-fn bounded(text: &str, newest: bool) -> String {
+/// Cut BEFORE the markdown pass: `plain` costs more than linear time on a long reply.
+pub(crate) fn bounded(text: &str, newest: bool) -> String {
     let count = text.chars().count();
     if count <= MAX_CHARS {
         return text.to_owned();
@@ -139,17 +131,18 @@ fn take_message(line: &[u8], out: &mut Vec<(ChatMessage, Option<String>)>) {
         }
         Kind::CustomTitle | Kind::AiTitle | Kind::LastPrompt => return,
     };
-    let text = plain(&clean_text(&collapse_fences(&raw)));
+    let text = plain(&bounded(&clean_text(&collapse_fences(&raw)), out.is_empty()));
     if text.is_empty() {
         return;
     }
+    let newest = out.len() == 1;
     if let Some((newer, newer_id)) = out.last_mut()
         && speaker == Speaker::Assistant
         && newer.speaker == Speaker::Assistant
         && id.is_some()
         && *newer_id == id
     {
-        newer.text = format!("{text} {}", newer.text);
+        newer.text = bounded(&format!("{text} {}", newer.text), newest);
         return;
     }
     let at_ms = field(&rec, "timestamp").and_then(|t| iso_ms(&ps_str(t)));

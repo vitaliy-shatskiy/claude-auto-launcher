@@ -3,8 +3,8 @@
 
 use serde_json::{Map, Value, json};
 
-use super::chat::ChatMessage;
 use super::chat::pane::{ChatKey, ChatPane, ChatState};
+use super::chat::{ChatMessage, bounded};
 use super::frame::{ChatView, Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
 use super::listing::Session;
 use crate::frame::{Frame, Style};
@@ -171,11 +171,13 @@ impl<'a> PickerScreen<'a> {
         let at = self.items.get(i).copied();
         at.and_then(|at| self.bucket().sessions.get(at))
             .map(|s| {
+                let newest = s.recent.len().saturating_sub(1);
                 s.recent
                     .iter()
-                    .map(|m| ChatMessage {
+                    .enumerate()
+                    .map(|(i, m)| ChatMessage {
                         speaker: m.speaker,
-                        text: super::frame::plain::plain(&m.text),
+                        text: super::frame::plain::plain(&bounded(&m.text, i == newest)),
                         at_ms: None,
                     })
                     .collect()
