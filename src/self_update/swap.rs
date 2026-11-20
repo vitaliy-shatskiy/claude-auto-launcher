@@ -57,7 +57,7 @@ fn remove_quietly(path: &Path) {
     }
 }
 
-/// Downloads the release exe beside `exe` as `.new` and checks it against the published SHA-256:
+/// Downloads the release exe beside `exe` as `.<pid>-<id>.new` and checks it against the published SHA-256:
 /// the verified file, or why not. A file that fails the check is deleted; `exe` is never touched.
 pub(crate) fn download(exe: &Path, release: &Release, net: &dyn Net) -> Result<PathBuf, String> {
     if let Some(r) = refusal(exe) {
@@ -70,7 +70,9 @@ pub(crate) fn download(exe: &Path, release: &Release, net: &dyn Net) -> Result<P
     let body = net
         .get(&release.exe_url, MAX_EXE)
         .map_err(|e| format!("the download failed: {e}"))?;
-    let new = sibling(exe, ".new");
+    // A name of its own per download: another launcher process never writes into the file this one
+    // hashed and then moves in.
+    let new = sibling(exe, &format!(".{}-{}.new", std::process::id(), crate::log::new_run_id()));
     std::fs::write(&new, &body).map_err(|e| format!("cannot write into {}: {e}", exe.parent().unwrap_or(exe).display()))?;
     // A file this process wrote carries no mark of the web; one left by another tool would make
     // SmartScreen ask on the next start.

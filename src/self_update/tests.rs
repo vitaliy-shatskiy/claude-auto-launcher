@@ -109,7 +109,17 @@ pub(in crate::self_update) fn local(dir: &Path, mode: Mode) -> Local {
         repo: Repo::default(),
         exe,
         state: dir.join(STATE_FILE),
+        busy: Arc::default(),
     }
+}
+
+/// The download files left in dir.
+pub(in crate::self_update) fn downloads(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| Path::new(n).extension().is_some_and(|e| e.eq_ignore_ascii_case("new")))
+        .collect()
 }
 
 fn full_stub(dir: &Path) -> Stub {
@@ -174,7 +184,7 @@ fn a_quitting_launcher_never_starts_the_swap() {
     let n = run(&l, NOW, &full_stub(&t.0), &RealFiles, &Mutex::new(true));
     assert!(matches!(n, Some(Notice::Failed(..))), "{n:?}");
     assert_eq!(std::fs::read(&l.exe).unwrap(), b"current build");
-    assert!(!swap::sibling(&l.exe, ".new").exists(), "the download is cleaned up");
+    assert_eq!(downloads(&t.0), Vec::<String>::new(), "the download is cleaned up");
 }
 
 #[test]
@@ -217,4 +227,32 @@ fn config_values_parse_strictly() {
     for bad in ["me", "me/", "/x", "a/b/c", "../x", "me/..", "me/x?y", "https://github.com/me/x"] {
         assert_eq!(Repo::parse(bad), None, "{bad}");
     }
+}
+
+#[test]
+fn a_second_update_or_roll_back_in_the_same_process_is_refused() {
+    let t = tmp("busy");
+    let l = local(&t.0, Mode::Notify);
+    let stub = full_stub(&t.0);
+    assert!(run(&l, NOW, &stub, &RealFiles, &Mutex::new(false)).is_some());
+    std::fs::write(swap::sibling(&l.exe, ".old"), b"previous build").unwrap();
+    let other = l.clone();
+    let held = Busy::take(&l.busy).unwrap();
+    let calls = stub.calls().len();
+    assert_eq!(
+        other.act_with(UPDATE_KEY, &stub, &RealFiles).as_deref(),
+        Some("claude-auto update failed: an update is already running")
+    );
+    assert_eq!(
+        other.act_with(ROLLBACK_KEY, &stub, &RealFiles).as_deref(),
+        Some("roll back failed: an update is already running")
+    );
+    assert_eq!(stub.calls().len(), calls, "refused before any download");
+    assert_eq!(std::fs::read(&l.exe).unwrap(), b"current build");
+    drop(held);
+    assert_eq!(
+        other.act_with(UPDATE_KEY, &stub, &RealFiles).as_deref(),
+        Some("updated to 99.0.0 - takes effect next start"),
+        "the slot is free again once the first one ends"
+    );
 }

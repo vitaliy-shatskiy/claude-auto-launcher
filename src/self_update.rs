@@ -7,6 +7,7 @@ mod check;
 mod swap;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::background::Background;
@@ -100,6 +101,9 @@ pub struct Local {
     pub(crate) repo: Repo,
     pub(crate) exe: PathBuf,
     pub(crate) state: PathBuf,
+    /// Set while an update or a roll back runs; shared by every clone, so the background update
+    /// and the maintenance keys of one process never swap at the same time.
+    pub(crate) busy: Arc<AtomicBool>,
 }
 
 impl Local {
@@ -113,6 +117,7 @@ impl Local {
             repo: repo.clone(),
             exe: exe.unwrap_or_default(),
             state: home.join(".claude").join(STATE_FILE),
+            busy: Arc::default(),
         }
     }
 
@@ -154,25 +159,55 @@ impl Local {
                     Err(e) => format!("claude-auto update failed: {e}"),
                 })
             }
-            ROLLBACK_KEY => Some(match swap::roll_back(&self.exe, files) {
-                Ok(()) => {
-                    let mut s = State::read(&self.state);
-                    let was = s.installed.or_else(Version::current);
-                    s.installed = s.previous;
-                    s.previous = was;
-                    s.write(&self.state);
-                    "rolled back - takes effect next start".to_owned()
-                }
-                Err(e) => format!("roll back failed: {e}"),
-            }),
+            ROLLBACK_KEY => Some(
+                match Busy::take(&self.busy)
+                    .ok_or_else(|| ALREADY_RUNNING.to_owned())
+                    .and_then(|_busy| swap::roll_back(&self.exe, files))
+                {
+                    Ok(()) => {
+                        let mut s = State::read(&self.state);
+                        let was = s.installed.or_else(Version::current);
+                        s.installed = s.previous;
+                        s.previous = was;
+                        s.write(&self.state);
+                        "rolled back - takes effect next start".to_owned()
+                    }
+                    Err(e) => format!("roll back failed: {e}"),
+                },
+            ),
             _ => None,
         }
+    }
+}
+
+const ALREADY_RUNNING: &str = "an update is already running";
+
+/// The one update or roll back of this process in flight; dropping it frees the slot.
+struct Busy<'a>(&'a AtomicBool);
+
+impl<'a> Busy<'a> {
+    /// None when another update or roll back holds the slot.
+    fn take(flag: &'a AtomicBool) -> Option<Self> {
+        // Never `then_some(Self(flag))`: the value built for a refusal is dropped, and its drop would
+        // free the slot the other caller holds.
+        if flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            Some(Self(flag))
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 
 /// Download, verify and swap, then record what the exe and `.old` now hold. `closed` set = the
 /// launcher is quitting: the swap does not start, so an exit never cuts it in half.
 fn update(local: &Local, release: &Release, net: &dyn Net, files: &dyn Files, closed: &Mutex<bool>) -> Result<(), String> {
+    let _busy = Busy::take(&local.busy).ok_or(ALREADY_RUNNING)?;
     let new = swap::download(&local.exe, release, net)?;
     let quitting = closed.lock().unwrap_or_else(PoisonError::into_inner);
     if *quitting {
