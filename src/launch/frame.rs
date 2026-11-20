@@ -222,14 +222,6 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
             &g,
         )
     };
-    // The narrow tier draws every value row one way: all as radio lists when each one fits,
-    // else all collapsed to `< value >`.
-    let collapse_all = !wide
-        && roster
-            .rows
-            .iter()
-            .filter(|r| r.name != RowName::Account)
-            .any(|r| display_width(&radio_of(r, "   ", "").text) > inner);
     let mut body: Vec<String> = Vec::new();
     let mut hits: Vec<(usize, &'static str, usize, Vec<CellSpan>)> = Vec::new();
     for (i, row) in roster.rows.iter().enumerate() {
@@ -246,7 +238,8 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
             let radio = radio_of(row, &prefix, if hovered_here { &state.hover_value } else { "" });
             (radio.text, radio.cells)
         };
-        if (collapse_all && row.name != RowName::Account) || display_width(&line) > inner {
+        // Only a row that does not fit collapses to `< value >`: the others stay readable.
+        if display_width(&line) > inner {
             line = format!(
                 "{prefix}{label_part}{} {} {}",
                 g.l_angle,

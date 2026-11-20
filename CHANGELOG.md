@@ -4,6 +4,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Changed
+
+- A launch screen narrower than 100 columns collapses only the rows that do not fit to
+  `‹ value ›`; the rows that fit stay radio lists you can read and click (before, one row too wide
+  collapsed them all).
+
 ## [0.8.2] — 2026-11-11
 
 ### Fixed
