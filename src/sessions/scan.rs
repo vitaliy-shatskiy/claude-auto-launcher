@@ -1,6 +1,6 @@
 //! One streaming byte scan over a whole transcript: the message count and the title records
-//! (`custom-title` from `/rename`, `ai-title`). Both can sit anywhere in a multi-MB file, so the
-//! head and tail reads cannot find them. The summary cache keeps the scan's state, so a grown
+//! (`custom-title` from `/rename`, `ai-title`) and the `last-prompt` record. They can sit anywhere
+//! in a multi-MB file, so the head and tail reads cannot find them. The summary cache keeps the scan's state, so a grown
 //! transcript is read only past the last scanned line and an unchanged one not at all.
 //! A record is classified from its raw bytes, parsing JSON only for the small title lines.
 
@@ -34,6 +34,9 @@ pub struct ScanState {
     pub custom_title: Option<String>,
     /// The last `ai-title` record (re-emitted every turn; the newest wins).
     pub ai_title: Option<String>,
+    /// The last `last-prompt` record: the newest finished turn's prompt, which a long turn's tool
+    /// lines can push out of the tail read.
+    pub last_prompt: Option<String>,
     /// The message id of the last assistant line, so a message split over the offset counts once.
     pub last_assistant_id: Option<String>,
 }
@@ -61,7 +64,7 @@ fn bytes_re(p: &str) -> Regex {
 // in Claude Code's key order (user: `message`, assistant: `uuid`); a bare match counts only at the
 // start of the line, where the test fixtures and the title records put it.
 static MARK: LazyLock<Regex> =
-    LazyLock::new(|| bytes_re(r#""type":"(?:custom-title|ai-title|user|assistant)"(?:,"message":\{|,"uuid":")?"#));
+    LazyLock::new(|| bytes_re(r#""type":"(?:custom-title|ai-title|last-prompt|user|assistant)"(?:,"message":\{|,"uuid":")?"#));
 static NEWLINE: LazyLock<Regex> = LazyLock::new(|| bytes_re("\n"));
 static SIDECHAIN: LazyLock<Regex> = LazyLock::new(|| bytes_re(r#""isSidechain":\s?true"#));
 static MESSAGE_ID: LazyLock<Regex> = LazyLock::new(|| bytes_re(r#""message":\{(?:"model":"[^"]*",)?"id":"([^"]+)""#));
@@ -76,6 +79,7 @@ enum Kind {
     Assistant,
     CustomTitle,
     AiTitle,
+    LastPrompt,
 }
 
 /// The line's record kind, from the first structural type mark that qualifies.
@@ -90,6 +94,7 @@ fn kind_of(line: &[u8]) -> Option<Kind> {
         let (kind, rest) = [
             (Kind::CustomTitle, b"custom-title\"".as_slice()),
             (Kind::AiTitle, b"ai-title\"".as_slice()),
+            (Kind::LastPrompt, b"last-prompt\"".as_slice()),
             (Kind::User, b"user\"".as_slice()),
             (Kind::Assistant, b"assistant\"".as_slice()),
         ]
@@ -97,7 +102,7 @@ fn kind_of(line: &[u8]) -> Option<Kind> {
         .find_map(|(k, name)| text.strip_prefix(name).map(|rest| (k, rest)))
         .unwrap_or((Kind::Assistant, b"?".as_slice()));
         let ok = match kind {
-            Kind::CustomTitle | Kind::AiTitle => first,
+            Kind::CustomTitle | Kind::AiTitle | Kind::LastPrompt => first,
             Kind::User => first || rest == br#","message":{"#.as_slice(),
             Kind::Assistant => first || rest == br#","uuid":""#.as_slice(),
         };
@@ -126,6 +131,11 @@ fn classify(line: &[u8], st: &mut ScanState) {
         Kind::AiTitle => {
             if let Some(t) = title_of(line, "aiTitle") {
                 st.ai_title = Some(t);
+            }
+        }
+        Kind::LastPrompt => {
+            if let Some(t) = title_of(line, "lastPrompt") {
+                st.last_prompt = Some(t);
             }
         }
         Kind::User | Kind::Assistant if SIDECHAIN.is_match(head) => {}

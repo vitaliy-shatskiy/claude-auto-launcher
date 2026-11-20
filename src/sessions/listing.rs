@@ -145,7 +145,9 @@ fn summarize_from(
     s.first_prompt = clean_text(&first);
     s.title = found.custom_title.or(found.ai_title).unwrap_or_else(|| s.first_prompt.clone());
     s.scan = scanned.resume;
-    s.last_user = clean_text(last_user.as_deref().unwrap_or(""));
+    // A prompt the tail found is the newest; the scan's `last-prompt` covers one that a long
+    // turn's tool lines pushed out of the tail (it lags a turn still running, so it comes second).
+    s.last_user = clean_text(last_user.or(found.last_prompt).as_deref().unwrap_or(""));
     s.last_assistant = clean_text(last_assistant.as_deref().unwrap_or(""));
     s.recent = recent
         .into_iter()

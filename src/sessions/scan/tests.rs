@@ -93,6 +93,65 @@ fn ai(t: &str) -> String {
     format!(r#"{{"type":"ai-title","aiTitle":"{t}","sessionId":"s1"}}"#)
 }
 
+fn last_prompt(t: &str) -> String {
+    format!(r#"{{"type":"last-prompt","lastPrompt":"{t}","leafUuid":"l1","sessionId":"s1"}}"#)
+}
+
+fn prompt(t: &str) -> String {
+    format!(r#"{{"parentUuid":null,"isSidechain":false,"type":"user","message":{{"role":"user","content":"{t}"}},"uuid":"u-{t}"}}"#)
+}
+
+/// A first prompt, the last real prompt, its `last-prompt` record, then 300 tool lines (past the
+/// 120-line tail) and the reply's text.
+fn long_turn(extra_after_tools: &str) -> String {
+    let mut lines = vec![prompt("first ask"), prompt("final ask"), last_prompt("final ask")];
+    for i in 0..300 {
+        lines.push(assistant(&format!("t{i}"), r#"{"type":"tool_use","name":"Read","input":{}}"#));
+        lines.push(TOOL_RESULT.to_owned());
+    }
+    lines.push(assistant("end", r#"{"type":"text","text":"the answer"}"#));
+    if !extra_after_tools.is_empty() {
+        lines.push(extra_after_tools.to_owned());
+    }
+    lines.join("\n") + "\n"
+}
+
+#[test]
+fn a_last_prompt_outside_the_tail_window_is_the_last_prompt() {
+    let (_t, p) = transcript("lastp", &long_turn(""));
+    let s = summarize(&p, None, true, MAX_BYTES).unwrap();
+    assert_eq!(s.first_prompt, "first ask");
+    assert_eq!(s.last_user, "final ask", "not the first prompt the card fell back to");
+    assert_eq!(s.last_assistant, "the answer", "the reply to that prompt");
+}
+
+#[test]
+fn a_prompt_in_the_tail_newer_than_the_last_prompt_record_wins() {
+    // Claude Code writes `last-prompt` after a turn: a prompt still being answered has none yet.
+    let (_t, p) = transcript("lastp-newer", &long_turn(&prompt("newest ask")));
+    assert_eq!(summarize(&p, None, true, MAX_BYTES).unwrap().last_user, "newest ask");
+}
+
+#[test]
+fn a_resumed_scan_picks_up_a_newer_last_prompt() {
+    let head = [USER.to_owned(), last_prompt("older ask")].join("\n") + "\n";
+    let (_t, p) = transcript("lastp-grow", &head);
+    let first = scan_transcript(&p, None);
+    assert_eq!(first.found.last_prompt.as_deref(), Some("older ask"));
+    let tail = [
+        USER.to_owned(),
+        last_prompt("newer ask"),
+        assistant("m9", r#"{"type":"text","text":"x"}"#),
+    ]
+    .join("\n")
+        + "\n";
+    append(&p, &tail);
+    let again = scan_transcript(&p, Some(&first.resume));
+    assert_eq!(again.read_bytes, len(&tail), "only the appended bytes");
+    assert_eq!(again.found.last_prompt.as_deref(), Some("newer ask"));
+    assert_eq!(again.found, scan_transcript(&p, None).found, "a full scan's answer");
+}
+
 #[test]
 fn a_custom_title_in_the_middle_of_a_long_file_beats_the_ai_title() {
     // 2,000 lines of ~1 KB: past the 400-line head and the 120-line tail the summary reads.

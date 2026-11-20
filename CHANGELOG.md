@@ -57,6 +57,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 - With `sharing` off, the session picker lists the other accounts' sessions although the
   launching account has no `projects` folder yet.
+- The preview card's `last ›` showed the first prompt when a long turn's tool lines pushed the
+  last prompt out of the tail read; the transcript scan now keeps Claude Code's `last-prompt`
+  record and the card falls back to it (a prompt found in the tail still wins).
 
 ## [0.8.2] — 2026-11-11
 
