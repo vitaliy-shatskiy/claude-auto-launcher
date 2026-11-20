@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+mod features;
 mod headless;
 mod plugins;
 

@@ -44,26 +44,44 @@ fn four_account_fixture_parses_with_hidden_and_tints() {
     }
 }
 
-/// D6: a module left out of the build warns on its key as unknown and stays off.
+/// D6: a module left out of the build names the missing module on its key and stays off.
 #[test]
 fn a_module_left_out_of_the_build_warns_on_its_key_and_stays_off() {
     let text = r#"{"accounts":[{"key":"a","root":"~/.claude","tint":"Green"},{"key":"b","root":"~/.b","tint":"Cyan"}],
         "mouse":true,"sharing":true,"remote":true,"riderMcp":"on"}"#;
     let cfg = parse_config(text, "x", &ctx());
     let built = [
-        ("mouse", cfg!(feature = "mouse")),
-        ("sharing", cfg!(feature = "sharing")),
-        ("remote", cfg!(feature = "remote")),
-        ("riderMcp", cfg!(feature = "rider-mcp")),
+        (
+            "mouse",
+            cfg!(feature = "mouse"),
+            "this build has no 'mouse' module; 'mouse' is ignored",
+        ),
+        (
+            "sharing",
+            cfg!(feature = "sharing"),
+            "this build has no 'sharing' module; 'sharing' is ignored; shared profile links are not repaired",
+        ),
+        (
+            "remote",
+            cfg!(feature = "remote"),
+            "this build has no 'remote' module; 'remote' is ignored",
+        ),
+        (
+            "riderMcp",
+            cfg!(feature = "rider-mcp"),
+            "this build has no 'rider-mcp' module; 'riderMcp' is ignored",
+        ),
     ];
-    for (key, on) in built {
-        let warned = cfg
-            .warnings
-            .iter()
-            .any(|w| w.starts_with(&format!("unrecognized config key '{key}' is ignored")));
+    for (key, on, line) in built {
+        let warned = cfg.warnings.iter().any(|w| w == line);
         assert_eq!(warned, !on, "{key}: {:?}", cfg.warnings);
     }
-    assert_eq!(cfg.warnings.len(), built.iter().filter(|(_, on)| !on).count(), "{:?}", cfg.warnings);
+    assert_eq!(
+        cfg.warnings.len(),
+        built.iter().filter(|(_, on, _)| !on).count(),
+        "{:?}",
+        cfg.warnings
+    );
     assert_eq!(
         (cfg.mouse, cfg.sharing, cfg.remote, cfg.rider_mcp == RiderMcp::On),
         (built[0].1, built[1].1, built[2].1, built[3].1)

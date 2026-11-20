@@ -319,13 +319,25 @@ impl Job {
             return None;
         }
         let job = Self(Handle(h));
+        job.set_limits(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE).then_some(job)
+    }
+
+    fn set_limits(&self, flags: u32) -> bool {
         // SAFETY: plain data.
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        info.BasicLimitInformation.LimitFlags = flags;
         let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).unwrap_or(0);
         // SAFETY: a valid job handle and a pointer to a live struct of the stated size.
-        let ok = unsafe { SetInformationJobObject((job.0).0, JobObjectExtendedLimitInformation, (&raw const info).cast(), size) };
-        (ok != 0).then_some(job)
+        let ok = unsafe { SetInformationJobObject((self.0).0, JobObjectExtendedLimitInformation, (&raw const info).cast(), size) };
+        ok != 0
+    }
+
+    /// Lets what is still in the job outlive it: the handle closes and kills nothing. If the limit
+    /// cannot be lifted the close kills the tree, as it would have before.
+    pub(crate) fn release(self) {
+        if !self.set_limits(0) {
+            // Kill-on-close stays: the drop below ends what is left.
+        }
     }
 
     /// Puts `process` (a raw process handle the caller keeps open) into the job.

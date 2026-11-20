@@ -1,5 +1,6 @@
 use super::*;
 use crate::types::VersionInfo;
+use std::path::Path;
 
 #[test]
 fn prefixes_are_shortest_unique() {
@@ -25,7 +26,7 @@ fn f12_on_the_held_session_warning_shows_the_timings_then_redraws_it() {
     let keys = crate::ui::parse_preview_keys("F12,Escape,Enter").unwrap();
     let mut t = crate::ui::PreviewTerm::new((80, 24), keys, true).with_logger(logger);
     let style = crate::frame::Style { color: false, ascii: true };
-    assert_eq!(screens::confirm_held(&mut t, Some("held by pid 1"), style), Ok(true));
+    assert_eq!(waits::confirm_held(&mut t, Some("held by pid 1"), style), Ok(true));
     let frames = t.frames.unwrap();
     assert_eq!(frames.len(), 3, "warning, timings, warning again");
     assert!(frames[1].iter().any(|l| l.contains("timings of this run")));
@@ -37,7 +38,7 @@ fn held_frames(timings: Timings) -> Vec<Vec<String>> {
     let keys = crate::ui::parse_preview_keys("Escape").unwrap();
     let mut t = crate::ui::PreviewTerm::new((80, 24), keys, true).with_logger(Logger::silent(timings));
     let style = crate::frame::Style { color: false, ascii: true };
-    assert_eq!(screens::confirm_held(&mut t, Some("held by pid 1"), style), Ok(false));
+    assert_eq!(waits::confirm_held(&mut t, Some("held by pid 1"), style), Ok(false));
     t.frames.unwrap()
 }
 
@@ -53,7 +54,7 @@ fn click_held(label: &str) -> Result<bool, crate::ui::UiStop> {
     use crate::input::{Event, MouseEvent};
     let style = crate::frame::Style { color: false, ascii: true };
     let mut probe = crate::ui::PreviewTerm::new((80, 24), crate::ui::parse_preview_keys("Escape").unwrap(), true);
-    assert_eq!(screens::confirm_held(&mut probe, Some("held by pid 1"), style), Ok(false));
+    assert_eq!(waits::confirm_held(&mut probe, Some("held by pid 1"), style), Ok(false));
     let frame = probe.frames.unwrap().remove(0);
     let (y, line) = frame.iter().enumerate().rev().find(|(_, l)| l.contains(label)).unwrap();
     let x = line.find(label).unwrap();
@@ -65,7 +66,7 @@ fn click_held(label: &str) -> Result<bool, crate::ui::UiStop> {
         ..MouseEvent::default()
     });
     let mut t = ScriptTerm::new((80, 24), [press]);
-    screens::confirm_held(&mut t, Some("held by pid 1"), style)
+    waits::confirm_held(&mut t, Some("held by pid 1"), style)
 }
 
 #[test]
@@ -93,7 +94,7 @@ fn a_click_off_the_held_buttons_does_nothing() {
     );
     let style = crate::frame::Style { color: false, ascii: true };
     assert_eq!(
-        screens::confirm_held(&mut t, Some("held by pid 1"), style),
+        waits::confirm_held(&mut t, Some("held by pid 1"), style),
         Ok(true),
         "only enter ended it"
     );
@@ -194,7 +195,7 @@ fn no_keys() -> crate::ui::PreviewTerm {
 fn opens_after(update: &std::cell::RefCell<crate::maintenance::UpdateWatch>, go: std::sync::mpsc::Sender<()>) -> Option<bool> {
     let release = std::thread::spawn(move || go.send(()).unwrap());
     let mut opened_after_check = None;
-    screens::open_maintenance(update, &quiet_timings(), &mut no_keys(), true, |_| {
+    waits::open_maintenance(update, &quiet_timings(), &mut no_keys(), true, |_| {
         opened_after_check = Some(update.borrow().outcome().is_some());
     });
     release.join().unwrap();
@@ -227,7 +228,7 @@ fn a_cancel_does_not_wait_for_an_update_check_on_the_network() {
     // Given: a check still talking to the network when a cancel ends the UI.
     let (go, mut w) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
     // When: the cancel quits.
-    screens::wait_for_update(false, &mut w, &tm, || {}, || false).unwrap();
+    waits::wait_for_update(false, &mut w, &tm, || {}, || false).unwrap();
     // Then: nothing waited (the check is let go only afterwards).
     assert!(w.outcome().is_none(), "the cancel did not read the check");
     drop(go);
@@ -241,7 +242,7 @@ fn a_launch_waits_for_an_unfinished_update_check() {
     let (go, mut w) = slow_check(VersionInfo::default(), found(VersionInfo::default(), None));
     let release = std::thread::spawn(move || go.send(()).unwrap());
     // When: the launch waits.
-    screens::wait_for_update(true, &mut w, &tm, || {}, || false).unwrap();
+    waits::wait_for_update(true, &mut w, &tm, || {}, || false).unwrap();
     // Then: the check answered before claude would start, and the wait is a span.
     assert!(matches!(w.outcome(), Some(Ok(_))));
     assert!(tm.spans().iter().any(|s| s.name.contains("update")), "{:?}", tm.spans());
@@ -258,8 +259,8 @@ fn escape_leaves_a_stuck_update_wait_and_maintenance_stays_shut() {
     let esc = || crate::ui::PreviewTerm::new((80, 25), crate::ui::parse_preview_keys("Escape").unwrap(), true);
     // When: Escape during the `u` wait, then during the launch wait.
     let mut opened = false;
-    screens::open_maintenance(&update, &quiet_timings(), &mut esc(), false, |_| opened = true);
-    let left = screens::wait_on_screen(true, &mut update.borrow_mut(), &quiet_timings(), &mut esc(), false);
+    waits::open_maintenance(&update, &quiet_timings(), &mut esc(), false, |_| opened = true);
+    let left = waits::wait_on_screen(true, &mut update.borrow_mut(), &quiet_timings(), &mut esc(), false);
     // Then: neither waited for the answer, maintenance never opened, the launch was left.
     assert!(!opened, "maintenance opened mid-update");
     assert_eq!(left, Err(crate::background::Left));

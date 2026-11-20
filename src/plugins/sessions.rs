@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use super::run::Runner;
 use super::{Kind, Plugins, Verb};
 use crate::sessions::listing::Session;
+use crate::sessions::valid_session_id;
+use crate::theme;
 
 pub const VERB: Verb = Verb {
     name: "sessions",
@@ -17,19 +19,10 @@ pub const VERB: Verb = Verb {
 const MAX_ENTRIES: usize = 200;
 const MAX_TITLE: usize = 200;
 
-/// A resume id becomes an argument of `claude`: one leading `-` and it would be read as an option.
-pub fn valid_session_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 128 && !id.starts_with('-') && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
 fn session(plugin: &str, project: &str, v: &Value) -> Option<Session> {
     let id = v.get("id").and_then(Value::as_str).filter(|id| valid_session_id(id))?;
-    let title: String = v
-        .get("title")
-        .and_then(Value::as_str)
-        .unwrap_or(id)
+    let title: String = theme::strip_ctl(v.get("title").and_then(Value::as_str).unwrap_or(id))
         .chars()
-        .filter(|c| !c.is_control())
         .take(MAX_TITLE)
         .collect();
     Some(Session {

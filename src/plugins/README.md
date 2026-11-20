@@ -6,10 +6,13 @@ is the registry `describe` checks hook and source names against. A new verb = a 
 
 Invariants:
 
-- Only `config::PluginSpec` entries run, by full path (`run.rs` refuses a missing file before any
-  spawn). `plugins::load` with `may_run` false (preview, `--launcher-options`) starts nothing.
+- Only `config::PluginSpec` entries run, by full path, exactly the file listed: config load and
+  `run.rs` (before each spawn) refuse a missing file and one with an `<path>.exe` twin beside it,
+  which Windows would start instead. `plugins::load` with `may_run` false (preview,
+  `--launcher-options`) starts nothing.
 - Every call goes through `run::Runner`; tests pass a fake. `Process` runs the child in a job
-  object: a timeout terminates the tree, the job's last handle kills whatever is left.
+  object: a timeout or an oversized answer terminates the tree; a plugin that ends on its own
+  releases the job, so what it started (an app an action opened) keeps running.
 - Plugin output is untrusted: each verb file checks its answer before anything uses it. A failure
   is a warning string; only `pre_launch::Outcome::Cancel` stops a launch.
 - Plugin rows are `RowName::Plugin(i)`, `i` counting every plugin's rows in config order

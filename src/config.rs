@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::launch::{CONFIG_ROWS, MODEL_FAMILY_KEYS, Roster, RowName};
-pub use plugins::{PluginSpec, parse_plugins};
+pub use plugins::{PathProblem, PluginSpec, parse_plugins, path_problem};
 use roster::default_account;
 pub use roster::{Account, parse_roster};
 
@@ -42,6 +42,37 @@ const KNOWN_KEYS: &[&str] = &[
     #[cfg(feature = "mouse")]
     "mouse",
     "plugins",
+];
+/// An optional module's config key. It reaches the unknown-key check only in a build without that
+/// module, and then says so instead of calling the key unrecognized.
+struct ModuleKey {
+    key: &'static str,
+    feature: &'static str,
+    /// What the user loses, after the warning.
+    also: &'static str,
+}
+
+const MODULE_KEYS: [ModuleKey; 4] = [
+    ModuleKey {
+        key: "mouse",
+        feature: "mouse",
+        also: "",
+    },
+    ModuleKey {
+        key: "sharing",
+        feature: "sharing",
+        also: "; shared profile links are not repaired",
+    },
+    ModuleKey {
+        key: "remote",
+        feature: "remote",
+        also: "",
+    },
+    ModuleKey {
+        key: "riderMcp",
+        feature: "rider-mcp",
+        also: "",
+    },
 ];
 /// The maintenance screen's own keys: five built-ins and `l`, the launch-rows editor.
 const RESERVED_ACTION_KEYS: [&str; 6] = ["u", "r", "d", "m", "p", "l"];
@@ -467,9 +498,11 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
     };
     for k in obj.keys() {
         if !KNOWN_KEYS.contains(&k.as_str()) {
-            let msg = match near_key(k) {
-                Some(best) => format!("unrecognized config key '{k}' is ignored; did you mean '{best}'?"),
-                None => format!("unrecognized config key '{k}' is ignored (known keys: {})", KNOWN_KEYS.join(", ")),
+            let module = MODULE_KEYS.iter().find(|m| m.key == k.as_str());
+            let msg = match (module, near_key(k)) {
+                (Some(m), _) => format!("this build has no '{}' module; '{k}' is ignored{}", m.feature, m.also),
+                (None, Some(best)) => format!("unrecognized config key '{k}' is ignored; did you mean '{best}'?"),
+                (None, None) => format!("unrecognized config key '{k}' is ignored (known keys: {})", KNOWN_KEYS.join(", ")),
             };
             cfg.warnings.push(msg);
         }

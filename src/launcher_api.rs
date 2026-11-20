@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::config::Account;
 use crate::launch::{LAUNCH_MODES, LaunchState, OptionText, Roster, RowDef, RowName, availability_snap, launch_mode, visible_row_values};
 use crate::prefs::{self, Prefs};
+use crate::sessions::valid_session_id;
 use crate::types::{DefaultLabels, Limits};
 
 pub const OPTIONS_FLAG: &str = "--launcher-options";
@@ -122,11 +123,6 @@ fn field(name: RowName) -> &'static str {
         RowName::Mode => "mode",
         RowName::Plugin(_) => "plugin",
     }
-}
-
-/// A resume id becomes an argument of `claude`: one leading `-` and it would be read as an option.
-fn valid_session_id(id: &str) -> bool {
-    !id.is_empty() && !id.starts_with('-') && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// One account's remembered rows on a fresh state, the way its tab shows them on the screen.

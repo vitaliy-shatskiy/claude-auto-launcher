@@ -149,7 +149,7 @@ The mouse, multi-account sharing, the Remote row and the Rider MCP scan are carg
 by default (`mouse`, `sharing`, `remote`, `rider-mcp`). Leave any out:
 `cargo build --release --locked --no-default-features --features mouse,sharing` builds without the
 other two; `--no-default-features` alone builds without all four. A config key of a left-out module
-(`mouse`, `sharing`, `remote`, `riderMcp`) warns as unknown and the module stays off.
+(`mouse`, `sharing`, `remote`, `riderMcp`) warns that the build has no such module and the module stays off.
 
 A second account: pick its tab, start a session, type `/login` once in it.
 

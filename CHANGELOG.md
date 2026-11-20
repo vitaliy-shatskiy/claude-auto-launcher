@@ -29,7 +29,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - The mouse, multi-account sharing, the Remote row and the Rider MCP scan are cargo features
   (`mouse`, `sharing`, `remote`, `rider-mcp`), all on by default; a default build behaves as
   before. `cargo build --no-default-features` leaves all four out; a left-out module's config key
-  (`mouse`, `sharing`, `remote`, `riderMcp`) warns as unknown and the module stays off. CI builds
+  (`mouse`, `sharing`, `remote`, `riderMcp`) warns that the build has no such module and the module stays off. CI builds
   and tests both ways.
 
 ### Changed

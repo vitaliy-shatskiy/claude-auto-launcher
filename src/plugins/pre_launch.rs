@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::run::Runner;
 use super::{Kind, Plugins, Verb};
+use crate::theme;
 
 pub const VERB: Verb = Verb {
     name: "preLaunch",
@@ -39,13 +40,19 @@ enum Answer {
 }
 
 /// Variables a plugin may never set: they pick the account or its credentials, which the launch
-/// screen owns. An entry ending in `*` is a prefix (case-insensitive, as Windows names are).
-const REFUSED_ENV: [&str; 5] = [
+/// screen owns - the config dir, an API key or OAuth token, another provider (Bedrock, Vertex,
+/// Foundry), or the home directory `~/.claude` is found from. An entry ending in `*` is a prefix
+/// (case-insensitive, as Windows names are).
+const REFUSED_ENV: [&str; 9] = [
     "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_*",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_*",
+    "USERPROFILE",
+    "HOME",
 ];
 
 fn refused_env(name: &str) -> bool {
@@ -68,7 +75,7 @@ fn check(v: &Value) -> Result<Answer, String> {
     match o.get("cancel") {
         None | Some(Value::Null | Value::Bool(false)) => {}
         Some(Value::String(r)) if !r.trim().is_empty() => {
-            let r: String = r.chars().filter(|c| !c.is_control()).take(MAX_REASON).collect();
+            let r: String = theme::strip_ctl(r).chars().take(MAX_REASON).collect();
             return Ok(Answer::Cancel(r));
         }
         Some(Value::Bool(true)) => return Ok(Answer::Cancel(String::new())),
