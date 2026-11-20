@@ -34,11 +34,43 @@ fn four_account_fixture_parses_with_hidden_and_tints() {
     let keys: Vec<&str> = cfg.accounts.iter().map(|a| a.key.as_str()).collect();
     assert_eq!(keys, ["work", "personal", "shared", "low"]);
     assert!(cfg.accounts.iter().any(|a| a.key == "shared" && a.hidden));
-    assert!(cfg.sharing && cfg.remote);
+    assert_eq!(cfg.sharing, cfg!(feature = "sharing"));
+    assert_eq!(cfg.remote, cfg!(feature = "remote"));
     assert_eq!(cfg.canonical().map(|a| a.key.as_str()), Some("work"));
     assert_eq!(cfg.maintenance_actions.len(), 1);
     assert!(cfg.maintenance_actions.first().is_some_and(|a| a.confirm_twice));
-    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+    if cfg!(all(feature = "sharing", feature = "remote", feature = "rider-mcp")) {
+        assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+    }
+}
+
+/// D6: a module left out of the build warns on its key as unknown and stays off.
+#[test]
+fn a_module_left_out_of_the_build_warns_on_its_key_and_stays_off() {
+    let text = r#"{"accounts":[{"key":"a","root":"~/.claude","tint":"Green"},{"key":"b","root":"~/.b","tint":"Cyan"}],
+        "mouse":true,"sharing":true,"remote":true,"riderMcp":"on"}"#;
+    let cfg = parse_config(text, "x", &ctx());
+    let built = [
+        ("mouse", cfg!(feature = "mouse")),
+        ("sharing", cfg!(feature = "sharing")),
+        ("remote", cfg!(feature = "remote")),
+        ("riderMcp", cfg!(feature = "rider-mcp")),
+    ];
+    for (key, on) in built {
+        let warned = cfg
+            .warnings
+            .iter()
+            .any(|w| w.starts_with(&format!("unrecognized config key '{key}' is ignored")));
+        assert_eq!(warned, !on, "{key}: {:?}", cfg.warnings);
+    }
+    assert_eq!(cfg.warnings.len(), built.iter().filter(|(_, on)| !on).count(), "{:?}", cfg.warnings);
+    assert_eq!(
+        (cfg.mouse, cfg.sharing, cfg.remote, cfg.rider_mcp == RiderMcp::On),
+        (built[0].1, built[1].1, built[2].1, built[3].1)
+    );
+    let defaults = Config::defaults(&ctx(), "x");
+    assert_eq!(defaults.mouse, cfg!(feature = "mouse"), "a left-out mouse is off by default too");
+    assert_eq!(defaults.rider_mcp == RiderMcp::Off, !cfg!(feature = "rider-mcp"));
 }
 
 #[test]
@@ -159,6 +191,7 @@ fn a_deeper_level_or_a_non_string_in_a_chain_is_skipped_with_a_warning() {
 }
 
 #[test]
+#[cfg(feature = "sharing")]
 fn sharing_with_one_account_is_turned_off() {
     let cfg = parse_config(r#"{"sharing":true}"#, "x", &ctx());
     assert!(!cfg.sharing);
@@ -243,6 +276,7 @@ fn project_screen_key_parses() {
 }
 
 #[test]
+#[cfg(feature = "mouse")]
 fn mouse_key_parses() {
     assert!(!parse_config(r#"{"mouse":false}"#, "x", &ctx()).mouse);
     assert!(!parse_config(r#"{"mouse":"FALSE"}"#, "x", &ctx()).mouse);
@@ -250,6 +284,10 @@ fn mouse_key_parses() {
     let bad = parse_config(r#"{"mouse":"maybe"}"#, "x", &ctx());
     assert!(bad.mouse);
     assert_eq!(bad.warnings, ["mouse: 'maybe' is not a boolean; using True"]);
+}
+
+#[test]
+fn a_bad_boolean_keeps_a_false_default() {
     let (b, w) = to_bool(Some(&Value::String("nope".into())), false, "sharing");
     assert!(!b);
     assert_eq!(

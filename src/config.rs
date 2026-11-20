@@ -16,11 +16,16 @@ pub use roster::{Account, parse_roster};
 
 /// Distinct on purpose: two accounts sharing a colour is the confusion a tint exists to prevent.
 pub const ALLOWED_TINTS: [&str; 6] = ["Green", "Magenta", "Cyan", "Blue", "Yellow", "Red"];
+#[cfg(feature = "rider-mcp")]
 const ALLOWED_RIDER_MODES: [&str; 3] = ["auto", "on", "off"];
-const KNOWN_KEYS: [&str; 18] = [
+/// A module's keys exist only in a build with its cargo feature; without it they warn as unknown.
+const KNOWN_KEYS: &[&str] = &[
     "accounts",
+    #[cfg(feature = "sharing")]
     "sharing",
+    #[cfg(feature = "remote")]
     "remote",
+    #[cfg(feature = "rider-mcp")]
     "riderMcp",
     "extraMcpConfigs",
     "secretsRoot",
@@ -34,6 +39,7 @@ const KNOWN_KEYS: [&str; 18] = [
     "pinnedProjects",
     "hideHeadlessProjects",
     "projectScreen",
+    #[cfg(feature = "mouse")]
     "mouse",
     "plugins",
 ];
@@ -179,6 +185,7 @@ pub struct Config {
     pub pinned_projects: Vec<String>,
     pub hide_headless_projects: bool,
     pub project_screen: ProjectScreen,
+    /// `mouse`, `sharing`, `remote`, `riderMcp`: always off in a build without that cargo feature.
     pub mouse: bool,
     pub accounts: Vec<Account>,
     pub sharing: bool,
@@ -208,11 +215,16 @@ impl Config {
             pinned_projects: Vec::new(),
             hide_headless_projects: true,
             project_screen: ProjectScreen::Always,
-            mouse: true,
+            // A module left out of the build stays off: its key is never read.
+            mouse: cfg!(feature = "mouse"),
             accounts: vec![default_account(ctx)],
             sharing: false,
             remote: false,
-            rider_mcp: RiderMcp::Auto,
+            rider_mcp: if cfg!(feature = "rider-mcp") {
+                RiderMcp::Auto
+            } else {
+                RiderMcp::Off
+            },
             extra_mcp_configs: vec![format!("{home}\\.claude\\mcp-shared.json")],
             secrets_root: format!("{home}\\.claude-secrets"),
             vsec_path: String::new(),
@@ -472,30 +484,8 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
             cfg.warnings.extend(w);
         }
     }
-    if let Some(v) = present("sharing") {
-        let (b, w) = to_bool(Some(v), cfg.sharing, "sharing");
-        cfg.sharing = b;
-        cfg.warnings.extend(w);
-    }
-    if let Some(v) = present("remote") {
-        let (b, w) = to_bool(Some(v), cfg.remote, "remote");
-        cfg.remote = b;
-        cfg.warnings.extend(w);
-    }
-    if let Some(v) = present("riderMcp") {
-        let mode = ps_str(v).to_lowercase();
-        cfg.rider_mcp = match mode.as_str() {
-            "auto" => RiderMcp::Auto,
-            "on" => RiderMcp::On,
-            "off" => RiderMcp::Off,
-            _ => {
-                cfg.warnings
-                    .push(format!("riderMcp '{}' is not auto/on/off; using auto", ps_str(v)));
-                RiderMcp::Auto
-            }
-        };
-        debug_assert!(ALLOWED_RIDER_MODES.len() == 3, "the three rider modes");
-    }
+    #[cfg(any(feature = "sharing", feature = "remote", feature = "rider-mcp"))]
+    parse_module_keys(obj, &mut cfg);
     if let Some(v) = present("extraMcpConfigs") {
         cfg.extra_mcp_configs = path_list(v, "extraMcpConfigs", ctx, &mut cfg.warnings);
     }
@@ -532,11 +522,45 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
         cfg.warnings.extend(w);
     }
     parse_screen_keys(obj, ctx, &mut cfg);
+    #[cfg(feature = "sharing")]
     if cfg.sharing && cfg.accounts.len() < 2 {
         cfg.sharing = false;
         cfg.warnings.push("sharing needs at least two accounts; off".into());
     }
     cfg
+}
+
+/// The built-in modules' keys; each exists only in a build with its cargo feature.
+#[cfg(any(feature = "sharing", feature = "remote", feature = "rider-mcp"))]
+fn parse_module_keys(obj: &serde_json::Map<String, Value>, cfg: &mut Config) {
+    let present = |k: &str| obj.get(k).filter(|v| !v.is_null());
+    #[cfg(feature = "sharing")]
+    if let Some(v) = present("sharing") {
+        let (b, w) = to_bool(Some(v), cfg.sharing, "sharing");
+        cfg.sharing = b;
+        cfg.warnings.extend(w);
+    }
+    #[cfg(feature = "remote")]
+    if let Some(v) = present("remote") {
+        let (b, w) = to_bool(Some(v), cfg.remote, "remote");
+        cfg.remote = b;
+        cfg.warnings.extend(w);
+    }
+    #[cfg(feature = "rider-mcp")]
+    if let Some(v) = present("riderMcp") {
+        let mode = ps_str(v).to_lowercase();
+        cfg.rider_mcp = match mode.as_str() {
+            "auto" => RiderMcp::Auto,
+            "on" => RiderMcp::On,
+            "off" => RiderMcp::Off,
+            _ => {
+                cfg.warnings
+                    .push(format!("riderMcp '{}' is not auto/on/off; using auto", ps_str(v)));
+                RiderMcp::Auto
+            }
+        };
+        debug_assert!(ALLOWED_RIDER_MODES.len() == 3, "the three rider modes");
+    }
 }
 
 /// The keys that shape the screens: rows, models, project hiding, the project screen, the mouse.
@@ -574,6 +598,7 @@ fn parse_screen_keys(obj: &serde_json::Map<String, Value>, ctx: &PathCtx, cfg: &
             ProjectScreen::Always
         };
     }
+    #[cfg(feature = "mouse")]
     if let Some(v) = present("mouse") {
         let (b, w) = to_bool(Some(v), cfg.mouse, "mouse");
         cfg.mouse = b;

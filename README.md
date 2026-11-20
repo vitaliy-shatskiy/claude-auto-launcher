@@ -145,6 +145,12 @@ attestation: `gh attestation verify claude-auto.exe -R vitaliy-shatskiy/claude-a
 From source: `cargo build --release --locked`, then copy `target\release\claude-auto.exe` to a
 folder on your PATH. There is no installer.
 
+The mouse, multi-account sharing, the Remote row and the Rider MCP scan are cargo features, all on
+by default (`mouse`, `sharing`, `remote`, `rider-mcp`). Leave any out:
+`cargo build --release --locked --no-default-features --features mouse,sharing` builds without the
+other two; `--no-default-features` alone builds without all four. A config key of a left-out module
+(`mouse`, `sharing`, `remote`, `riderMcp`) warns as unknown and the module stays off.
+
 A second account: pick its tab, start a session, type `/login` once in it.
 
 To update, replace the file. A running launcher holds it: rename the old one first
@@ -604,6 +610,8 @@ cargo build --release --locked
 cargo test --locked
 cargo fmt --all --check
 cargo clippy --all-targets --locked -- -D warnings
+cargo clippy --no-default-features --all-targets --locked -- -D warnings
+cargo test --no-default-features --locked
 ```
 
 - Toolchain pinned in `rust-toolchain.toml`, edition 2024. One package: a library (`src/lib.rs`)
@@ -614,7 +622,8 @@ cargo clippy --all-targets --locked -- -D warnings
   golden files in `tests/fixtures/wide-frames/`. `tests/it/` runs the built binary end to end
   against a fake home and a fake `claude`.
 - A privacy scan keeps personal data out of the tracked files, see [CONTRIBUTING.md](CONTRIBUTING.md).
-- CI (`.github/workflows/ci.yml`, a Windows runner) runs fmt, clippy and test, all `--locked`.
+- CI (`.github/workflows/ci.yml`, a Windows runner) runs fmt, clippy and test, all `--locked`, then
+  clippy and test again with `--no-default-features`.
 - Releases: `.github/workflows/release.yml`, run by hand for an existing tag, builds the exe with the
   C runtime linked in (`.cargo/config.toml`), publishes it with its `.sha256` and a build
   attestation, and takes the release notes from that version's `CHANGELOG.md` section.

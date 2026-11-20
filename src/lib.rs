@@ -20,6 +20,7 @@ pub mod out;
 pub mod plugins;
 pub mod prefs;
 pub mod projects;
+#[cfg(feature = "remote")]
 pub mod remote;
 pub mod sessions;
 pub(crate) mod sys;

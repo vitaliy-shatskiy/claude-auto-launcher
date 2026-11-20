@@ -19,9 +19,11 @@ use crate::log::{self, Logger};
 use crate::log_data;
 use crate::out::{self, Fg};
 use crate::prefs;
+#[cfg(feature = "remote")]
+use crate::remote;
 use crate::timing::{self, SpanId, Timings};
 use crate::types::ChildEnv;
-use crate::{env, invocation, plugins, remote, sys};
+use crate::{env, invocation, plugins, sys};
 
 use prompts::fallback_prompts;
 pub use prompts::{account_prefixes, resolve_account_answer};
@@ -461,6 +463,7 @@ fn launch(run: &Run) -> i32 {
         preview_summary(&choice, &child, remote_on, show_qr, stop_server, &launch_argv, &claude, &argv);
         return 0;
     }
+    #[cfg(feature = "remote")]
     if stop_server {
         match remote::stop_companion_server() {
             Ok(s) => out::line(&format!("  companion server: {s}"), Fg::Yellow),
@@ -473,8 +476,13 @@ fn launch(run: &Run) -> i32 {
             Fg::DarkGray,
         );
     }
-    let no_roam = var("CLAUDE_NO_ROAM").as_deref() == Some("1");
-    if run.cfg.remote && !selects_session && !no_roam && remote_on && (use_ui || screenless || launch_argv.is_empty()) {
+    #[cfg(feature = "remote")]
+    if run.cfg.remote
+        && !selects_session
+        && var("CLAUDE_NO_ROAM").as_deref() != Some("1")
+        && remote_on
+        && (use_ui || screenless || launch_argv.is_empty())
+    {
         let req = remote::CrcLaunch {
             argv: &argv,
             account: &choice,

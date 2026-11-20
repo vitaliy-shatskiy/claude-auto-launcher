@@ -20,6 +20,19 @@ path = "src/lib.rs"
 name = "privacy_scan"
 test = true
 
+# Built-in modules, each one additive: a build without one compiles, and that module's config keys
+# warn as unknown. `cargo build --no-default-features` is the launcher without all four.
+[features]
+default = ["mouse", "sharing", "remote", "rider-mcp"]
+# Console and VT mouse input: hover, click, the wheel (keys work either way).
+mouse = []
+# Several accounts on one profile: hardlinks, junctions with their ACL, the MCP mirror.
+sharing = []
+# The Remote row and the crc companion launch.
+remote = []
+# The Rider MCP endpoint scan (`riderMcp`).
+rider-mcp = []
+
 [dependencies]
 regex = "1"
 serde = { version = "1", features = ["derive"] }
