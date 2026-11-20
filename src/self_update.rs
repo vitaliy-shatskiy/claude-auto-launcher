@@ -5,6 +5,7 @@
 
 mod check;
 mod swap;
+mod tidy;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -286,7 +287,12 @@ impl Watch {
         let closed = Arc::new(Mutex::new(false));
         let job = (local.mode != Mode::Off).then(|| {
             let theirs = Arc::clone(&closed);
-            Background::start("self-update", move || run(&local, now_ms, net.as_ref(), files.as_ref(), &theirs)).unjoined()
+            Background::start("self-update", move || {
+                tidy::sweep_partials(&local.exe, now_ms, &tidy::alive_since);
+                tidy::forget_stale_install(&local, Version::current(), tidy::started_ms());
+                run(&local, now_ms, net.as_ref(), files.as_ref(), &theirs)
+            })
+            .unjoined()
         });
         Self { job, closed, told: false }
     }

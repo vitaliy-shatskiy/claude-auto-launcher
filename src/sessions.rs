@@ -11,7 +11,7 @@ pub mod listing;
 pub mod picker;
 pub mod scan;
 pub mod transcript;
-mod win;
+pub(crate) mod win;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
