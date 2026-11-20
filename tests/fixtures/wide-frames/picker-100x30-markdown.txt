@@ -1,0 +1,29 @@
+╭─ resume ─ 5 sessions ───────────────────────────────────────────────────────────────────────────╮
+│   project-1  session title 1    7 min │ **raw** title                                           │
+│ ❯ project-2  **raw** title     14 min │ 16.09 11:46 · 20 msgs · 4 KB · project-2                │
+│   ⌂ feature  session title 3   21 min │ ─────────────────────────────────────────────────────── │
+│   project-4  session title 4   28 min │ first › fix card.rs per spec                            │
+│   project-5  session title 5   35 min │ last  › Plan - Закрыто: CS-1561                         │
+│                                       │ reply › Done: the plain helper strips em and bold       │
+│                                       │         markers, keeps a_b_c, *.rs and 2*3 fn main() {} │
+│                                       │         then wraps the line at the full width of the    │
+│                                       │         card                                            │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+  w/s move  ┊  [/] filter  ┊  [enter] open  ┊  [f] fork  ┊  [esc] back
