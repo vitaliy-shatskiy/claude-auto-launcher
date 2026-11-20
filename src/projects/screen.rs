@@ -8,13 +8,13 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use super::nav_view::{NavView, navigator_frame};
-use super::navigator::{Lister, NETWORK_LIMIT, NavStep, Navigator, list_dirs};
-use super::paths::{DriveCache, folder_present, project_key};
-use super::select::{RowKind, project_rows, slugs_for_path};
+use super::navigator::{Lister, NETWORK_LIMIT, Navigator, list_dirs};
+use super::paths::DriveCache;
+use super::select::project_rows;
 use super::view::{ProjectView, project_actions, project_frame, step_project_action};
 use super::{Project, ProjectChoice};
 use crate::frame::{Frame, Style};
-use crate::input::{KeyPress, is_hotkey_exact, vk};
+use crate::input::{KeyPress, is_hotkey_exact};
 use crate::launch::LAUNCH_MODES;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
@@ -115,220 +115,6 @@ impl<'a> ProjectScreen<'a> {
     /// Preview mode: the navigator never creates a folder.
     pub(crate) fn with_preview(self, preview: bool) -> Self {
         Self { preview, ..self }
-    }
-
-    /// The listed projects: a hand-hidden one is hidden like a rule-hidden one; the show-hidden
-    /// view lists every one and marks the hidden.
-    fn rebuild_view(&mut self) {
-        let manual: Vec<String> = self
-            .hiding
-            .map(|h| h.paths.borrow().iter().map(|p| project_key(p)).collect())
-            .unwrap_or_default();
-        let hidden = |p: &Project| p.hidden || manual.contains(&project_key(&p.path));
-        self.marked = if self.show_hidden {
-            self.projects.iter().filter(|p| hidden(p)).map(|p| project_key(&p.path)).collect()
-        } else {
-            Vec::new()
-        };
-        self.view = self
-            .projects
-            .iter()
-            .map(|p| Project {
-                hidden: !self.show_hidden && hidden(p),
-                ..p.clone()
-            })
-            .collect();
-    }
-
-    /// `h`: a listed project joins `hiddenProjects`, a hand-hidden one leaves it; a rule-hidden one
-    /// (headless or scratch) stays as it is. Every change is saved at once.
-    fn toggle_hide(&mut self) {
-        let Some(h) = self.hiding else { return };
-        let Some((kind, name, path)) = usize::try_from(self.cursor.index)
-            .ok()
-            .and_then(|i| self.rows.get(i))
-            .map(|r| (r.kind, r.name.clone(), r.path.clone()))
-        else {
-            return;
-        };
-        if kind != RowKind::Project {
-            "only a listed project can be hidden".clone_into(&mut self.notice);
-            return;
-        }
-        let key = project_key(&path);
-        let mut paths = h.paths.borrow_mut();
-        let change = if paths.iter().any(|p| project_key(p) == key) {
-            // Every spelling of this folder goes, as the save does on disk.
-            paths.retain(|p| project_key(p) != key);
-            HideChange::Show
-        } else if self.projects.iter().any(|p| p.hidden && project_key(&p.path) == key) {
-            "hidden by rule (headless or scratch), not by h".clone_into(&mut self.notice);
-            return;
-        } else {
-            paths.push(path.clone());
-            HideChange::Hide
-        };
-        self.notice = match ((h.save)(&path, change), change) {
-            (Ok(()), HideChange::Show) => format!("{name} shown again"),
-            (Ok(()), HideChange::Hide) => format!("{name} hidden - v lists hidden projects"),
-            (Err(e), HideChange::Show) => format!("{name} shown for this run only: {e}"),
-            (Err(e), HideChange::Hide) => format!("{name} hidden for this run only: {e}"),
-        };
-    }
-
-    /// R16: a filter parks the cursor on its first match - row 0 when the cwd's project matches,
-    /// else the first list row; no filter, or no match, is row 0.
-    fn park(&self) -> i32 {
-        if self.filter.is_empty() {
-            return 0;
-        }
-        let rows = project_rows(&self.view, &self.filter, &self.cwd);
-        if rows.first().is_some_and(|r| r.matched) {
-            0
-        } else {
-            i32::from(rows.iter().any(|r| r.kind == RowKind::Project))
-        }
-    }
-
-    /// The row under the cursor into a result; every kind is checked for existence without a
-    /// network wait, so a row whose directory vanished is refused with a notice. The free-path
-    /// row opens the navigator.
-    fn commit(&mut self, how: &str) -> Flow<ProjectChoice> {
-        let Some(row) = usize::try_from(self.cursor.index).ok().and_then(|i| self.rows.get(i)) else {
-            return Flow::Continue;
-        };
-        if row.kind == RowKind::Path {
-            self.list_index = self.cursor.index;
-            self.cursor.index = 0;
-            let mut nav = Navigator::new(self.lister, self.limit);
-            nav.preview = self.preview;
-            self.nav = Some(nav);
-            return Flow::Continue;
-        }
-        let target = row.path.clone();
-        let slugs = if row.kind == RowKind::Cwd {
-            slugs_for_path(self.projects, &target)
-        } else {
-            row.slugs.clone()
-        };
-        if !folder_present(&target, &mut self.drives) {
-            "path not found".clone_into(&mut self.notice);
-            return Flow::Continue;
-        }
-        Flow::Done(Some(choice(target, &self.action, how, slugs)))
-    }
-
-    /// Enter or a second click in the navigator: a picked folder ends the screen (the records
-    /// carry the LENGTH of the path only, `log_fields`).
-    fn nav_enter(&mut self, how: &str) -> Flow<ProjectChoice> {
-        let index = usize::try_from(self.cursor.index).unwrap_or(0);
-        let Some(nav) = self.nav.as_mut() else { return Flow::Continue };
-        let NavStep::Pick(path) = nav.enter(index) else {
-            return Flow::Continue;
-        };
-        let slugs = slugs_for_path(self.projects, &path);
-        Flow::Done(Some(choice(path, &self.action, how, slugs)))
-    }
-
-    /// The navigator owns the typed characters and Backspace; the arrows, Enter, Tab and Esc
-    /// go to the loop, which hands them to this screen's handlers.
-    fn nav_key(&mut self, key: &KeyPress) -> bool {
-        let Some(nav) = self.nav.as_mut() else { return false };
-        nav.notice.clear();
-        if key.is(vk::BACKSPACE) {
-            nav.backspace(key.ctrl);
-            return true;
-        }
-        let passed = [vk::UP, vk::DOWN, vk::LEFT, vk::RIGHT, vk::ENTER, vk::TAB, vk::ESCAPE];
-        if passed.iter().any(|k| key.is(*k)) || key.is_ctrl(vk::C) {
-            return false;
-        }
-        // Ctrl gives a control character; AltGr (Ctrl+Alt) still types `\` on many layouts.
-        if key.ch != '\0' && !key.ch.is_control() {
-            nav.type_char(key.ch);
-        }
-        true
-    }
-
-    /// No row matches the filter and the cursor is on the current directory: Enter would run it.
-    /// The free-path row still opens the navigator.
-    fn no_match(&self) -> bool {
-        let on_cwd = usize::try_from(self.cursor.index)
-            .ok()
-            .and_then(|i| self.rows.get(i))
-            .is_some_and(|r| r.kind == RowKind::Cwd);
-        on_cwd && !self.filter.trim().is_empty() && !self.rows.iter().any(|r| r.kind == RowKind::Project || r.matched)
-    }
-
-    /// D5: the create question takes a deliberate yes (Enter or its footer button); a click or a
-    /// cursor move drops it. `true` = there was one.
-    fn drop_question(&mut self) -> bool {
-        self.nav.as_mut().is_some_and(|n| n.confirm.take().is_some())
-    }
-
-    /// The filter box owns every key while it is open, but the arrows (they move the cursor and
-    /// step the field) and Enter (D4: it runs the highlighted row, handed back as `false`). Its
-    /// ways of closing are logged with the LENGTH of the filter, never its text.
-    fn type_filter(&mut self, key: &KeyPress, term: &dyn Term) -> bool {
-        if [vk::UP, vk::DOWN, vk::LEFT, vk::RIGHT].iter().any(|k| key.is(*k)) {
-            return false;
-        }
-        if key.is(vk::ENTER) {
-            if self.no_match() {
-                "no project matches".clone_into(&mut self.notice);
-                return true;
-            }
-            self.cursor.typing = false;
-            self.log(
-                term,
-                "Enter",
-                &[("filter", json!("run")), ("filterLength", json!(self.filter.chars().count()))],
-            );
-            return false;
-        }
-        if key.is(vk::ESCAPE) || key.is_ctrl(vk::C) {
-            self.log(
-                term,
-                "Escape",
-                &[("filter", json!("clear")), ("filterLength", json!(self.filter.chars().count()))],
-            );
-            self.cursor.typing = false;
-            self.filter.clear();
-            self.cursor.index = 0;
-            return true;
-        }
-        if key.is(vk::BACKSPACE) {
-            self.filter.pop();
-            self.cursor.index = self.park();
-            return true;
-        }
-        // Any printable char: a Windows folder name may hold `~` (8.3 names), brackets, `+`, `@`.
-        if key.ch != '\0' && !key.ch.is_control() {
-            self.filter.push(key.ch);
-            self.cursor.index = self.park();
-        }
-        true
-    }
-
-    fn log(&self, term: &dyn Term, key: &str, extra: &[(&str, Value)]) {
-        let mut d = Map::new();
-        d.insert("screen".into(), json!("project"));
-        d.insert("key".into(), json!(key));
-        d.insert("index".into(), json!(self.cursor.index));
-        for (k, v) in extra {
-            d.insert((*k).into(), v.clone());
-        }
-        term.logger().write("key", d);
-    }
-}
-
-fn choice(path: String, action: &str, how: &str, slugs: Vec<String>) -> ProjectChoice {
-    ProjectChoice {
-        path,
-        action: action.to_owned(),
-        slug: slugs.first().cloned().unwrap_or_default(),
-        slugs,
-        how: how.to_owned(),
     }
 }
 
@@ -561,5 +347,8 @@ impl Screen for ProjectScreen<'_> {
     }
 }
 
+mod filter;
+mod marks;
+mod pick;
 #[cfg(test)]
 mod tests;
