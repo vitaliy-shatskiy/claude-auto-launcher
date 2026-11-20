@@ -287,15 +287,27 @@ cursor move drops the question.
 ### Session picker
 
 A row is the session's title and age (and its project outside one project's view); a green dot
-marks a session live now. The title is the session's `/rename` name, else Claude Code's newest AI
+marks a session a running Claude Code has open right now (its `sessions\<pid>.json` in any
+account's root, the pid alive with the recorded start time; read at open and every few seconds).
+The title is the session's `/rename` name, else Claude Code's newest AI
 title, else its first prompt. The rows show at once; titles and message counts fill in as a
 background scan finishes them.
 
 The preview on the right is a chat: the title, `DD.MM HH:MM · N msgs · size`, then the newest
 messages from the bottom up, Claude's on the left under an orange `claude · DD.MM HH:MM` label,
-yours on the right in cyan. Tool calls, tool results and notifications are left out and markdown
-shows as plain text; an older message is cut at 8 lines. It loads off the UI thread once the cursor
-rests and says `loading…` until it lands.
+yours on the right in cyan, each body 2 cells in from its label's side. Tool calls, tool results
+and notifications are left out. A message keeps its shape: paragraphs, `•` and numbered list items
+with a hanging indent, headings in bold, code blocks and tables dimmed, bold text bold and inline
+code in its own colour, never the raw markers. Each message shows from its start, at most 14 lines
+and then `… N more lines`.
+
+The chat streams off the UI thread once the cursor rests: the transcript is read backwards in
+64 KB steps, newest message first, until the pane plus one screen is filled (at most 8 MB per
+session), so the first messages show after one small read; `loading…` shows only until then. A
+session seen once stays in memory while the picker is open, so going back to it reads nothing. In
+the background, at below-normal priority and one 64 KB step per idle moment, the picker reads ahead
+the sessions next to the cursor and the newest five (one pane each, at most 1 MB each). Nothing is
+written to disk.
 
 With sharing on the picker reads the canonical `<root>\projects`. With sharing off it lists every
 account's sessions, the chosen account's own and the others' tagged `[account]`. Resuming a tagged

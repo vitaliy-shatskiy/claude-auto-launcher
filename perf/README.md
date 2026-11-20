@@ -8,7 +8,7 @@ time is not. Wall times appear only as `wallMsRef`, a reference nobody gates on.
 ## What is measured
 
 All paths run over one synthetic world (70 sessions in 7 projects, transcripts of 83, 40, 20 and
-5 MB among them), built once into `target\tmp\claude-auto-perf-world-v<N>` by `tests/perf/world.rs`.
+5 MB among them; the 83 MB one ends in 40 chatty turns), built once into `target\tmp\claude-auto-perf-world-v<N>` by `tests/perf/world.rs`.
 The real `~\.claude` is never read: the launcher runs with `USERPROFILE` on the world.
 
 | Path | What | Counts |
@@ -20,7 +20,9 @@ The real `~\.claude` is never read: the launcher runs with `USERPROFILE` on the 
 | `picker_ui_open_cold` | the interactive picker's UI thread, no summary cache: the same pages through `Summarizer::page` (cache hits and quick rows, the first 256 KB plus the tail per miss) while the worker is held, so the counts are the UI thread's alone | this process's `read_bytes`, `read_ops` |
 | `picker_worker_scan_cold` | the worker then let go: the full summaries of those pages and the cache write, until it has stored every page | this process's `read_bytes`, `read_ops`, `write_bytes` |
 | `picker_cursor` | one Down in the picker at 250x68, colour on | `frame_bytes` the line-diff writer sends, `full_frame_bytes` of the frame before |
-| `chat_load` | the chat pane's load of the newest (83 MB) transcript | `chat_bytes_read` (the loader's own count), `read_bytes` |
+| `chat_load` | the chat pane streaming the newest (83 MB, chatty tail) transcript until a 200x50 pane plus one screen is filled | `chat_bytes_read` (the workers' own count), `read_bytes` |
+| `chat_revisit` | the same session viewed again after it streamed, plus idle polls | `read_bytes`, budget 0 (a budget of 0 passes a measured 0) |
+| `chat_prefetch_open` | the picker-open prefetch of the newest 5 sessions, one pane height each, 1 MB cap each | `chat_bytes_read`, `read_bytes` |
 
 The I/O counts come from `GetProcessIoCounters` (`src/perf.rs`): every `ReadFile`/`WriteFile` of
 the process, pipes and the console included. That is why `tests/perf` is its own test binary and its
