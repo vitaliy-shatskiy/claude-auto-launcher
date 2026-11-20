@@ -92,6 +92,16 @@ fn picker_open_with_a_warm_cache_stays_within_budget() -> TestResult {
 }
 
 #[test]
+fn the_interactive_pickers_ui_thread_reads_quick_rows_only_before_its_first_frame() -> TestResult {
+    check("picker_ui_open_cold")
+}
+
+#[test]
+fn the_interactive_pickers_worker_scans_the_first_page_within_budget() -> TestResult {
+    check("picker_worker_scan_cold")
+}
+
+#[test]
 fn picker_cursor_move_writes_within_budget() -> TestResult {
     check("picker_cursor")
 }
