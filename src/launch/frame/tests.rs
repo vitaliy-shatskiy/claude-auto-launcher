@@ -230,7 +230,7 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
 fn value_column(f: &Frame, r: &Roster, name: &str) -> usize {
     let hit = f.map.rows.iter().find(|h| h.name == name).unwrap();
     let line = &f.lines[usize::try_from(hit.y).unwrap()];
-    let label = r.rows[hit.index].label;
+    let label = &r.rows[hit.index].label;
     let chars: Vec<char> = line.chars().collect();
     let label: Vec<char> = label.chars().collect();
     let at = chars.windows(label.len()).position(|w| w == label.as_slice()).unwrap() + label.len();
@@ -350,7 +350,7 @@ fn row_map_points_at_the_drawn_lines() {
     let f = launch_frame(&r, &inp);
     for hit in &f.map.rows {
         let line = f.lines.get(usize::try_from(hit.y).unwrap()).unwrap();
-        assert!(line.contains(r.rows[hit.index].label), "{} not on {line}", hit.name);
+        assert!(line.contains(&r.rows[hit.index].label), "{} not on {line}", hit.name);
         for c in &hit.cells {
             let drawn: String = line
                 .chars()

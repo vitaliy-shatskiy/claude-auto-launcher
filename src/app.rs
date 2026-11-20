@@ -21,7 +21,7 @@ use crate::out::{self, Fg};
 use crate::prefs;
 use crate::timing::{self, SpanId, Timings};
 use crate::types::ChildEnv;
-use crate::{env, invocation, remote, sys};
+use crate::{env, invocation, plugins, remote, sys};
 
 use prompts::fallback_prompts;
 pub use prompts::{account_prefixes, resolve_account_answer};
@@ -79,6 +79,8 @@ struct Run {
     process: SpanId,
     /// `--launcher-run`, checked: this stands in for the screen's outcome.
     headless: Option<headless::HeadlessRun>,
+    /// The described plugins (config `plugins`).
+    plugins: plugins::Plugins,
 }
 
 /// The whole launcher. Returns the process exit code.
@@ -123,15 +125,28 @@ pub fn run(args: Vec<String>) -> i32 {
     if cfg.project_screen == config::ProjectScreen::OnDemand {
         roster.add_action_row();
     }
+    // Preview and `--launcher-options` start no process: they see only cached descriptions.
+    let (plugins, plugin_warnings) = {
+        let _s = timings.scope(&["plugins"]);
+        let cache = plugins::cache_path(&cfg.path);
+        plugins::load(&cfg.plugins, cache.as_deref(), &plugins::run::Process, !wants_options && !preview)
+    };
+    plugins.add_rows(&mut roster);
     if wants_options {
         // stderr: stdout is the one line of JSON the client parses.
         for w in &cfg.warnings {
             out::err_line(&format!("  config: {w}"));
         }
+        for w in &plugin_warnings {
+            out::err_line(&format!("  {w}"));
+        }
         return headless::print_options(&ctx, &cfg, &roster);
     }
     for w in &cfg.warnings {
         out::line(&format!("  config: {w}"), Fg::DarkYellow);
+    }
+    for w in &plugin_warnings {
+        out::line(&format!("  {w}"), Fg::DarkYellow);
     }
     let headless = match run_request.map(|req| headless::prepare_run(&req, &ctx, &cfg, &roster)) {
         Some(Ok(checked)) => Some(checked),
@@ -158,6 +173,7 @@ pub fn run(args: Vec<String>) -> i32 {
         logger,
         process,
         headless,
+        plugins,
     };
     let code = launch(&run);
     // Every path but the spawn ends here; the spawn path ended and wrote these already.
@@ -371,6 +387,16 @@ fn launch(run: &Run) -> i32 {
         let _s = tm.scope(&["hooks"]);
         env::run_launch_hooks_with_env(&run.cfg.launch_hooks, &child, tm);
     }
+    let plugin_args = match ui.as_ref().filter(|_| !run.preview) {
+        Some(o) => {
+            let _s = tm.scope(&["plugins", "preLaunch"]);
+            match pre_launch(run, o, &mut child) {
+                Ok(args) => args,
+                Err(code) => return code,
+            }
+        }
+        None => Vec::new(),
+    };
     let mcp = {
         let _s = tm.scope(&["mcp"]);
         env::mcp_config_paths(&run.cfg, run.preview)
@@ -388,7 +414,7 @@ fn launch(run: &Run) -> i32 {
         }
     };
 
-    let launch_argv: Vec<String> = match &ui {
+    let mut launch_argv: Vec<String> = match &ui {
         Some(o) => {
             let available = o.view.limits.get(&o.state.account).and_then(|l| l.available_models.as_deref());
             let resolved = |row: &str| {
@@ -412,6 +438,7 @@ fn launch(run: &Run) -> i32 {
         }
         None => run.args.clone(),
     };
+    launch_argv.extend(plugin_args);
     let off_modes: Vec<&str> = LAUNCH_MODES
         .iter()
         .filter(|m| !m.remote_off.is_empty() && !m.flag.is_empty() && launch_argv.iter().any(|a| a == m.flag))
@@ -468,6 +495,7 @@ fn launch(run: &Run) -> i32 {
         if let Some(code) = remote::launch_via_crc(&req) {
             run.logger
                 .write("exit", log_data! { "via" => "crc", "code" => code, "ms" => ms(run) });
+            post_launch(run, ui.as_ref(), code);
             return code;
         }
         out::line(
@@ -491,7 +519,47 @@ fn launch(run: &Run) -> i32 {
     };
     run.logger
         .write("exit", log_data! { "via" => "claude", "code" => code, "ms" => ms(run) });
+    post_launch(run, ui.as_ref(), code);
     code
+}
+
+/// `preLaunch`: its variables into the session's environment, its arguments for claude; a
+/// `cancel` is the exit code of a launch that does not happen.
+fn pre_launch(run: &Run, o: &UiOutcome, child: &mut ChildEnv) -> Result<Vec<String>, i32> {
+    let mut warnings = Vec::new();
+    let choices: Vec<Value> = (0..run.plugins.list.len()).map(|i| run.plugins.choice(i, &o.state, o.resume_id.as_deref())).collect();
+    let choice = |i: usize| choices.get(i).cloned().unwrap_or(Value::Null);
+    let outcome = plugins::pre_launch::run(&run.plugins, &choice, &plugins::run::Process, &mut warnings);
+    for w in &warnings {
+        out::line(&format!("  {w}"), Fg::DarkYellow);
+    }
+    match outcome {
+        plugins::pre_launch::Outcome::Go(extra) => {
+            for (k, v) in &extra.env {
+                child.set(k, v);
+            }
+            Ok(extra.args)
+        }
+        plugins::pre_launch::Outcome::Cancel { plugin, reason } => {
+            let why = if reason.is_empty() { String::new() } else { format!(": {reason}") };
+            out::line(&format!("  launch cancelled by plugin {plugin}{why}"), Fg::Red);
+            run.logger.write(
+                "cancelled",
+                log_data! { "ms" => ms(run), "plugin" => plugin, "reason" => reason },
+            );
+            Err(1)
+        }
+    }
+}
+
+/// `postLaunch` once claude has ended; its warnings are the last lines.
+fn post_launch(run: &Run, ui: Option<&UiOutcome>, code: i32) {
+    let Some(o) = ui else { return };
+    let choices: Vec<Value> = (0..run.plugins.list.len()).map(|i| run.plugins.choice(i, &o.state, o.resume_id.as_deref())).collect();
+    let choice = |i: usize| choices.get(i).cloned().unwrap_or(Value::Null);
+    for w in plugins::post_launch::run(&run.plugins, &choice, code, &plugins::run::Process) {
+        out::line(&format!("  {w}"), Fg::DarkYellow);
+    }
 }
 
 fn preview_banner(title: &str) {

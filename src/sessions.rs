@@ -101,18 +101,36 @@ fn clock_now() -> Clock {
 /// `Invoke-SessionPicker` over paged, snapshotted lists: the file list is taken once per scope
 /// and every page skips over THAT list. `Ok(None)` = Esc.
 pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option<PickedSession>, UiStop> {
+    run_picker_with(term, req, &|_| Vec::new())
+}
+
+/// `run_picker` with sessions from outside the stores (`extra(slugs)`, plugin sources): tagged by
+/// their source, they join each scope's first page newest first and resume without a transfer.
+pub fn run_picker_with(
+    term: &mut dyn Term,
+    req: &PickerRequest<'_>,
+    extra: &dyn Fn(&[String]) -> Vec<listing::Session>,
+) -> Result<Option<PickedSession>, UiStop> {
     let tm = term.logger().timings.clone();
     let load = tm.begin(&["load", "picker"]);
     let root = req.sessions_root.clone();
     let cache_file = cache_path(&root);
     let mut cache = SessionCache::new(req.preview);
     let mut snapshots: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut extras: HashMap<String, Vec<listing::Session>> = HashMap::new();
     let mut fetch = |have: usize, slugs: &[String]| {
+        let added = extras.entry(slugs.join("|")).or_insert_with(|| extra(slugs));
         let snap = snapshots
             .entry(slugs.join("|"))
             .or_insert_with(|| joined_snapshot(session_files(&root, slugs), req.others, slugs));
-        let mut page = cache.list(&root, Scope::Files(snap), have, PAGE_SIZE, &cache_file);
+        // `have` counts the extra rows the first page carried; the file snapshot never held them.
+        let from_files = if have == 0 { 0 } else { have.saturating_sub(added.len()) };
+        let mut page = cache.list(&root, Scope::Files(snap), from_files, PAGE_SIZE, &cache_file);
         tag_sessions(&mut page, req.others);
+        if have == 0 && !added.is_empty() {
+            page.extend(added.iter().cloned());
+            page.sort_by_key(|s| std::cmp::Reverse(s.modified_ms));
+        }
         page
     };
     let slugs: Vec<String> = req.project_slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
@@ -121,7 +139,8 @@ pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option
     tm.end(load);
     let picked = crate::ui::screen_loop::run(&mut screen, term)?;
     Ok(picked.map(|p| PickedSession {
-        transfer: transfer_of(&p.session),
+        // An extra session has no transcript file here: nothing to copy.
+        transfer: (!p.session.path.as_os_str().is_empty()).then(|| transfer_of(&p.session)).flatten(),
         session_id: p.session.session_id,
         fork: p.fork,
     }))
