@@ -1,4 +1,4 @@
-//! The remote/companion path (`Remote.ps1` and the crc branch of `claude-auto.ps1`): the
+//! The remote/companion path: the
 //! companion server the phone talks to, started on demand and stopped only when it is provably
 //! ours; the tailnet line; the pairing QR; the session born through `crc.cmd`.
 
@@ -68,7 +68,7 @@ impl From<serde_json::Error> for ServerError {
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
-/// `Get-CompanionPort`: `port` of `%APPDATA%\claude-remote\config.json`, else 8791.
+/// `port` of `%APPDATA%\claude-remote\config.json`, else 8791.
 fn companion_port(appdata: Option<&Path>) -> u16 {
     appdata
         .map(|a| a.join("claude-remote").join("config.json"))
@@ -87,7 +87,7 @@ fn live_port() -> u16 {
     companion_port(std::env::var_os("APPDATA").map(PathBuf::from).as_deref())
 }
 
-/// `Get-CompanionRoot`: `CLAUDE_REMOTE_ROOT` when set, else the documented checkout.
+/// `CLAUDE_REMOTE_ROOT` when set, else the documented checkout.
 fn companion_root(env_root: Option<&str>, home: &Path) -> PathBuf {
     match env_root.filter(|r| !r.is_empty()) {
         Some(r) => PathBuf::from(r),
@@ -110,7 +110,7 @@ struct ProcInfo {
     command_line: String,
 }
 
-/// `Test-CompanionProcess`: node, running out of the configured checkout. The port alone says
+/// Node, running out of the configured checkout. The port alone says
 /// nothing about identity, and neither does "some node process".
 fn is_companion(info: &ProcInfo, root: &str) -> bool {
     if !info.name.eq_ignore_ascii_case("node") || info.command_line.is_empty() {
@@ -154,7 +154,7 @@ impl Procs for LiveProcs {
     }
 }
 
-/// `Stop-CompanionServer`: identify the listener first; anything that is not ours is named and
+/// Identify the listener first; anything that is not ours is named and
 /// left running. Always a status line, never a failure: this runs while the launcher quits.
 fn stop_with(root: &Path, port: u16, procs: &mut dyn Procs) -> String {
     let Some(pid) = procs.listener(port) else {
@@ -176,12 +176,12 @@ fn stop_with(root: &Path, port: u16, procs: &mut dyn Procs) -> String {
     }
 }
 
-/// `Stop-CompanionServer` on the live machine; `Ok` carries the status line in every case.
+/// Stops the companion server on the live machine; `Ok` carries the status line in every case.
 pub fn stop_companion_server() -> Result<String, String> {
     Ok(stop_with(&live_root(), live_port(), &mut LiveProcs))
 }
 
-/// `Get-CompanionLogPath`: one log per launcher instance; `.err` and `.build` share its name.
+/// One log per launcher instance; `.err` and `.build` share its name.
 fn log_path(pid: u32) -> PathBuf {
     std::env::temp_dir().join(format!("claude-remote-server-{pid}.log"))
 }
@@ -280,7 +280,7 @@ fn server_mode(server: &Path, log: &Path, child: &ChildEnv) -> &'static str {
     })
 }
 
-/// `Start-CompanionServer`: reports what actually happened, not what was intended. `Err` when
+/// Reports what actually happened, not what was intended. `Err` when
 /// node itself could not be started.
 fn start_companion_server(root: &Path, port: u16, log: &Path, child: &ChildEnv) -> Result<String, ServerError> {
     let server = root.join("server");
@@ -319,7 +319,7 @@ fn start_companion_server(root: &Path, port: u16, log: &Path, child: &ChildEnv) 
     Ok(format!("did not come up within 6s - see {}", log.display()))
 }
 
-/// `Show-PairingQr`: `npm run pair` prints the code; only a code that verified gets the pause.
+/// `npm run pair` prints the code; only a code that verified gets the pause.
 fn show_pairing_qr(root: &Path, child: &ChildEnv) {
     let run = on_path("npm").ok_or(ServerError::NotOnPath("npm")).and_then(|npm| {
         let mut pair = Command::new(npm);
@@ -346,7 +346,7 @@ fn tailnet(addrs: &[[u8; 4]]) -> Option<String> {
         .map(|a| format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]))
 }
 
-/// `Get-Command crc.cmd`: the `.cmd` shim on PATH, never `crc.ps1` (PowerShell drops `--`).
+/// The `crc.cmd` shim on PATH, never `crc.ps1` (PowerShell drops `--`).
 /// Public so `app.rs` can write the `decision` record (`via = crc`, `exe`) before the launch.
 pub fn crc_path() -> Option<PathBuf> {
     crate::invocation::find_on_path("crc", &std::env::var("PATH").unwrap_or_default(), ".CMD")

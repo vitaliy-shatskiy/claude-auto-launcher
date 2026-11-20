@@ -1,4 +1,4 @@
-//! Project frame: pinned rows on top (D1), a pin whose folder is gone drawn dimmed, the `p` button.
+//! Project frame: pinned rows on top, a pin whose folder is gone drawn dimmed, the `p` button.
 
 use super::*;
 use crate::projects::select::pinned_first;

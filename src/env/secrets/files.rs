@@ -1,4 +1,4 @@
-//! The fallback when vsec is not found: the file walk `Import-ProjectSecrets` did, one file per
+//! The fallback when vsec is not found: the file walk, one file per
 //! variable (file name = variable name, content = value) under `secretsRoot`, tiers shared -> org
 //! -> project, later beating earlier. The org tier is a junction at `<slug>\org`.
 

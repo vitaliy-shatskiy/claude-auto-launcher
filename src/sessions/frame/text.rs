@@ -15,7 +15,6 @@ pub(super) fn n0(x: f64) -> String {
     if v < 0 { format!("-{out}") } else { out }
 }
 
-/// `Format-RelativeAge`.
 #[expect(clippy::cast_precision_loss, reason = "a millisecond age fits f64 exactly enough")]
 pub fn relative_age(from_ms: i64, now_ms: i64) -> String {
     let secs = (now_ms - from_ms) as f64 / 1000.0;

@@ -1,4 +1,4 @@
-//! `Get-McpConfigPaths`: the `--mcp-config` files for a launch. Configured extras that exist, plus
+//! The `--mcp-config` files for a launch. Configured extras that exist, plus
 //! the Rider MCP endpoint file in a build with the `rider-mcp` feature.
 
 use std::path::Path;

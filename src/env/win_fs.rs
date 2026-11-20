@@ -15,7 +15,7 @@ pub(crate) use junction::create_junction;
 
 const SHARE_ALL: u32 = 7;
 
-/// `Get-SharedFileId`: volume serial plus file index = identity. Equal contents never mean one
+/// Volume serial plus file index = identity. Equal contents never mean one
 /// file. `None` = the question was not answered, never "linked".
 pub(crate) fn file_id(path: &Path) -> Option<String> {
     let f = OpenOptions::new()

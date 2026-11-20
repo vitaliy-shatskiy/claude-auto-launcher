@@ -1,4 +1,4 @@
-//! The Claude Code install on disk (`Maintenance.ps1`): downloaded builds in version order, the
+//! The Claude Code install on disk: downloaded builds in version order, the
 //! hash cache, install info, the rename swap, pruning and the verified update. Every verdict comes
 //! from a SHA-256 of the files, never from the updater's output: `claude update` reports success
 //! when Windows refused to overwrite the running image.
@@ -63,7 +63,7 @@ fn list_builds(dir: &Path) -> Option<Vec<Build>> {
     )
 }
 
-/// `Get-OrderedClaudeBuilds`: parseable names by version, newest first, then the rest by write
+/// Parseable names by version, newest first, then the rest by write
 /// time. Version beats file time: a rollback re-downloads an older build with a newer timestamp.
 pub(crate) fn order_builds(builds: Vec<Build>) -> Vec<Build> {
     let (mut parsed, mut rest): (Vec<_>, Vec<_>) = builds.into_iter().partition(|b| parse_version(&b.name).is_some());
@@ -108,7 +108,7 @@ fn read_cache(path: &Path) -> Map<String, Value> {
 }
 
 impl HashCache {
-    /// `Get-CachedFileHash`: upper-case hex, or `None` for a missing or unreadable file.
+    /// Upper-case hex, or `None` for a missing or unreadable file.
     pub(crate) fn hash(&self, path: &Path) -> Option<String> {
         let meta = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file)?;
         if meta.len() < HASH_CACHE_MIN_BYTES {
@@ -146,7 +146,6 @@ pub(crate) fn write_cache(path: &Path, text: &str) {
     }
 }
 
-/// `Get-ClaudeInstallInfo`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct InstallInfo {
     pub(crate) bin_path: String,
@@ -232,7 +231,7 @@ impl Install {
         }
     }
 
-    /// `Repair-ClaudeBinaryByRename`: copy the newest build beside the binary FIRST, then rename
+    /// Copy the newest build beside the binary FIRST, then rename
     /// the running image aside (Windows allows that) and the copy into place; any failure after
     /// the first rename puts the original back.
     pub(crate) fn rename_swap(&self) -> Outcome {
@@ -293,7 +292,7 @@ impl Install {
         }
     }
 
-    /// `Remove-OldClaudeVersions`: keeps the `keep` newest builds and the installed one. Only
+    /// Keeps the `keep` newest builds and the installed one. Only
     /// files named as a version are builds; an unidentified installed build prunes nothing.
     pub(crate) fn prune(&self, keep: usize) -> Pruned {
         let builds: Vec<Build> = list_builds(&self.versions)
@@ -323,7 +322,7 @@ impl Install {
         }
     }
 
-    /// `Invoke-ClaudeUpdate`: runs the updater, ignores what it said, re-hashes, and finishes by
+    /// Runs the updater, ignores what it said, re-hashes, and finishes by
     /// rename when the copy did not land. `updater` returns its output, or why it could not start.
     pub(crate) fn update(&self, updater: impl FnOnce() -> Result<String, String>) -> Update {
         let output = match updater() {

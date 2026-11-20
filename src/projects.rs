@@ -1,4 +1,4 @@
-//! Projects and the project screen (`Projects.ps1`, `Invoke-ProjectScreen`, `Get-ProjectFrame`):
+//! Projects and the project screen:
 //! the registry of directories Claude Code has sessions in, the start selection, and the screen
 //! that picks where a session runs and what it does there.
 
@@ -30,7 +30,7 @@ pub fn slugs_for_path(projects: &[Project], path: &str) -> Vec<String> {
     select::slugs_for_path(projects, path)
 }
 
-/// One project row (`Get-ProjectRegistry`): one real directory, every slug folder naming it.
+/// One project row: one real directory, every slug folder naming it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     /// The directory's leaf name (`C:` for a drive root).
@@ -81,7 +81,7 @@ fn home() -> PathBuf {
     std::env::var_os("USERPROFILE").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
-/// `Get-ProjectRegistry`. The projects root is `CLAUDE_AUTO_PROJECTS_ROOT`, else
+/// The projects root is `CLAUDE_AUTO_PROJECTS_ROOT`, else
 /// `~\.claude\projects`; the cache is `cache_path` (preview: its own per-PID file), else
 /// `claude-auto-projects.json` beside the root. `profile_roots`: every account root a job tmp
 /// directory can sit under. Never fails: an unreadable root is an empty list.
@@ -104,8 +104,8 @@ pub fn project_registry(cache_path: Option<&Path>, profile_roots: &[String], hid
     })
 }
 
-/// The profile roots the launcher hands `project_registry` (`Get-ProjectProfileRoots` plus the
-/// roster, claude-auto.ps1): `~\.claude`, the `CLAUDE_CONFIG_DIR` this process started with, then
+/// The profile roots the launcher hands `project_registry`: `~\.claude`, the `CLAUDE_CONFIG_DIR`
+/// this process started with, then
 /// every account root.
 pub fn launcher_profile_roots(home: &Path, config_dir: Option<&str>, account_roots: &[String]) -> Vec<String> {
     let mut roots = vec![home.join(".claude").to_string_lossy().into_owned()];
@@ -146,7 +146,7 @@ fn apply_start(state: &mut LaunchState, cwd: &str, projects: &[Project]) -> &'st
     source.as_str()
 }
 
-/// `Set-LaunchStartProject`: the cwd when it is a known project or holds a `.git`, else the
+/// The cwd when it is a known project or holds a `.git`, else the
 /// remembered project (`state.project`) when it is still there, else none. Sets the project, its
 /// slug and every slug of its directory; records the context for `update_start_selection`.
 /// Returns the source: cwd | remembered | none.
@@ -160,7 +160,7 @@ pub fn set_launch_start_project(state: &mut LaunchState, cwd: &Path, projects: &
     source.into()
 }
 
-/// `Update-LaunchStartSelection`: re-decides the start selection after a tab switch replaced the
+/// Re-decides the start selection after a tab switch replaced the
 /// remembered project. A no-op when no start selection ran.
 pub fn update_start_selection(state: &mut LaunchState) {
     if let Some(ctx) = state.start.take() {
@@ -169,13 +169,13 @@ pub fn update_start_selection(state: &mut LaunchState) {
     }
 }
 
-/// `Remove-StalePreviewProjectsCache`: the per-PID preview caches a killed run left, older than a
+/// The per-PID preview caches a killed run left, older than a
 /// day, by their exact name only.
 pub fn remove_stale_preview_cache(dir: &Path) {
     registry::remove_stale_preview_cache_at(dir, SystemTime::now());
 }
 
-/// `h` or `p` saved in one write: (the list `project` joins, the list it leaves). D2: a hide
+/// `h` or `p` saved in one write: (the list `project` joins, the list it leaves). A hide
 /// leaves the pins, a pin leaves the hidden.
 fn change_lists(change: HideChange) -> (Option<&'static str>, Option<&'static str>) {
     match change {
@@ -212,7 +212,7 @@ pub fn save_hidden_project(config: &str, ctx: &PathCtx, project: &str, change: H
     })
 }
 
-/// `Invoke-ProjectScreen`: where the session runs and what it does there. `None` = Escape, back to
+/// Where the session runs and what it does there. `None` = Escape, back to
 /// the launch screen. The cursor opens on the current directory and the action field on `new`.
 pub fn run_project_screen(
     term: &mut dyn Term,

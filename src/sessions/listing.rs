@@ -1,4 +1,4 @@
-//! The session list (`Sessions.ps1` second half): one summary per transcript, the newest-first
+//! The session list: one summary per transcript, the newest-first
 //! file snapshot a picker pages over, and the summary cache shared by every account root that
 //! reaches the same physical projects directory.
 
@@ -91,13 +91,13 @@ fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-/// `Get-ProjectPathFromTranscript`: the cwd the NEWEST transcript of a slug directory records.
+/// The cwd the NEWEST transcript of a slug directory records.
 pub(crate) fn project_path_from_transcript(dir: &Path) -> Option<String> {
     let newest = jsonl_files(dir).into_iter().max_by_key(|(_, t)| *t)?.0;
     crate::projects::path_from_transcript(&newest)
 }
 
-/// `Get-ClaudeSessionSummary`. `pre_filter` false parses every line (the suite's control); the
+/// `pre_filter` false parses every line (the suite's control); the
 /// prompt count reads at most `max_bytes` (`MAX_BYTES`; a test passes a small cap).
 #[cfg(test)]
 pub(crate) fn summarize(path: &Path, project_path: Option<&str>, pre_filter: bool, max_bytes: usize) -> Option<Session> {
@@ -244,7 +244,7 @@ fn slug_dirs(root: &Path, slugs: &[String]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// `Get-ClaudeSessionFile`: every transcript under the root (or under the slugs), newest first.
+/// Every transcript under the root (or under the slugs), newest first.
 /// Taken once when a picker opens; every page indexes THIS list.
 pub fn session_files(root: &Path, slugs: &[String]) -> Vec<PathBuf> {
     let slugs: Vec<String> = slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
@@ -253,7 +253,7 @@ pub fn session_files(root: &Path, slugs: &[String]) -> Vec<PathBuf> {
     all.into_iter().map(|(p, _)| p).collect()
 }
 
-/// `Get-PhysicalDirectoryPath`: every link component resolved, no trailing separator; anything
+/// Every link component resolved, no trailing separator; anything
 /// unresolvable comes back as given.
 pub(crate) fn physical_dir(path: &Path) -> PathBuf {
     let s = std::fs::canonicalize(path).map_or_else(
@@ -275,8 +275,8 @@ pub(crate) fn physical_dir(path: &Path) -> PathBuf {
     PathBuf::from(trimmed)
 }
 
-/// `Get-SessionsCachePath`. The PowerShell launcher that once owned this name is gone, so the Rust
-/// one took it back from `claude-auto-rs-sessions.json` (`files::LEGACY_CACHE_NAME`).
+/// The summary cache file, `claude-auto-sessions.json`; 0.9.0 took the name back from
+/// `claude-auto-rs-sessions.json` (`files::LEGACY_CACHE_NAME`).
 pub fn cache_path(projects_root: &Path) -> PathBuf {
     let physical = physical_dir(projects_root);
     physical.parent().unwrap_or(&physical).join(CACHE_NAME)
@@ -324,7 +324,7 @@ impl SessionCache {
         Self { memo: None, read_only }
     }
 
-    /// `Read-SessionsCache`: the file, a brief retry while another instance holds it, then this
+    /// The file, a brief retry while another instance holds it, then this
     /// process's own copy of the same bytes; corrupt = empty.
     pub fn read(&mut self, path: &Path) -> BTreeMap<String, Session> {
         let Some(st) = stamp(path) else { return BTreeMap::new() };
@@ -347,7 +347,7 @@ impl SessionCache {
         }
     }
 
-    /// `Write-SessionsCache`: a sibling temp moved over the file (atomic, last writer wins);
+    /// A sibling temp moved over the file (atomic, last writer wins);
     /// stranded temps older than a minute swept first; any failure is swallowed.
     pub fn write(&mut self, path: &Path, entries: &BTreeMap<String, Session>) {
         if self.read_only {
@@ -376,7 +376,7 @@ impl SessionCache {
         }
     }
 
-    /// `Get-ClaudeSessions`: up to `limit` summaries after `skip`, over the scope, cached. Every
+    /// Up to `limit` summaries after `skip`, over the scope, cached. Every
     /// miss is summarised here, on the caller's thread (preview, tests, the perf world).
     pub fn list(&mut self, root: &Path, scope: Scope<'_>, skip: usize, limit: usize, cache_file: &Path) -> Vec<Session> {
         let Some(plan) = self.plan(root, scope, skip, limit, cache_file) else {

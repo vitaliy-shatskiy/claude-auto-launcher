@@ -1,4 +1,4 @@
-//! Launcher configuration (`Config.ps1`): `~/.claude/claude-auto.json` or `CLAUDE_AUTO_CONFIG`.
+//! Launcher configuration: `~/.claude/claude-auto.json` or `CLAUDE_AUTO_CONFIG`.
 //! Every validation failure falls back to that key's default and adds a warning; nothing fails.
 
 mod plugins;
@@ -94,14 +94,14 @@ pub struct PathCtx {
 }
 
 impl PathCtx {
-    /// `$HOME` is `USERPROFILE` on Windows, as PowerShell reads it.
+    /// Home is `USERPROFILE` on Windows.
     pub fn from_env() -> Self {
         let home = std::env::var_os("USERPROFILE").map_or_else(|| PathBuf::from("."), PathBuf::from);
         let cwd = std::env::current_dir().unwrap_or_else(|_| home.clone());
         Self { home, cwd }
     }
 
-    /// `Expand-LauncherPath`: `~` and `~\x` against home, a relative value against `cwd`
+    /// `~` and `~\x` against home, a relative value against `cwd`
     /// explicitly, then a full path (separators normalised, `.`/`..` collapsed).
     pub fn expand(&self, raw: &str) -> String {
         if raw.is_empty() {
@@ -165,8 +165,8 @@ pub fn ps_truthy(v: Option<&Value>) -> bool {
     }
 }
 
-/// `ConvertTo-LauncherBool`: a real boolean or the literal strings true/false
-/// (case-insensitive); anything else keeps the default and names the field.
+/// A real boolean or the literal strings true/false (case-insensitive); anything else keeps the
+/// default and names the field.
 pub fn to_bool(v: Option<&Value>, default: bool, name: &str) -> (bool, Option<String>) {
     match v {
         None | Some(Value::Null) => (default, None),
@@ -307,7 +307,6 @@ pub struct RowsConfig {
     pub model_order: Option<Vec<String>>,
 }
 
-/// `Get-LauncherConfigPath`.
 pub fn config_path(ctx: &PathCtx, env_override: Option<&str>) -> String {
     match env_override {
         Some(v) if !v.is_empty() => ctx.expand(v),
@@ -315,7 +314,7 @@ pub fn config_path(ctx: &PathCtx, env_override: Option<&str>) -> String {
     }
 }
 
-/// `Get-LauncherNearKey`: a prefix match either way, case-insensitive.
+/// A prefix match either way, case-insensitive.
 fn near_key(key: &str) -> Option<&'static str> {
     let k = key.to_ascii_lowercase();
     KNOWN_KEYS.iter().copied().find(|known| {
@@ -348,7 +347,6 @@ fn parse_self_update_keys(obj: &serde_json::Map<String, Value>, cfg: &mut Config
     }
 }
 
-/// `ConvertTo-MaintenanceActions`.
 pub fn parse_actions(raw: &Value, ctx: &PathCtx) -> (Vec<MaintenanceAction>, Vec<String>) {
     let mut out: Vec<MaintenanceAction> = Vec::new();
     let mut warnings = Vec::new();
@@ -517,7 +515,7 @@ fn hook_chains(raw: &Value, ctx: &PathCtx, warnings: &mut Vec<String>) -> Vec<Ve
     out
 }
 
-/// `Read-LauncherConfig` over text already read from `path`.
+/// Parses config text already read from `path`.
 pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
     let mut cfg = Config::defaults(ctx, path);
     let raw: Value = match serde_json::from_str(text) {
@@ -712,7 +710,7 @@ fn has_bare_backslash(text: &str) -> bool {
     false
 }
 
-/// `Read-LauncherConfig`: no file = defaults; an unreadable file warns and keeps the defaults.
+/// No file = defaults; an unreadable file warns and keeps the defaults.
 pub fn read_config(path: &str, ctx: &PathCtx) -> Config {
     if !Path::new(path).exists() {
         return Config::defaults(ctx, path);

@@ -1,4 +1,4 @@
-//! Project screen: `p`, `pinnedProjects`, and how a pin and a hide exclude each other (D1, D2).
+//! Project screen: `p`, `pinnedProjects`, and how a pin and a hide exclude each other.
 
 use super::*;
 
@@ -106,7 +106,7 @@ fn a_failed_pin_save_lasts_this_run_only_and_the_cwd_row_pins_nothing() {
     assert_eq!(*hiding.pinned.borrow(), [f.beta.as_str()], "the pin holds for this run");
 }
 
-/// Mouse parity (0.8.0 D1): a click selects the row, the footer's `p` acts on it.
+/// Mouse parity: a click selects the row, the footer's `p` acts on it.
 #[test]
 fn a_click_then_the_footer_p_pins_the_clicked_row() {
     let f = fx();

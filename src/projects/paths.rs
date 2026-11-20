@@ -1,5 +1,4 @@
-//! Path keys and checks (`ConvertTo-ProjectKey`, `ConvertTo-ProjectScratchKey`,
-//! `Test-ProjectScratchPath`, `Get-ProjectTempRoots`, `Test-ProjectPathPresent`). Everything but the
+//! Path keys and checks. Everything but the
 //! presence check is string work: nothing here touches the disk or a network.
 
 use std::collections::BTreeMap;
@@ -67,7 +66,7 @@ fn expand_short(p: &str) -> String {
     }
 }
 
-/// `Test-ProjectRootKeyDeep`: a drive or share root is never a scratch root.
+/// A drive or share root is never a scratch root.
 pub(crate) fn root_key_deep(key: &str) -> bool {
     if key.is_empty() {
         return false;
@@ -76,7 +75,7 @@ pub(crate) fn root_key_deep(key: &str) -> bool {
     if key.starts_with(r"\\") { parts >= 3 } else { parts >= 2 }
 }
 
-/// `Get-ProjectTempRoots`: candidate temp directories as keys, minus any that could not be one (a
+/// Candidate temp directories as keys, minus any that could not be one (a
 /// drive or share root, the home directory or anything above it).
 pub(crate) fn temp_roots(candidates: &[String], home: &str) -> Vec<String> {
     let home_key = scratch_key(home);
@@ -105,7 +104,7 @@ pub(crate) fn default_temp_candidates() -> Vec<String> {
     c
 }
 
-/// `Test-ProjectScratchPath` over roots already normalised and depth-checked once per build.
+/// The scratch check over roots already normalised and depth-checked once per build.
 pub(crate) fn is_scratch_key(key: &str, temp_keys: &[String], profile_keys: &[String]) -> bool {
     if key.is_empty() {
         return false;
@@ -122,7 +121,7 @@ pub(crate) fn is_scratch_key(key: &str, temp_keys: &[String], profile_keys: &[St
     })
 }
 
-/// `Test-ProjectScratchPath` with raw roots: a temp root at a drive or share root hides nothing.
+/// The scratch check with raw roots: a temp root at a drive or share root hides nothing.
 #[cfg(test)]
 pub(crate) fn is_scratch_path(path: &str, temp_roots: &[&str], profile_roots: &[&str]) -> bool {
     let (t, p) = scratch_keys(temp_roots, profile_roots);
@@ -147,7 +146,7 @@ pub(crate) fn scratch_keys<S: AsRef<str>>(temp_roots: &[S], profile_roots: &[S])
 /// One build's drive answers, by lower-case letter.
 pub(crate) type DriveCache = BTreeMap<char, DriveClass>;
 
-/// `Test-ProjectPathPresent`: `Test-Path` that never waits on a network. A UNC path or a path on a
+/// A presence check that never waits on a network. A UNC path or a path on a
 /// network drive is taken as present unprobed; `\\?\X:\` is local and probed; a drive letter that
 /// is not there (or not ready) is absent without a look.
 pub(crate) fn path_present(path: &str, drives: &mut DriveCache) -> bool {

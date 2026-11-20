@@ -1,4 +1,4 @@
-//! The launch screen's frame (`Get-LaunchFrame`, `Add-LaunchColor`, limit lines). Pure.
+//! The launch screen's frame (limit lines). Pure.
 
 use std::sync::LazyLock;
 
@@ -13,7 +13,7 @@ use crate::layout::{display_width, new_box};
 use crate::theme::{self, BarStyle, Glyphs, new_bar};
 use crate::types::{DefaultLabels, LimitRecord, Limits, VersionInfo};
 
-/// Everything `Get-LaunchFrame` draws from.
+/// Everything the launch frame draws from.
 #[derive(Debug, Clone, Copy)]
 pub struct LaunchFrameInput<'a> {
     pub state: &'a LaunchState,
@@ -140,7 +140,6 @@ fn pad_right(s: &str, width: usize) -> String {
     format!("{s:<width$}")
 }
 
-/// `Get-LaunchFrame`.
 #[expect(clippy::too_many_lines, reason = "one row loop, as in Screens.ps1")]
 pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let state = inp.state;
@@ -419,7 +418,7 @@ fn is_selected_anchor(chars: &[char], open: usize, on: char) -> bool {
     COMPACT_PREFIX.is_match(&prefix) && !not_account.starts_with("account")
 }
 
-/// `Add-LaunchColor`: painted AFTER layout; the selected cell first (anchored on the On glyph or
+/// Painted AFTER layout; the selected cell first (anchored on the On glyph or
 /// the compact row's label), then the account tab, percentages, row words, cursor, sparkle, ages.
 pub fn add_launch_color(line: &str, enabled: bool, g: &Glyphs, roster: &Roster) -> String {
     if !enabled || line.is_empty() {

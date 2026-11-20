@@ -69,7 +69,7 @@ impl ProjectScreen<'_> {
         true
     }
 
-    /// D5: the create question takes a deliberate yes (Enter or its footer button); a click or a
+    /// The create question takes a deliberate yes (Enter or its footer button); a click or a
     /// cursor move drops it. `true` = there was one.
     pub(super) fn drop_question(&mut self) -> bool {
         self.nav.as_mut().is_some_and(|n| n.confirm.take().is_some())

@@ -1,4 +1,4 @@
-//! `Get-ProjectFrame` and `Get-ProjectViewport`: where the session runs and what it does there.
+//! The project frame and its viewport: where the session runs and what it does there.
 //! Pure: every input, the clock included, is a parameter.
 
 use std::sync::LazyLock;
@@ -27,7 +27,7 @@ pub(crate) fn project_actions() -> Vec<String> {
     LAUNCH_MODES.iter().map(|m| m.name.to_owned()).collect()
 }
 
-/// `Step-ProjectAction`; delta 0 is the canonicaliser (an unknown value is the first).
+/// Steps the project action; delta 0 is the canonicaliser (an unknown value is the first).
 pub(crate) fn step_project_action(action: &str, delta: i64) -> String {
     step_option(&project_actions(), action, delta)
 }
@@ -54,7 +54,7 @@ fn rounded(ms: i64, unit_ms: f64) -> i64 {
     (ms as f64 / unit_ms).round() as i64
 }
 
-/// `Format-RelativeAge`: now, N min, N h, N d (rounded like `{0:N0}`).
+/// Now, N min, N h, N d (rounded like `{0:N0}`).
 pub(crate) fn relative_age(from_ms: i64, now_ms: i64) -> String {
     let age = now_ms.saturating_sub(from_ms);
     if age < 60_000 {
@@ -71,13 +71,13 @@ pub(crate) fn relative_age(from_ms: i64, now_ms: i64) -> String {
 static CTL_OR_FORMAT: LazyLock<Regex> = LazyLock::new(|| theme::re(r"[\p{Cc}\p{Cf}]"));
 static SPACES: LazyLock<Regex> = LazyLock::new(|| theme::re(r"\s+"));
 
-/// `Get-CleanTranscriptText`: control and format characters become spaces, runs of space collapse.
+/// Control and format characters become spaces, runs of space collapse.
 pub(crate) fn clean_text(text: &str) -> String {
     let t = CTL_OR_FORMAT.replace_all(text, " ");
     SPACES.replace_all(&t, " ").trim().to_owned()
 }
 
-/// `Get-ProjectViewport`: the window over the rows, separator lines included, centred on the
+/// The window over the rows, separator lines included, centred on the
 /// cursor's line. A window never opens on a gap; one closing on a gap ends a line earlier.
 /// Returns (first row, visible rows).
 pub(crate) fn project_viewport(rows: &[Row], index: usize, lines: usize) -> (usize, usize) {
@@ -121,7 +121,7 @@ pub(crate) struct ProjectView<'a> {
     pub marked: &'a [String],
     /// Project keys drawn dimmed and marked missing: the pins whose folder is gone.
     pub dimmed: &'a [String],
-    /// Project keys of the pinned projects: a dim pin mark before the name (D10).
+    /// Project keys of the pinned projects: a dim pin mark before the name.
     pub pinned: &'a [String],
     pub index: usize,
     pub filter: &'a str,
@@ -310,7 +310,7 @@ fn list_body(rows: &[Row], w: &Window, v: &ProjectView<'_>, g: &Glyphs) -> (Vec<
     (body, row_ys)
 }
 
-/// `Get-ProjectFrame`. The current directory leads, the registry follows newest first, the
+/// The current directory leads, the registry follows newest first, the
 /// free-path row closes the list; the action field is a radio row under it.
 pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     if v.width < MIN_WIDTH || v.height < MIN_HEIGHT {

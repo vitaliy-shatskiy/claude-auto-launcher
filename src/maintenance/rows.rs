@@ -44,7 +44,7 @@ pub(crate) struct RowsEditor {
     cursor: Cursor,
     style: Style,
     notice: &'static str,
-    /// The row the last click selected; a key or the wheel clears it (D1).
+    /// The row the last click selected; a key or the wheel clears it.
     clicked: Option<usize>,
 }
 
@@ -275,7 +275,7 @@ impl Screen for RowsEditor {
         false
     }
 
-    /// D1: a click selects a row; a second click on the value of the hidden row the previous
+    /// A click selects a row; a second click on the value of the hidden row the previous
     /// click selected steps it as d does. Only a hidden, live row has a value cell.
     fn click(&mut self, hit: &Hit) -> Flow<RowsChoice> {
         let (row, on_value) = match hit {

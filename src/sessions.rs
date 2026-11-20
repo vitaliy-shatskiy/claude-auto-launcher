@@ -1,5 +1,4 @@
-//! Sessions and the session picker (`Sessions.ps1`, `Invoke-SessionPicker`, `Get-PickerFrame`,
-//! `Expand-SessionPage`, the frame memo). The entry points `app.rs` calls; the work lives in
+//! Sessions and the session picker. The entry points `app.rs` calls; the work lives in
 //! `sessions/`: `transcript` (records), `listing` (summaries, snapshot, cache), `frame` (the
 //! picker frame and memo), `picker` (the screen), `holder` (another live claude on a session).
 
@@ -80,7 +79,7 @@ pub struct PickerRequest<'a> {
     pub preview: bool,
 }
 
-/// `Get-SessionsRoot` with its inputs explicit: sharing on = one root for every account (the
+/// The sessions root with its inputs explicit: sharing on = one root for every account (the
 /// `CLAUDE_AUTO_PROJECTS_ROOT` override, else `~\.claude\projects`); off = the account's own.
 pub fn sessions_root_from(cfg: &Config, account: &str, projects_override: Option<&str>, home: &Path) -> PathBuf {
     if cfg.sharing {
@@ -89,7 +88,7 @@ pub fn sessions_root_from(cfg: &Config, account: &str, projects_override: Option
             _ => home.join(".claude").join("projects"),
         };
     }
-    // An unknown account (PowerShell throws) degrades to the canonical root: the launch goes on.
+    // An unknown account degrades to the canonical root: the launch goes on.
     cfg.accounts
         .iter()
         .find(|a| a.key.eq_ignore_ascii_case(account))
@@ -97,7 +96,6 @@ pub fn sessions_root_from(cfg: &Config, account: &str, projects_override: Option
         .map_or_else(|| home.join(".claude").join("projects"), |a| Path::new(&a.root).join("projects"))
 }
 
-/// `Get-SessionsRoot`.
 pub fn sessions_root(cfg: &Config, account: &str) -> PathBuf {
     let over = std::env::var("CLAUDE_AUTO_PROJECTS_ROOT").ok();
     sessions_root_from(cfg, account, over.as_deref(), &PathCtx::from_env().home)
@@ -113,7 +111,7 @@ fn clock_now() -> Clock {
     }
 }
 
-/// `Invoke-SessionPicker` over paged, snapshotted lists: the file list is taken once per scope
+/// The picker over paged, snapshotted lists: the file list is taken once per scope
 /// and every page skips over THAT list. `Ok(None)` = Esc.
 pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option<PickedSession>, UiStop> {
     run_picker_with(term, req, &|_| Vec::new())
@@ -177,21 +175,21 @@ pub fn run_picker_with(
     }))
 }
 
-/// `Get-ContinueSessionHolder`: the warning line for the claude.exe holding the session
+/// The warning line for the claude.exe holding the session
 /// `claude -c` would attach to, or `None`. Any failure is `None`.
 pub fn continue_session_holder(sessions_dirs: &[PathBuf], slugs: &[String], projects_root: &Path) -> Option<String> {
     let id = holder::continue_session_id(projects_root, slugs, sessions_dirs);
     session_holder(sessions_dirs, &id)
 }
 
-/// `Get-ClaudeSessionHolder`: the warning line for the claude.exe holding this session id.
+/// The warning line for the claude.exe holding this session id.
 pub fn session_holder(sessions_dirs: &[PathBuf], session_id: &str) -> Option<String> {
     let h = holder::find_holder(sessions_dirs, session_id)?;
     let offset = crate::sys::local_now().map_or(0, |t| t.offset_minutes);
     Some(holder::warning(&h, offset))
 }
 
-/// `Format-HeldSessionWarning`: the holder functions above already return the formatted line.
+/// The holder functions above already return the formatted line.
 pub fn held_warning(holder: &str) -> String {
     holder.to_owned()
 }

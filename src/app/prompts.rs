@@ -1,4 +1,4 @@
-//! The no-UI prompts (`claude-auto.ps1` fallback): the account letters, then the remote question.
+//! The no-UI prompts: the account letters, then the remote question.
 
 use std::collections::BTreeMap;
 
@@ -50,7 +50,7 @@ fn read_line() -> String {
     s.trim_end_matches(['\r', '\n']).to_owned()
 }
 
-/// `Get-AccountKeyPrefixes`: key -> its shortest unique lower-case prefix.
+/// Key -> its shortest unique lower-case prefix.
 pub fn account_prefixes(keys: &[&str]) -> BTreeMap<String, String> {
     let lower: Vec<String> = keys.iter().map(|k| k.to_lowercase()).collect();
     keys.iter()
@@ -66,7 +66,7 @@ pub fn account_prefixes(keys: &[&str]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// `Resolve-AccountAnswer`: the key in full, else the LONGEST advertised prefix; else the default.
+/// The key in full, else the LONGEST advertised prefix; else the default.
 pub fn resolve_account_answer(answer: &str, prefixes: &BTreeMap<String, String>, default: &str) -> String {
     let a = answer.trim().to_lowercase();
     if a.is_empty() {

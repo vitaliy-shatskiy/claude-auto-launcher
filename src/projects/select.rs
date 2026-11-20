@@ -1,5 +1,4 @@
-//! What the project screen lists and where the launch starts (`Select-ProjectMatch`,
-//! `Get-ProjectRows`, `Get-ProjectCount`, `Resolve-StartProject`). Pure but for the existence checks
+//! What the project screen lists and where the launch starts. Pure but for the existence checks
 //! of the start selection.
 
 use std::path::Path;
@@ -17,7 +16,7 @@ pub(crate) fn filter_words(filter: &str) -> Vec<String> {
         .collect()
 }
 
-/// `Select-ProjectMatch`: every word a literal, case-insensitive substring of "name path
+/// Every word a literal, case-insensitive substring of "name path
 /// worktree" (a pasted path must match as typed). No filter: the hidden rows are left out, except
 /// the cwd's own. A filter: a name starting with a word first, then a name holding one, then a
 /// path match; the hidden ones after all visible ones; registry order (recency) within a rank.
@@ -52,8 +51,8 @@ pub(crate) fn select_match<'a>(projects: &'a [Project], filter: &str, cwd: &str)
     hits.into_iter().map(|(_, _, p)| p).collect()
 }
 
-/// D1: the pinned projects first in `pins` order, then the rest in registry order (recency). A
-/// pin is never hidden (D2: pinning unhides); spellings of one folder count once. A pin the
+/// The pinned projects first in `pins` order, then the rest in registry order (recency). A
+/// pin is never hidden (pinning unhides); spellings of one folder count once. A pin the
 /// registry does not list (its folder gone, its transcripts pruned) stays, named by its leaf and
 /// undated. `select_match` sorts stably, so under a filter a pin only breaks ties.
 pub(crate) fn pinned_first(projects: &[Project], pins: &[String]) -> Vec<Project> {
@@ -116,7 +115,7 @@ fn all_slugs(p: &Project) -> Vec<String> {
     }
 }
 
-/// `Get-ProjectRows`: the cwd row, the matches, the free-path row - the ONE builder the frame draws
+/// The cwd row, the matches, the free-path row - the ONE builder the frame draws
 /// and the screen picks from. A cwd that is a known project carries it and leaves the list.
 pub(crate) fn project_rows(projects: &[Project], filter: &str, cwd: &str) -> Vec<Row> {
     let cwd_key = project_key(cwd);
@@ -175,7 +174,7 @@ pub(crate) fn project_rows(projects: &[Project], filter: &str, cwd: &str) -> Vec
     rows
 }
 
-/// `Get-ProjectCount`: (known, hidden) for the title, from the rule that decides the rows. The
+/// (known, hidden) for the title, from the rule that decides the rows. The
 /// cwd's own project is listed whatever its flag and counted in neither hidden total.
 pub(crate) fn project_count(projects: &[Project], filter: &str, cwd: &str) -> (usize, usize) {
     let listed = select_match(projects, filter, cwd);
@@ -217,7 +216,7 @@ impl StartSource {
     }
 }
 
-/// `Resolve-StartProject`: the cwd when it is a known project or holds a `.git`, else the
+/// The cwd when it is a known project or holds a `.git`, else the
 /// remembered project when it is still there (checked without a network wait), else none.
 pub(crate) fn resolve_start(cwd: &str, remembered: &str, projects: &[Project]) -> (Option<String>, StartSource) {
     let c = project_key(cwd);
@@ -289,7 +288,7 @@ pub(crate) mod tests {
         assert_eq!(names, ["api-new", "api-two", "my-api", "one", "api-old"]);
     }
 
-    /// D2: in `/` search a pin only breaks ties; the pins among one rank keep their pin order.
+    /// In `/` search a pin only breaks ties; the pins among one rank keep their pin order.
     #[test]
     fn a_pin_only_breaks_ties_in_the_filter_ranking() {
         let ps = vec![

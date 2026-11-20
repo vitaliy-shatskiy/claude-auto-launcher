@@ -1,4 +1,4 @@
-//! Remembered launch choices, one profile per account (`Prefs.ps1`, file v2): read with v1
+//! Remembered launch choices, one profile per account (file v2): read with v1
 //! migration, save under a per-file mutex with an atomic temp+rename write (UTF-8, no BOM),
 //! merge onto a fresh state, and the per-tab switch and reset of the launch screen.
 
@@ -21,7 +21,7 @@ pub struct Prefs {
     pub unreadable: bool,
 }
 
-/// `Get-LaunchPrefsPath`: `CLAUDE_AUTO_PREFS` overrides.
+/// `CLAUDE_AUTO_PREFS` overrides.
 pub fn prefs_path(ctx: &PathCtx, env_override: Option<&str>) -> String {
     match env_override {
         Some(v) if !v.is_empty() => ctx.expand(v),
@@ -111,7 +111,7 @@ pub fn parse_prefs(text: &str) -> Prefs {
     }
 }
 
-/// `Read-LaunchPrefs`: missing = empty; unreadable (a lock that outlasts the retries, a replace in
+/// Missing = empty; unreadable (a lock that outlasts the retries, a replace in
 /// flight) = empty AND marked, so save will not rebuild.
 pub fn read_prefs(path: &str) -> Prefs {
     let path = Path::new(path);
@@ -125,7 +125,7 @@ pub fn read_prefs(path: &str) -> Prefs {
     }
 }
 
-/// `Get-PrefsAgeText`: epoch milliseconds to 'just now', 'N min', 'N h', 'N d'.
+/// Epoch milliseconds to 'just now', 'N min', 'N h', 'N d'.
 pub fn age_text(saved_at_ms: Option<i64>, now_ms: i64) -> String {
     let Some(saved) = saved_at_ms else { return String::new() };
     #[expect(clippy::cast_precision_loss, reason = "a millisecond span as minutes")]
@@ -151,7 +151,7 @@ fn profile<'a>(prefs: &'a Prefs, account: &str) -> Option<&'a Map<String, Value>
     prefs.profiles.get(account).and_then(Value::as_object)
 }
 
-/// `Save-LaunchPrefs`'s merge: this account's entry rebuilt, every other profile copied forward.
+/// This account's entry rebuilt, every other profile copied forward.
 pub fn build_prefs_data(prev: &Prefs, state: &LaunchState, now_ms: i64, roster: &Roster) -> Value {
     let account = if state.account.is_empty() {
         "work".to_owned()
@@ -198,7 +198,7 @@ pub fn build_prefs_data(prev: &Prefs, state: &LaunchState, now_ms: i64, roster: 
     json!({ "Version": 2, "Account": account, "SavedAtMs": now_ms, "Profiles": profiles })
 }
 
-/// `Get-PrefsMutexName`: one mutex per prefs FILE, named by a hash of its full lower-case path.
+/// One mutex per prefs FILE, named by a hash of its full lower-case path.
 pub fn mutex_name(path: &str) -> String {
     let norm = std::path::absolute(path).map_or_else(|_| path.to_lowercase(), |p| p.to_string_lossy().to_lowercase());
     let hex = sys::sha256(norm.as_bytes()).map_or_else(String::new, |h| hex(h.get(..16).unwrap_or_default()));
@@ -214,7 +214,7 @@ fn hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// `Save-LaunchPrefs`: read, merge and write under one lock. A lock that does not arrive in 2 s,
+/// Read, merge and write under one lock. A lock that does not arrive in 2 s,
 /// or an unreadable file, is a skipped write, never a delay or a loss. Returns what was built, and
 /// why nothing was written when it was not (the caller logs it; a session still starts).
 pub fn save_prefs(path: &str, state: &LaunchState, now_ms: i64, roster: &Roster) -> (Value, std::io::Result<()>) {
@@ -237,7 +237,7 @@ pub(crate) fn write_json(path: &str, data: &Value) -> std::io::Result<()> {
     crate::atomic_file::write_durable(Path::new(path), text.as_bytes())
 }
 
-/// What `Merge-LaunchPrefs` applied.
+/// What the prefs merge applied.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Merged {
     pub restored: Vec<String>,
@@ -263,7 +263,7 @@ fn apply_entry(state: &mut LaunchState, entry: &Map<String, Value>, roster: &Ros
     restored
 }
 
-/// `Merge-LaunchPrefs`: the remembered account (validated against the account row) and its
+/// The remembered account (validated against the account row) and its
 /// profile onto a fresh state; the project only when it is an existing directory.
 pub fn merge_prefs(state: &mut LaunchState, prefs: &Prefs, roster: &Roster, now_ms: i64) -> Merged {
     let mut restored = Vec::new();
@@ -290,7 +290,7 @@ pub fn merge_prefs(state: &mut LaunchState, prefs: &Prefs, roster: &Roster, now_
     Merged { restored, age_text: age }
 }
 
-/// `Switch-LaunchAccount`: parks the tab being left in this session's stash, then loads the one
+/// Parks the tab being left in this session's stash, then loads the one
 /// arrived at from the stash, else the file, else the defaults.
 pub fn switch_account(state: &mut LaunchState, to: &str, prefs: &Prefs, roster: &Roster, now_ms: i64) {
     let mut stash = Stash {
@@ -342,7 +342,7 @@ pub fn switch_account(state: &mut LaunchState, to: &str, prefs: &Prefs, roster: 
     crate::projects::update_start_selection(state);
 }
 
-/// `Reset-LaunchTab`: ctrl+r resets the ACTIVE tab's habit rows for this launch only.
+/// Ctrl+r resets the ACTIVE tab's habit rows for this launch only.
 pub fn reset_tab(state: &mut LaunchState, roster: &Roster) {
     let fresh = roster.new_state();
     for f in PROFILE_FIELDS {

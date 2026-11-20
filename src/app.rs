@@ -1,4 +1,4 @@
-//! The launch, in the order `claude-auto.ps1` runs it: argv pass-through, config, log, the UI
+//! The launch, in order: argv pass-through, config, log, the UI
 //! (launch screen -> project screen -> picker), profile, secrets, sharing, hooks, MCP, exec.
 
 mod headless;

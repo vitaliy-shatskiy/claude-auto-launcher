@@ -1,4 +1,4 @@
-//! Pure geometry in display cells (`Layout.ps1`): width, truncation, wrapping, boxes, panes.
+//! Pure geometry in display cells: width, truncation, wrapping, boxes, panes.
 
 use unicode_general_category::{GeneralCategory, get_general_category};
 
@@ -63,7 +63,7 @@ const WIDE_RANGES: &[(u32, u32)] = &[
     (0x1F200, 0x1F2FF),
 ];
 
-/// `Get-CodePointWidth`: C0 zero, ASCII one, marks and format characters zero, wide ranges two.
+/// C0 zero, ASCII one, marks and format characters zero, wide ranges two.
 pub fn char_width(c: char) -> usize {
     let cp = u32::from(c);
     if cp < 0x20 {
@@ -85,7 +85,7 @@ pub fn char_width(c: char) -> usize {
     }
 }
 
-/// `Get-DisplayWidth`: the cells a string occupies.
+/// The cells a string occupies.
 pub fn display_width(text: &str) -> usize {
     text.chars().map(char_width).sum()
 }
@@ -95,7 +95,7 @@ pub fn ellipsis(ascii: bool) -> char {
     if ascii { '~' } else { '\u{2026}' }
 }
 
-/// `Limit-Cells`: the longest prefix fitting `max` cells, cut between whole characters.
+/// The longest prefix fitting `max` cells, cut between whole characters.
 pub fn limit_cells(text: &str, max: usize) -> String {
     let mut w = 0;
     let mut out = String::new();
@@ -110,7 +110,7 @@ pub fn limit_cells(text: &str, max: usize) -> String {
     out
 }
 
-/// `Limit-CellsRight`: the longest suffix fitting `max` cells.
+/// The longest suffix fitting `max` cells.
 pub fn limit_cells_right(text: &str, max: usize) -> String {
     let mut w = 0;
     let mut start = text.len();
@@ -125,7 +125,7 @@ pub fn limit_cells_right(text: &str, max: usize) -> String {
     text.get(start..).unwrap_or_default().to_owned()
 }
 
-/// `Limit-Line`: truncate with a one-cell marker rather than let the console wrap.
+/// Truncate with a one-cell marker rather than let the console wrap.
 pub fn limit_line(text: &str, max: usize, ascii: bool) -> String {
     if display_width(text) <= max {
         return text.to_owned();
@@ -138,7 +138,7 @@ pub fn limit_line(text: &str, max: usize, ascii: bool) -> String {
     s
 }
 
-/// `Limit-Path`: middle truncation that keeps the leaf and at least one cell of head.
+/// Middle truncation that keeps the leaf and at least one cell of head.
 pub fn limit_path(text: &str, max: usize, ascii: bool) -> String {
     if display_width(text) <= max {
         return text.to_owned();
@@ -158,7 +158,7 @@ pub fn limit_path(text: &str, max: usize, ascii: bool) -> String {
     format!("{head}{}{tail}", ellipsis(ascii))
 }
 
-/// `Split-TextLines`: word wrap; a token longer than the pane is cut, never dropped.
+/// Word wrap; a token longer than the pane is cut, never dropped.
 pub fn split_text_lines(text: &str, width: usize, max_lines: usize, ascii: bool) -> Vec<String> {
     if text.trim().is_empty() || width == 0 {
         return Vec::new();
@@ -205,7 +205,7 @@ pub fn split_text_lines(text: &str, width: usize, max_lines: usize, ascii: bool)
     lines
 }
 
-/// `Split-OutputLines`: every physical line wrapped on its own, blank runs collapsed, the head kept.
+/// Every physical line wrapped on its own, blank runs collapsed, the head kept.
 pub fn split_output_lines(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     if text.trim().is_empty() || width == 0 {
         return Vec::new();
@@ -238,7 +238,7 @@ fn repeat(c: char, n: usize) -> String {
     std::iter::repeat_n(c, n).collect()
 }
 
-/// `New-Box`: a frame of exactly `width` columns; content is truncated, never wrapped.
+/// A frame of exactly `width` columns; content is truncated, never wrapped.
 pub fn new_box(lines: &[String], width: usize, title: &str, g: &Glyphs, ascii: bool) -> Vec<String> {
     if width < 3 {
         return Vec::new();
@@ -264,7 +264,7 @@ pub fn new_box(lines: &[String], width: usize, title: &str, g: &Glyphs, ascii: b
     out
 }
 
-/// `Join-Panes`: side by side with one divider, both panes padded in cells.
+/// Side by side with one divider, both panes padded in cells.
 pub fn join_panes(left: &[String], right: &[String], left_w: usize, right_w: usize, g: &Glyphs, ascii: bool) -> Vec<String> {
     let height = left.len().max(right.len());
     (0..height)
@@ -281,7 +281,7 @@ pub fn join_panes(left: &[String], right: &[String], left_w: usize, right_w: usi
         .collect()
 }
 
-/// `Get-Viewport`: keep the selection centred, clamped at both ends.
+/// Keep the selection centred, clamped at both ends.
 pub fn viewport(count: usize, index: usize, visible: usize) -> (usize, usize) {
     let v = visible.min(count).max(1);
     let start = index.saturating_sub(v / 2).min(count.saturating_sub(v));

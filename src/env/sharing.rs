@@ -1,7 +1,7 @@
 //! Sharing repair between the canonical profile root ("work") and every secondary root:
-//! hardlinked files (`Repair-SharedLink`), the `CLAUDE.md` file symlink (`Repair-SharedSymlink`),
-//! junctions with their ACL shield (`Repair-SharedJunction`, `Protect-SharedJunction`) and the
-//! profile root itself (`New-ClaudeProfileRoot`). Every step yields notes; nothing panics.
+//! hardlinked files, the `CLAUDE.md` file symlink,
+//! junctions with their ACL shield and the
+//! profile root itself. Every step yields notes; nothing panics.
 
 use std::os::windows::fs::{FileTypeExt as _, MetadataExt as _};
 use std::path::{Path, PathBuf};
@@ -129,7 +129,7 @@ fn read_json(p: &Path) -> Option<Value> {
     serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
 }
 
-/// `Test-VolatileOnlyDifference`: the two copies differ in at least one volatile key and in
+/// The two copies differ in at least one volatile key and in
 /// nothing else. Unparseable content, or any other difference, is not volatile-only.
 pub(crate) fn volatile_only_difference(name: &str, a: &Path, b: &Path) -> bool {
     let Some((_, keys)) = VOLATILE.iter().find(|(n, _)| *n == name) else {
@@ -169,7 +169,7 @@ fn rotate_backup(backup: &Path, dst: &Path) -> std::io::Result<()> {
     olds.sort_by_key(|o| std::cmp::Reverse(o.0));
     for (_, p) in olds.iter().skip(3) {
         if std::fs::remove_file(p).is_err() {
-            // Best effort, like Remove-Item -ErrorAction SilentlyContinue: one more backup is no harm.
+            // Best effort: one more backup is no harm.
         }
     }
     Ok(())
@@ -210,7 +210,7 @@ fn relink_one(name: &str, src: &Path, dst: &Path, notes: &mut Vec<Note>) -> bool
     true
 }
 
-/// `Repair-SharedLink`: one File ID across every root that holds `name`, re-linked from the
+/// One File ID across every root that holds `name`, re-linked from the
 /// NEWEST copy when they differ. A copy differing only in volatile keys stays separate.
 pub(crate) fn repair_link(name: &str, roots: &[PathBuf]) -> Vec<Note> {
     let mut notes = Vec::new();
@@ -269,7 +269,7 @@ fn same_bytes(a: &Path, b: &Path) -> bool {
     matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y)
 }
 
-/// The body of `Repair-SharedSymlink`: at most one note; `None` = already correct.
+/// The symlink repair's body: at most one note; `None` = already correct.
 fn symlink_note(name: &str, work: &Path, root: &Path, make_link: &dyn Fn(&Path, &Path) -> std::io::Result<()>) -> Option<Note> {
     let w = work.join(name);
     let p = root.join(name);
@@ -343,9 +343,9 @@ fn symlink_note(name: &str, work: &Path, root: &Path, make_link: &dyn Fn(&Path, 
     Some(Note::new(format!("symlinked {name} in {root_name} -> work{saved}"), Fg::Yellow))
 }
 
-/// `Repair-SharedSymlink`: `<root>\<name>` a file symlink to the canonical copy. Missing ->
+/// `<root>\<name>` a file symlink to the canonical copy. Missing ->
 /// created; elsewhere -> re-pointed; an identical regular file -> saved and replaced; a diverged
-/// copy is the owner's edit, left and named. Lines go through `Write-SharingNote` (indented).
+/// copy is the owner's edit, left and named. Lines are indented notes.
 pub(crate) fn repair_symlink(name: &str, work: &Path, root: &Path, make_link: &dyn Fn(&Path, &Path) -> std::io::Result<()>) -> Vec<Note> {
     if !root.is_dir() || !work.join(name).is_file() {
         return Vec::new();
@@ -356,7 +356,7 @@ pub(crate) fn repair_symlink(name: &str, work: &Path, root: &Path, make_link: &d
         .collect()
 }
 
-/// `Protect-SharedJunction`: deny DELETE on the junction (`/L`, never the target) and
+/// Deny DELETE on the junction (`/L`, never the target) and
 /// `FILE_DELETE_CHILD` on the root that owns it, so Claude Code's swallowed `rmdir` fails instead
 /// of deleting the link. The root deny is added only when absent. icacls exit codes are read.
 pub(crate) fn protect_junction(path: &Path, root: &Path, icacls: &mut Icacls<'_>) -> Vec<Note> {
@@ -390,7 +390,7 @@ pub(crate) fn protect_junction(path: &Path, root: &Path, icacls: &mut Icacls<'_>
     notes
 }
 
-/// `Repair-SharedJunction`: a missing junction is created (and shielded); a real directory in its
+/// A missing junction is created (and shielded); a real directory in its
 /// place is reported, never merged. A missing canonical directory is put back silently first.
 pub(crate) fn repair_junction(name: &str, work: &Path, root: &Path, icacls: &mut Icacls<'_>) -> std::io::Result<Vec<Note>> {
     let w = work.join(name);
@@ -423,7 +423,7 @@ pub(crate) fn repair_junction(name: &str, work: &Path, root: &Path, icacls: &mut
     Ok(notes)
 }
 
-/// `New-ClaudeProfileRoot`: the root exists and holds a hardlink of each shared file the work root
+/// The root exists and holds a hardlink of each shared file the work root
 /// has. Idempotent; `Ok(true)` = the root was created now.
 pub(crate) fn new_profile_root(root: &Path, work: &Path, files: &[&str], notes: &mut Vec<Note>) -> std::io::Result<bool> {
     let created = !root.exists();
@@ -450,7 +450,7 @@ pub(crate) fn new_profile_root(root: &Path, work: &Path, files: &[&str], notes: 
     Ok(created)
 }
 
-/// `Repair-SharedProfiles` without the config and preview guards: roots, links, junctions,
+/// The sharing repair without the config and preview guards: roots, links, junctions,
 /// symlinks, each step in its own fail-soft envelope.
 pub(crate) fn repair_all(work: &Path, secondary: &[PathBuf], set: SharedSet<'_>, seams: &mut Seams<'_>) -> Vec<Note> {
     let mut notes = Vec::new();

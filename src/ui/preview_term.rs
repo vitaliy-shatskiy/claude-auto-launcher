@@ -98,7 +98,7 @@ pub fn parse_preview_keys(spec: &str) -> Result<VecDeque<KeyPress>, String> {
         .collect()
 }
 
-/// `CLAUDE_AUTO_PREVIEW_SIZE` (`WxH`, new in the Rust port); the PowerShell preview's 78x24 default.
+/// `CLAUDE_AUTO_PREVIEW_SIZE` (`WxH`); 78x24 by default.
 pub fn parse_preview_size(spec: Option<&str>) -> (usize, usize) {
     spec.and_then(|s| {
         let (w, h) = s.split_once(['x', 'X'])?;

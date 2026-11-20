@@ -1,5 +1,5 @@
 //! The armed console: `CONIN$`, mode arm and bit-exact restore, one record queue for keys, mouse
-//! and resize, ESC-sequence peeking, and the switch to VT text mouse (`Input.ps1`, CS-1653).
+//! and resize, ESC-sequence peeking, and the switch to VT text mouse.
 
 use std::io::Write as _;
 use std::time::{Duration, Instant};
@@ -236,7 +236,7 @@ impl ConsoleInput {
         }
     }
 
-    /// `Read-ClaudeInputEvent`: one event within `timeout_ms`, or `None`.
+    /// One event within `timeout_ms`, or `None`.
     pub fn read_event(&mut self, timeout_ms: u32) -> Option<Event> {
         if self.closed {
             return None;

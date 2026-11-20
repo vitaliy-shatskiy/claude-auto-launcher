@@ -1,4 +1,4 @@
-//! The picker frame (`Get-PickerFrame` and its helpers): master-detail at >= 100 columns, one
+//! The picker frame: master-detail at >= 100 columns, one
 //! column below with the preview underneath, and the frame memo that repaints only the lines a
 //! hover change touched.
 
@@ -91,12 +91,12 @@ pub struct PickerView<'a> {
     pub chat: ChatView<'a>,
 }
 
-/// `Select-ResumableSessions`' rule: not headless and something was asked.
+/// Resumable: not headless and something was asked.
 pub fn resumable(s: &Session) -> bool {
     !s.headless && s.prompt_count > 0
 }
 
-/// `Select-SessionMatch`: a case-insensitive substring over project, worktree and the texts.
+/// A case-insensitive substring over project, worktree and the texts.
 pub fn matches(s: &Session, filter: &str) -> bool {
     let f = filter.trim();
     if f.is_empty() {
@@ -116,7 +116,6 @@ struct RowCtx<'a> {
     ascii: bool,
 }
 
-/// `New-SessionRow`.
 fn session_row(it: &Session, row_index: usize, c: &RowCtx<'_>) -> String {
     let mark = if row_index == c.index {
         format!(" {} ", c.g.cursor)
@@ -247,7 +246,7 @@ struct Built {
     selected: i32,
 }
 
-/// `Get-PickerFrame`, memoised: a frame differing only in its hover repaints those lines.
+/// The picker frame, memoised: a frame differing only in its hover repaints those lines.
 pub fn picker_frame(v: &PickerView<'_>, memo: &mut Memo) -> Frame {
     if v.width < MIN_WIDTH || v.height < MIN_HEIGHT {
         return Frame {

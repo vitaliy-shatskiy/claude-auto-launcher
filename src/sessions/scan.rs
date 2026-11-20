@@ -1,5 +1,5 @@
 //! One streaming byte scan over a whole transcript: the message count and the title records
-//! (`custom-title` from `/rename`, `ai-title`) and the `last-prompt` record. They can sit anywhere
+//! (`custom-title` from `/rename`) and the `last-prompt` record. They can sit anywhere
 //! in a multi-MB file, so the head and tail reads cannot find them. The summary cache keeps the scan's state, so a grown
 //! transcript is read only past the last scanned line and an unchanged one not at all.
 //! A record is classified from its raw bytes, parsing JSON only for the small title lines.

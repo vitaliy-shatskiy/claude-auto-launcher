@@ -1,4 +1,4 @@
-//! Transcript reading (`Sessions.ps1` first half): which record is a human prompt, the clean text a
+//! Transcript reading: which record is a human prompt, the clean text a
 //! frame may show, the slug fallback, bounded head/tail reads, the prompt counter, the headless
 //! verdict and the `claude -c` candidate test. Pure apart from reading the file it is handed.
 
@@ -83,7 +83,7 @@ fn blocks(content: &Value) -> Vec<&Value> {
     }
 }
 
-/// `Get-ClaudeRecordText`: a plain string, or the `text` blocks of an array joined by a space.
+/// A plain string, or the `text` blocks of an array joined by a space.
 pub(crate) fn record_text(content: Option<&Value>) -> Option<String> {
     let content = content?;
     if let Value::String(s) = content {
@@ -101,7 +101,7 @@ fn content_of(rec: &Value) -> Option<&Value> {
     field(rec, "message").and_then(|m| field(m, "content"))
 }
 
-/// `Get-ClaudeUserPrompt`: the text a human typed, or `None` when the record is machinery.
+/// The text a human typed, or `None` when the record is machinery.
 pub(crate) fn user_prompt(rec: &Value) -> Option<String> {
     if !type_is(rec, "user") || ps_truthy(field(rec, "isSidechain")) {
         return None;
@@ -135,7 +135,7 @@ pub(crate) fn user_prompt(rec: &Value) -> Option<String> {
     Some(text)
 }
 
-/// `Get-CodeFenceCollapsedText`: a fenced block becomes `[code: N lines]`.
+/// A fenced block becomes `[code: N lines]`.
 pub(crate) fn collapse_fences(text: &str) -> String {
     if !text.contains("```") {
         return text.to_owned();
@@ -149,7 +149,7 @@ pub(crate) fn collapse_fences(text: &str) -> String {
         .into_owned()
 }
 
-/// `Get-CleanTranscriptText`: control and format characters become spaces, whitespace runs one
+/// Control and format characters become spaces, whitespace runs one
 /// space, trimmed. Transcript text is untrusted and reaches the terminal.
 pub fn clean_text(text: &str) -> String {
     let spaced: String = text
@@ -226,7 +226,7 @@ fn read_at(f: &mut File, offset: u64, count: usize) -> Vec<u8> {
     buf
 }
 
-/// `Get-FileTailLines`: the last `count` lines, walking back in chunks and bounded by BYTES as well
+/// The last `count` lines, walking back in chunks and bounded by BYTES as well
 /// as newlines, so a newline-free file costs the budget and never the whole file.
 pub(crate) fn tail_lines(path: &Path, count: usize, max_bytes: usize) -> Vec<String> {
     let Ok(mut f) = File::open(path) else { return Vec::new() };
@@ -339,7 +339,7 @@ pub(crate) fn counts_as_prompt(line: &str) -> bool {
     plain_prompt_content(line) || parse_line(line).is_some_and(|r| user_prompt(&r).is_some())
 }
 
-/// `Measure-ClaudePromptDetail`: (count, capped). Past `max_bytes` the count stops and says so.
+/// (count, capped). Past `max_bytes` the count stops and says so.
 pub(crate) fn prompt_detail(path: &Path, max_bytes: usize) -> (i64, bool) {
     let bounded = std::fs::metadata(path).map_or(true, |m| max_bytes > 0 && m.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX));
     let lines = if bounded {
@@ -354,7 +354,6 @@ pub(crate) fn prompt_detail(path: &Path, max_bytes: usize) -> (i64, bool) {
     (i64::try_from(n).unwrap_or(i64::MAX), bounded)
 }
 
-/// `Test-HeadlessEntrypoint`.
 pub(crate) fn headless_entrypoint(e: &str) -> bool {
     e.starts_with("sdk-")
 }
@@ -365,7 +364,7 @@ fn has_non_headless(seen: &str) -> bool {
         .any(|m| !seen.get(m.end()..).unwrap_or("").starts_with("sdk-"))
 }
 
-/// `Get-TranscriptHeadlessVerdict`: `Some(true)` when every entrypoint seen is headless,
+/// `Some(true)` when every entrypoint seen is headless,
 /// `Some(false)` when one is not, `None` when none is seen or the file cannot be read.
 pub(crate) fn headless_verdict(path: &Path, window: usize) -> Option<bool> {
     let mut f = File::open(path).ok()?;
@@ -399,12 +398,12 @@ pub(crate) fn headless_verdict(path: &Path, window: usize) -> Option<bool> {
     Some(!has_non_headless(&seen))
 }
 
-/// `Test-HeadlessTranscript`: no entrypoint or an unreadable file is NOT headless.
+/// No entrypoint or an unreadable file is NOT headless.
 pub(crate) fn is_headless(path: &Path) -> bool {
     headless_verdict(path, 65_536) == Some(true)
 }
 
-/// `Test-ContinueCandidate`: whether `claude -c` considers this transcript at all.
+/// Whether `claude -c` considers this transcript at all.
 pub(crate) fn continue_candidate(path: &Path, window: usize) -> bool {
     let Ok(mut f) = File::open(path) else { return false };
     let Ok(len) = f.metadata().map(|m| m.len()) else { return false };

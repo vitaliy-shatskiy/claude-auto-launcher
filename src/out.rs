@@ -1,9 +1,9 @@
-//! Console output: `Write-Host` lines with a foreground colour, and raw frame writes.
+//! Console output: lines with a foreground colour, and raw frame writes.
 #![expect(clippy::print_stdout, clippy::print_stderr, reason = "the CLI output module")]
 
 use std::io::{IsTerminal as _, Write as _};
 
-/// The `Write-Host -ForegroundColor` names the launcher uses.
+/// The foreground colours the launcher uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fg {
     Plain,
@@ -46,7 +46,7 @@ impl Fg {
 }
 
 fn paint(text: &str, fg: Fg) -> String {
-    // Write-Host colours the console, never a redirect: the preview's captured text stays plain.
+    // Colour goes to the console, never to a redirect: the preview's captured text stays plain.
     if fg == Fg::Plain || !std::io::stdout().is_terminal() {
         text.to_owned()
     } else {
@@ -54,12 +54,12 @@ fn paint(text: &str, fg: Fg) -> String {
     }
 }
 
-/// `Write-Host <text> -ForegroundColor <fg>`.
+/// One line in `fg`.
 pub fn line(text: &str, fg: Fg) {
     println!("{}", paint(text, fg));
 }
 
-/// `Write-Host -NoNewline`.
+/// Text in `fg`, no line break.
 pub fn inline(text: &str, fg: Fg) {
     print!("{}", paint(text, fg));
     flush();

@@ -1,6 +1,4 @@
-//! The model catalog read out of the installed `claude.exe` (`Get-ModelCatalog*`,
-//! `Read-ModelCatalogFrom*`, `Get-AnchorWindows`, `Get-ModelFamilyLabels`,
-//! `Get-FriendlyModelName`, `Get-Model1mBracket`). The binary embeds one
+//! The model catalog read out of the installed `claude.exe`. The binary embeds one
 //! `{id:"...",family:"...",display_name:"..."}` record per model and a `latest_per_family:{...}`
 //! map, exactly what each alias starts. The scan is cached per binary (path, size, write time);
 //! every failure degrades to the static labels.
@@ -53,7 +51,7 @@ fn latin1(b: &[u8]) -> String {
     b.iter().map(|&c| char::from(c)).collect()
 }
 
-/// `Get-AnchorWindows`: `[hit - before, hit + anchor + after]` around each ordinal occurrence,
+/// `[hit - before, hit + anchor + after]` around each ordinal occurrence,
 /// clipped. Keeps the regexes off the bulk of a 200 MB scan.
 pub(crate) fn anchor_windows<'a>(text: &'a [u8], anchor: &str, before: usize, after: usize) -> Vec<&'a [u8]> {
     let Ok(finder) = Regex::new(&format!("(?-u){}", regex::escape(anchor))) else {
@@ -65,7 +63,7 @@ pub(crate) fn anchor_windows<'a>(text: &'a [u8], anchor: &str, before: usize, af
         .collect()
 }
 
-/// `Read-ModelCatalogFromText`, over bytes.
+/// The catalog records in a run of bytes.
 pub(crate) fn from_text(text: &[u8], into: &mut Catalog) {
     for w in anchor_windows(text, "display_name:\"", 160, 120) {
         for c in RECORD.captures_iter(w) {
@@ -81,7 +79,7 @@ pub(crate) fn from_text(text: &[u8], into: &mut Catalog) {
     }
 }
 
-/// `Read-ModelCatalogFromBinary`: chunked, the tail of each chunk carried into the next so a
+/// Chunked, the tail of each chunk carried into the next so a
 /// record straddling a boundary is seen whole.
 pub(crate) fn from_binary(path: &Path, chunk: usize, overlap: usize) -> std::io::Result<Catalog> {
     let mut f = std::fs::File::open(path)?;
@@ -141,7 +139,7 @@ fn read_cache(cache: &Path, key: &str) -> Option<Catalog> {
     })
 }
 
-/// `Get-ModelCatalog`: from the cache when the binary is unchanged, else a fresh scan (written
+/// From the cache when the binary is unchanged, else a fresh scan (written
 /// back). Preview answers from the cache and stops there: the scan writes. `None` = static labels.
 pub(crate) fn load(bin: &Path, cache: &Path, preview: bool) -> Option<(Catalog, Source)> {
     if !bin.exists() {
@@ -169,14 +167,14 @@ pub(crate) fn load(bin: &Path, cache: &Path, preview: bool) -> Option<(Catalog, 
     Some((cat, Source::Binary))
 }
 
-/// `Get-ModelCatalogBinPath`: wherever `claude` resolves, else the native install path.
+/// Wherever `claude` resolves, else the native install path.
 pub(crate) fn bin_path(home: &Path) -> PathBuf {
     let path = std::env::var("PATH").unwrap_or_default();
     let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
     crate::invocation::find_on_path("claude", &path, &pathext).unwrap_or_else(|| home.join(r".local\bin\claude.exe"))
 }
 
-/// `Get-ModelFamilyLabels`: family -> what its alias starts today; the static table fills the rest.
+/// Family -> what its alias starts today; the static table fills the rest.
 pub(crate) fn family_labels(cat: Option<&Catalog>) -> Vec<(String, String)> {
     STATIC_FAMILY_LABELS
         .iter()
@@ -189,7 +187,7 @@ pub(crate) fn family_labels(cat: Option<&Catalog>) -> Vec<(String, String)> {
         .collect()
 }
 
-/// `Get-Model1mBracket`: Sonnet's 1M context is native, the bracket would say nothing.
+/// Sonnet's 1M context is native, the bracket would say nothing.
 pub(crate) fn bracket_1m(family: &str) -> &'static str {
     if family.eq_ignore_ascii_case("sonnet") { "" } else { "[1M]" }
 }
@@ -206,7 +204,7 @@ fn strip_1m(raw: &str) -> String {
     out.trim().to_owned()
 }
 
-/// `Get-FriendlyModelName`: an exact catalog id inside the value wins (longest first, so
+/// An exact catalog id inside the value wins (longest first, so
 /// `claude-fable-5` cannot shadow `claude-fable-5-1`); a bare alias falls to its family's label;
 /// anything else renders as itself, cut to 24 characters.
 pub(crate) fn friendly(raw: &str, cat: Option<&Catalog>) -> String {

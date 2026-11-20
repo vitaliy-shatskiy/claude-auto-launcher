@@ -79,7 +79,7 @@ fn escape_in_the_navigator_never_launches() {
     assert!(last.contains("> + enter a path"), "the cursor is back on the free-path row\n{last}");
 }
 
-/// D1 in the navigator: one click selects a row, the second click on it acts.
+/// One click selects a row, the second click on it acts.
 #[test]
 fn navigator_rows_take_a_click_then_a_second_click() {
     let f = fx();
@@ -107,7 +107,7 @@ fn navigator_rows_take_a_click_then_a_second_click() {
     assert_eq!(picked.path, f.beta, "the second click entered beta, Enter used it");
 }
 
-/// D5: the create question is answered only by Enter (or its footer button); a click or a cursor
+/// The create question is answered only by Enter (or its footer button); a click or a cursor
 /// move drops it, so a double-click never creates a folder.
 #[test]
 fn only_enter_answers_the_create_question() {

@@ -44,7 +44,7 @@ fn four_account_fixture_parses_with_hidden_and_tints() {
     }
 }
 
-/// D6: a module left out of the build names the missing module on its key and stays off.
+/// A module left out of the build names the missing module on its key and stays off.
 #[test]
 fn a_module_left_out_of_the_build_warns_on_its_key_and_stays_off() {
     let text = r#"{"accounts":[{"key":"a","root":"~/.claude","tint":"Green"},{"key":"b","root":"~/.b","tint":"Cyan"}],

@@ -1,4 +1,4 @@
-//! The account roster (`ConvertTo-LauncherRoster`): one entry per account, archived ones
+//! The account roster: one entry per account, archived ones
 //! dropped, and any structural failure falls back to the single default account.
 
 use serde_json::Value;

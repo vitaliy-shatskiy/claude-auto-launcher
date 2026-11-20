@@ -1,4 +1,4 @@
-//! `Invoke-LaunchScreen`: what the launch screen alone does around the shared loop - stepping a
+//! What the launch screen alone does around the shared loop - stepping a
 //! row over its visible values, the account row as a tab strip, click-to-value, ctrl+r, and the
 //! caller's own key hook (`u` opens maintenance).
 
@@ -35,7 +35,7 @@ pub struct LaunchView {
     pub version: VersionInfo,
     pub default_model_label: String,
     pub default_advisor_label: String,
-    /// Account -> its resolved defaults (`Get-DefaultLabels` per root).
+    /// Account -> its resolved defaults.
     pub labels_by_account: BTreeMap<String, DefaultLabels>,
     pub style: Style,
 }
