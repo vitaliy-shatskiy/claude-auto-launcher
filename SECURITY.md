@@ -17,9 +17,24 @@ Worth knowing before you run it, and the places a vulnerability would matter:
   `CLAUDE_AUTO_VSEC` or PATH), the launcher runs it and every variable it returns reaches the
   launched session: whatever is first on PATH under that name is trusted. Without vsec, every file
   under `secretsRoot` becomes an environment variable in the launched session. Anything readable
-  there reaches the child process. Values are never printed.
+  there reaches the child process, except Claude Code's own auth variables and the store's key,
+  which are refused. Values are never printed.
 - **Your Claude Code install.** The maintenance screen updates, renames and prunes binaries under
   the real install directory.
+- **Its own exe (claude-auto self-update).** Once a day it asks the GitHub releases of `updateRepo`
+  (default this repository; a fork can point it at its own) for a newer version. An update
+  downloads the exe over https only, checks it against the release's `.sha256`, renames the
+  running exe to `claude-auto.exe.old` and puts the download in its place; `b` swaps them back.
+  Whoever controls the `updateRepo` releases controls what runs next. `selfUpdate: "off"` or
+  `CLAUDE_AUTO_NO_SELF_UPDATE=1` turns it off.
+- **Plugins.** Every program listed in config `plugins` runs with the launcher's own
+  environment (the session's secrets are not in it) and can add variables and arguments to the session. A plugin may not set the
+  account or its credentials (`CLAUDE_CONFIG_DIR`, `ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `CLAUDE_CODE_USE_*`, `USERPROFILE`, `HOME`). Nothing unlisted runs; a listed path is never
+  looked up on PATH.
+- **`--launcher-run '<json>'`.** Starts claude from a JSON request, checked against what the launch
+  screen would offer that account; anything that can run `claude-auto` can launch a session this
+  way.
 - **Other account roots.** With `sharing: true` it hardlinks and junctions directories between
   account roots and applies `icacls` deny ACEs. Read that section of the README first.
 

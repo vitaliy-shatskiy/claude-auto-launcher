@@ -28,5 +28,4 @@ pwsh -File docs/media/render.ps1
 `render.ps1` runs `draw.mjs`, the four tapes, then paints over the cursor block VHS leaves on the screenshot. The tapes need `vhs` with `ttyd` and `ffmpeg` on PATH and the Cascadia Mono font. They take the
 release binary under `$env:CARGO_TARGET_DIR` (default `target`), else the debug one. In the walk
 the model names and the version in the title come from the `claude.exe` installed on the recording
-machine. The preview screenshot reads no catalog and shows the built-in model names. `launch-screen.tape` also writes `target/vhs/launch-screen.gif` (gitignored,
-not used).
+machine. The preview screenshot reads no catalog and shows the built-in model names.
