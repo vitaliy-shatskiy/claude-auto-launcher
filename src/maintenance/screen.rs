@@ -1,4 +1,4 @@
-//! The maintenance screen (`Invoke-MaintenanceScreen`, `Get-MaintenanceFrame`): install info, a
+//! The maintenance screen: install info, a
 //! status box, the five built-in keys and the configured actions. Every action reports through the
 //! status line, slow ones draw a "running ..." frame first, and confirm-twice actions gate on the
 //! input RECORD time so a paste is never two presses.
@@ -59,7 +59,7 @@ pub(crate) struct ScriptRun {
     pub(crate) exit_code: i32,
 }
 
-/// `Invoke-MaintenanceScript`'s verdict.
+/// A maintenance script's verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ScriptResult {
     pub(crate) ran: bool,
@@ -67,7 +67,7 @@ pub(crate) struct ScriptResult {
     pub(crate) message: String,
 }
 
-/// `Invoke-MaintenanceScript`: the existence check runs before any runner; exit 2 is "could not
+/// The existence check runs before any runner; exit 2 is "could not
 /// run", never a pass; the last three non-blank lines follow the verdict.
 pub(crate) fn run_script(script: &Path, label: &str, runner: &mut dyn FnMut(&Path) -> Result<ScriptRun, String>) -> ScriptResult {
     if !script.exists() {
@@ -121,7 +121,7 @@ fn prefix16(hash: Option<&str>, none: &str) -> String {
     hash.map_or_else(|| none.to_owned(), |h| h.chars().take(16).collect())
 }
 
-/// `Get-MaintenanceFrame`. `hover` is a clickable footer-button index, -1 for none.
+/// `hover` is a clickable footer-button index, -1 for none.
 pub(crate) fn maintenance_frame(
     info: &InstallInfo,
     size: (usize, usize),
@@ -194,17 +194,17 @@ pub(crate) fn maintenance_frame(
 
 /// What the screen's keys do to the machine; the seam that keeps tests off the real install.
 pub(crate) trait Ops {
-    /// `Get-ClaudeInstallInfo`, refreshed by every draw.
+    /// The install info, refreshed by every draw.
     fn info(&mut self) -> InstallInfo;
-    /// `(Invoke-ClaudeUpdate).Message`.
+    /// The Claude Code update's status message.
     fn update(&mut self) -> String;
-    /// `(Repair-ClaudeBinaryByRename).Message`.
+    /// The rename swap's status message.
     fn rename_swap(&mut self) -> String;
-    /// `Invoke-ClaudeCommandText`: `claude <args>` reduced to status text, never a failure.
+    /// `claude <args>` reduced to status text, never a failure.
     fn command_text(&mut self, args: &[&str]) -> String;
-    /// `Remove-OldClaudeVersions -Keep 2`.
+    /// Prunes old Claude Code builds, keeping two.
     fn prune(&mut self) -> Pruned;
-    /// The script runner behind `Invoke-MaintenanceScript`.
+    /// The maintenance script runner.
     fn run(&mut self, script: &Path) -> Result<ScriptRun, String>;
     /// Config `rows`, `hiddenValues` and the keys shaping them, as the file holds them now.
     fn load_rows(&mut self) -> RowsConfig;

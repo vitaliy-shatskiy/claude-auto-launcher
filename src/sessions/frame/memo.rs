@@ -1,4 +1,4 @@
-//! The frame memo (`Get-MemoFrame`): the last frame built, repainted only where a hover moved.
+//! The frame memo: the last frame built, repainted only where a hover moved.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -15,7 +15,7 @@ pub(super) struct Band {
     pub(super) len: usize,
 }
 
-/// The last frame built, for the hover-only repaint (`Get-MemoFrame`).
+/// The last frame built, for the hover-only repaint.
 #[derive(Debug, Clone, Default)]
 pub struct Memo {
     pub(super) key: u64,

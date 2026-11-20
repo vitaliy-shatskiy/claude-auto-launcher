@@ -1,4 +1,4 @@
-//! `Invoke-LaunchHooks`: config-listed scripts after the account choice, all at once, each
+//! Config-listed scripts after the account choice, all at once, each
 //! best-effort, printed in config order. A hook prints what it wants; a failure is one line;
 //! nothing stops the session.
 
@@ -70,7 +70,7 @@ fn run_one(hook: &str, env: &ChildEnv) -> Ran {
         ));
     };
     env.apply(&mut cmd);
-    // The console's stdin, as PowerShell gave its hooks: `output()` alone would hand them a
+    // The console's stdin: `output()` alone would hand them a
     // closed stream.
     let out = match cmd.creation_flags(CREATE_NO_WINDOW).stdin(Stdio::inherit()).output() {
         Ok(o) => o,

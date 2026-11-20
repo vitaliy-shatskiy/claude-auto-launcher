@@ -1,4 +1,4 @@
-//! `Invoke-ScreenLoop`: draw, wait, resize, the mouse (hover paints only, click, double-click
+//! Draw, wait, resize, the mouse (hover paints only, click, double-click
 //! guard, wheel, footer buttons), the arrows and WASD, Enter/Escape/Tab/hotkeys, and the log
 //! records, written once. A screen is a `Screen` implementation around it.
 
@@ -49,7 +49,7 @@ impl Cursor {
 }
 
 /// One screen: its draw and its handlers. Every handler is optional (the defaults are the
-/// loop's own behaviour), exactly like the PowerShell handler table.
+/// loop's own behaviour).
 pub trait Screen {
     type Output;
 
@@ -114,7 +114,7 @@ pub trait Screen {
     fn click(&mut self, _hit: &Hit) -> Flow<Self::Output> {
         Flow::Continue
     }
-    /// A click on the LIST row a previous click selected (D1); `None` = no handler.
+    /// A click on the LIST row a previous click selected; `None` = no handler.
     fn activate(&mut self, _hit: &Hit) -> Option<Flow<Self::Output>> {
         None
     }
@@ -183,7 +183,7 @@ struct Guards {
     footer_at: Option<u64>,
     /// An activation is fresh: the next ready point marks whether its twin already waits.
     settle: bool,
-    /// D1: the list row a click selected. Only a click on it activates: a cursor the keyboard or
+    /// The list row a click selected. Only a click on it activates: a cursor the keyboard or
     /// the wheel moved never starts anything on one click.
     selected: Option<i32>,
 }

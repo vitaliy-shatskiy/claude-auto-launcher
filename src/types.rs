@@ -1,8 +1,8 @@
-//! Data shared across modules and phase B workers. No phase B worker edits this file.
+//! Data shared across modules.
 
 use std::collections::BTreeMap;
 
-/// One account's last-known limits (`Get-RateLimitSummary`, Env.ps1).
+/// One account's last-known limits.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LimitRecord {
     pub five_hour: Option<i64>,
@@ -21,12 +21,11 @@ pub struct LimitRecord {
 /// Account key -> its limits.
 pub type Limits = BTreeMap<String, LimitRecord>;
 
-/// Row name (`Model`, `Effort`, `Advisor`, `Permission`) -> what 'default' resolves to there
-/// (`Get-DefaultLabels`, Env.ps1).
+/// Row name (`Model`, `Effort`, `Advisor`, `Permission`) -> what 'default' resolves to there.
 pub type DefaultLabels = BTreeMap<String, String>;
 
 /// The `default (X)` labels of the launch screen: the canonical root's model and advisor, and
-/// every account's resolved defaults (`Get-DefaultLabels` per root).
+/// every account's resolved defaults.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LabelDefaults {
     pub model: String,
@@ -34,7 +33,7 @@ pub struct LabelDefaults {
     pub by_account: BTreeMap<String, DefaultLabels>,
 }
 
-/// Installed and newest Claude Code versions for the header (`Get-InstalledClaudeVersion`).
+/// Installed and newest Claude Code versions for the header.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VersionInfo {
     pub installed: Option<String>,

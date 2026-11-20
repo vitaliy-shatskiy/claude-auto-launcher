@@ -1,5 +1,5 @@
-//! Tests of `sharing.rs` (Test-Env.ps1 "profile roots and the shared-file links", "CLAUDE.md",
-//! "a shared directory missing from the CANONICAL root", the bracket and failed-relink blocks).
+//! Tests of `sharing.rs`: profile roots and the shared-file links, `CLAUDE.md`, a shared directory
+//! missing from the CANONICAL root, the bracket and failed relinks.
 //! Fake roots under the temp directory only; icacls is a recording fake.
 
 use std::os::windows::fs::OpenOptionsExt as _;

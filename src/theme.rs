@@ -1,4 +1,4 @@
-//! Palette, glyphs, span markers and the small pure painters (`Theme.ps1`). Colour is applied
+//! Palette, glyphs, span markers and the small pure painters. Colour is applied
 //! AFTER a line is laid out and truncated, never during: escapes are invisible characters.
 
 use std::sync::LazyLock;
@@ -139,7 +139,7 @@ pub fn strip_ctl(s: &str) -> String {
     CTL.replace_all(s, "").into_owned()
 }
 
-/// `Add-DimSpanColor`: markers to Dim..Reset with colour on, to nothing with it off. An unpaired
+/// Markers to Dim..Reset with colour on, to nothing with it off. An unpaired
 /// open marker is closed at the end of the line.
 pub fn add_dim_span_color(line: &str, enabled: bool) -> String {
     if !enabled {
@@ -152,12 +152,12 @@ pub fn add_dim_span_color(line: &str, enabled: bool) -> String {
     out.replace(DIM_CLOSE, RESET)
 }
 
-/// `Add-HoverSpan`: marks a finished piece of plain text as hovered.
+/// Marks a finished piece of plain text as hovered.
 pub fn add_hover_span(text: &str) -> String {
     format!("{HOVER_OPEN}{text}{HOVER_CLOSE}")
 }
 
-/// `Add-HoverSpanColor`: the band as a background that survives every inner Reset.
+/// The band as a background that survives every inner Reset.
 pub fn add_hover_span_color(line: &str, enabled: bool) -> String {
     if !line.contains(HOVER_OPEN) && !line.contains(HOVER_CLOSE) {
         return line.to_owned();
@@ -177,17 +177,15 @@ pub fn add_hover_span_color(line: &str, enabled: bool) -> String {
     out.replace(HOVER_CLOSE, "")
 }
 
-/// `Test-ColorSupported`: `NO_COLOR` and a dumb terminal opt out.
+/// `NO_COLOR` and a dumb terminal opt out.
 pub fn color_supported(no_color: Option<&str>, term: Option<&str>) -> bool {
     !(no_color.is_some_and(|v| !v.is_empty()) || term == Some("dumb"))
 }
 
-/// `Remove-AnsiColor`.
 pub fn remove_ansi_color(text: &str) -> String {
     ANSI_COLOR.replace_all(text, "").into_owned()
 }
 
-/// `Get-PercentColor`.
 pub fn percent_color(p: i64) -> &'static str {
     if p >= 85 {
         RED
@@ -198,7 +196,7 @@ pub fn percent_color(p: i64) -> &'static str {
     }
 }
 
-/// `Test-AsciiRequired`: `CLAUDE_AUTO_ASCII=1`, or a console not on UTF-8 (code page 65001).
+/// `CLAUDE_AUTO_ASCII=1`, or a console not on UTF-8 (code page 65001).
 pub fn ascii_required(env_ascii: Option<&str>, code_page: u32) -> bool {
     env_ascii == Some("1") || code_page != 65001
 }
@@ -230,7 +228,6 @@ pub struct Glyphs {
     pub hint_sep: char,
 }
 
-/// `Get-Glyphs`.
 pub fn glyphs(ascii: bool) -> Glyphs {
     if ascii {
         Glyphs {
@@ -290,7 +287,7 @@ pub enum BarStyle {
     Line,
 }
 
-/// `New-Bar`: plain text of exactly `width` characters. `[Math]::Round` is banker's rounding.
+/// Plain text of exactly `width` characters. `[Math]::Round` is banker's rounding.
 pub fn new_bar(percent: i64, width: usize, g: &Glyphs, style: BarStyle) -> String {
     if width == 0 {
         return String::new();

@@ -1,4 +1,4 @@
-//! `Invoke-ProjectScreen`: what the project screen alone does around the shared loop - the filter
+//! What the project screen alone does around the shared loop - the filter
 //! box, the action field stepped from every row, the mode hotkeys, the pick with its existence
 //! check, and the path navigator the free-path row opens in the same screen.
 
@@ -20,7 +20,7 @@ use crate::launch::LAUNCH_MODES;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
 
-/// What one `h` or `p` press does to a project. Hide also unpins and Pin also unhides (D2).
+/// What one `h` or `p` press does to a project. Hide also unpins and Pin also unhides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HideChange {
     Hide,
@@ -65,7 +65,7 @@ pub(crate) struct ProjectScreen<'a> {
     marked: Vec<String>,
     /// Keys of the pins whose folder is gone, drawn dimmed (AC5).
     dimmed: Vec<String>,
-    /// Keys of the pinned projects, drawn with a pin mark (D10).
+    /// Keys of the pinned projects, drawn with a pin mark.
     pin_keys: Vec<String>,
     /// Folder checks of the pins the registry does not list, once per key per run.
     absent: BTreeMap<String, bool>,
@@ -355,7 +355,7 @@ impl Screen for ProjectScreen<'_> {
         Flow::Continue
     }
 
-    /// A second click on the row a click selected is Enter's gesture (D1), but never the create
+    /// A second click on the row a click selected is Enter's gesture, but never the create
     /// question's yes: a click while it shows only drops it.
     fn activate(&mut self, _hit: &Hit) -> Option<Flow<ProjectChoice>> {
         if self.drop_question() {

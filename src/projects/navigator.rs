@@ -1,6 +1,6 @@
 //! The in-screen path navigator behind the project screen's `enter a path...` row: a text field,
-//! the subfolders of the typed parent under it, Tab completion, and the create-folder confirm
-//! (D5). A network folder is listed only on Tab, on a worker thread with a time limit.
+//! the subfolders of the typed parent under it, Tab completion, and the create-folder confirm.
+//! A network folder is listed only on Tab, on a worker thread with a time limit.
 
 use std::collections::HashMap;
 use std::os::windows::fs::MetadataExt;
@@ -57,7 +57,7 @@ pub(crate) struct Navigator {
     pub notice: String,
     /// What the list cannot show: a network folder not listed yet, a listing error.
     pub hint: String,
-    /// D5: the folder Enter creates; Esc drops the question.
+    /// The folder Enter creates; Esc drops the question.
     pub confirm: Option<String>,
     /// Preview mode: `create` never touches the disk.
     pub preview: bool,
@@ -405,7 +405,7 @@ impl Navigator {
     }
 
     /// The use row: an existing folder is picked; a missing one under an existing local parent
-    /// asks to be created (D5); a network path is picked unprobed and never created.
+    /// asks to be created; a network path is picked unprobed and never created.
     fn use_path(&mut self, t: &str) -> NavStep {
         let full = std::path::absolute(t).map_or_else(|_| t.to_owned(), |p| p.to_string_lossy().into_owned());
         if !path_present_with(&full, &mut self.drives, self.classify) {
@@ -423,7 +423,7 @@ impl Navigator {
         NavStep::Stay
     }
 
-    /// D5: one level, `create_dir`, never `create_dir_all`.
+    /// One level, `create_dir`, never `create_dir_all`.
     fn create(&mut self) -> NavStep {
         let Some(path) = self.confirm.take() else { return NavStep::Stay };
         if self.preview {

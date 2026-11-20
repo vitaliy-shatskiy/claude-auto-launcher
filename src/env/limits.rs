@@ -1,4 +1,4 @@
-//! `Get-FreshestRateLimitRecord`, `Get-RateLimitSummary`: last-known limits per account from two
+//! Last-known limits per account from two
 //! writers - `statusline.js` (`<name>.json`, while a session runs) and the usage widget
 //! (`<name>.widget.json`, every five minutes). Freshest `atMs` wins for the numbers; the age is
 //! always rendered. `available_models` comes from the WIDGET record only (one writer), three-state.
@@ -55,7 +55,7 @@ fn at_ms(j: &Value) -> Option<i64> {
     j.get("atMs").filter(|v| !v.is_null()).and_then(to_int)
 }
 
-/// `Get-FreshestRateLimitRecord`: newest `atMs` of the two files; a file that is unreadable,
+/// Newest `atMs` of the two files; a file that is unreadable,
 /// malformed or unstamped is no candidate.
 pub(crate) fn freshest(dir: &Path, name: &str) -> Option<Value> {
     let mut best: Option<(i64, Value)> = None;
@@ -144,7 +144,7 @@ fn record(j: &Value, age: String, widget: Option<(&Value, Option<String>)>) -> R
     })
 }
 
-/// `Get-RateLimitSummary` with the availability cap as a parameter. An account with no record,
+/// The summary with the availability cap as a parameter. An account with no record,
 /// or a record with neither percentage, is absent; a malformed one shows nothing.
 pub(crate) fn summary(accounts: &[Account], dir: &Path, now_ms: i64, max_age_ms: i64) -> Limits {
     let mut out = Limits::new();

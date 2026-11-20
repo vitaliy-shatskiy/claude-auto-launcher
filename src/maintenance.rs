@@ -1,5 +1,5 @@
-//! Maintenance screen, Claude Code versions and the update check (`Maintenance.ps1`,
-//! `Invoke-MaintenanceScreen`, `Get-MaintenanceFrame`). Entry points for `app.rs`; the install
+//! Maintenance screen, Claude Code versions and the Claude Code update check.
+//! Entry points for `app.rs`; the install
 //! logic lives in `install`, the release channel in `release`, the screen in `screen`.
 
 mod install;
@@ -235,7 +235,7 @@ fn check_into(version: &mut VersionInfo, gate: &InstallGate, lines: &mut Vec<Not
     labels
 }
 
-/// `Invoke-MaintenanceScreen`, opened by `u` from the launch screen and returning to it.
+/// The maintenance screen, opened by `u` from the launch screen and returning to it.
 /// `launcher`: the self-update of this process, shared with the launch screen's check.
 pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style, launcher: &crate::self_update::Local) -> Result<(), UiStop> {
     let tm = term.logger().timings.clone();

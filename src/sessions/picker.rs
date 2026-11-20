@@ -1,4 +1,4 @@
-//! The session picker screen (`Invoke-SessionPicker`, `Expand-SessionPage`): the scope and its
+//! The session picker screen: the scope and its
 //! page buckets, the filter box (`filter`), paging on Down and the wheel, and what a chosen row means.
 
 mod filter;
@@ -28,7 +28,7 @@ pub struct Bucket {
     pub exhausted: bool,
 }
 
-/// `Expand-SessionPage`: appends the next page, skipping rows already listed. An EMPTY page is
+/// Appends the next page, skipping rows already listed. An EMPTY page is
 /// the end; a page of overlap only is not. Returns how many rows were added.
 pub fn expand_page(bucket: &mut Bucket, fetch: Fetch<'_>, scope: &[String]) -> usize {
     let page = fetch(bucket.fetched, scope);

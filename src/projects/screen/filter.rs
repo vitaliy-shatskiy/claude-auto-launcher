@@ -33,7 +33,7 @@ impl ProjectScreen<'_> {
     }
 
     /// The filter box owns every key while it is open, but the arrows (they move the cursor and
-    /// step the field) and Enter (D4: it runs the highlighted row, handed back as `false`). Its
+    /// step the field) and Enter (it runs the highlighted row, handed back as `false`). Its
     /// ways of closing are logged with the LENGTH of the filter, never its text.
     pub(super) fn type_filter(&mut self, key: &KeyPress, term: &dyn Term) -> bool {
         if [vk::UP, vk::DOWN, vk::LEFT, vk::RIGHT].iter().any(|k| key.is(*k)) {

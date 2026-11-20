@@ -140,7 +140,7 @@ fn down_stops_at_the_free_path_row() {
     assert!(cursor_line(6) < cursor_line(5));
 }
 
-/// D4: Enter in the open filter runs the highlighted row; the arrows move while typing.
+/// Enter in the open filter runs the highlighted row; the arrows move while typing.
 #[test]
 fn enter_and_arrows_work_inside_the_filter() {
     let f = fx();

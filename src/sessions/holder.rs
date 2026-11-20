@@ -1,5 +1,4 @@
-//! Another live claude.exe on a session (`Get-ClaudeSessionHolder`, `Get-ContinueSessionId`,
-//! `Format-HeldSessionWarning`). Fail open: any unreadable input answers "not held".
+//! Another live claude.exe on a session. Fail open: any unreadable input answers "not held".
 
 use std::path::{Path, PathBuf};
 
@@ -66,7 +65,7 @@ pub(crate) fn find_holder(dirs: &[PathBuf], session_id: &str) -> Option<Holder> 
     None
 }
 
-/// `Get-ContinueSessionId`: the newest transcript of the project's own slugs that `claude -c`
+/// The newest transcript of the project's own slugs that `claude -c`
 /// considers and no live NON-interactive process holds. No slug = no candidate.
 pub(crate) fn continue_session_id(root: &Path, slugs: &[String], dirs: &[PathBuf]) -> String {
     let slugs: Vec<String> = slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
@@ -93,7 +92,7 @@ fn local_hh_mm(filetime: u64, offset_minutes: i32) -> String {
     format!("{:02}:{:02}", m / 60, m % 60)
 }
 
-/// `Format-HeldSessionWarning`: the name (else the id's first block), pid, status, local start.
+/// The name (else the id's first block), pid, status, local start.
 pub(crate) fn warning(h: &Holder, offset_minutes: i32) -> String {
     let mut label = clean_text(&h.name);
     if label.is_empty() {

@@ -1,6 +1,5 @@
-//! What gets handed to `claude` and how it runs (`Env.ps1` Get-ClaudeInvocation,
-//! Resolve-ClaudeExecutable, the launch marker; `claude-auto.ps1` the exec): same console, wait,
-//! the child's exit code.
+//! What gets handed to `claude` and how it runs (argv, the executable, the launch marker, the
+//! exec): same console, wait, the child's exit code.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,12 +31,12 @@ const SUBCOMMANDS: [&str; 21] = [
     "migrate-installer",
 ];
 
-/// `Test-ClaudeSubcommand` (`-in`: case-insensitive).
+/// A claude subcommand, matched case-insensitively.
 pub fn is_subcommand(token: &str) -> bool {
     !token.is_empty() && SUBCOMMANDS.iter().any(|s| s.eq_ignore_ascii_case(token))
 }
 
-/// `Get-ClaudeInvocation`: the single source of truth for argv. `--mcp-config` goes LAST (it is
+/// The single source of truth for argv. `--mcp-config` goes LAST (it is
 /// variadic); a subcommand gets no MCP flags at all.
 pub fn claude_invocation(launch_args: &[String], mcp_configs: &[String]) -> Vec<String> {
     let mut out = launch_args.to_vec();
@@ -67,7 +66,7 @@ pub fn find_on_path(name: &str, path: &str, pathext: &str) -> Option<PathBuf> {
     None
 }
 
-/// `Resolve-ClaudeExecutable`: the path, or the message the launcher prints before `exit 1`.
+/// The path, or the message the launcher prints before `exit 1`.
 pub fn resolve_claude() -> Result<PathBuf, &'static str> {
     let path = std::env::var("PATH").unwrap_or_default();
     let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());

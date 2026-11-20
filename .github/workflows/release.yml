@@ -1,14 +1,14 @@
 ## Manual only (owner's call: no automatic builds). Builds claude-auto.exe from an existing version tag
 ## on a clean runner and publishes the GitHub release: the exe, its .sha256 and a build-provenance
 ## attestation (`gh attestation verify claude-auto.exe -R <repo>`). No build cache: built from the tag alone.
-## Run: gh workflow run release.yml -f tag=v0.6.0
+## Run: gh workflow run release.yml -f tag=v1.0.0
 name: release
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'existing tag to release, e.g. v0.6.0'
+        description: 'existing tag to release, e.g. v1.0.0'
         required: true
 
 permissions:

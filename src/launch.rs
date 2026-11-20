@@ -1,5 +1,5 @@
-//! The launch rows, the launch state and the claude arguments it produces (`Screens.ps1` top half
-//! and `LaunchModes.ps1`). Pure: no file reads, no console.
+//! The launch rows, the launch state and the claude arguments it produces. Pure: no file
+//! reads, no console.
 
 mod args;
 pub mod frame;
@@ -82,7 +82,7 @@ pub const CONFIG_ROWS: [RowName; 7] = [
 /// Model family -> its model row key, in the default order: weakest to strongest.
 pub const MODEL_FAMILY_KEYS: [(&str, &str); 4] = [("haiku", "haiku"), ("sonnet", "sonnet1m"), ("opus", "opus1m"), ("fable", "fable")];
 
-/// The habit rows remembered per account (Prefs.ps1 `$ProfileFields`).
+/// The habit rows remembered per account.
 pub const PROFILE_FIELDS: [RowName; 5] = [
     RowName::Model,
     RowName::Effort,
@@ -161,13 +161,13 @@ fn base_rows() -> Vec<RowDef> {
     ]
 }
 
-/// The model row key a 'default' launch pins on an account lacking the default's family (CS-231).
+/// The model row key a 'default' launch pins on an account lacking the default's family.
 const UNAVAILABLE_DEFAULT_KEY: &str = "opus1m";
 
-/// The advisor row value a 'default' launch pins there for the same reason (CS-1044).
+/// The advisor row value a 'default' launch pins there for the same reason.
 const UNAVAILABLE_DEFAULT_ADVISOR: &str = "opus";
 
-/// The account roster and the rows it shapes (`Set-LaunchRoster`).
+/// The account roster and the rows it shapes.
 #[derive(Debug, Clone)]
 pub struct Roster {
     pub rows: Vec<RowDef>,
@@ -251,7 +251,7 @@ impl Roster {
         &self.default_account
     }
 
-    /// `Get-AccountTint`: one table for both painters; unknown -> Green.
+    /// One table for both painters; unknown -> Green.
     pub fn tint(&self, account: &str) -> &'static str {
         self.tints.get(account).and_then(|n| theme::palette(n)).unwrap_or(theme::GREEN)
     }
@@ -327,7 +327,7 @@ impl Roster {
             .collect();
     }
 
-    /// `Set-ModelRowLabels`: family -> display name from the installed binary; the 1M keys
+    /// Family -> display name from the installed binary; the 1M keys
     /// append their bracket (none for Sonnet, whose 1M context is native).
     pub fn set_model_labels(&mut self, family_labels: &BTreeMap<String, String>) {
         let Some(row) = self.rows.iter_mut().chain(&mut self.spare).find(|r| r.name == RowName::Model) else {
@@ -342,7 +342,7 @@ impl Roster {
         }
     }
 
-    /// `New-LaunchState`: pressing Enter at once adds no arguments at all, unless `hiddenValues`
+    /// Pressing Enter at once adds no arguments at all, unless `hiddenValues`
     /// pins a value on a row the screen does not show.
     pub fn new_state(&self) -> LaunchState {
         let mut s = LaunchState::fresh(&self.default_account);
@@ -360,7 +360,7 @@ impl Roster {
         s
     }
 
-    /// `Get-UnavailableDefaultModel`: (arg, label) of the pin.
+    /// (arg, label) of the pin.
     /// A hidden model row still pins: its definition comes from the base rows then.
     pub fn unavailable_default_model(&self) -> (String, String) {
         let base = base_rows();
@@ -370,7 +370,7 @@ impl Roster {
     }
 }
 
-/// This session's stash of one account's habit rows and marks (`Switch-LaunchAccount`).
+/// This session's stash of one account's habit rows and marks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Stash {
     pub values: BTreeMap<RowName, String>,

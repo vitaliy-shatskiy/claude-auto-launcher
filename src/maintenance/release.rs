@@ -16,7 +16,7 @@ const FAILURE_TTL_MS: i64 = 5 * 60_000;
 static CHANNEL_BODY: LazyLock<Regex> = LazyLock::new(|| crate::theme::re(r"^\s*(\d+\.\d+\.\d+\S*)\s*$"));
 static VERSION_TOKEN: LazyLock<Regex> = LazyLock::new(|| crate::theme::re(r"(\d+\.\d+\.\d+\S*)"));
 
-/// `Get-AutoUpdatesChannel`: `latest` or `stable` from settings.json, `latest` otherwise.
+/// `latest` or `stable` from settings.json, `latest` otherwise.
 pub(crate) fn auto_updates_channel(settings: &Path) -> String {
     std::fs::read_to_string(settings)
         .ok()
@@ -81,7 +81,7 @@ pub(crate) fn skipped_line(e: &FetchFailed) -> Option<String> {
     }
 }
 
-/// `Get-RemoteClaudeVersion`: the channel's version or `None`. A hit younger than 30 minutes
+/// The channel's version or `None`. A hit younger than 30 minutes
 /// answers without a request; a failure younger than 5 minutes answers `None` without one. A
 /// fresh failed request is remembered too, and returned as `Err` so the launch can say why.
 pub(crate) fn remote_version(
@@ -121,7 +121,7 @@ pub(crate) fn remote_version(
     fetched.map(|_| version)
 }
 
-/// `Test-ClaudeUpdateAvailable`: both parse as versions and `remote` is strictly newer. An
+/// Both parse as versions and `remote` is strictly newer. An
 /// unparseable side never starts an update.
 pub(crate) fn update_available(installed: Option<&str>, remote: Option<&str>) -> bool {
     match (installed.and_then(parse_version), remote.and_then(parse_version)) {
@@ -130,7 +130,7 @@ pub(crate) fn update_available(installed: Option<&str>, remote: Option<&str>) ->
     }
 }
 
-/// `Get-InstalledClaudeVersion`'s parse: the bare version out of `claude --version`, else the
+/// The bare version out of `claude --version`, else the
 /// raw line.
 pub(crate) fn version_token(raw: &str) -> String {
     VERSION_TOKEN

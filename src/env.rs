@@ -1,7 +1,6 @@
-//! Environment around a launch (`Env.ps1`, `sharing/`), worker W3 (see PORTING.md): profiles
-//! and the MCP mirror, secrets, sharing repair (hardlinks, symlinks, junctions, ACL), launch
-//! hooks, MCP discovery incl. Rider, the model catalog, rate limits. The entry points here print;
-//! the decisions live in `env/*` and return notes.
+//! Environment around a launch: profiles and the MCP mirror, secrets, sharing repair (hardlinks,
+//! symlinks, junctions, ACL), launch hooks, MCP discovery incl. Rider, the model catalog, rate
+//! limits. The entry points here print; the decisions live in `env/*` and return notes.
 
 mod hooks;
 mod limits;
@@ -28,7 +27,7 @@ pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(feature = "sharing")]
 pub(crate) const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
-/// One `Write-Host` line a step wants printed.
+/// One console line a step wants printed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Note {
     pub(crate) text: String,
@@ -70,7 +69,7 @@ fn home() -> PathBuf {
     std::env::var_os("USERPROFILE").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
-/// `Set-ClaudeProfile` with the mirror injected: the account line, then (sharing on, not preview,
+/// The account step with the mirror injected: the account line, then (sharing on, not preview,
 /// a secondary account) the MCP mirror's one line.
 fn profile_notes(
     cfg: &Config,
@@ -101,7 +100,7 @@ fn profile_notes(
     Ok(notes)
 }
 
-/// `Set-ClaudeProfile`: the canonical account is the ABSENCE of `CLAUDE_CONFIG_DIR`. Prints the
+/// The canonical account is the ABSENCE of `CLAUDE_CONFIG_DIR`. Prints the
 /// account line in its tint; with sharing on and outside preview, mirrors MCP servers.
 pub fn set_profile(cfg: &Config, account: &str, preview: bool, child: &mut ChildEnv) -> Result<(), String> {
     #[cfg(feature = "sharing")]
@@ -142,7 +141,7 @@ pub fn import_project_secrets(cwd: &Path, cfg: &Config, child: &mut ChildEnv) ->
     got.loaded.len()
 }
 
-/// `Set-ClaudeProjectDirectory`: the session starts in the chosen project. A path that is not an
+/// The session starts in the chosen project. A path that is not an
 /// existing directory is refused and the launch directory stays.
 pub fn set_project_directory(project: &str) -> bool {
     if project.is_empty() {
@@ -169,7 +168,7 @@ fn roots(cfg: &Config) -> Option<(PathBuf, Vec<PathBuf>)> {
     ))
 }
 
-/// `Repair-SharedProfiles`: profile roots, hardlinked files, junctions with their ACL shield, the
+/// Profile roots, hardlinked files, junctions with their ACL shield, the
 /// `CLAUDE.md` symlink. Sharing off or preview: touches nothing.
 #[cfg(feature = "sharing")]
 pub fn repair_shared_profiles(cfg: &Config, preview: bool) {
@@ -189,14 +188,14 @@ pub fn repair_shared_profiles(cfg: &Config, preview: bool) {
 #[cfg(not(feature = "sharing"))]
 pub fn repair_shared_profiles(_cfg: &Config, _preview: bool) {}
 
-/// `Invoke-LaunchHooks` with the session's environment (`CLAUDE_CONFIG_DIR`, secrets): the
-/// PowerShell launcher set those in its own process, so its hooks saw them. `tm` on: a span per
+/// Runs the launch hooks with the session's environment (`CLAUDE_CONFIG_DIR`, secrets), so a hook
+/// sees what the session will. `tm` on: a span per
 /// hook under the open `hooks` span.
 pub fn run_launch_hooks_with_env(hooks: &[Vec<String>], child: &ChildEnv, tm: &crate::timing::Timings) {
     print(&hooks::run(hooks, child, tm));
 }
 
-/// `Get-McpConfigPaths`: the configured extras that exist, plus the Rider MCP endpoint per
+/// The configured extras that exist, plus the Rider MCP endpoint per
 /// `riderMcp` in a per-PID temp file (named, never written, in preview).
 pub fn mcp_config_paths(cfg: &Config, preview: bool) -> Vec<String> {
     let (paths, notes) = mcp::config_paths(cfg, preview);
@@ -208,7 +207,7 @@ pub fn mcp_config_paths(cfg: &Config, preview: bool) -> Vec<String> {
 /// install); `None` inside = static labels. A static: `friendly_model_name` callers carry no context.
 static CATALOG: RwLock<Option<models::Catalog>> = RwLock::new(None);
 
-/// `Initialize-ModelCatalog` + `Get-ModelFamilyLabels`: family -> display name read out of the
+/// Family -> display name read out of the
 /// installed claude.exe, cached per binary. `None` keeps the static row labels.
 pub fn model_family_labels(preview: bool) -> Option<BTreeMap<String, String>> {
     let (labels, notes) = read_model_catalog(preview);
@@ -229,7 +228,7 @@ pub(crate) fn read_model_catalog(preview: bool) -> (Option<BTreeMap<String, Stri
     (labels, notes)
 }
 
-/// The line `claude-auto.ps1` prints after a catalog rescan; a cache hit says nothing.
+/// The line printed after a catalog rescan; a cache hit says nothing.
 fn catalog_note(loaded: Option<&(models::Catalog, models::Source)>) -> Option<Note> {
     match loaded {
         Some((c, models::Source::Binary)) => Some(Note::new(
@@ -240,7 +239,7 @@ fn catalog_note(loaded: Option<&(models::Catalog, models::Source)>) -> Option<No
     }
 }
 
-/// `Get-FriendlyModelName`: a raw `--model` value to the label the model row shows for it.
+/// A raw `--model` value to the label the model row shows for it.
 pub fn friendly_model_name(raw: &str) -> String {
     CATALOG
         .read()
@@ -256,7 +255,7 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
     v.get(key).filter(|x| crate::config::ps_truthy(Some(x))).map(crate::config::ps_str)
 }
 
-/// `Get-DefaultModelLabel`: what 'default' on the model row means; a menu, never a validator.
+/// What 'default' on the model row means; a menu, never a validator.
 pub fn default_model_label(settings: &Path) -> String {
     if !settings.exists() {
         return "default".into();
@@ -270,7 +269,7 @@ pub fn default_model_label(settings: &Path) -> String {
     }
 }
 
-/// `Get-DefaultAdvisorLabel`: 'default (none)' = read and empty; 'default' = unreadable.
+/// 'default (none)' = read and empty; 'default' = unreadable.
 pub fn default_advisor_label(settings: &Path) -> String {
     if !settings.exists() {
         return "default".into();
@@ -281,7 +280,7 @@ pub fn default_advisor_label(settings: &Path) -> String {
     }
 }
 
-/// `Get-DefaultLabels`: Row name -> the bare value 'default' resolves to for this profile.
+/// Row name -> the bare value 'default' resolves to for this profile.
 pub fn default_labels(settings: &Path) -> DefaultLabels {
     let mut model = default_model_label(settings);
     if let Some(inner) = model.strip_prefix("default (").and_then(|m| m.strip_suffix(')')) {
@@ -313,7 +312,7 @@ pub fn default_labels(settings: &Path) -> DefaultLabels {
     labels
 }
 
-/// `Get-RateLimitSummary`: freshest of `<name>.json` / `<name>.widget.json` per account, age
+/// Freshest of `<name>.json` / `<name>.widget.json` per account, age
 /// text, availableModels three-state (widget only, 30 min max age).
 pub fn rate_limit_summary(accounts: &[Account], dir: &Path, now_ms: i64) -> Limits {
     limits::summary(accounts, dir, now_ms, limits::AVAILABILITY_MAX_AGE_MS)

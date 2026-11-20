@@ -87,7 +87,7 @@ fn a_footer_click_in_the_open_filter_is_never_typed() {
     assert!(!last.contains("filter:"), "the click was Esc: the filter is cleared\n{last}");
 }
 
-/// D1: the keyboard puts the cursor on alpha; one click there selects, it never starts a session.
+/// The keyboard puts the cursor on alpha; one click there selects, it never starts a session.
 #[test]
 fn one_click_on_a_keyboard_cursor_row_starts_nothing() {
     let f = fx();

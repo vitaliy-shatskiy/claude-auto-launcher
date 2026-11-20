@@ -1,4 +1,4 @@
-//! Input events and their pure decoding (`Input.ps1`): keys, console mouse records, VT mouse
+//! Input events and their pure decoding: keys, console mouse records, VT mouse
 //! reports (SGR and X10), VT cursor keys, and hotkeys on any keyboard layout.
 
 pub mod console;
@@ -152,7 +152,7 @@ pub fn parse_key_name(name: &str) -> Option<u16> {
     }
 }
 
-/// `New-ScriptedKeyReader`'s rule: one character is a typed character, anything longer a key name.
+/// One character is a typed character, anything longer a key name.
 /// `Ctrl+<name>` (new in the Rust port) is that key with Ctrl held.
 pub fn scripted_key(entry: &str) -> Option<KeyPress> {
     if let Some(name) = entry.get(..5).filter(|p| p.eq_ignore_ascii_case("ctrl+")).and(entry.get(5..)) {
@@ -168,7 +168,7 @@ pub fn scripted_key(entry: &str) -> Option<KeyPress> {
     }
 }
 
-/// `New-SyntheticKey`: what a footer click stands in for.
+/// What a footer click stands in for.
 pub fn synthetic_key(key: &str, ch: Option<char>) -> KeyPress {
     KeyPress {
         ch: ch.unwrap_or('\0'),
@@ -291,7 +291,7 @@ pub enum AfterEsc {
     Followed,
 }
 
-/// `Skip-ClaudeVtSequence`, called with the ESC consumed.
+/// Skips one VT sequence, called with the ESC consumed.
 pub fn after_esc(src: &mut impl EscSource, wait_ms: u64) -> AfterEsc {
     let Some(next) = src.peek_down(wait_ms) else {
         return AfterEsc::Alone;
@@ -423,7 +423,7 @@ pub fn layout_char(hotkey: char) -> Option<char> {
     HOTKEY_LAYOUT.iter().find(|(k, _)| *k == hotkey).map(|(_, c)| *c)
 }
 
-/// `Test-ClaudeHotkey`: does this press mean the Latin hotkey on ANY layout? The character
+/// Does this press mean the Latin hotkey on ANY layout? The character
 /// itself, the virtual key, or the Cyrillic letter on that key. Ctrl and Alt never are. Case never
 /// matters: psmux drops the Caps Lock flag, a Latin letter then arrives as a bare uppercase char
 /// (vk 0, no flags) and a Cyrillic one as Shift + the letter.

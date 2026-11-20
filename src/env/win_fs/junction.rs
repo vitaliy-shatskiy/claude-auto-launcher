@@ -1,4 +1,4 @@
-//! `New-Item -ItemType Junction` (`FSCTL_SET_REPARSE_POINT`): only sharing repair and tests make junctions.
+//! Junction creation (`FSCTL_SET_REPARSE_POINT`): only sharing repair and tests make junctions.
 #![expect(unsafe_code, reason = "W3's FFI module: FSCTL_SET_REPARSE_POINT")]
 
 use std::fs::{File, OpenOptions};
@@ -62,7 +62,7 @@ fn set_mount_point(dir: &File, target: &str) -> std::io::Result<()> {
     if ok == 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
 }
 
-/// `New-Item -ItemType Junction`: an empty directory at `link` turned into a mount point onto
+/// An empty directory at `link` turned into a mount point onto
 /// `target` (made absolute). A failed conversion removes the directory again.
 pub(crate) fn create_junction(link: &Path, target: &Path) -> std::io::Result<()> {
     let abs = std::path::absolute(target)?;

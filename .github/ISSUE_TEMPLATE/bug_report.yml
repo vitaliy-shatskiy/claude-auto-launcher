@@ -12,11 +12,10 @@ body:
     id: versions
     attributes:
       label: Versions
-      description: Output of the commands below.
+      description: Output of the commands below. Built from source? Add `git rev-parse --short HEAD` of your clone.
       value: |
         claude-auto --launcher-version
         claude --version
-        git -C <this clone> rev-parse --short HEAD
       render: shell
     validations: { required: true }
   - type: input
@@ -29,7 +28,7 @@ body:
     id: checkpoint
     attributes:
       label: Test result
-      description: "`cargo test --locked`: paste the result. Skip if the bug stops it from running."
+      description: "Built from source only: `cargo test --locked`, paste the result. Skip if you run the release exe or the bug stops it from running."
       render: shell
   - type: checkboxes
     id: features
@@ -39,4 +38,7 @@ body:
         - label: "`sharing: true` (hardlinks and junctions between account roots)"
         - label: "`remote: true` (the crc companion)"
         - label: "`secretsRoot` configured"
+        - label: "`plugins` configured"
+        - label: "`selfUpdate: auto` (or a claude-auto self-update just ran)"
+        - label: "Started through `--launcher-run`"
         - label: More than one launcher running at once

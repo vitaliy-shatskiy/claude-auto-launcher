@@ -1,6 +1,6 @@
-//! List-screen pieces the picker (W1) and the project screen (W2) share (`Screens.ps1`): one row
-//! layout (`New-ListRow`), the list body painter (`Add-PickerColor`), and the hover-band helpers
-//! the frame memo uses. Shared: no phase B worker edits this file.
+//! List-screen pieces the picker and the project screen share: one row
+//! layout, the list body painter, and the hover-band helpers
+//! the frame memo uses.
 
 use std::sync::LazyLock;
 
@@ -9,7 +9,7 @@ use regex::Regex;
 use crate::layout::{display_width, limit_line, limit_path};
 use crate::theme::{self, Glyphs};
 
-/// `New-ListRow`'s switches and columns.
+/// A list row's switches and columns.
 #[derive(Debug, Clone, Default)]
 #[expect(clippy::struct_excessive_bools, reason = "the PowerShell switches, one each")]
 pub struct ListRow<'a> {
@@ -30,7 +30,7 @@ pub struct ListRow<'a> {
     pub age_gutter: bool,
 }
 
-/// `New-ListRow`: mark + label + pad + tail + age in exactly `width` cells. The label is clamped
+/// Mark + label + pad + tail + age in exactly `width` cells. The label is clamped
 /// first; the tail takes what is left and is dropped below 9 cells. Markers are added AFTER the
 /// arithmetic, so a marked row lays out like an unmarked one.
 pub fn new_list_row(r: &ListRow<'_>) -> String {
@@ -79,7 +79,7 @@ pub fn new_list_row(r: &ListRow<'_>) -> String {
     }
 }
 
-/// `Get-RowBandLength`: the characters a hovered row's band wraps, its pad included.
+/// The characters a hovered row's band wraps, its pad included.
 pub fn row_band_length(row: &str, pane_width: usize) -> usize {
     let plain: String = row
         .chars()
@@ -88,7 +88,7 @@ pub fn row_band_length(row: &str, pane_width: usize) -> usize {
     plain.chars().count() + pane_width.saturating_sub(display_width(&plain))
 }
 
-/// `Add-HoverSpanAt`: the band around character columns of a finished line; `None` when the range
+/// The band around character columns of a finished line; `None` when the range
 /// does not fit (the caller rebuilds rather than guesses).
 pub fn add_hover_span_at(line: &str, start: usize, length: usize) -> Option<String> {
     let chars: Vec<char> = line.chars().collect();
@@ -142,7 +142,7 @@ fn bullet_at(chars: &[char], g: &Glyphs) -> Option<usize> {
     (chars.get(b) == Some(&g.bullet) && rest.to_lowercase() == " enter a path").then_some(b)
 }
 
-/// `Add-PickerColor`: speaker attributions parked behind a sentinel, the free-path bullet, cursor,
+/// Speaker attributions parked behind a sentinel, the free-path bullet, cursor,
 /// worktree glyph, trailing age and message counts.
 pub fn add_picker_color(line: &str, enabled: bool, g: &Glyphs) -> String {
     if !enabled || line.is_empty() {

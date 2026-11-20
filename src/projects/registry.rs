@@ -1,4 +1,4 @@
-//! `Get-ProjectRegistry`: every slug directory under the projects root, resolved from its newest
+//! Every slug directory under the projects root, resolved from its newest
 //! transcript's cwd, merged one row per real directory, ordered by last interactive activity. The
 //! cache holds only derived data (path, git-root answer, headless verdict), so a lost or corrupt
 //! write costs one recompute; written atomically, last writer wins.
@@ -84,7 +84,7 @@ fn transcripts(dir: &Path) -> Vec<Transcript> {
     out
 }
 
-/// `Get-ProjectPathFromTranscript`: the cwd of the first of the newest transcript's first 40
+/// The cwd of the first of the newest transcript's first 40
 /// records that carries one. A slug is not reversible; the transcript is the only authority.
 pub(crate) fn path_from_transcript(file: &Path) -> Option<String> {
     let mut r = BufReader::new(File::open(file).ok()?);
@@ -112,12 +112,12 @@ fn trim_line(b: &[u8]) -> &[u8] {
 
 static ENTRYPOINT: LazyLock<Regex> = LazyLock::new(|| crate::theme::re(r#""entrypoint":\s?"([^"]*)""#));
 
-/// `Test-HeadlessEntrypoint`: an entrypoint starting with `sdk-` is a headless run.
+/// An entrypoint starting with `sdk-` is a headless run.
 fn is_headless_entrypoint(e: &str) -> bool {
     e.starts_with("sdk-")
 }
 
-/// `Get-TranscriptHeadlessVerdict`: `Some(true)` when every entrypoint seen is headless,
+/// `Some(true)` when every entrypoint seen is headless,
 /// `Some(false)` when any is not, `None` when none is seen or the file cannot be read. Seen = the
 /// head up to its first entrypoint plus the last `window` bytes; a file up to two windows is read
 /// whole.
@@ -161,7 +161,7 @@ pub(crate) fn headless_verdict(path: &Path, window: u64) -> Option<bool> {
     any.then_some(true)
 }
 
-/// `Test-HeadlessTranscript`: no entrypoint, or an unreadable file, is NOT headless.
+/// No entrypoint, or an unreadable file, is NOT headless.
 #[cfg(test)]
 pub(crate) fn is_headless_transcript(path: &Path) -> bool {
     headless_verdict(path, 65_536) == Some(true)
@@ -172,7 +172,7 @@ fn slug_worktree(slug: &str) -> Option<String> {
     slug.split_once("--claude-worktrees-").map(|(_, w)| w.to_owned())
 }
 
-/// `Find-ProjectInteractiveTranscript`: the newest transcript that is not a headless run. Only a
+/// The newest transcript that is not a headless run. Only a
 /// FOUND entrypoint is cached; a transcript read before its first records were written is asked
 /// again next build.
 fn interactive_transcript<'a>(
@@ -198,7 +198,7 @@ fn interactive_transcript<'a>(
     None
 }
 
-/// `Test-ProjectGitRoot`: `.git` is a DIRECTORY (a linked worktree's is a file).
+/// `.git` is a DIRECTORY (a linked worktree's is a file).
 fn is_git_root(path: &str) -> bool {
     !path.is_empty() && Path::new(path).join(".git").is_dir()
 }
@@ -375,7 +375,7 @@ fn merge(rows: Vec<SlugRow>) -> Vec<Project> {
     merged
 }
 
-/// `Remove-StalePreviewProjectsCache`: only the exact names a preview writes (its cache and that
+/// Only the exact names a preview writes (its cache and that
 /// cache's temps), older than a day.
 pub(crate) fn remove_stale_preview_cache_at(dir: &Path, now: SystemTime) {
     let Ok(rd) = fs::read_dir(dir) else { return };

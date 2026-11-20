@@ -1,5 +1,5 @@
 //! `h` and `p` on the project screen: which projects the list hides, which it pins on top, and the
-//! toggles saved to `hiddenProjects` and `pinnedProjects` (a pin and a hide exclude each other, D2).
+//! toggles saved to `hiddenProjects` and `pinnedProjects` (a pin and a hide exclude each other).
 
 use super::{HideChange, ProjectScreen};
 use crate::projects::Project;

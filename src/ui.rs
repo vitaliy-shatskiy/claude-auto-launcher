@@ -1,4 +1,4 @@
-//! The terminal shell of every screen (`Ui.ps1` top): alternate buffer, flicker-free frame
+//! The terminal shell of every screen: alternate buffer, flicker-free frame
 //! writes, the event wait, hit-testing a click against a row map, and the scripted preview term.
 
 mod preview_term;
@@ -21,7 +21,7 @@ pub use preview_term::{PreviewTerm, parse_preview_keys, parse_preview_size};
 pub const ENTER_ALT: &str = "\x1b[?1049h\x1b[?25l\x1b]0;claude-auto\x07";
 pub const EXIT_ALT: &str = "\x1b[?25h\x1b[?1049l";
 
-/// `Write-Frame`: home, each line then erase-to-end, then erase below. No clear, no flicker.
+/// Home, each line then erase-to-end, then erase below. No clear, no flicker.
 /// No line feed after the last line: on the bottom row it scrolls the buffer by one.
 pub fn frame_bytes(lines: &[String]) -> String {
     let mut s = String::from("\x1b[H");
@@ -152,7 +152,7 @@ impl std::error::Error for UiStop {}
 pub trait Term {
     fn size(&mut self) -> (usize, usize);
     fn paint(&mut self, lines: &[String]);
-    /// `Wait-KeyOrResize`: the next event; `Resize` when the size moved from `size`; `Idle` after
+    /// The next event; `Resize` when the size moved from `size`; `Idle` after
     /// one empty poll (~60 ms) so a screen can look at background work.
     fn wait(&mut self, size: (usize, usize)) -> Result<Event, UiStop>;
     fn window_top(&mut self) -> i32;
@@ -169,7 +169,7 @@ pub trait Term {
     /// Drops input queued while a child owned the screen.
     fn drain(&mut self);
     fn logger(&self) -> &Logger;
-    /// `Read-ClaudeFreePath`: hands the console back for one cooked line typed after `prompt`
+    /// Hands the console back for one cooked line typed after `prompt`
     /// at the bottom row, then re-arms it. Preview answers an empty line.
     fn read_line(&mut self, prompt: &str) -> String;
     /// The screen may no longer show the last frame (a new screen, a child, a typed line): the
@@ -394,7 +394,7 @@ pub enum Hit {
     ListRow(i32),
 }
 
-/// `Get-ClaudeFooterHit`: which footer hint a click landed on.
+/// Which footer hint a click landed on.
 pub fn footer_hit(map: &RowMap, x: i32, y: i32, window_top: i32) -> Option<(FooterSpan, usize)> {
     let fy = map.footer_y?;
     let line = (y - window_top) - fy;
@@ -406,7 +406,7 @@ pub fn footer_hit(map: &RowMap, x: i32, y: i32, window_top: i32) -> Option<(Foot
         .map(|(i, s)| (s.clone(), i))
 }
 
-/// `Get-ClaudeMouseRow`: a buffer row to a list row index, or `None` outside the rows.
+/// A buffer row to a list row index, or `None` outside the rows.
 pub fn mouse_row(y: i32, first_row_y: i32, row_count: i32, window_top: i32) -> Option<i32> {
     if row_count <= 0 {
         return None;
@@ -415,7 +415,7 @@ pub fn mouse_row(y: i32, first_row_y: i32, row_count: i32, window_top: i32) -> O
     (0..row_count).contains(&row).then_some(row)
 }
 
-/// `Get-HitAt`: footer first, then the action row, then a launch row and its cell, then a list row.
+/// Footer first, then the action row, then a launch row and its cell, then a list row.
 pub fn hit_at(map: Option<&RowMap>, x: i32, y: i32, window_top: i32) -> Hit {
     let Some(map) = map else { return Hit::None };
     if let Some((span, index)) = footer_hit(map, x, y, window_top) {

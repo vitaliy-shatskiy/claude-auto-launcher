@@ -1,10 +1,9 @@
-//! The launch modes (`LaunchModes.ps1`) and the claude arguments a launch state produces
-//! (`Get-LaunchArgs`). Pure.
+//! The launch modes and the claude arguments a launch state produces. Pure.
 
 use super::options::default_model_unavailable;
 use super::{LaunchState, Roster, RowName, UNAVAILABLE_DEFAULT_ADVISOR};
 
-/// One launch mode (`LaunchModes.ps1`): the project screen's action field values.
+/// One launch mode: the project screen's action field values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LaunchMode {
     pub name: &'static str,
@@ -56,12 +55,12 @@ pub const LAUNCH_MODES: [LaunchMode; 4] = [
 /// Keys the project screen keeps for itself: a mode hotkey on one would replace it.
 pub const PROJECT_SCREEN_OWN_KEYS: [char; 7] = ['/', 'w', 'a', 's', 'd', 'h', 'v'];
 
-/// `Get-LaunchMode`: case-insensitive, like the switch it replaced.
+/// Case-insensitive, like the switch it replaced.
 pub fn launch_mode(name: &str) -> Option<&'static LaunchMode> {
     LAUNCH_MODES.iter().find(|m| m.name.eq_ignore_ascii_case(name))
 }
 
-/// `Get-LaunchModeTableErrors`: every hotkey clash, one line each.
+/// Every hotkey clash, one line each.
 pub fn launch_mode_table_errors(modes: &[LaunchMode], reserved: &[char]) -> Vec<String> {
     let mut errors = Vec::new();
     let mut seen: Vec<(char, &str)> = Vec::new();
@@ -82,9 +81,9 @@ pub fn launch_mode_table_errors(modes: &[LaunchMode], reserved: &[char]) -> Vec<
     errors
 }
 
-/// `Get-LaunchArgs`: a default state yields NOTHING. `available`/`default_model`: the one
-/// exception, the CS-231 pin when the account lacks the default model's family; `default_advisor`
-/// (the raw `advisorModel`) gets the same pin on the advisor row (CS-1044).
+/// A default state yields NOTHING. `available`/`default_model`: the one
+/// exception, the pin when the account lacks the default model's family; `default_advisor`
+/// (the raw `advisorModel`) gets the same pin on the advisor row.
 pub fn launch_args(
     roster: &Roster,
     state: &LaunchState,

@@ -1,4 +1,4 @@
-//! The launcher log (`Env.ps1` Write-LauncherLog): one JSON object per line in
+//! The launcher log: one JSON object per line in
 //! `<canonical root>\launcher-logs\claude-auto-<yyyy-MM-dd>.jsonl`. Append-only, fail-open, SILENT.
 
 use std::io::Write as _;
@@ -113,7 +113,7 @@ pub(crate) fn iso_o(t: &sys::LocalNow) -> String {
     )
 }
 
-/// `Remove-OldLauncherLogs`: files older than `days` by last write time.
+/// Files older than `days` by last write time.
 pub fn prune(root: &Path, days: u64) {
     let Ok(entries) = std::fs::read_dir(root) else { return };
     let cut = SystemTime::now().checked_sub(Duration::from_secs(days * 86_400));
@@ -130,8 +130,8 @@ pub fn prune(root: &Path, days: u64) {
     }
 }
 
-/// `Get-LauncherParentChain`: this process and up to five ancestors, pid and name. The command
-/// line is not read (WMI in PowerShell); see PORTING.md.
+/// This process and up to five ancestors, pid and name. The command
+/// line is not read.
 pub fn parent_chain(depth: usize) -> Vec<Value> {
     let table = sys::process_table();
     let mut out = Vec::new();

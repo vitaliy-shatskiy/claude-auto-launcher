@@ -1,5 +1,5 @@
 //! What a row shows and how it steps: hidden families, the folded default cell, the wrap
-//! stepper (`Screens.ps1` row helpers). Pure.
+//! stepper. Pure.
 
 use std::sync::LazyLock;
 
@@ -26,7 +26,7 @@ fn has_family_map(row: RowName) -> bool {
     matches!(row, RowName::Model | RowName::Advisor)
 }
 
-/// `Get-HiddenFamilies`: `None` hides nothing; an answer hides every hideable family not in it.
+/// `None` hides nothing; an answer hides every hideable family not in it.
 pub fn hidden_families(available: Option<&[String]>) -> Vec<&'static str> {
     let Some(have) = available else { return Vec::new() };
     HIDEABLE_FAMILIES
@@ -36,7 +36,7 @@ pub fn hidden_families(available: Option<&[String]>) -> Vec<&'static str> {
         .collect()
 }
 
-/// `Get-RowOptionText`: the text a row key is drawn as.
+/// The text a row key is drawn as.
 #[derive(Debug, Clone, Copy)]
 pub struct OptionText<'a> {
     pub default_model_label: &'a str,
@@ -96,13 +96,13 @@ static FAMILY_WORD: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
         .collect()
 });
 
-/// `Test-DefaultModelUnavailable`: the resolved default names a family this account lacks.
+/// The resolved default names a family this account lacks.
 pub fn default_model_unavailable(label: &str, available: Option<&[String]>) -> bool {
     let hidden = hidden_families(available);
     FAMILY_WORD.iter().any(|(f, re)| hidden.contains(f) && re.is_match(label))
 }
 
-/// `Get-HonestDefaultLabel`: an unavailable default names the pin the launch passes instead.
+/// An unavailable default names the pin the launch passes instead.
 pub fn honest_default_label(roster: &Roster, label: &str, available: Option<&[String]>, row: RowName) -> String {
     if !default_model_unavailable(label, available) {
         return label.to_owned();
@@ -119,7 +119,7 @@ pub fn honest_default_label(roster: &Roster, label: &str, available: Option<&[St
     }
 }
 
-/// `Get-VisibleRowValues`: values minus hidden families, with the option that reads the same as
+/// Values minus hidden families, with the option that reads the same as
 /// the resolved default folded INTO the default cell, which takes the twin's slot.
 pub fn visible_row_values(roster: &Roster, row: &RowDef, ctx: &OptionText<'_>) -> Vec<String> {
     let hidden = hidden_families(ctx.available);
@@ -162,7 +162,7 @@ pub fn visible_row_values(roster: &Roster, row: &RowDef, ctx: &OptionText<'_>) -
     ordered
 }
 
-/// `Test-HiddenRowValue`: `key` is a twin folded into the default cell.
+/// `key` is a twin folded into the default cell.
 pub fn is_hidden_row_value(roster: &Roster, row: &RowDef, key: &str, ctx: &OptionText<'_>) -> bool {
     if key.eq_ignore_ascii_case("default") || !ctx.default_labels.contains_key(row.name.as_str()) {
         return false;
@@ -171,7 +171,7 @@ pub fn is_hidden_row_value(roster: &Roster, row: &RowDef, key: &str, ctx: &Optio
     has(&visible_row_values(roster, row, &ctx.unfolded())) && !has(&visible_row_values(roster, row, ctx))
 }
 
-/// `Set-LaunchAvailabilitySnap`: a remembered Model/Advisor of a hidden family goes back to
+/// A remembered Model/Advisor of a hidden family goes back to
 /// 'default' and loses its restore mark.
 pub fn availability_snap(state: &mut LaunchState, available: Option<&[String]>) {
     let hidden = hidden_families(available);
@@ -186,7 +186,7 @@ pub fn availability_snap(state: &mut LaunchState, available: Option<&[String]>) 
     }
 }
 
-/// `Step-Option`: the one wrap-stepper, canonicalised case-insensitively.
+/// The one wrap-stepper, canonicalised case-insensitively.
 pub fn step_option(values: &[String], current: &str, delta: i64) -> String {
     if values.is_empty() {
         return current.to_owned();
@@ -200,7 +200,7 @@ pub fn step_option(values: &[String], current: &str, delta: i64) -> String {
     values.get(j).cloned().unwrap_or_default()
 }
 
-/// `Step-LaunchValue`: steps the row under the cursor over its VISIBLE values. Landing on a
+/// Steps the row under the cursor over its VISIBLE values. Landing on a
 /// default cell that folded a twin stores the twin, so the pick is saved.
 pub fn step_launch_value(roster: &Roster, state: &mut LaunchState, delta: i64, ctx: &OptionText<'_>) {
     let Some(row) = roster.rows.get(state.row) else { return };

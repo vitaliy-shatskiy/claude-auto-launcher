@@ -29,7 +29,7 @@ impl Drop for Hash {
     }
 }
 
-/// SHA-256 of a file in upper-case hex (`Get-FileHash`), streamed in 1 MiB chunks; `None` when
+/// SHA-256 of a file in upper-case hex, streamed in 1 MiB chunks; `None` when
 /// the file cannot be opened or read.
 pub(crate) fn sha256_file(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;

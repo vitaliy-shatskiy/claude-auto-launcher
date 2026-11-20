@@ -1,4 +1,4 @@
-//! Frame pieces every screen shares (`Screens.ps1` middle): the footer as data, radio rows, click
+//! Frame pieces every screen shares: the footer as data, radio rows, click
 //! spans, the row map, and the per-line truncate-then-paint chain. Pure.
 
 use crate::layout::{display_width, limit_line};
@@ -73,7 +73,7 @@ pub fn with_switch_hint(line: String, g: &Glyphs, max: usize) -> String {
     format!("{line}  {hint}")
 }
 
-/// `Get-FrameWidth`: the last console column is never written (it wraps on some terminals).
+/// The last console column is never written (it wraps on some terminals).
 pub fn frame_width(width: usize) -> usize {
     width.saturating_sub(1)
 }
@@ -163,7 +163,7 @@ pub struct Footer {
     pub lines: Vec<FooterLine>,
 }
 
-/// `New-HintFooter`: one list drives what is printed, where it can be clicked and which key a
+/// One list drives what is printed, where it can be clicked and which key a
 /// click means. All hints on one line when they fit `width` (0 = never wrap); else the plain
 /// (not clickable) hints drop, except the kept ones, and what is left goes on one line or into an
 /// aligned grid with the most columns that fit. A hint is never split.
@@ -259,7 +259,7 @@ pub struct FooterLight {
     pub selected: Vec<(String, Option<char>)>,
 }
 
-/// `Get-FooterHover`: the (key, char) a hovered clickable-span INDEX names.
+/// The (key, char) a hovered clickable-span INDEX names.
 pub fn footer_hover(footer: &Footer, hover: i32) -> Option<(String, Option<char>)> {
     let i = usize::try_from(hover).ok()?;
     footer
@@ -275,7 +275,7 @@ fn char_slice(chars: &[char], from: usize, to_inclusive: usize) -> String {
     chars.get(from..=to_inclusive).map_or_else(String::new, |s| s.iter().collect())
 }
 
-/// `Add-HintColor`: paints key tokens by COLUMN, so stripping the colour returns the line exactly.
+/// Paints key tokens by COLUMN, so stripping the colour returns the line exactly.
 pub fn add_hint_color(line: &str, spans: &[FooterSpan], enabled: bool, light: &FooterLight) -> String {
     if !enabled || line.is_empty() || spans.is_empty() {
         return line.to_owned();
@@ -338,7 +338,7 @@ pub struct CellSpan {
     pub value: String,
 }
 
-/// `Measure-CellSpans`: columns in DISPLAY CELLS of pieces about to be joined.
+/// Columns in DISPLAY CELLS of pieces about to be joined.
 pub fn measure_cell_spans(pieces: &[String], joiner: &str, start_x: usize, values: &[String]) -> Vec<CellSpan> {
     let mut x = i32::try_from(start_x).unwrap_or(0);
     let jw = i32::try_from(display_width(joiner)).unwrap_or(0);
@@ -374,7 +374,7 @@ pub struct RadioRow {
     pub compact: bool,
 }
 
-/// Inputs of `New-RadioRow`.
+/// Inputs of a radio row.
 #[derive(Debug, Clone)]
 pub struct RadioSpec<'a> {
     pub prefix: &'a str,
@@ -398,7 +398,7 @@ fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
-/// `New-RadioRow`: `label  ○ a ● [b] ○ c` with a click cell per value. The compact form drops the
+/// `label  ○ a ● [b] ○ c` with a click cell per value. The compact form drops the
 /// glyphs; a value whose label carries a space has no readable compact form.
 pub fn new_radio_row(spec: &RadioSpec<'_>, g: &Glyphs) -> RadioRow {
     let label_part = pad_right(&theme::strip_ctl(spec.label), spec.label_width);
@@ -507,11 +507,11 @@ pub struct Frame {
     pub map: RowMap,
 }
 
-/// A screen's body painter (`Add-LaunchColor`, `Add-PickerColor`), run after dim spans and before
+/// A screen's body painter, run after dim spans and before
 /// the hover band.
 pub type BodyPainter<'a> = &'a dyn Fn(&str, bool) -> String;
 
-/// `Format-FrameLine`, body lines: truncate, dim spans, the body painter, the hover band LAST.
+/// Body lines: truncate, dim spans, the body painter, the hover band LAST.
 pub fn format_body_line(line: &str, width: usize, style: Style, painter: BodyPainter<'_>) -> String {
     let l = limit_line(line, width, style.ascii);
     let l = theme::add_dim_span_color(&l, style.color);
@@ -519,7 +519,7 @@ pub fn format_body_line(line: &str, width: usize, style: Style, painter: BodyPai
     theme::add_hover_span_color(&l, style.color)
 }
 
-/// `Complete-PickerFrame` without the memo: appends the footer, records its spans, paints.
+/// The frame's end without the memo: appends the footer, records its spans, paints.
 pub fn complete_frame(
     lines: &[String],
     footer: &Footer,
@@ -544,7 +544,7 @@ pub fn complete_frame(
     out_lines
 }
 
-/// `Get-TooSmallFrame`: the size line first, so the numbers survive any cut.
+/// The size line first, so the numbers survive any cut.
 pub fn too_small_frame(width: usize, height: usize, ascii: bool) -> Vec<String> {
     let fw = frame_width(width);
     let mut lines: Vec<String> = [

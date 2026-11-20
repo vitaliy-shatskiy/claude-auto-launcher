@@ -27,7 +27,7 @@ fn modified(p: &Path) -> SystemTime {
     std::fs::metadata(p).and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH)
 }
 
-/// `Join-SessionSnapshot`: the launching account's snapshot plus every other store's, newest first,
+/// The launching account's snapshot plus every other store's, newest first,
 /// one row per session id: a session transferred once exists twice, the newer copy wins.
 pub fn joined_snapshot(primary: Vec<PathBuf>, others: &[OtherStore], slugs: &[String]) -> Vec<PathBuf> {
     if others.is_empty() {
@@ -49,7 +49,7 @@ pub fn joined_snapshot(primary: Vec<PathBuf>, others: &[OtherStore], slugs: &[St
         .collect()
 }
 
-/// `Add-SessionAccountTag`: names the other account whose store holds this session; a session of
+/// Names the other account whose store holds this session; a session of
 /// the launching account keeps an empty tag.
 pub fn tag_sessions(sessions: &mut [Session], others: &[OtherStore]) {
     for s in sessions {
@@ -69,7 +69,7 @@ pub fn transfer_of(s: &Session) -> Option<Transfer> {
     })
 }
 
-/// `Copy-SessionToProfile`: the transcript into the target store, slug directory preserved (the
+/// The transcript into the target store, slug directory preserved (the
 /// slug is how claude maps a transcript back to its directory). An up-to-date target is never
 /// touched; an older one is renamed to a `.bak` sibling, which the `*.jsonl` scan never offers.
 pub fn copy_session_to_profile(source: &Path, target_root: &Path) -> std::io::Result<PathBuf> {

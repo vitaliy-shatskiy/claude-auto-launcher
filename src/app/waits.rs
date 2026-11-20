@@ -81,7 +81,7 @@ pub(super) fn open_maintenance(
     }
 }
 
-/// `Confirm-HeldSession`: Enter or `[enter] go on` = go on, Esc/Ctrl+C or `[esc] back` = back;
+/// Enter or `[enter] go on` = go on, Esc/Ctrl+C or `[esc] back` = back;
 /// nothing held = go on.
 pub(super) fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Result<bool, UiStop> {
     let Some(h) = holder else { return Ok(true) };

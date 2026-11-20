@@ -422,14 +422,14 @@ fn row_one() -> List {
     }
 }
 
-/// D1: a click that selects row 1 first (one more frame painted), so the next click on it acts.
+/// A click that selects row 1 first (one more frame painted), so the next click on it acts.
 fn selected_first(q: Vec<(Event, u64, usize)>) -> Clocked {
     let mut all = vec![(click(5, 2), 100, 0)];
     all.extend(q.into_iter().map(|(e, at, paints)| (e, at, paints + 1)));
     clocked(all)
 }
 
-/// D1: the cursor sits on the row (keyboard or start), but one click only selects it.
+/// The cursor sits on the row (keyboard or start), but one click only selects it.
 #[test]
 fn d1_a_click_on_a_cursor_row_no_click_selected_only_selects() {
     let mut s = row_one();
@@ -442,7 +442,7 @@ fn d1_a_click_on_a_cursor_row_no_click_selected_only_selects() {
     assert_eq!(s.acts, 1, "the second click on the selected row acts");
 }
 
-/// D1: a key between the two clicks drops the selection; keyboard Enter is unchanged.
+/// A key between the two clicks drops the selection; keyboard Enter is unchanged.
 #[test]
 fn d1_a_key_between_two_clicks_drops_the_selection() {
     let mut s = List {
@@ -478,7 +478,7 @@ fn debug_mode_draws_exactly_as_off() {
     assert_eq!(frames(timed(keys())), frames(term(keys())));
 }
 
-/// CS-224 a: the twin queued during a handler slower than the window is read late. It is still
+/// The twin queued during a handler slower than the window is read late. It is still
 /// the twin, because it was waiting when the loop was ready again.
 #[test]
 fn cs224a_twin_queued_during_a_slow_activation_is_dropped() {
@@ -506,7 +506,7 @@ fn carried_activation(t: &mut Clocked) {
     });
 }
 
-/// CS-224 a across screens: the previous screen's twin is already queued when this screen opens.
+/// Across screens: the previous screen's twin is already queued when this screen opens.
 #[test]
 fn cs224a_twin_queued_before_the_next_screen_opens_is_dropped() {
     let mut s = row_one();
@@ -517,7 +517,7 @@ fn cs224a_twin_queued_before_the_next_screen_opens_is_dropped() {
     assert_eq!(s.acts, 0);
 }
 
-/// CS-224 a across screens: the twin lands while the next screen's first frame is drawn.
+/// Across screens: the twin lands while the next screen's first frame is drawn.
 #[test]
 fn cs224a_twin_queued_during_the_next_screens_first_draw_is_dropped() {
     let mut s = row_one();
@@ -527,7 +527,7 @@ fn cs224a_twin_queued_during_the_next_screens_first_draw_is_dropped() {
     assert_eq!(s.acts, 0, "the twin read after a slow first draw acted on the new screen");
 }
 
-/// CS-224 b: every later record of one gesture is dropped, not only the first twin.
+/// Every later record of one gesture is dropped, not only the first twin.
 #[test]
 fn cs224b_third_and_fourth_records_of_one_gesture_are_dropped() {
     let mut s = row_one();

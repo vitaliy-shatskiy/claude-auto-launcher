@@ -64,7 +64,7 @@ pub(crate) fn command_line(pid: u32) -> Option<String> {
     Some(String::from_utf16_lossy(&text))
 }
 
-/// `Stop-Process -Force`.
+/// Ends the process at once, without asking it to close.
 pub(crate) fn terminate(pid: u32) -> Result<(), String> {
     // SAFETY: plain call; a null handle is checked below.
     let h = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };

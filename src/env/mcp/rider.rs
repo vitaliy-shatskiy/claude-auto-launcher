@@ -1,4 +1,4 @@
-//! `Get-RiderMcpUrl`, `Test-McpPort` (cargo feature `rider-mcp`): a per-PID `--mcp-config` file
+//! Rider MCP discovery (cargo feature `rider-mcp`): a per-PID `--mcp-config` file
 //! pointing at the Rider MCP endpoint when the mode asks for it. Only the MCP endpoint answers 200
 //! with `text/event-stream`; several Rider ports accept TCP and then stall, so the scan runs in
 //! parallel behind a cached hit.
@@ -39,7 +39,7 @@ pub(crate) fn is_rider(process_name: &str) -> bool {
     process_name.to_ascii_lowercase().starts_with("rider")
 }
 
-/// `Test-McpPort`: GET /stream answers 200 with `Content-Type: text/event-stream` within a second.
+/// GET /stream answers 200 with `Content-Type: text/event-stream` within a second.
 pub(crate) fn is_mcp_port(port: u16) -> bool {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let Ok(mut s) = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) else {
@@ -86,7 +86,7 @@ pub(crate) fn loopback_ports(listeners: &[Listener], pids: &[u32]) -> Vec<u16> {
     ports
 }
 
-/// `Get-RiderMcpUrl`: the cached port first, else a parallel probe of every port; the first that
+/// The cached port first, else a parallel probe of every port; the first that
 /// answers wins and is cached (never in preview: preview writes nothing).
 fn rider_url(p: &Probe<'_>, preview: bool) -> Option<String> {
     let ports = (p.ports)();
@@ -132,7 +132,7 @@ fn sweep_old(temp: &Path) {
         let json = Path::new(&name).extension().is_some_and(|x| x.eq_ignore_ascii_case("json"));
         let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < day_ago);
         if name.starts_with("claude-mcp-rider-") && json && old && std::fs::remove_file(e.path()).is_err() {
-            // Best effort, like Remove-Item -ErrorAction SilentlyContinue.
+            // Best effort: a file another run still holds is swept next time.
         }
     }
 }
