@@ -28,26 +28,51 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   so the check does not depend on machine load; `examples/bench.rs` prints the counts with wall
   times for reference (`perf/README.md`).
 
+### Changed
+
+- The README states what 1.0 keeps stable (config keys, plugin protocol 1, the `--launcher-*`
+  flags and their JSON, the `CLAUDE_AUTO_*` switches) and what stays internal.
+
+### Fixed
+
+- The session picker opened late (seconds on a cold disk) after every update: it now shows its
+  rows at once, titled by their first prompt, and fills in titles and message counts as a
+  background scan finishes them; an update no longer discards the session summary cache.
+- Self-update `auto` installed a build again on the next start after `b` rolled it back; a
+  rolled-back build now comes back only through `c`, and a newer release updates as before.
+- Self-update trusted its record of the installed build after the exe was replaced by hand, and
+  hid the update; a start now forgets a record the exe does not match. A download cut off by an
+  exit (`claude-auto.exe.<pid>-<id>.new`) is deleted an hour later once its process is gone.
+- Self-update `auto` downloaded ~10 MB again on every start after a failed update (a checksum
+  mismatch, a locked folder); it now retries that release a day later and repeats the reason.
+- Self-update `auto` dropped a download still running when the screens closed, so each start
+  downloaded again; the check now lives until claude exits.
+- The picker's chat dropped `*` and `_` from paths and globs taken for emphasis
+  (`src/**/*.rs`, `__init__.py`, `\__pycache__\`); next to `/`, `\` or `.` they stay.
+- The picker showed every time at today's UTC offset, so a message from before the DST change
+  was an hour off; each time now takes the offset of its own date.
+
 ## [0.9.0] — 2026-11-20
 
 ### Added
 
-- Self-update from the launcher's GitHub releases (config `selfUpdate`: `notify` by default, `auto`,
-  `off`; `updateRepo` for a fork; `CLAUDE_AUTO_NO_SELF_UPDATE=1`): a daily background check,
-  a dim line on the launch screen, maintenance `c` to update and `b` to roll back. The download is
-  https only and checked against the release's SHA-256 before the running exe is renamed to
-  `.old`; a failed step puts the old exe back. Keys `c` and `b` are now reserved for
-  `maintenanceActions`.
-- The session picker's preview is a chat: the newest messages fill the pane from the bottom,
-  Claude's on the left under an orange `claude · DD.MM HH:MM` label, yours on the right in cyan;
-  tool calls, tool results, notifications and subagent lines are left out, markdown is shown as
-  plain text, an older message is cut at 8 lines and the newest one, when taller than the pane,
-  shows its end. A worker thread reads only the transcript's tail (1 MB steps, 8 MB at most) once
-  the cursor rests, and keeps the last 32 chats; the pane says `loading…` until it lands. Debug
-  mode logs `picker.chat.load` with the bytes read. The `first`/`last`/`reply` lines are gone.
+- claude-auto self-update from its GitHub releases (config `selfUpdate`: `notify` by default,
+  `auto`, `off`; `updateRepo` for a fork; `CLAUDE_AUTO_NO_SELF_UPDATE=1`): a daily background
+  check, a dim line on the launch screen, maintenance `c` to update and `b` to roll back. The
+  download is https only and checked against the release's SHA-256 before the running exe is
+  renamed to `claude-auto.exe.old`; a failed step puts the old exe back. Keys `c` and `b` are now
+  reserved for `maintenanceActions`.
+- The session picker's preview is a chat: a title and a `DD.MM HH:MM · N msgs · size` line, a
+  rule, then the newest messages filling the pane from the bottom, Claude's on the left under an
+  orange `claude · DD.MM HH:MM` label, yours on the right in cyan. Tool calls, tool results,
+  notifications and subagent lines are left out, markdown is shown as plain text (`2*3`, `a_b_c`
+  and paths stay as written), an older message is cut at 8 lines and the newest one, when taller
+  than the pane, shows its end. A worker thread reads only the transcript's tail (1 MB steps, 8 MB
+  at most) once the cursor rests, and keeps the last 32 chats; the pane says `loading…` until it
+  lands. Debug mode logs `picker.chat.load` with the bytes read.
 - The picker has a colour hierarchy: the selected row is a grey fill in bold (the mouse hover a
-  darker one), ages and the project name dim, a green dot before a session live now, the card's
-  title bold and its meta line dim but for the message count and size.
+  darker one), ages and the project name dim, a green dot before a session live now, the
+  preview's title bold and its meta line dim but for the message count and size.
 - Every screen repaints only the lines that changed since its last frame (a full rewrite on a
   resize, a new screen, after a child or a typed line), and input that arrives in one burst (mouse
   motion, key repeat) costs one frame; background work waits while input is pending. Debug mode
@@ -56,11 +81,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   `pinnedProjects`, in pin order, whatever their recency), `p` again unpins it. Pinning a hidden
   project unhides it and hiding a pinned one unpins it; in a `/` search a pin only breaks ties. A
   pinned folder that no longer exists stays in the config and is listed dimmed, marked `(missing)`.
-  The footer's `p` button takes a third footer line at 78-80 columns.
-- With `sharing` off, the session picker lists every account's sessions and tags another
-  account's with its name; resuming one copies the transcript into the launching account first
-  (an older copy there kept as `.bak`, a newer one left alone, a failed copy stops the launch,
-  preview copies nothing). Ported from Reva1v's fork.
+  Pinned rows carry a dim `↑` before the name.
+- With `sharing` off, the session picker lists every account's sessions (even when the launching
+  account has no `projects` folder yet) and tags another account's with its name; resuming one
+  copies the transcript into the launching account first (an older copy there kept as `.bak`, a
+  newer one left alone, a failed copy stops the launch, preview copies nothing). Ported from
+  Reva1v's fork.
 - `--launcher-options` prints what the launch screen offers as one line of JSON, starting nothing
   and writing nothing; `--launcher-run '<json>'` launches with those choices after checking them
   against the rows (exit `2` before any side effect when they do not fit) and does not save them.
@@ -75,58 +101,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - The mouse, multi-account sharing, the Remote row and the Rider MCP scan are cargo features
   (`mouse`, `sharing`, `remote`, `rider-mcp`), all on by default; a default build behaves as
   before. `cargo build --no-default-features` leaves all four out; a left-out module's config key
-  (`mouse`, `sharing`, `remote`, `riderMcp`) warns that the build has no such module and the module stays off. CI builds
-  and tests both ways.
+  (`mouse`, `sharing`, `remote`, `riderMcp`) warns that the build has no such module and the
+  module stays off. CI builds and tests both ways.
 
 ### Changed
 
+- Every screen is a full page: the launch screen, maintenance, the rows editor and the held-session
+  question span the terminal's width (boxes and rules included) with the footer on the last row
+  but one, like the project screen and the picker, and redraw on resize. A terminal over 240x80
+  gets a 240x80 page centred horizontally at the top, clicks counted from its first column. From
+  155 columns the launch screen's usage bars double to 16 cells.
 - A launch screen narrower than 100 columns collapses only the rows that do not fit to
   `‹ value ›`; the rows that fit stay radio lists you can read and click (before, one row too wide
   collapsed them all).
-- The session picker's summary cache is `claude-auto-sessions.json` again; the first cache write
-  removes the old `claude-auto-rs-sessions.json` beside it (that exact file, nothing else).
+- A row that switches with a/d says so: the project screen's action row, and on the launch screen
+  the row under the cursor, end in a dim `‹ a/d ←/→ ›` (`< a/d <-/-> >` in ASCII).
+- Session picker: a row is the session's title and age (the project only outside one project's
+  view). The list pane stays 40 % wide, at most 72 columns; a tall picker loads more pages while
+  idle.
 - A session is titled by its `/rename` name, else Claude Code's newest AI title, else its first
   prompt. The message count counts every user and assistant message of the whole transcript (an
   assistant message written over several lines once), not only typed prompts.
-- Session picker: a row is the session's title and age (the project only outside one project's
-  view); the preview is a card - title, `DD.MM HH:MM · N msgs · size`, a rule, then `first ›`,
-  `last ›` and `reply ›`. The picker and the project screen fill the whole terminal and redraw on
-  resize; a tall picker loads more pages while idle. The list pane stays 40 % wide, at most 72
-  columns. Pinned projects carry a dim `↑` before the name.
-- The preview card's `first ›`, `last ›` and `reply ›` show markdown as plain text: bold, emphasis,
-  code and fence marks, `##` headings, a leading list marker and link targets are dropped; `2*3`,
-  `a_b_c`, `*.rs` and paths stay as written. Titles are shown as they are.
-- Every screen is a full page: the launch screen, maintenance, the rows editor and the held-session
-  question span the terminal's width (boxes and rules included) with the footer on the last row
-  but one, like the project screen and the picker. A terminal over 240x80 gets a 240x80 page
-  centred horizontally at the top, clicks counted from its first column. From 155 columns the
-  launch screen's usage bars double to 16 cells.
-- A row that switches with a/d says so: the project screen's action row, and on the launch screen
-  the row under the cursor, end in a dim `‹ a/d ←/→ ›` (`< a/d <-/-> >` in ASCII).
-
-### Fixed
-
-- The session picker opened late (seconds on a cold disk) after every update: it now shows its
-  rows at once, titled by their first prompt, and fills in titles and message counts as a
-  background scan finishes them; an update no longer discards the session summary cache.
-- With `sharing` off, the session picker lists the other accounts' sessions although the
-  launching account has no `projects` folder yet.
-- The preview card's `last ›` showed the first prompt when a long turn's tool lines pushed the
-  last prompt out of the tail read; the transcript scan now keeps Claude Code's `last-prompt`
-  record and the card falls back to it (a prompt found in the tail still wins).
-- Self-update `auto` installed a build again on the next start after `b` rolled it back; a
-  rolled-back build now comes back only through `c`, and a newer release updates as before.
-- Self-update trusted its record of the installed build after the exe was replaced by hand, and
-  hid the update; a start now forgets a record the exe does not match. A download cut off by an
-  exit (`claude-auto.exe.<pid>-<id>.new`) is deleted an hour later once its process is gone.
-- Self-update `auto` downloaded ~10 MB again on every start after a failed update (a checksum
-  mismatch, a locked folder); it now retries that release a day later and repeats the reason.
-- Self-update `auto` dropped a download still running when the screens closed, so each start
-  downloaded again; the check now lives until claude exits.
-- The picker's chat dropped `*` and `_` from paths and globs taken for emphasis
-  (`src/**/*.rs`, `__init__.py`, `\__pycache__\`); next to `/`, `\` or `.` they stay.
-- The picker showed every time at today's UTC offset, so a message from before the DST change
-  was an hour off; each time now takes the offset of its own date.
+- The session picker's summary cache is `claude-auto-sessions.json` again (0.6.0 kept the old
+  `claude-auto-rs-` prefix); the first cache write removes the old `claude-auto-rs-sessions.json`
+  beside it (that exact file, nothing else).
 
 ## [0.8.2] — 2026-11-11
 
@@ -634,6 +632,23 @@ First public release.
   decoded as text, for terminals that send them that way.
 - 15-check verification gate (`tests\checkpoint.ps1`).
 
+[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.2...v0.9.0
+[0.8.2]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.7.3...v0.8.0
+[0.7.3]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.7.2...v0.7.3
+[0.7.2]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.4.2...v0.5.0
+[0.4.2]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/tag/v0.1.0
-[0.3.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/tag/v0.3.0
-[0.3.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/releases/tag/v0.3.1
