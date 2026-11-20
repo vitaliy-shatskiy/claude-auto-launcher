@@ -214,6 +214,28 @@ fn a_project_the_registry_knows_keeps_its_own_row() {
 }
 
 #[test]
+fn a_plugin_session_joins_the_picker_and_resumes_without_a_transfer() {
+    let d = dir("picker");
+    let req = crate::sessions::PickerRequest {
+        sessions_root: d.clone(),
+        others: &[],
+        project_slugs: &[],
+        project_name: "",
+        style: crate::frame::Style { color: false, ascii: true },
+        preview: true,
+    };
+    let fake = Fake::with(&[("describe", ticket()), ("sessions", json!([{"id":"s-1","title":"from jira","updated":7}]))]);
+    let plugins = loaded(&fake);
+    let extra = |_: &[String]| sessions::collect(&plugins, "", &fake, &mut Vec::new());
+    let mut t = crate::ui::PreviewTerm::new((100, 30), crate::ui::parse_preview_keys("Enter").unwrap(), true);
+    let got = crate::sessions::run_picker_with(&mut t, &req, &extra).unwrap().unwrap();
+    assert_eq!((got.session_id.as_str(), got.transfer), ("s-1", None));
+    let frames = t.frames.unwrap();
+    assert!(frames.iter().flatten().any(|l| l.contains("[tick]")), "the row names its plugin: {frames:?}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
 fn without_may_run_no_plugin_is_called() {
     let fake = Fake::with(&[("describe", ticket())]);
     let (p, w) = load(&[spec("tick", r"C:\p\tick.exe")], None, &fake, false);

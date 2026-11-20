@@ -37,6 +37,8 @@ fn session(plugin: &str, project: &str, v: &Value) -> Option<Session> {
         project: project.to_owned(),
         modified_ms: v.get("updated").and_then(Value::as_i64).unwrap_or(0),
         title,
+        // The picker offers only sessions with a prompt; a plugin's entry is resumable by definition.
+        prompt_count: 1,
         account: plugin.to_owned(),
         ..Session::default()
     })
