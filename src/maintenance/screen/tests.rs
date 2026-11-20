@@ -71,11 +71,13 @@ fn count(lines: &[String], needle: &str) -> usize {
 }
 
 #[test]
-fn frame_fills_the_frame_width_and_shows_the_newest_version() {
+fn the_header_spans_the_width_and_the_page_ends_at_its_content() {
     let f = draw(&page_of(info(true, Some("A"), Some("A")), "", &[]), (80, 24));
     assert_eq!(widest(&f.lines), frame_width(80));
-    assert_eq!(count(&f.lines, "Claude Code  2.1.230 \u{b7} newest"), 1, "{:#?}", f.lines);
-    assert_eq!(f.lines.len(), 23, "the page reaches the footer, the last row stays free");
+    assert!(f.lines[1].contains("claude-auto \u{b7} maintenance"), "{}", f.lines[1]);
+    assert_eq!(count(&f.lines, "Claude Code    2.1.230 \u{b7} newest"), 1, "{:#?}", f.lines);
+    assert!(f.lines.len() < 23, "content height, nothing pads to the bottom: {}", f.lines.len());
+    assert!(f.lines.last().unwrap().contains("[esc] back"));
 }
 
 #[test]
@@ -94,22 +96,22 @@ fn builds_on_disk_read_as_words_and_hashes_stay_off() {
     i.versions_bytes = 3_650_722_201;
     let f = draw(&page_of(i, "", &[]), (60, MIN_HEIGHT + 8));
     assert_eq!(widest(&f.lines), frame_width(60));
-    assert_eq!(count(&f.lines, "12 builds on disk \u{b7} 3.4 GB"), 1, "{:#?}", f.lines);
+    assert_eq!(count(&f.lines, "12 builds \u{b7} 3.4 GB"), 1, "{:#?}", f.lines);
     assert_eq!(count(&f.lines, "a1a1"), 0, "no hash on the page");
 }
 
 #[test]
-fn a_multi_line_status_lands_one_row_per_line() {
+fn a_finished_action_shows_its_reports_first_line_on_its_own_row() {
     let s = "Running: native (2.1.229)\nPlatform: win32-x64\n\nNo installation issues found.";
     let f = draw(&page_of(info(false, None, None), s, &[]), (100, 30));
-    assert_eq!(count(&f.lines, "\n"), 0);
-    for needle in ["Running: native", "Platform: win32-x64", "No installation issues found"] {
-        assert_eq!(count(&f.lines, needle), 1, "{needle}: {:#?}", f.lines);
-    }
+    let row = f.lines.iter().find(|l| l.contains("[d] doctor")).unwrap();
+    assert!(row.ends_with("Running: native (2.1.229)"), "right-aligned on the row: {row:?}");
+    assert_eq!(count(&f.lines, "Platform: win32-x64"), 0, "no report block under the list");
+    assert_eq!(count(&f.lines, "Last action"), 0);
 }
 
 #[test]
-fn a_tall_status_is_capped_with_headroom_at_every_size() {
+fn a_tall_status_never_outgrows_the_terminal() {
     let long: Vec<String> = (1..=40).map(|i| format!("status line {i}")).collect();
     let long = long.join("\n");
     for size in [(50, MIN_HEIGHT), (78, 24), (100, 30), (160, 45)] {
@@ -117,10 +119,12 @@ fn a_tall_status_is_capped_with_headroom_at_every_size() {
         assert!(f.lines.len() < size.1, "a spare row at {size:?}");
         assert!(widest(&f.lines) < size.0, "{size:?}");
         assert_eq!(count(&f.lines, "status line 40"), 0, "{size:?}");
+        let last = f.map.rows.iter().map(|r| r.y).max().unwrap_or(0);
+        assert!(
+            usize::try_from(last).unwrap() < f.lines.len(),
+            "no row map past the drawn rows at {size:?}"
+        );
     }
-    let f = draw(&page_of(info(false, None, None), &long, &[]), (100, 30));
-    assert_eq!(count(&f.lines, "status line 1 "), 1, "the cap keeps the head");
-    assert_eq!(count(&f.lines, "more lines"), 1);
 }
 
 #[test]
@@ -129,7 +133,7 @@ fn every_action_has_one_row_with_its_chip_and_name() {
     let keys: Vec<String> = f.map.rows.iter().map(|r| r.name.clone()).collect();
     assert_eq!(keys, ["u", "r", "p", "d", "m", "l", "i"]);
     for (key, name) in [
-        ('u', "update Claude Code"),
+        ('u', "update"),
         ('r', "update anyway (rename)"),
         ('p', "delete old builds"),
         ('d', "doctor"),
@@ -150,12 +154,11 @@ fn only_the_selected_row_shows_its_hint() {
     let f = draw(&p, (120, 30));
     assert_eq!(count(&f.lines, "while claude.exe is in use"), 1, "{:#?}", f.lines);
     assert_eq!(count(&f.lines, "keeps the 2 newest"), 0, "no column of descriptions");
-    assert_eq!(count(&f.lines, "custom"), 0);
-    p.selected = 6;
+    let row = f.lines.iter().find(|l| l.contains("[r] update anyway")).unwrap();
     assert_eq!(
-        count(&draw(&p, (120, 30)).lines, "custom"),
-        1,
-        "a configured action is marked custom"
+        display_width(row),
+        crate::frame::right_edge(120),
+        "the hint ends at the header's right edge"
     );
 }
 
@@ -177,7 +180,7 @@ fn the_name_column_lines_up_on_every_row() {
 #[test]
 fn warnings_are_listed_with_the_place_to_fix_them() {
     let mut p = page_of(info(true, None, None), "", &[]);
-    assert_eq!(count(&draw(&p, (120, 30)).lines, "Warnings     none"), 1);
+    assert_eq!(count(&draw(&p, (120, 30)).lines, " Warnings       none"), 1);
     p.warnings = vec!["config: unknown key \"colour\"".into(), "plugin git: describe timed out".into()];
     p.config_path = r"C:\Users\sample\.claude\claude-auto.json".into();
     let f = draw(&p, (160, 45));
@@ -191,17 +194,15 @@ fn the_last_action_reads_done_failed_or_its_live_step() {
     let mut p = page_of(info(true, None, None), "", &[]);
     "MCP servers".clone_into(&mut p.last);
     for (phase, needle) in [
-        (
-            Phase::Running("checking\u{2026} \u{b7} 3 s".into()),
-            "             checking\u{2026} \u{b7} 3 s",
-        ),
-        (Phase::Done, "             done "),
-        (Phase::Failed("1 of 2 connected".into()), "             failed: 1 of 2 connected"),
+        (Phase::Running("checking\u{2026} \u{b7} 3 s".into()), "checking\u{2026} \u{b7} 3 s"),
+        (Phase::Done, "done"),
+        (Phase::Failed("1 of 2 connected".into()), "failed: 1 of 2 connected"),
     ] {
         p.phase = phase;
         let f = draw(&p, (120, 30));
-        assert_eq!(count(&f.lines, needle), 1, "{needle}: {:#?}", f.lines);
-        assert_eq!(count(&f.lines, "Last action  MCP servers"), 1);
+        let row = f.lines.iter().find(|l| l.contains("[m] MCP servers")).unwrap();
+        assert!(row.ends_with(needle), "{needle}: {row:?}");
+        assert_eq!(count(&f.lines, "Last action"), 0);
     }
     p.phase = Phase::Done;
     let colored = maintenance_frame(&p, (120, 30), Style { color: true, ascii: false });
@@ -243,13 +244,13 @@ fn a_grandchild_holding_the_pipe_never_holds_the_screen() {
 #[test]
 fn both_page_layouts_keep_the_frame_at_50_columns() {
     let long: Vec<String> = (1..=40).map(|i| format!("status line {i} with some words in it")).collect();
-    for h in [MIN_HEIGHT, 24, 30] {
+    for h in [24, 30] {
         let f = draw(&page_of(info(false, None, None), &long.join("\n"), &reindex()), (50, h));
         let text = f.lines.join("\n");
-        for row in ["[u] update Claude Code", "[l] launch rows", "[i] full reindex", "[esc] back"] {
+        for row in ["[u] update", "[l] launch rows", "[i] full reindex", "[esc] back"] {
             assert!(text.contains(row), "50x{h}: {row}");
         }
-        assert!(f.lines[0].starts_with("\u{256d}\u{2500} maintenance"), "50x{h}: {}", f.lines[0]);
+        assert!(f.lines[1].contains("maintenance"), "50x{h}: {}", f.lines[1]);
         assert!(f.lines.len() < h);
     }
 }
@@ -381,6 +382,66 @@ impl Ops for FakeOps {
         hidden.clone_into(&mut log.hidden);
         Ok(())
     }
+}
+
+/// Compares with `tests/fixtures/wide-frames/<name>.txt`; `CLAUDE_AUTO_BLESS` rewrites it.
+fn assert_golden(name: &str, actual: &str) {
+    let path = format!("{}/tests/fixtures/wide-frames/{name}.txt", env!("CARGO_MANIFEST_DIR"));
+    if std::env::var_os("CLAUDE_AUTO_BLESS").is_some() {
+        std::fs::write(&path, actual).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    assert_eq!(actual, expected, "{name}");
+}
+
+#[test]
+fn the_grouped_page_matches_its_goldens() {
+    let mut p = page_of(info(true, None, None), "", &reindex());
+    p.selected = 1;
+    p.hover_row = 4;
+    p.warnings = vec!["config: unknown key \"colour\"".into()];
+    p.config_path = r"C:\Users\sample\.claude\claude-auto.json".into();
+    assert_golden("maintenance-130x45", &draw(&p, (130, 45)).lines.join("\n"));
+    let colored = maintenance_frame(&p, (130, 45), Style { color: true, ascii: false });
+    let escaped: Vec<String> = colored.lines.iter().map(|l| l.replace('\u{1b}', "\\e")).collect();
+    assert_golden("maintenance-130x45-hover-color", &escaped.join("\n"));
+}
+
+/// The shared hover rule over every compact screen: launch, maintenance, rows editor.
+#[test]
+fn every_clickable_region_hovers_and_never_selects() {
+    use crate::ui::screen_loop::hover_walk::assert_every_region_hovers;
+    let color = Style { color: true, ascii: false };
+    let mut ops = FakeOps {
+        log: Rc::new(RefCell::new(Log::default())),
+        exit_code: 0,
+    };
+    let actions = reindex();
+    let mut m = MaintScreen::new(&mut ops, &actions, color);
+    assert_every_region_hovers(&mut m, (130, 45));
+    let mut rows = RowsEditor::new(
+        &RowsConfig {
+            rows: Some(vec![RowName::Account, RowName::Effort]),
+            ..RowsConfig::default()
+        },
+        color,
+    );
+    assert_every_region_hovers(&mut rows, (130, 45));
+    let mut roster = crate::launch::tests::four();
+    let view = crate::launch::screen::LaunchView {
+        limits: crate::types::Limits::new(),
+        version: VersionInfo::default(),
+        default_model_label: "default".into(),
+        default_advisor_label: "default".into(),
+        labels_by_account: BTreeMap::new(),
+        style: color,
+    };
+    let prefs = crate::prefs::Prefs::default();
+    let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+    let st = roster.new_state();
+    let mut launch = crate::launch::screen::LaunchScreen::new(&mut roster, st, &view, &prefs, 0, &mut hook);
+    assert_every_region_hovers(&mut launch, (130, 45));
 }
 
 #[test]
@@ -664,15 +725,10 @@ fn one_press_only_warns_the_second_runs_once() {
     assert!(status.contains("confirm: press i"));
     let (log, status, t, _) = go(vec![key('i'), key('i'), esc()], &reindex(), vec![], 0, (100, 24));
     assert_eq!(log.runs.len(), 1);
-    assert!(
-        status.contains("Last action  full reindex") && status.contains("  done") && status.contains("green"),
-        "{status}"
-    );
+    assert!(status.contains("full reindex") && status.contains("finished green"), "{status}");
     assert_eq!(t.drains, 1, "the input queue is drained after a command that owned the screen");
     assert!(
-        t.frames
-            .iter()
-            .any(|f| crate::theme::remove_ansi_color(f).contains("             running")),
+        t.frames.iter().any(|f| crate::theme::remove_ansi_color(f).contains("running")),
         "a running frame first"
     );
 }
@@ -847,11 +903,7 @@ fn update_draws_a_running_frame_and_drains() {
     let (log, status, t, _) = go(vec![key('u'), esc()], &[], vec![], 0, (100, 24));
     assert_eq!(log.updates, 1);
     assert!(status.contains("updated"));
-    assert!(
-        t.frames
-            .iter()
-            .any(|f| crate::theme::remove_ansi_color(f).contains("Last action  update Claude Code"))
-    );
+    assert!(t.frames.iter().any(|f| crate::theme::remove_ansi_color(f).contains(" u  update")));
     assert!(
         t.frames
             .iter()

@@ -11,6 +11,8 @@ use crate::frame::{Area, Frame, RowMap};
 use crate::input::{Event, KeyPress, is_hotkey, vk};
 use crate::timing::{SpanId, Timings, view};
 
+#[cfg(test)]
+pub(crate) mod hover_walk;
 mod mouse;
 use mouse::mouse;
 

@@ -1,0 +1,24 @@
+╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ \e[38;5;209m✻\e[0m claude-auto · maintenance                                                                                                   │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ \e[1m\e[38;5;209mClaude Code\e[0m    \e[2m2.1.230\e[0m\e[2m · \e[0m\e[32mnewest\e[0m\e[2m · \e[0m\e[2m3 builds\e[0m\e[2m · \e[0m\e[2m0.8 GB\e[0m\e[0m
+   \e[48;5;238m\e[38;5;250m u \e[0m update\e[0m
+\e[48;5;240m\e[1m   \e[48;5;238m\e[38;5;250m r \e[0m\e[48;5;240m\e[1m update anyway (rename)                                                                        \e[2mwhile claude.exe is in use\e[0m\e[48;5;240m\e[1m\e[0m\e[0m
+   \e[48;5;238m\e[38;5;250m p \e[0m delete old builds\e[0m
+
+ \e[1m\e[38;5;209mChecks\e[0m\e[0m
+   \e[48;5;238m\e[38;5;250m d \e[0m doctor\e[0m
+   \e[48;5;238m\e[48;5;238m\e[38;5;250m m \e[0m\e[48;5;238m MCP servers\e[0m\e[0m
+
+ \e[1m\e[38;5;209mLauncher\e[0m\e[0m
+   \e[48;5;238m\e[38;5;250m l \e[0m launch rows\e[0m
+
+ \e[1m\e[38;5;209mCustom\e[0m\e[0m
+   \e[48;5;238m\e[38;5;250m i \e[0m full reindex\e[0m
+
+ \e[1m\e[38;5;209mWarnings\e[0m       \e[33m⚠ config: unknown key "colour"\e[0m\e[0m
+                  \e[2mfix it in C:\Users\sample\.claude\claude-auto.json\e[0m
+
+  \e[2m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\e[0m
+\e[2m  \e[0m\e[2mw/s\e[0m\e[2m move  ┊  \e[0m\e[48;5;238m\e[38;5;250m enter \e[0m\e[2m run\e[0m\e[2m  ┊  \e[0m\e[48;5;238m\e[38;5;250m esc \e[0m\e[2m back\e[0m

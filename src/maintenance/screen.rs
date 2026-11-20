@@ -21,7 +21,7 @@ use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
 
 mod view;
-pub(crate) use view::{Entry, Page, Phase, maintenance_frame};
+pub(crate) use view::{Entry, Group, Page, Phase, maintenance_frame};
 
 /// Two presses closer than this are one paste, not a confirmation.
 pub(crate) const CONFIRM_MIN_MS: u64 = 150;
@@ -179,24 +179,25 @@ const ROWS_KEY: char = 'l';
 
 /// The built-in rows: key, name, and the short hint the selected row shows when the name alone
 /// cannot carry it.
-const BUILT_IN_ROWS: [(char, &str, &str); 6] = [
-    ('u', "update Claude Code", ""),
-    ('r', "update anyway (rename)", "while claude.exe is in use"),
-    ('p', "delete old builds", "keeps the 2 newest + the running one"),
-    ('d', "doctor", ""),
-    ('m', "MCP servers", "checks each connection"),
-    (ROWS_KEY, "launch rows", ""),
+const BUILT_IN_ROWS: [(char, &str, &str, Group); 6] = [
+    ('u', "update", "", Group::ClaudeCode),
+    ('r', "update anyway (rename)", "while claude.exe is in use", Group::ClaudeCode),
+    ('p', "delete old builds", "keeps the 2 newest + the running one", Group::ClaudeCode),
+    ('d', "doctor", "", Group::Checks),
+    ('m', "MCP servers", "checks each connection", Group::Checks),
+    (ROWS_KEY, "launch rows", "", Group::Launcher),
 ];
 
-/// The rows: built-ins, then the launcher's own entries, then the configured actions (a
-/// configured action never takes a key already listed).
+/// The rows in drawing order (by group): built-ins, the launcher's own entries, the configured
+/// actions (a configured action never takes a key already listed).
 fn entries(launcher: &[(char, String)], actions: &[MaintenanceAction]) -> Vec<Entry> {
     let mut out: Vec<Entry> = BUILT_IN_ROWS
         .iter()
-        .map(|(key, name, about)| Entry {
+        .map(|(key, name, about, group)| Entry {
             key: *key,
             name: (*name).into(),
             about: (*about).into(),
+            group: *group,
         })
         .collect();
     for (key, label) in launcher {
@@ -204,6 +205,7 @@ fn entries(launcher: &[(char, String)], actions: &[MaintenanceAction]) -> Vec<En
             key: *key,
             name: label.clone(),
             about: String::new(),
+            group: Group::ClaudeAuto,
         });
     }
     for a in actions {
@@ -213,10 +215,13 @@ fn entries(launcher: &[(char, String)], actions: &[MaintenanceAction]) -> Vec<En
             out.push(Entry {
                 key,
                 name: strip_ctl(&a.label),
-                about: "custom".into(),
+                about: String::new(),
+                group: Group::Custom,
             });
         }
     }
+    // Stable: a group keeps its rows' order.
+    out.sort_by_key(|e| e.group);
     out
 }
 
@@ -378,7 +383,7 @@ impl<'a> MaintScreen<'a> {
         let ell = crate::layout::ellipsis(self.style.ascii);
         match key {
             ROWS_KEY => self.edit_rows(term),
-            'u' => self.live(term, "update Claude Code", "updating", |ops, s| ops.update(s)),
+            'u' => self.live(term, "update", "updating", |ops, s| ops.update(s)),
             'r' => self.live(term, "update anyway (rename)", "swapping", |ops, _| ops.rename_swap()),
             'd' => self.live(term, "doctor", "running claude doctor", |ops, s| ops.command_text(&["doctor"], s)),
             'm' => self.live(term, "MCP servers", &format!("checking{ell}"), |ops, s| {
@@ -450,6 +455,7 @@ impl Screen for MaintScreen<'_> {
         let last = self.page.entries.len().saturating_sub(1);
         self.page.selected = usize::try_from(self.cursor.index).unwrap_or(0).min(last);
         self.page.hover = self.cursor.hover;
+        self.page.hover_row = self.cursor.hover_row;
     }
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {

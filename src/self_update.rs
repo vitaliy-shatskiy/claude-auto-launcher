@@ -150,13 +150,10 @@ impl Local {
         if self.mode != Mode::Off
             && let Some(r) = self.offered()
         {
-            out.push((UPDATE_KEY, format!("update claude-auto to {}", r.version)));
+            out.push((UPDATE_KEY, format!("update to {}", r.version)));
         }
         if swap::sibling(&self.exe, ".old").exists() {
-            let to = State::read(&self.state)
-                .previous
-                .map_or_else(|| "the previous build".to_owned(), |v| v.to_string());
-            out.push((ROLLBACK_KEY, format!("roll back to {to}")));
+            out.push((ROLLBACK_KEY, "roll back".to_owned()));
         }
         out
     }

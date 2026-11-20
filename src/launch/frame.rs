@@ -6,7 +6,7 @@ use regex::Regex;
 
 use super::{LaunchState, OptionText, Roster, RowName, is_hidden_row_value, visible_row_values};
 use crate::frame::{
-    self, CellSpan, Footer, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RadioSpec, RowHit, RowMap, Style, TWO_PANE_WIDTH,
+    self, BODY_TOP, CellSpan, Footer, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RadioSpec, RowHit, RowMap, Style, TWO_PANE_WIDTH,
     measure_cell_spans, new_hint_footer, new_radio_row,
 };
 use crate::layout::display_width;
@@ -85,15 +85,22 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         roster.rows.iter().map(|r| r.label.len()).max().unwrap_or(0) + 3
     };
 
-    let mut title = format!("{} claude-auto", g.sparkle);
+    let title = format!("{} claude-auto", g.sparkle);
+    let mut version = String::new();
     if let Some(inst) = inp.version.installed.as_deref().filter(|s| !s.is_empty()) {
-        title = format!("{title} {} v{inst}", g.h);
+        version = format!("v{inst}");
         if let Some(newest) = inp.version.newest.as_deref().filter(|n| !n.is_empty() && *n != inst) {
-            title = format!("{title} {} {newest}", g.up);
+            version = format!("{version} {} {newest}", g.up);
         }
     }
     let limit = inp.limits.get(&state.account);
     let limits = limit.map_or_else(String::new, |l| limits_text(l, &g));
+    // The limits go first when the box is too narrow, then the version.
+    let rights: Vec<String> = [format!("{version}   {limits}"), version.clone()]
+        .into_iter()
+        .map(|r| r.trim().to_owned())
+        .filter(|r| !r.is_empty())
+        .collect();
     let available = limit.and_then(|l| l.available_models.as_deref());
     let ctx = OptionText {
         default_model_label: inp.default_model_label,
@@ -171,26 +178,28 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
             );
             cells = Vec::new();
         }
+        // The pointer on the row outside its values paints the label: hover never selects.
+        if hovered_here
+            && state.hover_value.is_empty()
+            && let Some(rest) = line.strip_prefix(&format!("{prefix}{label_part}"))
+        {
+            let label = format!("{}{}", row.label, mark_of(row));
+            let pad = " ".repeat(label_width.saturating_sub(label.len()));
+            line = format!("{prefix}{}{pad}{rest}", theme::add_hover_span(&label));
+        }
         hits.push((i, row.name.as_str(), body.len(), cells));
         body.push(line);
     }
 
-    // The rows sit inside the page frame: one row below its top border, one column right of its side.
+    // The rows start under the header box, at the terminal's first column.
     let mut map = RowMap {
         rows: hits
             .into_iter()
             .map(|(index, name, y, cells)| RowHit {
                 index,
                 name: name.to_owned(),
-                y: i32::try_from(1 + y).unwrap_or(0),
-                cells: cells
-                    .into_iter()
-                    .map(|c| CellSpan {
-                        start: c.start + 1,
-                        end: c.end + 1,
-                        ..c
-                    })
-                    .collect(),
+                y: i32::try_from(BODY_TOP + y).unwrap_or(0),
+                cells,
             })
             .collect(),
         ..RowMap::default()
@@ -200,22 +209,17 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         restored: !restored.is_empty(),
     };
     let footer = launch_footer(&g, fw, inp.style.color, &extra);
-    // The self-update notice is the page's last row, dim.
+    // The self-update notice closes the body, dim, a blank row under the rows.
     if let Some(n) = inp.notice {
-        let rows = inp.height.saturating_sub(4 + footer.lines.len());
-        body.resize(rows.max(body.len()), String::new());
+        body.push(String::new());
         body.push(format!("{}{}{n}{}", frame::PAD, theme::DIM_OPEN, theme::DIM_CLOSE));
     }
-    let lines = frame::page(body, (inp.width, inp.height), footer.lines.len(), &title, &limits, inp.style);
+    let lines = frame::header_page(body, inp.width, &title, &rights, inp.style);
     let light = FooterLight {
         hover: frame::footer_hover(&footer, state.hover),
         selected: Vec::new(),
     };
-    // Painted inside the side border: the row painters anchor on the row's own first column.
-    let painter = |l: &str, enabled: bool| match l.strip_prefix(g.v) {
-        Some(rest) => format!("{}{}", g.v, add_launch_color(rest, enabled, &g, roster)),
-        None => add_launch_color(l, enabled, &g, roster),
-    };
+    let painter = |l: &str, enabled: bool| add_launch_color(l, enabled, &g, roster);
     let lines = frame::complete_frame(&lines, &footer, fw, inp.style, &painter, &light, &mut map);
     Frame { lines, map }
 }

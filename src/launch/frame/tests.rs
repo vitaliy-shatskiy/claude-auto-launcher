@@ -202,16 +202,16 @@ fn narrow_tier_draws_compact_rows_inside_the_frame() {
     let f = launch_frame(&r, &inp);
     assert!(f.lines.iter().all(|l| display_width(l) <= 49), "{:#?}", f.lines);
     assert!(
-        f.lines.iter().any(|l| l.starts_with("|   effort       < default >")),
+        f.lines.iter().any(|l| l.starts_with("   effort       < default >")),
         "too wide rows collapse: {:#?}",
         f.lines
     );
     assert!(
-        f.lines.iter().any(|l| l.starts_with("|   mode         * [normal] - safe")),
+        f.lines.iter().any(|l| l.starts_with("   mode         * [normal] - safe")),
         "a row that fits stays a radio list: {:#?}",
         f.lines
     );
-    assert!(f.lines.len() < MIN_HEIGHT, "the narrow worst case stays under the minimum height");
+    assert!(f.lines.len() <= MIN_HEIGHT, "the narrow worst case fits the minimum height");
 }
 
 fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame {
@@ -290,7 +290,7 @@ fn narrow_and_wide_frames_match_their_goldens() {
 }
 
 #[test]
-fn the_limits_sit_on_the_top_border_and_go_before_the_frame_does() {
+fn the_limits_sit_in_the_header_box_and_go_before_the_box_does() {
     let r = four();
     let personal: Limits = [(
         "work".to_owned(),
@@ -308,29 +308,29 @@ fn the_limits_sit_on_the_top_border_and_go_before_the_frame_does() {
     let s = r.new_state();
     let wide = frame_at(&r, &s, &golden_limits(), 160);
     assert!(
-        wide.lines[0].ends_with("\u{2500} 5h 41% \u{b7} 7d 63% \u{b7} fable 15% \u{b7} 12 min ago \u{2500}\u{256e}"),
+        wide.lines[1].ends_with(" 5h 41% \u{b7} 7d 63% \u{b7} fable 15% \u{b7} 12 min ago \u{2502}"),
         "{}",
-        wide.lines[0]
+        wide.lines[1]
     );
     let no_five = frame_at(&r, &s, &personal, 160);
     assert!(
-        no_five.lines[0].contains(" 7d 83% \u{b7} fable 1% \u{b7} just now "),
+        no_five.lines[1].contains(" 7d 83% \u{b7} fable 1% \u{b7} just now "),
         "{}",
-        no_five.lines[0]
+        no_five.lines[1]
     );
     assert!(
         !wide.lines.iter().any(|l| l.contains('\u{2591}') || l.contains('\u{2593}')),
         "no bar glyphs"
     );
-    for width in [50, 58, 60] {
+    // 60 columns still hold the limits; narrower ones drop them.
+    for width in [50, 54] {
         let f = frame_at(&r, &s, &golden_limits(), width);
+        assert!(f.lines[1].starts_with("\u{2502} \u{273b} claude-auto"), "{width}: {}", f.lines[1]);
         assert!(
-            f.lines[0].starts_with("\u{256d}\u{2500} \u{273b} claude-auto"),
-            "{width}: {}",
-            f.lines[0]
+            f.lines[0].ends_with('\u{256e}') && f.lines[1].ends_with('\u{2502}'),
+            "{width}: the box stays"
         );
-        assert!(f.lines[0].ends_with('\u{256e}'), "{width}: the frame stays: {}", f.lines[0]);
-        assert!(!f.lines[0].contains("5h"), "{width}: the limits go first: {}", f.lines[0]);
+        assert!(!f.lines[1].contains("5h"), "{width}: the limits go first: {}", f.lines[1]);
         assert_eq!(display_width(&f.lines[0]), width - 1);
     }
     let y = |name: &str| wide.map.rows.iter().find(|h| h.name == name).unwrap().y;
@@ -457,7 +457,7 @@ fn model_row_weak_to_strong_and_fable_cell() {
             && at("Opus 5.5[1M]") < at("Fable 5.2"),
         "haiku, sonnet, opus, fable: {line}"
     );
-    assert!(f.lines[0].contains("fable 15% (2 h ago)"), "{}", f.lines[0]);
+    assert!(f.lines[1].contains("fable 15% (2 h ago)"), "{}", f.lines[1]);
 
     let mut ordered = four();
     ordered.apply_model_order(&["fable".to_owned(), "haiku".to_owned()]);
