@@ -95,6 +95,13 @@ impl Net for WinNet {
     }
 }
 
+/// What kind of start this is: a preview makes no request and writes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    Launch,
+    Preview,
+}
+
 /// The exe, the state file and the mode: what both the check and the maintenance keys act on.
 #[derive(Debug, Clone)]
 pub struct Local {
@@ -110,9 +117,9 @@ pub struct Local {
 impl Local {
     /// This process: `mode` forced off by `CLAUDE_AUTO_NO_SELF_UPDATE=1`, a preview, or an exe
     /// path that cannot be read.
-    pub fn from_env(mode: Mode, repo: &Repo, home: &Path, preview: bool) -> Self {
+    pub fn from_env(mode: Mode, repo: &Repo, home: &Path, start: Start) -> Self {
         let exe = std::env::current_exe().ok();
-        let off = preview || std::env::var("CLAUDE_AUTO_NO_SELF_UPDATE").as_deref() == Ok("1") || exe.is_none();
+        let off = start == Start::Preview || std::env::var("CLAUDE_AUTO_NO_SELF_UPDATE").as_deref() == Ok("1") || exe.is_none();
         Self {
             mode: if off { Mode::Off } else { mode },
             repo: repo.clone(),

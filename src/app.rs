@@ -232,7 +232,16 @@ fn launch(run: &Run) -> i32 {
     // The launcher's own release check: a thread, never in the way of the first frame. It lives
     // until this function returns, after claude exits: a download that outlasts the screens still
     // lands, and the drop keeps a swap from starting once the launcher is quitting.
-    let self_update = crate::self_update::Local::from_env(run.cfg.self_update, &run.cfg.update_repo, &run.ctx.home, run.preview);
+    let self_update = crate::self_update::Local::from_env(
+        run.cfg.self_update,
+        &run.cfg.update_repo,
+        &run.ctx.home,
+        if run.preview {
+            crate::self_update::Start::Preview
+        } else {
+            crate::self_update::Start::Launch
+        },
+    );
     let launcher = std::cell::RefCell::new(crate::self_update::Watch::start(
         if use_ui { self_update.clone() } else { self_update.off() },
         now_ms(),

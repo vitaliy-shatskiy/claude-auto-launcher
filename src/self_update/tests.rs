@@ -287,10 +287,10 @@ fn a_quit_is_no_failure_to_wait_out() {
 #[test]
 fn a_preview_forces_self_update_off() {
     let t = tmp("preview");
-    let preview = Local::from_env(Mode::Auto, &Repo::default(), &t.0, true);
+    let preview = Local::from_env(Mode::Auto, &Repo::default(), &t.0, Start::Preview);
     assert_eq!(preview.mode, Mode::Off);
     if std::env::var("CLAUDE_AUTO_NO_SELF_UPDATE").as_deref() != Ok("1") {
-        let launch = Local::from_env(Mode::Auto, &Repo::default(), &t.0, false);
+        let launch = Local::from_env(Mode::Auto, &Repo::default(), &t.0, Start::Launch);
         assert_eq!(launch.mode, Mode::Auto, "only the preview turned it off");
     }
 }
