@@ -50,6 +50,40 @@ fn overlap_is_not_the_end_and_offsets_count_fetched_rows() {
 }
 
 #[test]
+fn the_dot_marks_live_sessions_only_and_follows_the_idle_refresh() {
+    // Given: `a` written just now but not running, `b` an old session a live process has open.
+    let mut a = row("a", "x", 1);
+    a.modified_ms = clock().now_ms - 5_000;
+    let first = vec![a, row("b", "x", 1)];
+    let reads = std::cell::Cell::new(0);
+    let scan = || {
+        reads.set(reads.get() + 1);
+        if reads.get() == 1 {
+            HashSet::from(["b".to_owned()])
+        } else {
+            HashSet::new()
+        }
+    };
+    let mut s = PickerScreen::new(first, None, 0, &[], "", style(), clock()).with_live(Box::new(scan));
+    let dotted = |s: &mut PickerScreen<'_>| -> Vec<bool> {
+        s.before();
+        let f = s.draw((100, 30));
+        ["title a", "title b"]
+            .iter()
+            .map(|t| f.lines.iter().find(|l| l.contains(t)).is_some_and(|l| l.contains("* x")))
+            .collect()
+    };
+    // Then: only `b` has the dot, read once at open.
+    assert_eq!(dotted(&mut s), [false, true]);
+    assert_eq!(reads.get(), 1);
+    // When: idle polls pass; the re-read finds `b` gone.
+    let redraws: usize = (0..LIVE_POLLS).map(|_| usize::from(s.idle())).sum();
+    // Then: one re-read, one redraw, no dot.
+    assert_eq!((reads.get(), redraws), (2, 1));
+    assert_eq!(dotted(&mut s), [false, false]);
+}
+
+#[test]
 fn enter_fork_and_escape() {
     let first = vec![row("a", "x", 1), row("b", "x", 2)];
     let mut s = PickerScreen::new(first.clone(), None, 0, &[], "", style(), clock());

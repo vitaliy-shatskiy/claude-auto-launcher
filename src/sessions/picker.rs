@@ -4,6 +4,8 @@
 mod filter;
 mod landed;
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value, json};
 
 use self::filter::scope_name;
@@ -15,6 +17,12 @@ use crate::frame::{Frame, Style};
 use crate::input::KeyPress;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
+
+/// Reads the ids of the sessions a running Claude Code has open (`holder::live_ids`).
+pub type LiveScan<'a> = Box<dyn FnMut() -> HashSet<String> + 'a>;
+
+/// Idle polls (~60 ms each) between two reads of the live set.
+const LIVE_POLLS: u32 = 50;
 
 /// The next page of a scope: called with the rows fetched so far and the scope's slugs.
 pub type Fetch<'a> = &'a mut dyn FnMut(usize, &[String]) -> Vec<Session>;
@@ -80,6 +88,10 @@ pub struct PickerScreen<'a> {
     chat: Option<ChatPane>,
     /// Full summaries for rows first shown quick (`summaries`); `None` = every row is final.
     landed: Option<std::sync::mpsc::Receiver<Vec<Session>>>,
+    /// Reads the ids a live process has open: once at open, again every `LIVE_POLLS` idle polls.
+    live_scan: Option<LiveScan<'a>>,
+    live: HashSet<String>,
+    live_polls: u32,
 }
 
 impl std::fmt::Debug for PickerScreen<'_> {
@@ -141,6 +153,9 @@ impl<'a> PickerScreen<'a> {
             memo: Memo::default(),
             chat: None,
             landed: None,
+            live_scan: None,
+            live: HashSet::new(),
+            live_polls: 0,
         };
         *s.bucket_mut() = open;
         s.started[slot(scope)] = true;
@@ -152,6 +167,27 @@ impl<'a> PickerScreen<'a> {
     pub fn with_chat(mut self, pane: ChatPane) -> Self {
         self.chat = Some(pane);
         self
+    }
+
+    /// Rows a running process has open get the green dot; `scan` runs now and on idle refreshes.
+    #[must_use]
+    pub fn with_live(mut self, mut scan: LiveScan<'a>) -> Self {
+        self.live = scan();
+        self.live_scan = Some(scan);
+        self
+    }
+
+    /// A re-read of the live set every `LIVE_POLLS` idle polls; `true` when it changed.
+    fn refresh_live(&mut self) -> bool {
+        self.live_polls += 1;
+        let Some(scan) = self.live_scan.as_mut().filter(|_| self.live_polls >= LIVE_POLLS) else {
+            return false;
+        };
+        self.live_polls = 0;
+        let now = scan();
+        let changed = now != self.live;
+        self.live = now;
+        changed
     }
 
     /// Rows shown quick take their full summaries from `landed` as the worker sends them.
@@ -339,7 +375,7 @@ impl Screen for PickerScreen<'_> {
     /// first frame never waits for the pages a big window wants.
     fn idle(&mut self) -> bool {
         // The chat first: collecting a finished load is cheap, a page of summaries is not.
-        if self.chat.as_mut().is_some_and(ChatPane::idle) || self.take_landed() {
+        if self.chat.as_mut().is_some_and(ChatPane::idle) || self.take_landed() || self.refresh_live() {
             return true;
         }
         if self.fetch.is_none() || self.bucket().exhausted || self.resumable_count >= self.want {
@@ -368,6 +404,14 @@ impl Screen for PickerScreen<'_> {
         }
         if self.fill_rows > 0 {
             self.fill_to(self.fill_rows);
+        }
+        let bucket = match self.scope {
+            PickerScope::Project => &mut self.project,
+            PickerScope::All => &mut self.all,
+            PickerScope::None => &mut self.none,
+        };
+        for s in &mut bucket.sessions {
+            s.live = self.live.contains(&s.session_id);
         }
         self.pool = self.pool_of();
         let b = self.bucket();

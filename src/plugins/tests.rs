@@ -303,6 +303,7 @@ fn a_plugin_session_joins_the_picker_and_resumes_without_a_transfer() {
         project_slugs: &[],
         project_name: "",
         style: crate::frame::Style { color: false, ascii: true },
+        live_dirs: &[],
         preview: true,
     };
     let fake = Fake::with(&[

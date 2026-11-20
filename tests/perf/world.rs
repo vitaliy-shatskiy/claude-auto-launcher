@@ -273,6 +273,7 @@ pub(crate) fn picker_cursor(w: &World) -> io::Result<Measured> {
         project_slugs: &slugs,
         project_name: "Demo0",
         style: Style { color: true, ascii: false },
+        live_dirs: &[],
         preview: true,
     };
     let keys = parse_preview_keys("DownArrow").map_err(io::Error::other)?;

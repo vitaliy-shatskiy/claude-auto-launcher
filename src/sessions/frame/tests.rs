@@ -131,7 +131,7 @@ fn wide_frames_match_the_powershell_goldens() {
 #[test]
 fn chat_frames_match_their_goldens_in_colour_and_ascii() {
     let mut owned = golden_sessions();
-    owned[0].modified_ms = GOLDEN_NOW - 20_000;
+    owned[0].live = true;
     let s: Vec<&Session> = owned.iter().collect();
     let ascii = PickerView {
         style: Style { color: false, ascii: true },

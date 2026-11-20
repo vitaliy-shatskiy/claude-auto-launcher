@@ -76,6 +76,8 @@ pub struct PickerRequest<'a> {
     pub project_slugs: &'a [String],
     pub project_name: &'a str,
     pub style: Style,
+    /// Every account's `sessions\` folder: a session a live process has open gets the green dot.
+    pub live_dirs: &'a [PathBuf],
     pub preview: bool,
 }
 
@@ -158,7 +160,10 @@ pub fn run_picker_with(
     };
     let slugs: Vec<String> = req.project_slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
     let first = fetch(0, &slugs);
-    let mut screen = PickerScreen::new(first, Some(&mut fetch), PAGE_SIZE, &slugs, req.project_name, req.style, clock_now());
+    let dirs = req.live_dirs.to_vec();
+    let live = move || holder::live_ids(&dirs, &win::process_start);
+    let mut screen =
+        PickerScreen::new(first, Some(&mut fetch), PAGE_SIZE, &slugs, req.project_name, req.style, clock_now()).with_live(Box::new(live));
     // Preview never polls idle (scripted keys only), so a background load would never land:
     // it shows the summary's recent messages instead.
     if !req.preview {
@@ -278,6 +283,7 @@ mod tests {
             project_slugs: &["C--src-p".to_owned()],
             project_name: "p",
             style: Style { color: false, ascii: true },
+            live_dirs: &[],
             preview: true,
         };
         let keys = crate::ui::parse_preview_keys("Enter").unwrap();
@@ -332,6 +338,7 @@ mod tests {
             project_slugs: &["C--src-p".to_owned()],
             project_name: "p",
             style: Style { color: false, ascii: true },
+            live_dirs: &[],
             preview: true,
         };
         let keys = crate::ui::parse_preview_keys("Enter").unwrap();

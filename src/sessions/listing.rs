@@ -66,6 +66,9 @@ pub struct Session {
     /// who launches, so it never enters the summary cache.
     #[serde(skip)]
     pub account: String,
+    /// A running Claude Code has it open now (`holder::live_ids`); never cached.
+    #[serde(skip)]
+    pub live: bool,
 }
 
 const HEAD_LINES: usize = 400;
