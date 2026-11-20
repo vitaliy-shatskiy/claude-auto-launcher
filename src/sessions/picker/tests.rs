@@ -1,4 +1,5 @@
 use super::*;
+use crate::input::vk;
 use crate::ui::PreviewTerm;
 use crate::ui::screen_loop::run;
 use std::collections::VecDeque;

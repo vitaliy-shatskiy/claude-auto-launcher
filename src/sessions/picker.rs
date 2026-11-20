@@ -1,14 +1,17 @@
 //! The session picker screen (`Invoke-SessionPicker`, `Expand-SessionPage`): the scope and its
-//! page buckets, the filter box, paging on Down and the wheel, and what a chosen row means.
+//! page buckets, the filter box (`filter`), paging on Down and the wheel, and what a chosen row means.
+
+mod filter;
 
 use serde_json::{Map, Value, json};
 
+use self::filter::scope_name;
 use super::chat::pane::{ChatKey, ChatPane, ChatState};
 use super::chat::{ChatMessage, bounded};
 use super::frame::{ChatView, Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
 use super::listing::Session;
 use crate::frame::{Frame, Style};
-use crate::input::{KeyPress, vk};
+use crate::input::KeyPress;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
 
@@ -278,56 +281,6 @@ impl<'a> PickerScreen<'a> {
 
     fn chosen(&self, fork: bool) -> Flow<Picked> {
         self.take(fork).map_or(Flow::Continue, |p| Flow::Done(Some(p)))
-    }
-
-    fn log_typing(&mut self, term: &dyn Term, fields: &[(&str, Value)]) {
-        let mut d = Map::new();
-        d.insert("screen".into(), json!("picker"));
-        for (k, v) in fields {
-            d.insert((*k).into(), v.clone());
-        }
-        d.insert("scope".into(), json!(scope_name(self.scope)));
-        term.logger().write("key", d);
-    }
-
-    /// The filter box owns every key while open; only its two closes are logged, never the text.
-    fn type_filter(&mut self, key: &KeyPress, term: &dyn Term) {
-        if key.is(vk::ENTER) {
-            self.cursor.typing = false;
-            let n = self.filter.chars().count();
-            self.log_typing(
-                term,
-                &[("key", json!("Enter")), ("filter", json!("close")), ("filterLength", json!(n))],
-            );
-        } else if key.is(vk::ESCAPE) || key.is_ctrl(vk::C) {
-            let n = self.filter.chars().count();
-            let index = self.cursor.index;
-            self.log_typing(
-                term,
-                &[
-                    ("key", json!("Escape")),
-                    ("filter", json!("clear")),
-                    ("filterLength", json!(n)),
-                    ("index", json!(index)),
-                ],
-            );
-            self.cursor.typing = false;
-            self.filter.clear();
-            self.cursor.index = 0;
-        } else if key.is(vk::BACKSPACE) {
-            self.filter.pop();
-        } else if key.ch.is_alphanumeric() || key.ch == ' ' || key.ch == '-' {
-            self.filter.push(key.ch);
-            self.cursor.index = 0;
-        }
-    }
-}
-
-fn scope_name(s: PickerScope) -> &'static str {
-    match s {
-        PickerScope::None => "none",
-        PickerScope::Project => "project",
-        PickerScope::All => "all",
     }
 }
 
