@@ -6,9 +6,11 @@
 mod hooks;
 mod limits;
 mod mcp;
+#[cfg(feature = "sharing")]
 mod mirror;
 mod models;
 mod secrets;
+#[cfg(feature = "sharing")]
 mod sharing;
 pub(crate) mod win_fs;
 
@@ -23,6 +25,7 @@ use crate::out::{self, Fg};
 use crate::types::{ChildEnv, DefaultLabels, Limits};
 
 pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(feature = "sharing")]
 pub(crate) const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 /// One `Write-Host` line a step wants printed.
@@ -46,6 +49,7 @@ fn print(notes: &[Note]) {
 
 /// `ConvertTo-SortedJson` / the mirror's `canonical`: keys sorted at every level, array order
 /// kept, so key order never decides equality.
+#[cfg(feature = "sharing")]
 pub(crate) fn sorted_json(v: &Value) -> String {
     match v {
         Value::Array(a) => format!("[{}]", a.iter().map(sorted_json).collect::<Vec<_>>().join(",")),
@@ -100,12 +104,18 @@ fn profile_notes(
 /// `Set-ClaudeProfile`: the canonical account is the ABSENCE of `CLAUDE_CONFIG_DIR`. Prints the
 /// account line in its tint; with sharing on and outside preview, mirrors MCP servers.
 pub fn set_profile(cfg: &Config, account: &str, preview: bool, child: &mut ChildEnv) -> Result<(), String> {
-    print(&profile_notes(cfg, account, preview, child, &mut mirror_project_mcp)?);
+    #[cfg(feature = "sharing")]
+    let mut mirror = mirror_project_mcp;
+    // No sharing in the build: `cfg.sharing` stays false and the mirror is never asked.
+    #[cfg(not(feature = "sharing"))]
+    let mut mirror = |_: &str| Ok(String::new());
+    print(&profile_notes(cfg, account, preview, child, &mut mirror)?);
     Ok(())
 }
 
 /// The MCP mirror (formerly `sharing/claude-mirror-mcp.mjs` under node) from `~\.claude.json` into
 /// `<root>\.claude.json`. `Ok(one-line summary)`, `Err(one-line reason)`.
+#[cfg(feature = "sharing")]
 pub fn mirror_project_mcp(root: &str) -> Result<String, String> {
     let opts = mirror::Options::from_vars(
         std::env::var("CLAUDE_AUTO_MIRROR_EXCLUDE").ok().as_deref(),
@@ -146,6 +156,7 @@ pub fn set_project_directory(project: &str) -> bool {
 }
 
 /// The canonical root and every secondary root, from the roster.
+#[cfg(feature = "sharing")]
 fn roots(cfg: &Config) -> Option<(PathBuf, Vec<PathBuf>)> {
     let work = PathBuf::from(&cfg.canonical()?.root);
     Some((
@@ -160,6 +171,7 @@ fn roots(cfg: &Config) -> Option<(PathBuf, Vec<PathBuf>)> {
 
 /// `Repair-SharedProfiles`: profile roots, hardlinked files, junctions with their ACL shield, the
 /// `CLAUDE.md` symlink. Sharing off or preview: touches nothing.
+#[cfg(feature = "sharing")]
 pub fn repair_shared_profiles(cfg: &Config, preview: bool) {
     if !cfg.sharing || preview {
         return;
@@ -172,6 +184,10 @@ pub fn repair_shared_profiles(cfg: &Config, preview: bool) {
     };
     print(&sharing::repair_all(&work, &secondary, sharing::SHARED, &mut seams));
 }
+
+/// A build without sharing: nothing to repair.
+#[cfg(not(feature = "sharing"))]
+pub fn repair_shared_profiles(_cfg: &Config, _preview: bool) {}
 
 /// `Invoke-LaunchHooks`: each configured hook, best-effort, one line on failure.
 pub fn run_launch_hooks(hooks: &[Vec<String>]) {
@@ -188,17 +204,7 @@ pub fn run_launch_hooks_with_env(hooks: &[Vec<String>], child: &ChildEnv, tm: &c
 /// `Get-McpConfigPaths`: the configured extras that exist, plus the Rider MCP endpoint per
 /// `riderMcp` in a per-PID temp file (named, never written, in preview).
 pub fn mcp_config_paths(cfg: &Config, preview: bool) -> Vec<String> {
-    let procs = crate::sys::process_table();
-    let rider: Vec<u32> = procs.iter().filter(|p| mcp::is_rider(&p.name)).map(|p| p.pid).collect();
-    let ports = || mcp::rider_ports(&rider);
-    let probe = mcp::Probe {
-        rider_running: !rider.is_empty(),
-        ports: &ports,
-        is_mcp: mcp::is_mcp_port,
-        temp: std::env::temp_dir(),
-        pid: std::process::id(),
-    };
-    let (paths, notes) = mcp::config_paths(&cfg.extra_mcp_configs, cfg.rider_mcp, preview, &probe);
+    let (paths, notes) = mcp::config_paths(cfg, preview);
     print(&notes);
     paths
 }
@@ -368,6 +374,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sharing")]
     fn preview_never_runs_the_mirror_and_each_secondary_gets_its_own_root() {
         let cfg = four(Path::new(r"C:\h"));
         let mut roots: Vec<String> = Vec::new();
@@ -444,6 +451,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sharing")]
     fn sorted_json_ignores_key_order_only() {
         let a: Value = serde_json::from_str(r#"{"b":[1,{"y":2,"x":1}],"a":"s"}"#).unwrap();
         let b: Value = serde_json::from_str(r#"{"a":"s","b":[1,{"x":1,"y":2}]}"#).unwrap();

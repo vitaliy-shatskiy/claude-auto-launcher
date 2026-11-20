@@ -235,7 +235,10 @@ fn to_ascii(s: &str) -> String {
         .collect()
 }
 
+/// config-four.json carries the sharing, remote and riderMcp keys: a build without one draws
+/// their warnings and no Remote row.
 #[test]
+#[cfg(all(feature = "sharing", feature = "remote", feature = "rider-mcp"))]
 fn preview_dumps_the_launch_frame_and_launches_nothing() {
     let d = scratch("preview");
     fake_claude(&d);
@@ -352,7 +355,10 @@ fn preview_resume_lists_another_accounts_session_and_copies_nothing() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+/// config-four.json carries the sharing, remote and riderMcp keys: a build without one draws
+/// their warnings and no Remote row.
 #[test]
+#[cfg(all(feature = "sharing", feature = "remote", feature = "rider-mcp"))]
 fn preview_steps_rows_into_launch_arguments() {
     let d = scratch("steps");
     fake_claude(&d);
