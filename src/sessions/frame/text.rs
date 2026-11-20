@@ -1,8 +1,4 @@
-//! The texts a picker row and the preview show: counts, ages, stamps and the last exchange.
-
-use super::super::listing::{Message, Session, Speaker};
-use crate::layout::split_text_lines;
-use crate::theme::{Glyphs, strip_ctl};
+//! The texts a picker row and the preview show: counts, ages and stamps.
 
 /// .NET `{0:N0}` in the invariant culture: rounded half away from zero, thousands grouped.
 pub(super) fn n0(x: f64) -> String {
@@ -48,72 +44,4 @@ pub fn local_stamp(ms: i64, offset_minutes: i32) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     format!("{d:02}.{m:02} {:02}:{:02}", rem / 60, rem % 60)
-}
-
-/// `Get-SessionExchange`: the recent messages, or the last question and answer.
-pub fn exchange(s: &Session) -> Vec<Message> {
-    if !s.recent.is_empty() {
-        return s.recent.clone();
-    }
-    let user = [&s.last_user, &s.title]
-        .into_iter()
-        .find(|t| !t.is_empty())
-        .map_or_else(|| "(nothing was asked)".to_owned(), Clone::clone);
-    let reply = if s.last_assistant.is_empty() {
-        "(no reply)".to_owned()
-    } else {
-        s.last_assistant.clone()
-    };
-    vec![
-        Message {
-            speaker: Speaker::User,
-            text: user,
-        },
-        Message {
-            speaker: Speaker::Assistant,
-            text: reply,
-        },
-    ]
-}
-
-/// `Get-ExchangeLines`: as many of the newest messages as fit, oldest on top, each capped so a
-/// long one cannot eat the pane.
-pub fn exchange_lines(messages: &[Message], width: usize, max_lines: usize, g: &Glyphs, ascii: bool) -> Vec<String> {
-    const MIN_PER_MESSAGE: usize = 5;
-    if max_lines == 0 || width == 0 {
-        return Vec::new();
-    }
-    let mut blocks: Vec<Vec<String>> = Vec::new();
-    let mut used = 0;
-    for (i, m) in messages.iter().enumerate().rev() {
-        if used >= max_lines {
-            break;
-        }
-        let left = max_lines - used;
-        let cap = MIN_PER_MESSAGE.max(left / (i + 1).min(3));
-        let budget = cap.min(left);
-        let prefix = match m.speaker {
-            Speaker::User => format!("you {} ", g.r_angle),
-            Speaker::Assistant => format!("claude {} ", g.r_angle),
-        };
-        let plen = prefix.chars().count();
-        let wrapped = split_text_lines(&strip_ctl(&m.text), width.saturating_sub(plen).max(1), budget, ascii);
-        if wrapped.is_empty() {
-            continue;
-        }
-        let lines: Vec<String> = wrapped
-            .iter()
-            .enumerate()
-            .map(|(j, w)| {
-                if j == 0 {
-                    format!("{prefix}{w}")
-                } else {
-                    format!("{}{w}", " ".repeat(plen))
-                }
-            })
-            .collect();
-        used += lines.len();
-        blocks.insert(0, lines);
-    }
-    blocks.concat()
 }

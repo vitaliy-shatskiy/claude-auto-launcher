@@ -152,19 +152,6 @@ pub fn parse_key_name(name: &str) -> Option<u16> {
     }
 }
 
-/// The `ConsoleKey` name of a code, for log records.
-pub fn key_name(code: u16) -> String {
-    if let Some(&(n, _)) = KEY_NAMES.iter().find(|(_, c)| *c == code) {
-        return n.to_owned();
-    }
-    match code {
-        0x41..=0x5A => char::from_u32(u32::from(code)).map_or_else(|| code.to_string(), String::from),
-        0x30..=0x39 => format!("D{}", code - 0x30),
-        112..=135 => format!("F{}", code - 111),
-        _ => code.to_string(),
-    }
-}
-
 /// `New-ScriptedKeyReader`'s rule: one character is a typed character, anything longer a key name.
 /// `Ctrl+<name>` (new in the Rust port) is that key with Ctrl held.
 pub fn scripted_key(entry: &str) -> Option<KeyPress> {

@@ -22,7 +22,7 @@ use card::Preview;
 pub use chat::ChatView;
 pub use memo::Memo;
 use memo::{Band, memo_key, painter};
-pub use text::{exchange, exchange_lines, local_stamp, relative_age};
+pub use text::{local_stamp, relative_age};
 
 /// The clock a frame is drawn against: now, and the local offset from UTC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,15 +72,6 @@ pub fn matches(s: &Session, filter: &str) -> bool {
     }
     let hay = format!("{} {} {} {} {}", s.project, s.worktree, s.title, s.last_user, s.last_assistant);
     hay.to_lowercase().contains(&f.to_lowercase())
-}
-
-/// `Format-PromptCount`: the number, plus '+' from the capped flag.
-pub fn prompt_count_text(s: &Session) -> String {
-    if s.prompt_count_capped {
-        format!("{}+", s.prompt_count)
-    } else {
-        s.prompt_count.to_string()
-    }
 }
 
 struct RowCtx<'a> {
