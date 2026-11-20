@@ -1,6 +1,7 @@
 //! One plugin call: `<path> <args...> <verb>` windowless, the request as one JSON line on stdin, one
-//! JSON value back on stdout, inside a job object that kills the whole tree on a timeout. Exports
-//! `Runner` (the seam tests replace), `Process` (the real one) and `Failure`.
+//! JSON value back on stdout, inside a job object that kills the whole tree on a timeout or an
+//! oversized answer and lets go of it once the plugin has ended on its own. Exports `Runner` (the
+//! seam tests replace), `Process` (the real one), `call` and `Failure`.
 
 use std::io::{Read as _, Write as _};
 use std::os::windows::io::AsRawHandle as _;
@@ -127,8 +128,12 @@ pub fn call(spec: &PluginSpec, verb: &Verb, input: &Value, kill_grace: Duration)
     });
     let ms = timeout_of(spec, verb);
     match rx.recv_timeout(Duration::from_millis(ms)) {
-        Ok(Some((out, 0))) => parse(&out),
-        Ok(Some((_, code))) => Err(Failure::Exit(code)),
+        // The plugin ended on its own: what it started (an app an action opened) is its user's now,
+        // so the job lets go of it instead of killing it on close.
+        Ok(Some((out, code))) => {
+            job.release();
+            if code == 0 { parse(&out) } else { Err(Failure::Exit(code)) }
+        }
         Ok(None) => {
             job.terminate();
             Err(Failure::TooLarge)

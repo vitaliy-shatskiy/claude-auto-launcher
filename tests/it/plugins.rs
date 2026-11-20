@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use claude_auto::config::PluginSpec;
 use claude_auto::plugins::run::{self, Failure, Process, Runner as _};
-use claude_auto::plugins::{self, describe};
+use claude_auto::plugins::{self, action, describe};
 use serde_json::json;
 
 use super::{launcher, scratch, text};
@@ -231,5 +231,28 @@ fn a_timed_out_call_returns_once_its_tree_is_killed_not_when_the_hang_ends() {
     // open until ping ends (29 s at least) inside the 120 s grace; with it the call is back right
     // after the 300 ms timeout. 15 s leaves room for a loaded machine and still fails the first.
     assert!(took < Duration::from_secs(15), "returned after {took:?}: the tree was not killed");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn what_an_action_started_outlives_a_call_that_ended_normally() {
+    let d = scratch("plugin-action-child");
+    // Start-Process (ShellExecute) gives ping no copy of the plugin's stdout, so the call ends
+    // when the plugin does; ping is still in the call's job.
+    let opener = cmd(
+        &d,
+        "opener",
+        "powershell.exe -NoProfile -NonInteractive -Command \"(Start-Process -WindowStyle Hidden -PassThru ping -ArgumentList '-n','60','127.0.0.1').Id | Out-File -Encoding ascii '%~dp0child.pid'\"\r\necho {\"message\":\"opened\"}",
+    );
+    let answer = Process.call(&opener, &action::VERB, &json!({"key": "o", "context": {}}));
+    let pid: u32 = std::fs::read_to_string(d.join("child.pid")).unwrap().trim().parse().unwrap();
+    let left = tree_left(pid);
+    let killed = Command::new("taskkill.exe").args(["/PID", &pid.to_string(), "/F"]).output();
+    assert!(answer.is_ok(), "{answer:?}");
+    assert!(
+        left.to_ascii_lowercase().contains("ping"),
+        "the app the action opened is still running: [{left}]"
+    );
+    assert!(killed.is_ok_and(|o| o.status.success()), "the test stops it");
     std::fs::remove_dir_all(&d).unwrap();
 }
