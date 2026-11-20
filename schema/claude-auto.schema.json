@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/vitaliy-shatskiy/claude-auto-launcher/main/schema/claude-auto.schema.json",
+  "title": "claude-auto launcher config (claude-auto.json)",
+  "description": "~/.claude/claude-auto.json or the file CLAUDE_AUTO_CONFIG names. Every bad value falls back to that key's default with a warning at launch; nothing fails. Paths: ~/..., forward slashes, or doubled backslashes.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "description": "The schema an editor validates this file against; the launcher ignores it.",
+      "type": "string"
+    },
+    "version": {
+      "description": "Config format version. Absent = 1. A file with a higher version than the launcher knows is read best-effort with one warning.",
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "accounts": {
+      "description": "The account roster. An empty list, a key outside 1-8 characters, a duplicate key, a root that is not absolute, or not exactly one account with root ~/.claude discards the whole roster for the single default account.",
+      "type": "array",
+      "default": [{ "key": "work", "root": "~/.claude", "label": "work account", "tint": "Green" }],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "root"],
+        "properties": {
+          "key": { "description": "1-8 characters, unique ignoring case.", "type": "string", "minLength": 1, "maxLength": 8 },
+          "root": { "description": "The account's config directory, absolute; exactly one account has ~/.claude (the canonical one).", "type": "string" },
+          "label": { "description": "Shown on the tab strip; default '<key> account'.", "type": "string" },
+          "tint": {
+            "description": "The account's colour (case-insensitive); anything else falls back to Green with a warning.",
+            "type": "string",
+            "enum": ["Green", "Magenta", "Cyan", "Blue", "Yellow", "Red"],
+            "default": "Green"
+          },
+          "hidden": { "description": "Left out of the tab strip and the no-UI prompt's text, still typeable there.", "type": "boolean", "default": false },
+          "archived": { "description": "Ignored entirely; refused on the canonical account.", "type": "boolean", "default": false }
+        }
+      }
+    },
+    "sharing": {
+      "description": "Share one profile's files across accounts (hardlinks, junctions, the MCP mirror). Forced off with fewer than two accounts. Module 'sharing'.",
+      "type": "boolean",
+      "default": false
+    },
+    "remote": {
+      "description": "The Remote row and the companion launch (author setup). Module 'remote'.",
+      "type": "boolean",
+      "default": false
+    },
+    "riderMcp": {
+      "description": "Rider MCP endpoint scan: auto scans only while Rider runs. Module 'rider-mcp'.",
+      "type": "string",
+      "enum": ["auto", "on", "off"],
+      "default": "auto"
+    },
+    "extraMcpConfigs": {
+      "description": "MCP config files passed to claude with --mcp-config; each absolute, a relative one is skipped with a warning.",
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["~/.claude/mcp-shared.json"]
+    },
+    "secretsRoot": {
+      "description": "Absolute path of the secrets folder.",
+      "type": "string",
+      "default": "~/.claude-secrets"
+    },
+    "vsecPath": {
+      "description": "Absolute path of vsec.exe or its shim (author setup); empty = CLAUDE_AUTO_VSEC, then PATH.",
+      "type": "string",
+      "default": ""
+    },
+    "launchHooks": {
+      "description": "Scripts (.ps1, .js, .mjs, .cmd) run after the account choice in the chosen project, best-effort. Entries run at the same time; an entry that is a list of paths runs them in order. Absolute paths.",
+      "type": "array",
+      "items": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      },
+      "default": []
+    },
+    "maintenanceActions": {
+      "description": "Extra keys on the maintenance screen. A key outside the rules or a missing or relative script skips the entry with a warning; a duplicate key keeps the first.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "script"],
+        "properties": {
+          "key": { "description": "One character a-z or 0-9, outside u r d m p l c b.", "type": "string", "pattern": "^[aAe-kE-Kn-oN-OqQs-tS-Tv-zV-Z0-9]$" },
+          "label": { "description": "Shown on the maintenance screen; default the key.", "type": "string" },
+          "script": { "description": "Absolute path of the script to run.", "type": "string", "minLength": 1 },
+          "confirmTwice": { "description": "Ask twice before running.", "type": "boolean", "default": false }
+        }
+      }
+    },
+    "rows": {
+      "description": "The launch rows in drawing order; an unlisted row is hidden and launches with its hiddenValues entry, else its default. account is always shown, first when unlisted. Default: every row.",
+      "type": "array",
+      "items": { "type": "string", "enum": ["account", "remote", "model", "effort", "advisor", "permission", "mode"] }
+    },
+    "hiddenValues": {
+      "description": "Row name -> the value a hidden row launches with. Values: model default or a family key (haiku, sonnet1m, opus1m, fable); effort default, low, medium, high, xhigh, max, ultracode; advisor default, fable, opus, off; permission default, plan, auto, acceptEdits, bypass; mode normal, safe; remote on, off.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "remote": { "type": "string" },
+        "model": { "type": "string" },
+        "effort": { "type": "string" },
+        "advisor": { "type": "string" },
+        "permission": { "type": "string" },
+        "mode": { "type": "string" }
+      }
+    },
+    "modelOrder": {
+      "description": "Model families on the model row after default, in this order; an unlisted family is hidden.",
+      "type": "array",
+      "items": { "type": "string", "enum": ["haiku", "sonnet", "opus", "fable"] },
+      "default": ["haiku", "sonnet", "opus", "fable"]
+    },
+    "hiddenProjects": {
+      "description": "Projects the project screen leaves out: absolute paths, case-insensitive; 'h' edits the list.",
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "pinnedProjects": {
+      "description": "Projects the project screen lists first, in this order: absolute paths, case-insensitive; 'p' edits the list.",
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "hideHeadlessProjects": {
+      "description": "Hide a project with no interactive session (only sdk-* transcripts), even a git root.",
+      "type": "boolean",
+      "default": true
+    },
+    "projectScreen": {
+      "description": "always: the project screen after every launch screen; onDemand: Enter launches in the launch directory and the action row picks what it does.",
+      "type": "string",
+      "enum": ["always", "onDemand"],
+      "default": "always"
+    },
+    "mouse": {
+      "description": "Mouse input (hover, click, wheel); CLAUDE_AUTO_NO_MOUSE=1 turns it off whatever this says. Module 'mouse'.",
+      "type": "boolean",
+      "default": true
+    },
+    "plugins": {
+      "description": "The only plugin processes that ever run (README, Plugins). A bad entry is skipped with a warning.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "path"],
+        "properties": {
+          "name": { "description": "1-32 letters, digits, '-', '_'; unique ignoring case.", "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
+          "path": { "description": "Absolute path of the plugin's executable, never looked up on PATH.", "type": "string", "minLength": 1 },
+          "args": { "description": "Arguments before the verb.", "type": "array", "items": { "type": "string" }, "default": [] },
+          "timeoutMs": { "description": "Overrides every verb's default timeout.", "type": "integer", "minimum": 1, "maximum": 120000 }
+        }
+      }
+    },
+    "selfUpdate": {
+      "description": "The launcher's own update from its GitHub releases: notify shows a line, auto updates in the background, off never checks.",
+      "type": "string",
+      "enum": ["notify", "auto", "off"],
+      "default": "notify"
+    },
+    "updateRepo": {
+      "description": "The GitHub owner/name whose releases the launcher updates from.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+      "default": "vitaliy-shatskiy/claude-auto-launcher"
+    }
+  }
+}

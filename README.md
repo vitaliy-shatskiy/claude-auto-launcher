@@ -401,10 +401,20 @@ naming it. Windows paths in JSON: write `~/...`, forward slashes, or double ever
 (`C:\\Users\\me\\.claude`). A single backslash fails the whole file. `config.example.json` is a
 two-account starting point.
 
+[`schema/claude-auto.schema.json`](schema/claude-auto.schema.json) is the JSON Schema of this file
+(draft 2020-12): put
+`"$schema": "https://raw.githubusercontent.com/vitaliy-shatskiy/claude-auto-launcher/main/schema/claude-auto.schema.json"`
+at the top, as `config.example.json` does, and an editor completes and checks the keys. The
+launcher ignores `$schema`. `version` (default `1`) is the config format; a file with a higher
+version, written by a newer claude-auto, is read best-effort with one warning: the keys this
+launcher knows apply, the rest warn as unknown.
+
 <details><summary><b>All config keys</b></summary>
 
 | key | type | default | notes |
 |---|---|---|---|
+| `$schema` | URL | none | the editor's schema; ignored by the launcher |
+| `version` | integer | `1` | the config format; higher than the launcher knows = one warning, best-effort read; not a whole number of at least 1 = a warning, read as `1` |
 | `accounts[]` | `{key, root, label, tint, hidden, archived}` | one `work` account | see [Accounts](#accounts) below |
 | `sharing` | bool | `false` | forced off with fewer than two accounts. Read [Multi-account sharing](#multi-account-sharing) before turning it on |
 | `remote` | bool | `false` | keep it off: author setup only, see [Optional author setup](#optional-author-setup) |

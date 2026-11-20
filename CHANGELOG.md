@@ -4,6 +4,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- A JSON Schema for the config, `schema/claude-auto.schema.json` (draft 2020-12): every key the
+  launcher reads, with its type, allowed values, default and description. `config.example.json`
+  points at it with `"$schema"`, which the launcher accepts and ignores. A test keeps the schema's
+  keys, enums and defaults equal to the parser's.
+- Config `version` (optional, default `1`): a file written by a newer claude-auto warns once and
+  is read best-effort; a value that is not a whole number of at least 1 warns and reads as `1`.
+
 ## [0.9.0] — 2026-11-20
 
 ### Added

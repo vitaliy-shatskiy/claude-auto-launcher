@@ -20,6 +20,9 @@ pub const ALLOWED_TINTS: [&str; 6] = ["Green", "Magenta", "Cyan", "Blue", "Yello
 const ALLOWED_RIDER_MODES: [&str; 3] = ["auto", "on", "off"];
 /// A module's keys exist only in a build with its cargo feature; without it they warn as unknown.
 const KNOWN_KEYS: &[&str] = &[
+    // The editor's pointer to `schema/claude-auto.schema.json`; never read.
+    "$schema",
+    "version",
     "accounts",
     #[cfg(feature = "sharing")]
     "sharing",
@@ -45,6 +48,9 @@ const KNOWN_KEYS: &[&str] = &[
     "selfUpdate",
     "updateRepo",
 ];
+/// The config `version` this launcher reads; absent = 1. A newer file is read best-effort: its
+/// keys this build knows apply, the rest warn as unknown.
+pub const CONFIG_VERSION: u64 = 1;
 /// An optional module's config key. It reaches the unknown-key check only in a build without that
 /// module, and then says so instead of calling the key unrecognized.
 struct ModuleKey {
@@ -540,6 +546,7 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
             cfg.warnings.push(msg);
         }
     }
+    check_version(obj.get("version"), &mut cfg);
     let present = |k: &str| obj.get(k).filter(|v| !v.is_null());
     if let Some(a) = obj.get("accounts") {
         if a.is_null() {
@@ -595,6 +602,21 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
         cfg.warnings.push("sharing needs at least two accounts; off".into());
     }
     cfg
+}
+
+/// `version`: a newer one warns once and the parse goes on; a bad one warns and reads as 1.
+fn check_version(v: Option<&Value>, cfg: &mut Config) {
+    let Some(v) = v.filter(|v| !v.is_null()) else { return };
+    match v.as_u64() {
+        Some(n) if n > CONFIG_VERSION => cfg.warnings.push(format!(
+            "config {} was written by a newer claude-auto (config version {n}; this one reads {CONFIG_VERSION}); reading the keys it knows",
+            cfg.path
+        )),
+        Some(n) if n >= 1 => {}
+        _ => cfg
+            .warnings
+            .push(format!("version {v} is not a config version (1, 2, ...); reading it as 1")),
+    }
 }
 
 /// The built-in modules' keys; each exists only in a build with its cargo feature.
@@ -761,5 +783,7 @@ pub(crate) fn update_config(path: &str, edit: impl FnOnce(&mut serde_json::Map<S
     crate::prefs::write_json(path, &Value::Object(obj))
 }
 
+#[cfg(test)]
+mod schema_tests;
 #[cfg(test)]
 mod tests;
