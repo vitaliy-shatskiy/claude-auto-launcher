@@ -122,11 +122,38 @@ fn a_full_pane_stops_after_the_first_step() {
     let line = |i: i32| format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"prompt {i}\"}},\"uuid\":\"{i}\"}}\n");
     let text = (0..40_000).map(line).collect::<Vec<_>>().concat();
     let len = u64::try_from(text.len()).unwrap();
-    assert!(len > 2 * FIRST_READ);
+    assert!(len > 2 * CHUNK);
     let load = read_chat(&mut Cursor::new(text.into_bytes()), len, 30, MAX_READ);
     assert_eq!(load.messages.len(), 30);
     assert_eq!(load.messages[29].text, "prompt 39999");
-    assert_eq!(load.bytes_read, FIRST_READ);
+    assert_eq!(load.bytes_read, CHUNK);
+}
+
+#[test]
+fn a_stream_hands_out_the_newest_message_after_one_chunk_then_older_ones_step_by_step() {
+    // Given: five prompts, each followed by 100 KB of tool output.
+    let filler = format!("{{\"type\":\"progress\",\"data\":\"{}\"}}\n", "x".repeat(1000)).repeat(100);
+    let text: String = (0..5)
+        .flat_map(|i| {
+            [
+                format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"prompt {i}\"}},\"uuid\":\"{i}\"}}\n"),
+                filler.clone(),
+            ]
+        })
+        .collect();
+    let len = u64::try_from(text.len()).unwrap();
+    let mut s = ChatStream::new(Cursor::new(text.into_bytes()), len, MAX_READ);
+    // When: one chunk is read, nothing is found yet past the newest filler; then more chunks.
+    let mut seen = Vec::new();
+    while s.step() {
+        seen.push(s.found());
+    }
+    // Then: each chunk read 64 KB at most, the messages came one by one, newest first.
+    assert_eq!(seen.len(), usize::try_from(len.div_ceil(CHUNK)).unwrap());
+    assert!(seen.windows(2).all(|w| w[1] - w[0] <= 1), "{seen:?}");
+    assert_eq!(seen.iter().position(|n| *n == 1), Some(1), "prompt 4 sits 100 KB from the end");
+    assert_eq!(s.messages().first().map(|m| m.text.as_str()), Some("prompt 0"));
+    assert!(s.done());
 }
 
 #[test]

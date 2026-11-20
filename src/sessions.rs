@@ -167,8 +167,7 @@ pub fn run_picker_with(
     // Preview never polls idle (scripted keys only), so a background load would never land:
     // it shows the summary's recent messages instead.
     if !req.preview {
-        let loader: chat::pane::Loader = std::sync::Arc::new(chat::load_chat);
-        screen = screen.with_chat(chat::pane::ChatPane::new(loader, tm.clone())).with_landed(landed);
+        screen = screen.with_chat(chat::pane::ChatPane::new(tm.clone())).with_landed(landed);
     }
     tm.end(load);
     let picked = crate::ui::screen_loop::run(&mut screen, term)?;

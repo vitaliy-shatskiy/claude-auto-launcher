@@ -17,30 +17,35 @@
       "wallMsRef": { "median": 99.176, "p80": 101.726 }
     },
     "project_screen": {
-      "counts": { "read_bytes": 436515, "read_ops": 72 },
+      "counts": { "read_bytes": 436487, "read_ops": 72 },
       "wallMsRef": { "median": 104.916, "p80": 110.532 }
     },
     "picker_open_cold": {
-      "counts": { "read_bytes": 127957698, "read_ops": 365, "write_bytes": 18325 },
+      "counts": { "read_bytes": 128299274, "read_ops": 367, "write_bytes": 22015 },
       "wallMsRef": { "median": 64.623, "p80": 65.931 }
     },
     "picker_open_warm": {
-      "counts": { "read_bytes": 49385, "read_ops": 9, "write_bytes": 18325 },
+      "counts": { "read_bytes": 53075, "read_ops": 9, "write_bytes": 22015 },
       "wallMsRef": { "median": 4.137, "p80": 5.007 }
     },
     "picker_ui_open_cold": {
-      "counts": { "read_bytes": 2902816, "read_ops": 238 }
+      "counts": { "read_bytes": 2968224, "read_ops": 239 }
     },
     "picker_worker_scan_cold": {
-      "counts": { "read_bytes": 127926790, "read_ops": 358, "write_bytes": 18235 }
+      "counts": { "read_bytes": 128268214, "read_ops": 360, "write_bytes": 22015 }
     },
     "picker_cursor": {
-      "counts": { "frame_bytes": 3844, "full_frame_bytes": 18517 },
+      "counts": { "frame_bytes": 15392, "full_frame_bytes": 19134 },
       "wallMsRef": { "median": 0.005, "p80": 0.006 }
     },
     "chat_load": {
-      "counts": { "chat_bytes_read": 8388608, "read_bytes": 8388608 },
-      "wallMsRef": { "median": 7.535, "p80": 8.169 }
+      "counts": { "chat_bytes_read": 65536, "read_bytes": 65536 }
+    },
+    "chat_revisit": {
+      "counts": { "read_bytes": 0 }
+    },
+    "chat_prefetch_open": {
+      "counts": { "chat_bytes_read": 2165930, "read_bytes": 2165930 }
     }
   }
 }

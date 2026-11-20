@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use serde_json::{Map, Value, json};
 
 use self::filter::scope_name;
-use super::chat::pane::{ChatKey, ChatPane, ChatState};
+use super::chat::pane::{ChatKey, ChatPane, ChatState, Fill};
 use super::chat::{ChatMessage, bounded};
 use super::frame::{ChatView, Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
 use super::listing::Session;
@@ -86,6 +86,8 @@ pub struct PickerScreen<'a> {
     /// Loads the highlighted session's chat off the UI thread; `None` shows the summary's
     /// recent messages instead (tests, a session from a plugin source).
     chat: Option<ChatPane>,
+    /// The pane size the last frame had: what a stream fills.
+    chat_fill: Fill,
     /// Full summaries for rows first shown quick (`summaries`); `None` = every row is final.
     landed: Option<std::sync::mpsc::Receiver<Vec<Session>>>,
     /// Reads the ids a live process has open: once at open, again every `LIVE_POLLS` idle polls.
@@ -152,6 +154,7 @@ impl<'a> PickerScreen<'a> {
             style,
             memo: Memo::default(),
             chat: None,
+            chat_fill: Fill { rows: 0, cols: 0 },
             landed: None,
             live_scan: None,
             live: HashSet::new(),
@@ -197,23 +200,42 @@ impl<'a> PickerScreen<'a> {
         self
     }
 
-    /// The highlighted session's chat from the pane (cached or loading); `None` when there is no
-    /// pane or no transcript, and the summary's recent messages stand in.
-    fn chat_state(&mut self, rows: usize) -> Option<ChatState> {
-        let i = usize::try_from(self.cursor.index).ok()?;
-        let s = self.bucket().sessions.get(*self.items.get(i)?)?;
-        if s.path.as_os_str().is_empty() {
-            return None;
-        }
-        let key = ChatKey {
+    /// The chat key of the row at `item` (an index into `items`); `None` without a transcript.
+    fn chat_key(&self, item: usize) -> Option<ChatKey> {
+        let s = self.bucket().sessions.get(*self.items.get(item)?)?;
+        (!s.path.as_os_str().is_empty()).then(|| ChatKey {
             path: s.path.clone(),
             size: s.size_bytes,
             modified_ms: s.modified_ms,
-        };
-        // Each message takes a label and a line at least, plus the gap between.
-        Some(self.chat.as_mut()?.view(&key, rows / 3 + 2))
+        })
     }
 
+    /// The highlighted session's chat from the pane (streamed so far or loading); `None` when
+    /// there is no pane or no transcript, and the summary's recent messages stand in.
+    fn chat_state(&mut self, size: (usize, usize)) -> Option<ChatState> {
+        let key = self.chat_key(usize::try_from(self.cursor.index).ok()?)?;
+        self.chat_fill = Fill {
+            rows: size.1,
+            cols: size.0 / 2,
+        };
+        let fill = self.chat_fill;
+        Some(self.chat.as_mut()?.view(&key, fill))
+    }
+
+    /// The sessions the pane prefetches: 2 either side of the cursor, then the newest 5.
+    fn prefetch_keys(&self) -> Vec<ChatKey> {
+        let at = usize::try_from(self.cursor.index).unwrap_or(0);
+        let near = [at + 1, at.wrapping_sub(1), at + 2, at.wrapping_sub(2)];
+        let mut keys: Vec<ChatKey> = Vec::new();
+        for i in near.into_iter().chain(0..5) {
+            if let Some(k) = self.chat_key(i)
+                && !keys.contains(&k)
+            {
+                keys.push(k);
+            }
+        }
+        keys
+    }
     fn recent(&self) -> Vec<ChatMessage> {
         let Some(i) = usize::try_from(self.cursor.index).ok() else {
             return Vec::new();
@@ -342,11 +364,12 @@ impl Screen for PickerScreen<'_> {
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
         let mut memo = std::mem::take(&mut self.memo);
-        let state = self.chat_state(size.1);
+        let state = self.chat_state(size);
         let fallback = if state.is_none() { self.recent() } else { Vec::new() };
         let chat = match &state {
             Some(ChatState::Loading) => ChatView::Loading,
             Some(ChatState::Ready(m)) => ChatView::Messages(m),
+            Some(ChatState::Updating(m)) => ChatView::Updating(m),
             None => ChatView::Messages(&fallback),
         };
         let b = self.bucket();
@@ -375,6 +398,11 @@ impl Screen for PickerScreen<'_> {
     /// first frame never waits for the pages a big window wants.
     fn idle(&mut self) -> bool {
         // The chat first: collecting a finished load is cheap, a page of summaries is not.
+        let keys = if self.chat.is_some() { self.prefetch_keys() } else { Vec::new() };
+        let fill = self.chat_fill;
+        if let Some(pane) = self.chat.as_mut() {
+            pane.prefetch(keys, fill);
+        }
         if self.chat.as_mut().is_some_and(ChatPane::idle) || self.take_landed() || self.refresh_live() {
             return true;
         }

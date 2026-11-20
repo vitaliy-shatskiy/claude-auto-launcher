@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use claude_auto::frame::Style;
 use claude_auto::perf::IoCounts;
-use claude_auto::sessions::chat::load_chat;
+use claude_auto::sessions::chat::pane::{ChatKey, ChatPane, Fill};
 use claude_auto::sessions::frame::resumable;
 use claude_auto::sessions::listing::plan::Entry;
 use claude_auto::sessions::listing::{Scope, SessionCache, session_files};
@@ -20,12 +20,13 @@ use claude_auto::sessions::{PickerRequest, run_picker};
 use claude_auto::ui::{PreviewTerm, Shown, parse_preview_keys};
 
 /// Bump on any change to what `build` writes: an older world on disk is then rebuilt.
-const VERSION: &str = "perf-world-v2";
+const VERSION: &str = "perf-world-v3";
 /// The terminal the frame paths render at.
 pub(crate) const SIZE: (usize, usize) = (250, 68);
 const SLUGS: usize = 7;
 const PER_SLUG: usize = 10;
-/// (slug, session, MB): the newest is the 83 MB one the chat path loads.
+/// (slug, session, MB): the newest is the 83 MB one the chat paths stream; it ends in a chatty
+/// tail (`chatty`), the others in one exchange after their tool output.
 const BIG: [(usize, usize, usize); 4] = [(0, 0, 83), (1, 0, 20), (2, 0, 5), (3, 5, 40)];
 /// The newest session's mtime (Unix seconds); every other one is a minute older per rank.
 const NEWEST_S: u64 = 1_790_000_000;
@@ -86,7 +87,7 @@ fn line(kind: &str, cwd: &str, n: usize, text: &str) -> String {
 
 /// A transcript: a few turns, then `mb` megabytes of tool progress (no chat line), then one turn,
 /// so the chat walk finds two messages in its last 8 MB and stops at the cap.
-fn transcript(cwd: &Path, mb: usize) -> Vec<u8> {
+fn transcript(cwd: &Path, mb: usize, chatty: bool) -> Vec<u8> {
     let cwd = cwd.to_string_lossy().replace('\\', r"\\");
     let mut s = String::new();
     for n in 0..3 {
@@ -109,7 +110,26 @@ fn transcript(cwd: &Path, mb: usize) -> Vec<u8> {
         line("assistant", &cwd, 9, "all set")
     );
     bytes.extend_from_slice(tail.as_bytes());
+    if chatty {
+        bytes.extend_from_slice(chatty_tail(&cwd).as_bytes());
+    }
     bytes
+}
+
+/// 40 turns the way a working session ends: a prompt, three 2 KB tool lines, a markdown reply of
+/// six 100-character lines.
+fn chatty_tail(cwd: &str) -> String {
+    let tool = format!("{{\"type\":\"progress\",\"data\":\"{}\"}}\n", "t".repeat(2000));
+    let reply = ["- a list item that says what changed and why it matters here"; 6].join(r"\n") + " plus the closing line of the reply";
+    let mut s = String::new();
+    for n in 10..50 {
+        s.push_str(&line("user", cwd, n, "please check the next step of the build and report"));
+        s.push('\n');
+        s.push_str(&tool.repeat(3));
+        s.push_str(&line("assistant", cwd, n, &reply));
+        s.push('\n');
+    }
+    s
 }
 
 /// Writes `w`'s files under `dir`, which is renamed to `w.root` afterwards.
@@ -121,7 +141,7 @@ fn build(w: &World, dir: &Path) -> io::Result<()> {
         for n in 0..PER_SLUG {
             let mb = BIG.iter().find(|b| b.0 == s && b.1 == n).map_or(0, |b| b.2);
             let f = d.join(format!("{}.jsonl", id(s, n)));
-            std::fs::write(&f, transcript(&w.work(s), mb))?;
+            std::fs::write(&f, transcript(&w.work(s), mb, (s, n) == (0, 0)))?;
             let rank = u64::try_from(n * SLUGS + s).unwrap_or(0);
             let t = UNIX_EPOCH + Duration::from_secs(NEWEST_S - rank * 60);
             std::fs::File::options().write(true).open(&f)?.set_modified(t)?;
@@ -294,17 +314,68 @@ pub(crate) fn picker_cursor(w: &World) -> io::Result<Measured> {
     Ok((vec![("frame_bytes", to_u64(diff)), ("full_frame_bytes", to_u64(full))], took))
 }
 
-/// (e) The chat load for the newest (83 MB) transcript: the loader's own count and this process's.
-pub(crate) fn chat_load(w: &World) -> io::Result<Measured> {
-    let (before, t) = (own()?, Instant::now());
-    let load = load_chat(&w.newest(), 32);
-    let (io, took) = (before.since(own()?), t.elapsed());
-    if load.messages.is_empty() {
-        return Err(io::Error::other("the chat load found no message"));
-    }
-    Ok((vec![("chat_bytes_read", load.bytes_read), ("read_bytes", io.read_bytes)], took))
+/// The chat pane at 200x50: what a stream fills.
+const CHAT_PANE: Fill = Fill { rows: 50, cols: 100 };
+
+fn chat_key(path: &Path) -> io::Result<ChatKey> {
+    Ok(ChatKey {
+        path: path.to_path_buf(),
+        size: std::fs::metadata(path)?.len(),
+        modified_ms: 1,
+    })
 }
 
+/// Idle polls until the pane's workers have nothing left.
+fn settle(p: &mut ChatPane) {
+    while !p.quiet() {
+        p.idle();
+        std::thread::yield_now();
+    }
+}
+
+/// The highlighted newest transcript streamed until the pane is filled plus one screen.
+fn stream_newest(w: &World) -> io::Result<(ChatPane, ChatKey)> {
+    let key = chat_key(&w.newest())?;
+    let mut p = ChatPane::new(claude_auto::timing::Timings::default());
+    p.view(&key, CHAT_PANE);
+    settle(&mut p);
+    Ok((p, key))
+}
+
+/// (e) The chat pane filling 200x50 from the newest (83 MB) transcript: the workers' own count
+/// and this process's.
+pub(crate) fn chat_load(w: &World) -> io::Result<Measured> {
+    let (before, t) = (own()?, Instant::now());
+    let (p, _) = stream_newest(w)?;
+    let (io, took) = (before.since(own()?), t.elapsed());
+    Ok((vec![("chat_bytes_read", p.bytes_read()), ("read_bytes", io.read_bytes)], took))
+}
+
+/// (e2) Back to a session streamed before: this process reads nothing.
+pub(crate) fn chat_revisit(w: &World) -> io::Result<Measured> {
+    let (mut p, key) = stream_newest(w)?;
+    let (before, t) = (own()?, Instant::now());
+    p.view(&key, CHAT_PANE);
+    for _ in 0..10 {
+        p.idle();
+    }
+    settle(&mut p);
+    let (io, took) = (before.since(own()?), t.elapsed());
+    Ok((vec![("read_bytes", io.read_bytes)], took))
+}
+
+/// (e3) The picker's open prefetch: the newest 5 sessions, each to one pane height.
+pub(crate) fn chat_prefetch_open(w: &World) -> io::Result<Measured> {
+    let keys = (0..5)
+        .map(|s| chat_key(&w.projects().join(w.slug(s)).join(format!("{}.jsonl", id(s, 0)))))
+        .collect::<io::Result<Vec<_>>>()?;
+    let (before, t) = (own()?, Instant::now());
+    let mut p = ChatPane::new(claude_auto::timing::Timings::default());
+    p.prefetch(keys, CHAT_PANE);
+    settle(&mut p);
+    let (io, took) = (before.since(own()?), t.elapsed());
+    Ok((vec![("chat_bytes_read", p.bytes_read()), ("read_bytes", io.read_bytes)], took))
+}
 /// Which thread's work `picker_interactive` returns.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Side {
@@ -371,7 +442,7 @@ pub(crate) fn picker_interactive(w: &World, side: Side) -> io::Result<Measured> 
 pub(crate) type Run = fn(&Path, &World) -> io::Result<Measured>;
 
 /// Every measured path by its budget name, in table order.
-pub(crate) const PATHS: [(&str, Run); 8] = [
+pub(crate) const PATHS: [(&str, Run); 10] = [
     ("startup", startup),
     ("project_screen", project_screen),
     ("picker_open_cold", |_, w| picker_open(w, false)),
@@ -380,4 +451,6 @@ pub(crate) const PATHS: [(&str, Run); 8] = [
     ("picker_worker_scan_cold", |_, w| picker_interactive(w, Side::Worker)),
     ("picker_cursor", |_, w| picker_cursor(w)),
     ("chat_load", |_, w| chat_load(w)),
+    ("chat_revisit", |_, w| chat_revisit(w)),
+    ("chat_prefetch_open", |_, w| chat_prefetch_open(w)),
 ];

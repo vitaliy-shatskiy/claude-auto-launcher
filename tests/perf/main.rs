@@ -35,7 +35,8 @@ fn breaches(budget: &Value, path: &str, counts: &Counts) -> Vec<String> {
     for (metric, value) in counts {
         match entry.get(*metric).and_then(Value::as_u64) {
             None => out.push(format!("{path}.{metric}: no budget (measured {value})")),
-            Some(_) if *value == 0 => out.push(format!("{path}.{metric}: measured 0, the counter is not wired")),
+            // A budget of 0 is a promise of no work (a revisit reads nothing): 0 is its pass.
+            Some(limit) if *value == 0 && limit > 0 => out.push(format!("{path}.{metric}: measured 0, the counter is not wired")),
             Some(limit) if u128::from(*value) * 100 > u128::from(limit) * u128::from(100 + headroom) => {
                 out.push(format!("{path}.{metric}: {value} over the budget {limit} +{headroom} %"));
             }
@@ -107,8 +108,18 @@ fn picker_cursor_move_writes_within_budget() -> TestResult {
 }
 
 #[test]
-fn chat_load_of_the_newest_transcript_reads_within_budget() -> TestResult {
+fn chat_pane_fill_from_the_newest_transcript_reads_within_budget() -> TestResult {
     check("chat_load")
+}
+
+#[test]
+fn chat_revisit_reads_nothing() -> TestResult {
+    check("chat_revisit")
+}
+
+#[test]
+fn chat_prefetch_on_open_reads_within_budget() -> TestResult {
+    check("chat_prefetch_open")
 }
 
 #[test]
@@ -138,5 +149,9 @@ fn breaches_deny_a_zero_count_a_missing_entry_and_an_unmeasured_metric() -> Test
     );
     assert_eq!(breaches(&b, "p", &vec![("read_bytes", 1)]).len(), 1);
     assert_eq!(breaches(&b, "q", &vec![("read_bytes", 1)]).len(), 1);
+    // And: a budget of 0 passes 0 and fails any work at all.
+    let zero: Value = serde_json::from_str(r#"{"headroomPercent":10,"paths":{"z":{"counts":{"read_bytes":0}}}}"#)?;
+    assert_eq!(breaches(&zero, "z", &vec![("read_bytes", 0)]), Vec::<String>::new());
+    assert_eq!(breaches(&zero, "z", &vec![("read_bytes", 1)]).len(), 1);
     Ok(())
 }

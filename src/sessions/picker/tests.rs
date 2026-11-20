@@ -273,34 +273,19 @@ fn without_a_chat_pane_the_summary_messages_show_as_plain_text() {
     assert!(frame.iter().any(|l| l.contains("Done: shipped v1")), "{frame:#?}");
 }
 
-/// AC3: the UI thread never waits on a chat load. The loader below is held until the run ends.
+/// AC3: the UI thread never reads a transcript: keys draw their frames with the pane loading,
+/// and nothing is read until idle polls hand the stream to its worker.
 #[test]
-fn a_key_draws_its_frame_while_a_chat_load_is_held() {
+fn keys_draw_their_frames_and_read_nothing_before_idle_polls() {
     use crate::input::Event;
-    use crate::sessions::chat::ChatLoad;
-    use crate::sessions::chat::pane::{ChatPane, Loader};
-    use std::sync::mpsc::channel;
-    use std::sync::{Arc, Mutex};
-    // Given: a loader that reports its start, then blocks until released.
-    let (release, held) = channel::<()>();
-    let (started_tx, started) = channel::<()>();
-    let (held, started_tx) = (Mutex::new(held), Mutex::new(started_tx));
-    let loader: Loader = Arc::new(move |_p, _want| {
-        started_tx.lock().unwrap().send(()).unwrap();
-        held.lock().unwrap().recv().unwrap_or_default();
-        ChatLoad::default()
-    });
+    use crate::sessions::chat::pane::ChatPane;
     let first = vec![row("a", "x", 1), row("b", "x", 1), row("c", "x", 1)];
-    let mut s =
-        PickerScreen::new(first, None, 0, &[], "", style(), clock()).with_chat(ChatPane::new(loader, crate::timing::Timings::default()));
+    let mut s = PickerScreen::new(first, None, 0, &[], "", style(), clock()).with_chat(ChatPane::new(crate::timing::Timings::default()));
     let down = || Event::Key(KeyPress::named(vk::DOWN));
-    let mut t = crate::ui::script_term::ScriptTerm::new((100, 30), [Event::Idle, Event::Idle, down(), down()]);
-    // When: two idle polls start the load, then two keys come while it is held.
+    let mut t = crate::ui::script_term::ScriptTerm::new((100, 30), [down(), down()]);
     assert_eq!(run(&mut s, &mut t), Err(crate::ui::UiStop::KeysExhausted));
-    // Then: the load started and is still held, yet each key drew its frame, the pane loading.
-    started.recv().unwrap();
     let frames = t.inner.frames.clone().unwrap();
     assert_eq!(frames.len(), 3, "the opening frame and one per key");
     assert!(frames.iter().all(|f| f.iter().any(|l| l.contains("loading..."))), "{frames:#?}");
-    release.send(()).unwrap();
+    assert_eq!(s.chat.as_ref().map(ChatPane::bytes_read), Some(0));
 }

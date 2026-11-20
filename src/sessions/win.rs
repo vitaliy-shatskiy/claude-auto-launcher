@@ -22,3 +22,13 @@ pub(crate) fn process_start(pid: u32) -> Option<u64> {
     unsafe { CloseHandle(h) };
     ok.then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
 }
+
+/// The calling thread at below-normal priority (the chat prefetch: it must never compete with
+/// the UI or with the user's other work). A failure leaves it at normal.
+pub(crate) fn lower_this_thread() {
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+    // SAFETY: no input; the pseudo handle of the calling thread needs no close.
+    let me = unsafe { GetCurrentThread() };
+    // SAFETY: `me` is a valid thread handle for the duration of the call.
+    let _lowered = unsafe { SetThreadPriority(me, THREAD_PRIORITY_BELOW_NORMAL) };
+}
