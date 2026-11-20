@@ -38,6 +38,23 @@ enum Answer {
     Cancel(String),
 }
 
+/// Variables a plugin may never set: they pick the account or its credentials, which the launch
+/// screen owns. An entry ending in `*` is a prefix (case-insensitive, as Windows names are).
+const REFUSED_ENV: [&str; 5] = [
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_*",
+];
+
+fn refused_env(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    REFUSED_ENV
+        .iter()
+        .any(|r| r.strip_suffix('*').map_or(up == *r, |prefix| up.starts_with(prefix)))
+}
+
 fn valid_name(n: &str) -> bool {
     !n.is_empty() && n.len() <= MAX_NAME && !n.contains('=') && !n.chars().any(char::is_control)
 }
@@ -67,6 +84,9 @@ fn check(v: &Value) -> Result<Answer, String> {
             let v = v.as_str().ok_or_else(|| format!("env {k}: not a string"))?;
             if !valid_name(k) || !valid_text(v, MAX_VALUE) {
                 return Err(format!("env {k}: bad name or value"));
+            }
+            if refused_env(k) {
+                return Err(format!("env {k}: the account and its credentials are the launcher's"));
             }
             extra.env.push((k.clone(), v.to_owned()));
         }

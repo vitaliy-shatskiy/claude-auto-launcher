@@ -144,6 +144,33 @@ fn pre_launch_output_with_a_nul_or_a_bad_name_adds_nothing_and_warns() {
 }
 
 #[test]
+fn pre_launch_may_not_set_the_account_or_its_credentials() {
+    let state = four().new_state();
+    for key in [
+        "CLAUDE_CONFIG_DIR",
+        "anthropic_api_key",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+    ] {
+        let fake = Fake::with(&[("describe", ticket()), ("preLaunch", json!({"env":{"OK":"1", key:"x"}}))]);
+        let plugins = loaded(&fake);
+        let mut w = Vec::new();
+        let out = pre_launch::run(&plugins, &|i| plugins.choice(i, &state, None), &fake, &mut w);
+        assert_eq!(out, pre_launch::Outcome::Go(pre_launch::Extra::default()), "{key}");
+        assert!(w.first().is_some_and(|l| l.contains(key)), "{key}: {w:?}");
+    }
+    let fine = Fake::with(&[("describe", ticket()), ("preLaunch", json!({"env":{"CLAUDE_CODE_X":"1"}}))]);
+    let plugins = loaded(&fine);
+    let out = pre_launch::run(&plugins, &|i| plugins.choice(i, &state, None), &fine, &mut Vec::new());
+    assert_ne!(
+        out,
+        pre_launch::Outcome::Go(pre_launch::Extra::default()),
+        "an unrelated name still passes"
+    );
+}
+
+#[test]
 fn a_failing_pre_launch_warns_and_the_launch_goes_on() {
     let fake = Fake::with(&[("describe", ticket())]);
     let plugins = loaded(&fake);
@@ -212,6 +239,33 @@ fn source_entries_merge_into_the_lists_marked_by_plugin() {
         [("s-1", "tick", "from jira")]
     );
     assert_eq!(fake.calls("sessions"), [json!({"project": r"C:\known"})]);
+}
+
+#[test]
+fn resume_on_a_plugin_only_project_lists_its_own_sessions_or_none_never_the_account() {
+    let root = dir("plugin-slug");
+    let other = root.join("C--elsewhere");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("other.jsonl"), "{}\n").unwrap();
+    let e = projects::Entry {
+        plugin: "tick".into(),
+        path: r"C:\jira\ABC-1".into(),
+        name: "ABC-1".into(),
+        last_used_ms: None,
+    };
+    let merged = projects::merge(&[], &[e]);
+    let p = merged.first().unwrap();
+    assert_eq!(p.slugs, ["C--jira-ABC-1"], "Claude's slug of that path");
+    assert_eq!(
+        crate::sessions::listing::session_files(&root, &p.slugs),
+        Vec::<PathBuf>::new(),
+        "no session of another project"
+    );
+    let own = root.join("C--jira-ABC-1");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("mine.jsonl"), "{}\n").unwrap();
+    assert_eq!(crate::sessions::listing::session_files(&root, &p.slugs), [own.join("mine.jsonl")]);
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
