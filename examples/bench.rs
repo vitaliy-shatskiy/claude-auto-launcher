@@ -57,7 +57,7 @@ fn main() -> ExitCode {
         times.sort_by(f64::total_cmp);
         let shown: Vec<String> = counts.iter().map(|(m, v)| format!("{m}={v}")).collect();
         println!(
-            "{name:<18} {:>10.1} {:>10.1}  {}",
+            "{name:<18} {:>10.3} {:>10.3}  {}",
             quantile(&times, 50),
             quantile(&times, 80),
             shown.join(" ")

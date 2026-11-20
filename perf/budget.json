@@ -1,11 +1,40 @@
 {
+  "about": "Baseline work counts per hot path, gated by tests/perf at +headroomPercent. wallMsRef is documentation only: a load-dependent reference from the timing run below, never gated. Update rules: perf/README.md.",
   "headroomPercent": 10,
+  "timingRun": {
+    "date": "20.11.2026 19:15 Kyiv",
+    "commit": "3f53b20",
+    "command": "target\\release\\examples\\bench.exe 10 (bench built from 3f53b20 plus its 3-decimal print)",
+    "cpu": "Intel Core i9-14900KF",
+    "powerPlan": "High performance",
+    "powerSource": "mains (grid on, station in bypass, 100 % charge)",
+    "cpuLoadPercent": { "before": 63, "after": 43 },
+    "note": "other Claude Code sessions busy on the machine: a noisy reference"
+  },
   "paths": {
-    "startup": { "counts": { "read_bytes": 430760, "read_ops": 71 } },
-    "project_screen": { "counts": { "read_bytes": 436515, "read_ops": 72 } },
-    "picker_open_cold": { "counts": { "read_bytes": 127957698, "read_ops": 365, "write_bytes": 18325 } },
-    "picker_open_warm": { "counts": { "read_bytes": 49385, "read_ops": 9, "write_bytes": 18325 } },
-    "picker_cursor": { "counts": { "frame_bytes": 3844, "full_frame_bytes": 18517 } },
-    "chat_load": { "counts": { "chat_bytes_read": 8388608, "read_bytes": 8388608 } }
+    "startup": {
+      "counts": { "read_bytes": 430760, "read_ops": 71 },
+      "wallMsRef": { "median": 99.176, "p80": 101.726 }
+    },
+    "project_screen": {
+      "counts": { "read_bytes": 436515, "read_ops": 72 },
+      "wallMsRef": { "median": 104.916, "p80": 110.532 }
+    },
+    "picker_open_cold": {
+      "counts": { "read_bytes": 127957698, "read_ops": 365, "write_bytes": 18325 },
+      "wallMsRef": { "median": 64.623, "p80": 65.931 }
+    },
+    "picker_open_warm": {
+      "counts": { "read_bytes": 49385, "read_ops": 9, "write_bytes": 18325 },
+      "wallMsRef": { "median": 4.137, "p80": 5.007 }
+    },
+    "picker_cursor": {
+      "counts": { "frame_bytes": 3844, "full_frame_bytes": 18517 },
+      "wallMsRef": { "median": 0.005, "p80": 0.006 }
+    },
+    "chat_load": {
+      "counts": { "chat_bytes_read": 8388608, "read_bytes": 8388608 },
+      "wallMsRef": { "median": 7.535, "p80": 8.169 }
+    }
   }
 }

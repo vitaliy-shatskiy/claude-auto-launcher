@@ -4,6 +4,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- A speed budget in the repo: `perf/budget.json` holds the work counts of the hot paths (start to
+  the first frame, the project screen, the picker opened over a cold and a warm summary cache, one
+  cursor move at 250x68, the chat load of an 83 MB transcript), and `tests/perf` fails `cargo test`
+  when a path reads or writes more than its budget plus 10 %. Counts come from the OS I/O counters,
+  so the check does not depend on machine load; `examples/bench.rs` prints the counts with wall
+  times for reference (`perf/README.md`).
+
 ## [0.9.0] — 2026-11-20
 
 ### Added
