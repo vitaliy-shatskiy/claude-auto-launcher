@@ -459,7 +459,7 @@ needed.
   binary's path, size and mtime.
 - `~/.claude/claude-auto-update.json` - the release channel's last answer (30 minutes, a failure 5).
 - `~/.claude/claude-auto-projects.json` - the project screen's registry cache.
-- `~/.claude/claude-auto-rs-sessions.json` - the session picker's summary cache.
+- `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (0.9.0 renamed it from `claude-auto-rs-sessions.json` and removes the old file on its first write).
 - `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day.
 - `%TEMP%\claude-auto-projects-preview-<pid>.json` - the project cache of a preview run, swept after a day.
 - `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan.

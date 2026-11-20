@@ -4,6 +4,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Changed
+
+- The session picker's summary cache is `claude-auto-sessions.json` again; the first cache write
+  removes the old `claude-auto-rs-sessions.json` beside it (that exact file, nothing else).
+
 ## [0.8.2] — 2026-11-11
 
 ### Fixed

@@ -258,16 +258,40 @@ fn junctioned_roots_share_one_cache_file() {
     let link = t.0.join("accountA");
     std::fs::create_dir_all(&link).unwrap();
     crate::env::win_fs::create_junction(&link.join("projects"), &phys).unwrap();
-    let expect = physical_dir(&t.0.join("physical")).join("claude-auto-rs-sessions.json");
+    let expect = physical_dir(&t.0.join("physical")).join("claude-auto-sessions.json");
     assert_eq!(cache_path(&link.join("projects")), expect);
     assert_eq!(cache_path(&phys), expect);
     let plain = t.0.join("plain").join("projects");
     std::fs::create_dir_all(&plain).unwrap();
     assert_eq!(
         cache_path(&plain),
-        physical_dir(&t.0.join("plain")).join("claude-auto-rs-sessions.json")
+        physical_dir(&t.0.join("plain")).join("claude-auto-sessions.json")
     );
     std::fs::remove_dir(link.join("projects")).unwrap();
+}
+
+#[test]
+fn a_write_removes_only_the_old_cache_file() {
+    let t = tmp("legacy");
+    let root = t.0.join("projects");
+    put(&root.join("S"), "a.jsonl", &prompt("p", r"C:\src\p"));
+    let old = put(&t.0, "claude-auto-rs-sessions.json", "{}");
+    let lookalikes = [
+        put(&t.0, "claude-auto-rs-sessions.json.bak", "keep"),
+        put(&t.0, "claude-auto-rs-sessions.json.0123.tmp", "keep"),
+        put(&t.0, "x-claude-auto-rs-sessions.json", "keep"),
+    ];
+    let file = cache_path(&root);
+
+    SessionCache::new(true).list(&root, Scope::All, 0, 10, &file);
+    assert!(old.exists(), "preview writes nothing, so it deletes nothing");
+
+    SessionCache::default().list(&root, Scope::All, 0, 10, &file);
+    assert!(file.exists());
+    assert!(!old.exists(), "the leftover of the old name is removed");
+    for l in &lookalikes {
+        assert!(l.exists(), "only the exact old name goes: {}", l.display());
+    }
 }
 
 #[test]

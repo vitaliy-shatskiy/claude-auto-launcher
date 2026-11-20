@@ -186,8 +186,8 @@ mod tests {
         let root = base.join("second").join("projects");
         let rows = SessionCache::default().list(&root, Scope::All, 0, 40, &cache_path(&root));
         assert_eq!(rows.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(), ["bbbbbbbb"]);
-        assert!(base.join("second").join("claude-auto-rs-sessions.json").exists());
-        assert!(!base.join("work").join("claude-auto-rs-sessions.json").exists());
+        assert!(base.join("second").join("claude-auto-sessions.json").exists());
+        assert!(!base.join("work").join("claude-auto-sessions.json").exists());
         std::fs::remove_dir_all(&base).unwrap();
     }
 
@@ -208,7 +208,7 @@ mod tests {
         let mut term = crate::ui::PreviewTerm::new((100, 30), keys, true);
         let got = run_picker(&mut term, &req).unwrap().unwrap();
         assert_eq!(got.session_id, "s1");
-        assert!(!base.join("claude-auto-rs-sessions.json").exists(), "preview is side-effect-free");
+        assert!(!base.join("claude-auto-sessions.json").exists(), "preview is side-effect-free");
         std::fs::remove_dir_all(&base).unwrap();
     }
 }
