@@ -1,21 +1,32 @@
 //! One streaming byte scan over a whole transcript: the message count and the title records
 //! (`custom-title` from `/rename`, `ai-title`). Both can sit anywhere in a multi-MB file, so the
-//! head and tail reads cannot find them; the summary cache keeps this to once per file change.
+//! head and tail reads cannot find them. The summary cache keeps the scan's state, so a grown
+//! transcript is read only past the last scanned line and an unchanged one not at all.
 //! A record is classified from its raw bytes, parsing JSON only for the small title lines.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::bytes::Regex;
+use serde::{Deserialize, Serialize};
 
 use super::transcript::{clean_text, field, parse_line};
 use crate::config::ps_str;
 
-/// What the scan found. Titles are cleaned; `None` = no such record.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TranscriptScan {
+/// What a scan found up to `offset`, and the file it read: the summary cache keeps it, so the
+/// next scan of a grown transcript reads only the bytes after `offset`. Titles are cleaned;
+/// `None` = no such record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScanState {
+    /// Bytes consumed: always the end of a complete line, so a line still being written is
+    /// read whole next time.
+    pub offset: u64,
+    /// The file's identity: a resume needs both equal (a replaced file starts over).
+    pub created_ms: u64,
+    pub file_id: String,
     /// Every non-sidechain user and assistant message; an assistant message Claude Code wrote
     /// as several lines (one per content block, one message id) counts once.
     pub messages: i64,
@@ -23,6 +34,19 @@ pub(crate) struct TranscriptScan {
     pub custom_title: Option<String>,
     /// The last `ai-title` record (re-emitted every turn; the newest wins).
     pub ai_title: Option<String>,
+    /// The message id of the last assistant line, so a message split over the offset counts once.
+    pub last_assistant_id: Option<String>,
+}
+
+/// One scan's answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Scanned {
+    /// What the file says now, an unfinished last line included.
+    pub found: ScanState,
+    /// The state to resume from: complete lines only.
+    pub resume: ScanState,
+    /// Bytes this scan read.
+    pub read_bytes: u64,
 }
 
 fn bytes_re(p: &str) -> Regex {
@@ -52,12 +76,6 @@ enum Kind {
     Assistant,
     CustomTitle,
     AiTitle,
-}
-
-#[derive(Debug, Default)]
-struct State {
-    scan: TranscriptScan,
-    last_assistant_id: Option<Vec<u8>>,
 }
 
 /// The line's record kind, from the first structural type mark that qualifies.
@@ -96,72 +114,111 @@ fn title_of(line: &[u8], key: &str) -> Option<String> {
     (!t.is_empty()).then_some(t)
 }
 
-fn classify(line: &[u8], st: &mut State) {
+fn classify(line: &[u8], st: &mut ScanState) {
     let Some(kind) = kind_of(line) else { return };
     let head = line.get(..HEAD.min(line.len())).unwrap_or_default();
     match kind {
         Kind::CustomTitle => {
             if let Some(t) = title_of(line, "customTitle") {
-                st.scan.custom_title = Some(t);
+                st.custom_title = Some(t);
             }
         }
         Kind::AiTitle => {
             if let Some(t) = title_of(line, "aiTitle") {
-                st.scan.ai_title = Some(t);
+                st.ai_title = Some(t);
             }
         }
         Kind::User | Kind::Assistant if SIDECHAIN.is_match(head) => {}
         Kind::User => {
-            st.scan.messages += 1;
+            st.messages += 1;
             st.last_assistant_id = None;
         }
         Kind::Assistant => {
-            let id = MESSAGE_ID.captures(head).and_then(|c| c.get(1)).map(|m| m.as_bytes().to_vec());
+            let id = MESSAGE_ID
+                .captures(head)
+                .and_then(|c| c.get(1))
+                .map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned());
             if id.is_none() || id != st.last_assistant_id {
-                st.scan.messages += 1;
+                st.messages += 1;
             }
             st.last_assistant_id = id;
         }
     }
 }
 
-/// Every complete line of `buf` (the last one only when `last`); returns the bytes consumed.
-fn scan_lines(buf: &[u8], last: bool, st: &mut State) -> usize {
+/// Every complete line of `buf`; returns the bytes consumed (through the last newline).
+fn scan_lines(buf: &[u8], st: &mut ScanState) -> usize {
     let mut from = 0;
     for nl in NEWLINE.find_iter(buf) {
         classify(buf.get(from..nl.start()).unwrap_or_default(), st);
         from = nl.end();
     }
-    if last && from < buf.len() {
-        classify(buf.get(from..).unwrap_or_default(), st);
-        return buf.len();
-    }
     from
 }
 
-/// The whole file in 1 MB chunks; a line longer than a chunk is carried until it ends. An
-/// unreadable file scans as empty.
-pub(crate) fn scan_transcript(path: &Path) -> TranscriptScan {
-    let Ok(mut f) = File::open(path) else {
-        return TranscriptScan::default();
-    };
-    let mut st = State::default();
+/// The scan over `r`, positioned at `start.offset`: 1 MB chunks, a line longer than a chunk
+/// carried until it ends. The bytes after the last newline count in `found` but not in `resume`.
+/// A read error ends the scan where it is.
+pub(crate) fn scan_reader(mut r: impl Read, start: ScanState) -> Scanned {
+    let mut st = start;
+    let mut read_bytes = 0u64;
     let mut buf: Vec<u8> = Vec::with_capacity(CHUNK);
     let mut chunk = vec![0u8; CHUNK];
     loop {
-        let n = match f.read(&mut chunk) {
+        let n = match r.read(&mut chunk) {
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => 0,
         };
-        buf.extend_from_slice(chunk.get(..n).unwrap_or_default());
-        let used = scan_lines(&buf, n == 0, &mut st);
-        buf.drain(..used);
         if n == 0 {
             break;
         }
+        read_bytes += u64::try_from(n).unwrap_or(0);
+        buf.extend_from_slice(chunk.get(..n).unwrap_or_default());
+        let used = scan_lines(&buf, &mut st);
+        st.offset += u64::try_from(used).unwrap_or(0);
+        buf.drain(..used);
     }
-    st.scan
+    let resume = st.clone();
+    if !buf.is_empty() {
+        classify(&buf, &mut st);
+    }
+    Scanned {
+        found: st,
+        resume,
+        read_bytes,
+    }
+}
+
+fn created_ms(meta: &std::fs::Metadata) -> u64 {
+    meta.created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0))
+}
+
+/// The transcript scanned from `prior`'s offset when `prior` is this same file (identity equal,
+/// size not below the offset), else from the start. An unreadable file scans as empty.
+pub(crate) fn scan_transcript(path: &Path, prior: Option<&ScanState>) -> Scanned {
+    let Ok(mut f) = File::open(path) else {
+        return Scanned::default();
+    };
+    let Ok(meta) = f.metadata() else {
+        return Scanned::default();
+    };
+    let fresh = ScanState {
+        created_ms: created_ms(&meta),
+        file_id: crate::env::win_fs::file_id(path).unwrap_or_default(),
+        ..ScanState::default()
+    };
+    let start = prior
+        .filter(|p| !fresh.file_id.is_empty() && p.file_id == fresh.file_id && p.created_ms == fresh.created_ms && p.offset <= meta.len())
+        .cloned()
+        .unwrap_or(fresh);
+    if start.offset > 0 && f.seek(SeekFrom::Start(start.offset)).is_err() {
+        return Scanned::default();
+    }
+    scan_reader(f, start)
 }
 
 #[cfg(test)]

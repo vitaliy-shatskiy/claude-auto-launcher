@@ -44,8 +44,8 @@ const SIDE: &str =
 fn counts_every_user_and_assistant_message_of_the_fixture() {
     // counted.jsonl: 5 user records (prompts, a tool result, a meta) and 2 assistant replies;
     // the sidechain prompt is not this session's.
-    assert_eq!(scan_transcript(&fixture("counted.jsonl")).messages, 7);
-    assert_eq!(scan_transcript(&fixture("with-sidechain.jsonl")).messages, 2);
+    assert_eq!(scan_transcript(&fixture("counted.jsonl"), None).found.messages, 7);
+    assert_eq!(scan_transcript(&fixture("with-sidechain.jsonl"), None).found.messages, 2);
 }
 
 #[test]
@@ -62,7 +62,11 @@ fn an_assistant_message_split_over_lines_counts_once_and_nested_types_never() {
         assistant("m2", r#"{"type":"text","text":"a resent id after a user is a new message"}"#),
     ];
     let (_t, p) = transcript("split", &lines.join("\n"));
-    assert_eq!(scan_transcript(&p).messages, 6, "2 prompts + 1 tool result + m1 + m2 + m2 again");
+    assert_eq!(
+        scan_transcript(&p, None).found.messages,
+        6,
+        "2 prompts + 1 tool result + m1 + m2 + m2 again"
+    );
 }
 
 /// A long transcript: `n` prompt lines of ~1 KB, `extra` lines spliced in at their indexes.
@@ -122,7 +126,7 @@ fn a_title_line_straddling_a_chunk_boundary_is_read_whole() {
     let text = format!("{filler}\n{line}\n{USER}");
     assert!(text.find(&line).unwrap() < CHUNK && text.find(&line).unwrap() + line.len() > CHUNK);
     let (_t, p) = transcript("straddle", &text);
-    let s = scan_transcript(&p);
+    let s = scan_transcript(&p, None).found;
     assert_eq!(s.custom_title.as_deref(), Some("across the boundary"));
     assert_eq!(s.messages, 1, "the last line has no newline and still counts");
 }
@@ -131,5 +135,108 @@ fn a_title_line_straddling_a_chunk_boundary_is_read_whole() {
 fn hostile_title_text_is_cleaned_and_an_empty_one_ignored() {
     let text = [custom("good"), custom("\\u001b[31mred\\u0007 bell"), custom("   ")].join("\n");
     let (_t, p) = transcript("hostile", &text);
-    assert_eq!(scan_transcript(&p).custom_title.as_deref(), Some("[31mred bell"));
+    assert_eq!(scan_transcript(&p, None).found.custom_title.as_deref(), Some("[31mred bell"));
+}
+
+/// Counts what passes through: the bytes a scan really read.
+struct Counting<R> {
+    inner: R,
+    read: u64,
+}
+
+impl<R: Read> Read for Counting<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read += u64::try_from(n).unwrap();
+        Ok(n)
+    }
+}
+
+fn append(p: &Path, text: &str) {
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(p)
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+}
+
+/// The fields a resumed scan must agree on with a full one.
+fn answer(s: &ScanState) -> (i64, Option<String>, Option<String>) {
+    (s.messages, s.custom_title.clone(), s.ai_title.clone())
+}
+
+fn len(s: &str) -> u64 {
+    u64::try_from(s.len()).unwrap()
+}
+
+#[test]
+fn a_grown_transcript_is_read_only_past_the_last_scanned_line() {
+    let head = [USER.to_owned(), assistant("m1", r#"{"type":"thinking"}"#), custom("first name")].join("\n") + "\n";
+    let (_t, p) = transcript("grow", &head);
+    let first = scan_transcript(&p, None);
+    assert_eq!(first.read_bytes, len(&head));
+    assert_eq!(first.resume.offset, first.read_bytes);
+    // The same message continues past the offset: it still counts once.
+    let tail = [assistant("m1", r#"{"type":"text","text":"x"}"#), ai("later ai"), USER.to_owned()].join("\n") + "\n";
+    append(&p, &tail);
+    let again = scan_transcript(&p, Some(&first.resume));
+    assert_eq!(again.read_bytes, len(&tail), "only the appended bytes");
+    assert_eq!(
+        answer(&again.found),
+        answer(&scan_transcript(&p, None).found),
+        "a full scan's answer"
+    );
+    assert_eq!(answer(&again.found), (3, Some("first name".into()), Some("later ai".into())));
+    let still = scan_transcript(&p, Some(&again.resume));
+    assert_eq!(still.read_bytes, 0, "an unchanged file reads nothing");
+}
+
+#[test]
+fn the_injected_reader_sees_only_the_bytes_after_the_offset() {
+    let text = [USER.to_owned(), USER.to_owned(), custom("t")].join("\n") + "\n";
+    let start = ScanState {
+        offset: len(USER) + 1,
+        messages: 1,
+        ..ScanState::default()
+    };
+    let rest = text.as_bytes().get(USER.len() + 1..).unwrap();
+    let mut r = Counting { inner: rest, read: 0 };
+    let s = scan_reader(&mut r, start);
+    assert_eq!(r.read, u64::try_from(rest.len()).unwrap());
+    assert_eq!((s.found.messages, s.resume.offset), (2, len(&text)));
+}
+
+#[test]
+fn a_shrunk_or_replaced_file_is_scanned_from_the_start() {
+    let long = [USER.to_owned(), USER.to_owned(), USER.to_owned()].join("\n") + "\n";
+    let (_t, p) = transcript("shrink", &long);
+    let before = scan_transcript(&p, None).resume;
+    std::fs::write(&p, format!("{USER}\n")).unwrap();
+    let shrunk = scan_transcript(&p, Some(&before));
+    assert_eq!((shrunk.found.messages, shrunk.read_bytes), (1, len(USER) + 1));
+
+    let before = scan_transcript(&p, None).resume;
+    std::fs::remove_file(&p).unwrap();
+    let replaced = format!("{long}{}\n", custom("new file"));
+    std::fs::write(&p, &replaced).unwrap();
+    let s = scan_transcript(&p, Some(&before));
+    assert_ne!(s.resume.file_id, before.file_id, "a new file under the same name");
+    assert_eq!(s.read_bytes, len(&replaced), "read from the start");
+    assert_eq!(answer(&s.found), (3, Some("new file".into()), None));
+}
+
+#[test]
+fn a_line_cut_by_the_old_end_of_file_is_read_whole_next_time() {
+    let line = custom("half and half");
+    let (cut, rest) = line.split_at(line.len() / 2);
+    let (_t, p) = transcript("cut", &format!("{USER}\n{cut}"));
+    let first = scan_transcript(&p, None);
+    assert_eq!(first.resume.offset, len(USER) + 1, "the offset stops at the last newline");
+    assert_eq!(first.found.custom_title, None, "half a record is no title");
+    append(&p, &format!("{rest}\n{USER}\n"));
+    let again = scan_transcript(&p, Some(&first.resume));
+    assert_eq!(answer(&again.found), (2, Some("half and half".into()), None));
+    assert_eq!(again.read_bytes, len(&line) + 1 + len(USER) + 1, "the cut line again, whole");
 }

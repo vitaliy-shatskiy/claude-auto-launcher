@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::scan::scan_transcript;
+use super::scan::{ScanState, scan_transcript};
 use super::transcript::{
     MAX_BYTES, clean_text, collapse_fences, field, head_lines, is_headless, parse_line, prompt_detail, record_text, slug_names, tail_lines,
     user_prompt,
@@ -55,6 +55,8 @@ pub struct Session {
     pub last_assistant: String,
     pub recent: Vec<Message>,
     pub headless: bool,
+    /// The title scan's resume point: the next summary of this file reads only past it.
+    pub scan: ScanState,
     /// The other account whose store holds this session; empty for the launching one. Depends on
     /// who launches, so it never enters the summary cache.
     #[serde(skip)]
@@ -91,7 +93,19 @@ pub(crate) fn project_path_from_transcript(dir: &Path) -> Option<String> {
 
 /// `Get-ClaudeSessionSummary`. `pre_filter` false parses every line (the suite's control); the
 /// prompt count reads at most `max_bytes` (`MAX_BYTES`; a test passes a small cap).
+#[cfg(test)]
 pub(crate) fn summarize(path: &Path, project_path: Option<&str>, pre_filter: bool, max_bytes: usize) -> Option<Session> {
+    summarize_from(path, project_path, pre_filter, max_bytes, None)
+}
+
+/// `summarize`, the title scan resumed from an earlier summary's `scan` of the same file.
+fn summarize_from(
+    path: &Path,
+    project_path: Option<&str>,
+    pre_filter: bool,
+    max_bytes: usize,
+    prior: Option<&ScanState>,
+) -> Option<Session> {
     let meta = std::fs::metadata(path).ok()?;
     let session_id = path.file_stem()?.to_string_lossy().into_owned();
     let slug = path.parent()?.file_name()?.to_string_lossy().into_owned();
@@ -120,15 +134,17 @@ pub(crate) fn summarize(path: &Path, project_path: Option<&str>, pre_filter: boo
         .find_map(|r| user_prompt(&r));
     let (last_user, last_assistant, recent) = walk_tail(path, pre_filter);
     let (count, capped) = prompt_detail(path, max_bytes);
-    let scan = scan_transcript(path);
+    let scanned = scan_transcript(path, prior);
     let first = first
         .or_else(|| last_user.clone())
         .unwrap_or_else(|| format!("(no prompt) {}", short_id(&session_id)));
+    let found = scanned.found;
     s.prompt_count = count;
     s.prompt_count_capped = capped;
-    s.message_count = scan.messages;
+    s.message_count = found.messages;
     s.first_prompt = clean_text(&first);
-    s.title = scan.custom_title.or(scan.ai_title).unwrap_or_else(|| s.first_prompt.clone());
+    s.title = found.custom_title.or(found.ai_title).unwrap_or_else(|| s.first_prompt.clone());
+    s.scan = scanned.resume;
     s.last_user = clean_text(last_user.as_deref().unwrap_or(""));
     s.last_assistant = clean_text(last_assistant.as_deref().unwrap_or(""));
     s.recent = recent
@@ -374,6 +390,7 @@ impl SessionCache {
         let physical = physical_dir(root).to_string_lossy().into_owned();
         let mut dirs: HashMap<PathBuf, Option<String>> = HashMap::new();
         let mut fresh = BTreeMap::new();
+        let mut superseded: Vec<String> = Vec::new();
         let mut out = Vec::new();
         for f in window {
             let Ok(meta) = std::fs::metadata(f) else { continue };
@@ -384,7 +401,8 @@ impl SessionCache {
                 }
                 _ => full.clone(),
             };
-            let key = format!("{version}|{key_path}|{}|{}", meta.modified().map_or(0, ticks), meta.len());
+            let same_file = format!("{version}|{key_path}|");
+            let key = format!("{same_file}{}|{}", meta.modified().map_or(0, ticks), meta.len());
             let dir = f.parent().map(Path::to_path_buf).unwrap_or_default();
             let project_path = dirs
                 .entry(dir.clone())
@@ -396,11 +414,18 @@ impl SessionCache {
                 s.project = clean_text(&project_path.as_deref().map_or_else(|| slug_names(&s.slug).0, leaf));
                 s
             } else {
-                let Some(s) = summarize(f, project_path.as_deref(), true, MAX_BYTES) else {
+                // A changed file: its last summary's scan resumes where it stopped.
+                let prior = cache
+                    .iter()
+                    .filter(|(k, _)| k.starts_with(&same_file))
+                    .map(|(_, s)| &s.scan)
+                    .max_by_key(|scan| scan.offset);
+                let Some(s) = summarize_from(f, project_path.as_deref(), true, MAX_BYTES, prior) else {
                     continue;
                 };
                 s
             };
+            superseded.push(same_file);
             fresh.insert(key, summary.clone());
             out.push(summary);
         }
@@ -409,6 +434,8 @@ impl SessionCache {
             self.write(cache_file, &fresh);
         } else {
             let mut merged = cache;
+            // One entry per file: a grown transcript's older summary goes.
+            merged.retain(|k, _| !superseded.iter().any(|p| k.starts_with(p.as_str())));
             merged.extend(fresh);
             self.write(cache_file, &merged);
         }
