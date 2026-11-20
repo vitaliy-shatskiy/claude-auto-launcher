@@ -157,13 +157,7 @@ fn iso_ms(s: &str) -> Option<i64> {
     if s.get(10..11) != Some("T") || !(1..=12).contains(&mo) {
         return None;
     }
-    // Howard Hinnant's days_from_civil.
-    let y = if mo <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
+    let days = crate::sys::days_from_civil(i32::try_from(y).ok()?, u32::try_from(mo).ok()?, u32::try_from(d).ok()?);
     Some(((days * 24 + h) * 60 + mi) * 60_000 + sec * 1000)
 }
 
