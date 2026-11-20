@@ -120,6 +120,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   mismatch, a locked folder); it now retries that release a day later and repeats the reason.
 - Self-update `auto` dropped a download still running when the screens closed, so each start
   downloaded again; the check now lives until claude exits.
+- The picker's chat dropped `*` and `_` from paths and globs taken for emphasis
+  (`src/**/*.rs`, `__init__.py`, `\__pycache__\`); next to `/`, `\` or `.` they stay.
 
 ## [0.8.2] — 2026-11-11
 

@@ -17,13 +17,15 @@ static FENCE: LazyLock<Regex> = LazyLock::new(|| re(r"```[\w+.#-]* ?"));
 static CODE: LazyLock<Regex> = LazyLock::new(|| re(r"`([^`]+)`"));
 static LINK: LazyLock<Regex> = LazyLock::new(|| re(r"!?\[([^\]]+)\]\([^)\s]*\)"));
 /// Emphasis needs a non-word neighbour outside and no space inside, so `2*3`, `a_b_c`, `*.rs`
-/// and a lone `*` are not markup. Each has the same three groups: before, inside, after.
+/// and a lone `*` are not markup; `/`, `\` and `.` count as word characters there, so paths and
+/// globs (`src/**/*.rs`, `__init__.py`, `\__pycache__\`) stay. Each has the same three groups:
+/// before, inside, after.
 static EMPHASIS: LazyLock<[Regex; 4]> = LazyLock::new(|| {
     [
-        re(r"(^|[^\w*])\*\*([^\s*]|[^\s*].*?\S)\*\*($|[^\w*])"),
-        re(r"(^|[^\w_])__([^\s_]|[^\s_].*?\S)__($|[^\w_])"),
-        re(r"(^|[^\w*])\*([^\s*]|[^\s*][^*]*?\S)\*($|[^\w*])"),
-        re(r"(^|[^\w_])_([^\s_]|[^\s_][^_]*?\S)_($|[^\w_])"),
+        re(r"(^|[^\w*/\\.])\*\*([^\s*]|[^\s*].*?\S)\*\*($|[^\w*/\\.])"),
+        re(r"(^|[^\w_/\\.])__([^\s_]|[^\s_].*?\S)__($|[^\w_/\\.])"),
+        re(r"(^|[^\w*/\\.])\*([^\s*]|[^\s*][^*]*?\S)\*($|[^\w*/\\.])"),
+        re(r"(^|[^\w_/\\.])_([^\s_]|[^\s_][^_]*?\S)_($|[^\w_/\\.])"),
     ]
 });
 
@@ -95,6 +97,10 @@ mod tests {
             ("2*3 = 6 and 2 * 3 * 4", "2*3 = 6 and 2 * 3 * 4"),
             ("done - fixed - shipped", "done - fixed - shipped"),
             ("C# and #5", "C# and #5"),
+            ("src/**/*.rs and **/*.toml", "src/**/*.rs and **/*.toml"),
+            ("edit __init__.py now", "edit __init__.py now"),
+            (r"C:\proj\__pycache__\x.pyc", r"C:\proj\__pycache__\x.pyc"),
+            (r"C:\proj\_tmp_ dir", r"C:\proj\_tmp_ dir"),
         ];
         for (input, want) in cases {
             assert_eq!(plain(input), want, "input: {input}");
