@@ -3,26 +3,25 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-use crate::background::{Background, Left};
+use crate::background::Background;
 use crate::config::{PathCtx, ProjectScreen};
-use crate::frame::{self, FooterLight, Frame, Hint, RowMap, Style};
+use crate::frame::Style;
 use crate::input::console::ConsoleInput;
-use crate::input::{Event, KeyPress, is_hotkey, vk};
+use crate::input::{KeyPress, is_hotkey};
 use crate::launch::LaunchState;
 use crate::launch::PROJECT_ACTION;
 use crate::launch::launch_mode;
 use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore};
-use crate::layout::split_text_lines;
 use crate::log::Logger;
 use crate::log_data;
 use crate::out;
 use crate::prefs;
-use crate::timing::Timings;
 use crate::types::{LabelDefaults, VersionInfo};
-use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{ConsoleTerm, PreviewTerm, Term, UiStop, parse_preview_keys, parse_preview_size};
-use crate::{env, maintenance, plugins, projects, sessions, sys, theme};
+use crate::{env, maintenance, projects, sessions, sys, theme};
 
+use super::plugins::{launch_key, project_entries, session_entries};
+use super::waits::{confirm_held, open_maintenance, wait_on_screen};
 use super::{Run, UiEnd, UiOutcome, now_ms, var};
 
 /// The UI: launch screen, project screen, held-session warning, picker - until a launch.
@@ -133,7 +132,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let mut rows_store = ConfigRows { run };
     // Plugin messages and warnings met on the screens, printed once the console is back.
     let plugin_lines: RefCell<Vec<String>> = RefCell::new(Vec::new());
-    let mut plugin_projects: Option<Vec<plugins::projects::Entry>> = None;
+    let mut plugin_projects: Option<Vec<crate::plugins::projects::Entry>> = None;
 
     let outcome = loop {
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
@@ -145,17 +144,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
                 });
                 return true;
             }
-            if let Some((p, key)) = plugins::action::find(&run.plugins, "launch", k) {
-                if !run.preview {
-                    status(t, false, "running plugin action...")();
-                    let context = serde_json::json!({ "screen": "launch", "cwd": run.ctx.cwd.to_string_lossy() });
-                    plugin_lines
-                        .borrow_mut()
-                        .extend(plugins::action::run(&run.plugins, p, key, &context, &plugins::run::Process));
-                }
-                return true;
-            }
-            false
+            launch_key(run, k, t, &plugin_lines)
         };
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
             .with_rows(&mut rows_store)
@@ -169,17 +158,8 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             &run.logger,
             status(term.as_mut(), run.preview, "loading projects..."),
         );
-        let extra = plugin_projects.get_or_insert_with(|| {
-            let mut w = Vec::new();
-            let found = if run.preview {
-                Vec::new()
-            } else {
-                plugins::projects::collect(&run.plugins, &plugins::run::Process, &mut w)
-            };
-            plugin_lines.borrow_mut().extend(w);
-            found
-        });
-        let merged_projects = plugins::projects::merge(registry_list, extra);
+        let extra = plugin_projects.get_or_insert_with(|| project_entries(run, &plugin_lines));
+        let merged_projects = crate::plugins::projects::merge(registry_list, extra);
         let project_list: &[projects::Project] = &merged_projects;
         // Deferred from before the launch screen: the rule reads only the cwd and the project the
         // final tab remembers, so applying it once here equals applying it on every tab switch.
@@ -267,16 +247,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             preview: run.preview,
         };
         let project = state.project.clone();
-        let plugin_sessions = |slugs: &[String]| {
-            if run.preview {
-                return Vec::new();
-            }
-            let mut w = Vec::new();
-            let scope = if slugs.is_empty() { "" } else { project.as_str() };
-            let found = plugins::sessions::collect(&run.plugins, scope, &plugins::run::Process, &mut w);
-            plugin_lines.borrow_mut().extend(w);
-            found
-        };
+        let plugin_sessions = |slugs: &[String]| session_entries(run, &project, slugs, &plugin_lines);
         if let Some(picked) = sessions::run_picker_with(term.as_mut(), &req, &plugin_sessions)? {
             let holder = if picked.fork {
                 None
@@ -339,71 +310,6 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     Ok(outcome)
 }
 
-/// Claude never starts mid-update: a launch waits for the check (`WinHTTP` allows 5 s per phase,
-/// four phases; `claude update` has no limit). A quit leaves a check that is only talking to the
-/// network and waits only for a running install. Either wait is `wait:update`; `left` (Esc,
-/// Ctrl+C) ends it unread.
-pub(super) fn wait_for_update(
-    launching: bool,
-    update: &mut maintenance::UpdateWatch,
-    tm: &Timings,
-    on_slow: impl FnOnce(),
-    left: impl FnMut() -> bool,
-) -> Result<(), Left> {
-    let waited = if launching {
-        update.finish(on_slow, left)
-    } else {
-        update.quit_or_leave(on_slow, left)
-    }?;
-    if let Some(w) = waited {
-        tm.add(&["wait", "update"], None, w.start, w.end, None);
-    }
-    Ok(())
-}
-
-/// `wait_for_update` on the console: the status line once it outlasts `SLOW`, then Esc or Ctrl+C
-/// leaves it (the raw console reads Ctrl+C as a key, so nothing else could).
-pub(super) fn wait_on_screen(
-    launching: bool,
-    update: &mut maintenance::UpdateWatch,
-    tm: &Timings,
-    term: &mut dyn Term,
-    preview: bool,
-) -> Result<(), Left> {
-    let term = RefCell::new(term);
-    wait_for_update(
-        launching,
-        update,
-        tm,
-        || status(&mut **term.borrow_mut(), preview, UPDATE_STATUS)(),
-        || leave_key(&mut **term.borrow_mut()),
-    )
-}
-
-/// The wait's status line: Esc leaves even a running install, which finishes on its own.
-const UPDATE_STATUS: &str = "checking for a Claude Code update... (esc: quit; claude update keeps running in the background)";
-
-/// One poll of the console: Esc or Ctrl+C. Other input during the wait is dropped.
-fn leave_key(term: &mut dyn Term) -> bool {
-    let size = term.size();
-    matches!(term.wait(size), Ok(Event::Key(k)) if k.is(vk::ESCAPE) || k.is_ctrl(vk::C))
-}
-
-/// `u`: maintenance opens only once the background check is done, so its update keys never run
-/// beside the check's own `claude update`. Leaving the wait goes back to the launch screen; the
-/// check runs on and the next Enter or `u` waits for it again.
-pub(super) fn open_maintenance(
-    update: &RefCell<maintenance::UpdateWatch>,
-    tm: &Timings,
-    term: &mut dyn Term,
-    preview: bool,
-    open: impl FnOnce(&mut dyn Term),
-) {
-    if wait_on_screen(true, &mut update.borrow_mut(), tm, term, preview).is_ok() {
-        open(term);
-    }
-}
-
 /// The `default (X)` labels: the canonical root's model and advisor, every account's defaults.
 pub(super) fn label_defaults(canonical_root: &str, accounts: &[(String, String)]) -> LabelDefaults {
     let settings = |root: &str| Path::new(root).join("settings.json");
@@ -419,7 +325,7 @@ pub(super) fn label_defaults(canonical_root: &str, accounts: &[(String, String)]
 
 /// A one-line frame for a wait after Enter that outlasts `background::SLOW`; none in preview,
 /// whose printed frames a harness compares.
-fn status<'t>(term: &'t mut dyn Term, preview: bool, text: &'t str) -> impl FnOnce() + 't {
+pub(super) fn status<'t>(term: &'t mut dyn Term, preview: bool, text: &'t str) -> impl FnOnce() + 't {
     move || {
         if !preview {
             term.paint(&[String::new(), format!("  {text}")]);
@@ -535,63 +441,4 @@ fn trace_path(ctx: &PathCtx) -> PathBuf {
     }
     let d = sys::local_now().map_or_else(String::new, |t| format!("{:04}-{:02}-{:02}", t.year, t.month, t.day));
     dir.join(format!("input-{d}-{}.log", std::process::id()))
-}
-
-/// `Confirm-HeldSession`: Enter or `[enter] go on` = go on, Esc/Ctrl+C or `[esc] back` = back;
-/// nothing held = go on.
-pub(super) fn confirm_held(term: &mut dyn Term, holder: Option<&str>, style: Style) -> Result<bool, UiStop> {
-    let Some(h) = holder else { return Ok(true) };
-    let mut screen = HeldConfirm {
-        warning: sessions::held_warning(h),
-        style,
-        cursor: Cursor::at(0),
-    };
-    Ok(crate::ui::screen_loop::run(&mut screen, term)?.unwrap_or(false))
-}
-
-/// The held-session warning: the text, then the two buttons as its footer.
-struct HeldConfirm {
-    warning: String,
-    style: Style,
-    cursor: Cursor,
-}
-
-impl Screen for HeldConfirm {
-    type Output = bool;
-
-    fn name(&self) -> &'static str {
-        "held"
-    }
-
-    fn cursor(&mut self) -> &mut Cursor {
-        &mut self.cursor
-    }
-
-    /// The buttons placed first, the warning wrapped into what is left.
-    fn draw(&mut self, (width, height): (usize, usize)) -> Frame {
-        let g = theme::glyphs(self.style.ascii);
-        let fw = frame::frame_width(width);
-        let hints = [Hint::key("enter", "go on", "Enter"), Hint::key("esc", "back", "Escape")];
-        let footer = frame::new_hint_footer(&hints, &g, fw, !self.style.color);
-        // 2 = the blank lines above and below the warning.
-        let room = height.saturating_sub(footer.lines.len() + 2).max(1);
-        let mut lines = vec![String::new()];
-        lines.extend(
-            split_text_lines(&self.warning, fw.saturating_sub(2).max(1), room, self.style.ascii)
-                .into_iter()
-                .map(|l| format!("  {l}")),
-        );
-        lines.push(String::new());
-        let light = FooterLight {
-            hover: frame::footer_hover(&footer, self.cursor.hover),
-            selected: Vec::new(),
-        };
-        let mut map = RowMap::default();
-        let lines = frame::complete_frame(&lines, &footer, fw, self.style, &|l: &str, _| l.to_owned(), &light, &mut map);
-        Frame { lines, map }
-    }
-
-    fn enter(&mut self) -> Option<Flow<bool>> {
-        Some(Flow::Done(Some(true)))
-    }
 }

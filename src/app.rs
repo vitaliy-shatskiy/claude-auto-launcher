@@ -2,11 +2,14 @@
 //! (launch screen -> project screen -> picker), profile, secrets, sharing, hooks, MCP, exec.
 
 mod headless;
+mod plugins;
 mod prompts;
+mod report;
 mod screens;
+mod waits;
 
 use std::io::IsTerminal as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use serde_json::{Value, json};
@@ -23,10 +26,12 @@ use crate::prefs;
 use crate::remote;
 use crate::timing::{self, SpanId, Timings};
 use crate::types::ChildEnv;
-use crate::{env, invocation, plugins, sys};
+use crate::{env, invocation, sys};
 
+use plugins::{post_launch, pre_launch};
 use prompts::fallback_prompts;
 pub use prompts::{account_prefixes, resolve_account_answer};
+use report::{log_start, preview_banner, preview_summary, print_timings};
 use screens::run_ui;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -82,7 +87,7 @@ struct Run {
     /// `--launcher-run`, checked: this stands in for the screen's outcome.
     headless: Option<headless::HeadlessRun>,
     /// The described plugins (config `plugins`).
-    plugins: plugins::Plugins,
+    plugins: crate::plugins::Plugins,
 }
 
 /// The whole launcher. Returns the process exit code.
@@ -127,13 +132,7 @@ pub fn run(args: Vec<String>) -> i32 {
     if cfg.project_screen == config::ProjectScreen::OnDemand {
         roster.add_action_row();
     }
-    // Preview and `--launcher-options` start no process: they see only cached descriptions.
-    let (plugins, plugin_warnings) = {
-        let _s = timings.scope(&["plugins"]);
-        let cache = plugins::cache_path(&cfg.path);
-        plugins::load(&cfg.plugins, cache.as_deref(), &plugins::run::Process, !wants_options && !preview)
-    };
-    plugins.add_rows(&mut roster);
+    let (plugins, plugin_warnings) = plugins::load(&cfg, &timings, &mut roster, !wants_options && !preview);
     if wants_options {
         // stderr: stdout is the one line of JSON the client parses.
         for w in &cfg.warnings {
@@ -190,22 +189,6 @@ fn refuse(why: &str) -> i32 {
     2
 }
 
-/// `--timings [--days N]`: the table, then exit without the UI.
-fn print_timings(log_root: &Path, days: Result<u32, String>) -> i32 {
-    let days = match days {
-        Ok(d) => d,
-        Err(e) => {
-            out::err_line(&format!("claude-auto: {e}"));
-            return 1;
-        }
-    };
-    let today = sys::local_now().map_or((1970, 1, 1), |t| (i64::from(t.year), i64::from(t.month), i64::from(t.day)));
-    for l in timing::summary::report(&timing::summary::log_files(log_root, today, days)) {
-        out::line(&l, Fg::Plain);
-    }
-    0
-}
-
 fn ms(run: &Run) -> u64 {
     u64::try_from(run.started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
@@ -216,33 +199,6 @@ fn ui_stop_type(e: crate::ui::UiStop) -> &'static str {
         crate::ui::UiStop::KeysExhausted => "Exhausted",
         crate::ui::UiStop::ConsoleLost => "ConsoleLost",
     }
-}
-
-fn log_start(run: &Run, input_redirected: bool, output_redirected: bool) {
-    log::prune(&run.logger.root, 14);
-    let env_names = [
-        "TERMINAL_EMULATOR",
-        "TERM_PROGRAM",
-        "WT_SESSION",
-        "CLAUDE_CODE_ENTRYPOINT",
-        "CLAUDE_NO_ROAM",
-        "CLAUDE_CODE_SSE_PORT",
-    ];
-    let env_map: serde_json::Map<String, Value> = env_names.iter().map(|n| ((*n).to_owned(), json!(var(n)))).collect();
-    run.logger.write(
-        "start",
-        log_data! {
-            "cwd" => run.ctx.cwd.to_string_lossy(),
-            "moduleMs" => 0,
-            "args" => run.args,
-            "inputRedirected" => input_redirected,
-            "outputRedirected" => output_redirected,
-            "psVersion" => format!("rust {VERSION}"),
-            "configDir" => var("CLAUDE_CONFIG_DIR"),
-            "env" => env_map,
-            "parents" => log::parent_chain(6),
-        },
-    );
 }
 
 #[expect(clippy::too_many_lines, reason = "the launch order reads top to bottom as in claude-auto.ps1")]
@@ -529,95 +485,6 @@ fn launch(run: &Run) -> i32 {
         .write("exit", log_data! { "via" => "claude", "code" => code, "ms" => ms(run) });
     post_launch(run, ui.as_ref(), code);
     code
-}
-
-/// `preLaunch`: its variables into the session's environment, its arguments for claude; a
-/// `cancel` is the exit code of a launch that does not happen.
-fn pre_launch(run: &Run, o: &UiOutcome, child: &mut ChildEnv) -> Result<Vec<String>, i32> {
-    let mut warnings = Vec::new();
-    let choices: Vec<Value> = (0..run.plugins.list.len())
-        .map(|i| run.plugins.choice(i, &o.state, o.resume_id.as_deref()))
-        .collect();
-    let choice = |i: usize| choices.get(i).cloned().unwrap_or(Value::Null);
-    let outcome = plugins::pre_launch::run(&run.plugins, &choice, &plugins::run::Process, &mut warnings);
-    for w in &warnings {
-        out::line(&format!("  {w}"), Fg::DarkYellow);
-    }
-    match outcome {
-        plugins::pre_launch::Outcome::Go(extra) => {
-            for (k, v) in &extra.env {
-                child.set(k, v);
-            }
-            Ok(extra.args)
-        }
-        plugins::pre_launch::Outcome::Cancel { plugin, reason } => {
-            let why = if reason.is_empty() { String::new() } else { format!(": {reason}") };
-            out::line(&format!("  launch cancelled by plugin {plugin}{why}"), Fg::Red);
-            run.logger
-                .write("cancelled", log_data! { "ms" => ms(run), "plugin" => plugin, "reason" => reason });
-            Err(1)
-        }
-    }
-}
-
-/// `postLaunch` once claude has ended; its warnings are the last lines.
-fn post_launch(run: &Run, ui: Option<&UiOutcome>, code: i32) {
-    let Some(o) = ui else { return };
-    let choices: Vec<Value> = (0..run.plugins.list.len())
-        .map(|i| run.plugins.choice(i, &o.state, o.resume_id.as_deref()))
-        .collect();
-    let choice = |i: usize| choices.get(i).cloned().unwrap_or(Value::Null);
-    for w in plugins::post_launch::run(&run.plugins, &choice, code, &plugins::run::Process) {
-        out::line(&format!("  {w}"), Fg::DarkYellow);
-    }
-}
-
-fn preview_banner(title: &str) {
-    out::line("", Fg::Plain);
-    out::line(title, Fg::Cyan);
-    out::line(
-        "in an interactive session this returns to the launch screen; preview cannot loop because the scripted key list is finite",
-        Fg::Plain,
-    );
-}
-
-#[expect(clippy::too_many_arguments, reason = "one line per preview field")]
-fn preview_summary(
-    choice: &str,
-    child: &ChildEnv,
-    remote: bool,
-    qr: bool,
-    stop: bool,
-    launch_argv: &[String],
-    claude: &Path,
-    argv: &[String],
-) {
-    let ps_bool = |b: bool| if b { "True" } else { "False" };
-    out::line("", Fg::Plain);
-    out::line("--- preview, nothing launched ---", Fg::Cyan);
-    out::line(&format!("account            : {choice}"), Fg::Plain);
-    out::line(
-        &format!("CLAUDE_CONFIG_DIR  : {}", child.effective("CLAUDE_CONFIG_DIR").unwrap_or_default()),
-        Fg::Plain,
-    );
-    out::line(
-        &format!(
-            "remote             : {}   qr={}   stopServer={}",
-            ps_bool(remote),
-            ps_bool(qr),
-            ps_bool(stop)
-        ),
-        Fg::Plain,
-    );
-    let advisor = if child.effective("CLAUDE_CODE_DISABLE_ADVISOR_TOOL").as_deref() == Some("1") {
-        "disabled (CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1)"
-    } else {
-        "enabled"
-    };
-    out::line(&format!("advisor tool       : {advisor}"), Fg::Plain);
-    out::line(&format!("launch args        : {}", launch_argv.join(" ")), Fg::Plain);
-    out::line(&format!("command            : {} {}", claude.display(), argv.join(" ")), Fg::Plain);
-    out::line(&format!("argv count         : {}", argv.len()), Fg::Plain);
 }
 
 #[cfg(test)]
