@@ -4,8 +4,8 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use super::PickerView;
 use crate::frame::{Footer, FooterLight, Frame, RowMap, add_hint_color, footer_hover, format_body_line};
-use crate::list::{add_hover_span_at, add_picker_color};
-use crate::theme::Glyphs;
+use crate::list::add_hover_span_at;
+use crate::theme::{add_select_band_color, add_tone_color};
 
 /// Where a hover band goes on one memoised row: line, first character, length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +28,7 @@ pub struct Memo {
     pub(super) footer_index: usize,
     pub(super) width: usize,
     pub(super) map: RowMap,
+    pub(super) selected: i32,
 }
 
 pub(super) fn memo_key(v: &PickerView<'_>) -> u64 {
@@ -43,27 +44,33 @@ pub(super) fn memo_key(v: &PickerView<'_>) -> u64 {
         v.project_name,
     )
         .hash(&mut h);
-    (v.clock.now_ms.div_euclid(60_000), v.clock.offset_minutes).hash(&mut h);
+    (v.clock.now_ms.div_euclid(60_000), v.clock.offset_minutes, v.chat).hash(&mut h);
     for s in v.sessions {
         s.hash(&mut h);
     }
     h.finish()
 }
 
-pub(super) fn painter(g: Glyphs) -> impl Fn(&str, bool) -> String {
-    move |l: &str, c: bool| add_picker_color(l, c, &g)
+/// The picker's body painter: tone spans, then the selected-row band (the hover band comes last,
+/// in `format_body_line`).
+pub(super) fn painter() -> impl Fn(&str, bool) -> String {
+    |l: &str, c: bool| add_select_band_color(&add_tone_color(l, c), c)
 }
 
 impl Memo {
     /// The memoised frame repainted for a new hover, or `None` to rebuild.
-    pub(super) fn hit(&mut self, key: u64, v: &PickerView<'_>, g: Glyphs) -> Option<Frame> {
+    pub(super) fn hit(&mut self, key: u64, v: &PickerView<'_>) -> Option<Frame> {
         if self.key != key || self.painted.is_empty() {
             return None;
         }
-        let paint = painter(g);
+        let paint = painter();
         let mut painted = self.painted.clone();
         if self.hover_row != v.hover_row {
             for idx in [self.hover_row, v.hover_row] {
+                // The selected row keeps its own band; a hover never repaints it.
+                if idx == self.selected {
+                    continue;
+                }
                 let Some((_, b)) = self.rows.iter().find(|(r, _)| *r == idx) else {
                     continue;
                 };

@@ -222,3 +222,35 @@ fn a_click_selects_and_a_second_click_opens() {
     assert_eq!(s.click(&Hit::ListRow(9)), Flow::Continue);
     assert_eq!(s.cursor.index, 1, "a click past the end moves nothing");
 }
+
+/// AC3: the UI thread never waits on a chat load. The loader below is held until the run ends.
+#[test]
+fn a_key_draws_its_frame_while_a_chat_load_is_held() {
+    use crate::input::Event;
+    use crate::sessions::chat::ChatLoad;
+    use crate::sessions::chat::pane::{ChatPane, Loader};
+    use std::sync::mpsc::channel;
+    use std::sync::{Arc, Mutex};
+    // Given: a loader that reports its start, then blocks until released.
+    let (release, held) = channel::<()>();
+    let (started_tx, started) = channel::<()>();
+    let (held, started_tx) = (Mutex::new(held), Mutex::new(started_tx));
+    let loader: Loader = Arc::new(move |_p, _want| {
+        started_tx.lock().unwrap().send(()).unwrap();
+        held.lock().unwrap().recv().unwrap_or_default();
+        ChatLoad::default()
+    });
+    let first = vec![row("a", "x", 1), row("b", "x", 1), row("c", "x", 1)];
+    let mut s =
+        PickerScreen::new(first, None, 0, &[], "", style(), clock()).with_chat(ChatPane::new(loader, crate::timing::Timings::default()));
+    let down = || Event::Key(KeyPress::named(vk::DOWN));
+    let mut t = crate::ui::script_term::ScriptTerm::new((100, 30), [Event::Idle, Event::Idle, down(), down()]);
+    // When: two idle polls start the load, then two keys come while it is held.
+    assert_eq!(run(&mut s, &mut t), Err(crate::ui::UiStop::KeysExhausted));
+    // Then: the load started and is still held, yet each key drew its frame, the pane loading.
+    started.recv().unwrap();
+    let frames = t.inner.frames.clone().unwrap();
+    assert_eq!(frames.len(), 3, "the opening frame and one per key");
+    assert!(frames.iter().all(|f| f.iter().any(|l| l.contains("loading..."))), "{frames:#?}");
+    release.send(()).unwrap();
+}

@@ -3,8 +3,9 @@
 //! hover change touched.
 
 mod card;
+mod chat;
 mod memo;
-mod plain;
+pub(super) mod plain;
 mod text;
 
 use super::listing::Session;
@@ -18,6 +19,7 @@ use crate::list::{ListRow, new_list_row, row_band_length};
 use crate::theme::{self, Glyphs, glyphs};
 
 use card::Preview;
+pub use chat::ChatView;
 pub use memo::Memo;
 use memo::{Band, memo_key, painter};
 pub use text::{exchange, exchange_lines, local_stamp, relative_age};
@@ -53,6 +55,8 @@ pub struct PickerView<'a> {
     pub hover: i32,
     /// List row under the mouse, -1 none.
     pub hover_row: i32,
+    /// The highlighted session's chat for the preview pane.
+    pub chat: ChatView<'a>,
 }
 
 /// `Select-ResumableSessions`' rule: not headless and something was asked.
@@ -90,8 +94,8 @@ struct RowCtx<'a> {
 }
 
 /// `New-SessionRow`.
-fn session_row(it: &Session, row: usize, c: &RowCtx<'_>) -> String {
-    let mark = if row == c.index {
+fn session_row(it: &Session, row_index: usize, c: &RowCtx<'_>) -> String {
+    let mark = if row_index == c.index {
         format!(" {} ", c.g.cursor)
     } else {
         "   ".to_owned()
@@ -109,29 +113,68 @@ fn session_row(it: &Session, row: usize, c: &RowCtx<'_>) -> String {
         format!("[{}] {place}", it.account).trim_end().clone_into(&mut place);
     }
     let age = relative_age(it.modified_ms, c.clock.now_ms);
+    // A session written to within the minute is live now: a green dot before its title.
+    let live = if age == "now" { format!("{} ", c.g.on) } else { String::new() };
     let what = [&it.title, &it.last_user]
         .into_iter()
         .find(|t| !t.is_empty())
         .cloned()
         .unwrap_or_default();
     let n = |s: &str| i64::try_from(s.chars().count()).unwrap_or(0);
-    let room = i64::try_from(c.width).unwrap_or(0) - n(&mark) - n(&age) - 2;
-    let mut label = place.clone();
+    let room = i64::try_from(c.width).unwrap_or(0) - n(&mark) - n(&age) - n(&live) - 2;
+    let mut label = format!("{live}{place}");
     if !what.is_empty() && room > n(&place) + 4 {
         let sep = if place.is_empty() { "" } else { "  " };
         let max = usize::try_from(room - n(&place) - n(sep)).unwrap_or(0);
-        label = format!("{place}{sep}{}", limit_line(&what, max, c.ascii));
+        label = format!("{live}{place}{sep}{}", limit_line(&what, max, c.ascii));
     }
-    new_list_row(&ListRow {
+    let laid = new_list_row(&ListRow {
         mark: &mark,
         label: &label,
         age: &age,
         width: c.width,
         ascii: c.ascii,
         trailing_space: true,
-        hover: i32::try_from(row).is_ok_and(|r| r == c.hover_row),
+        dim_age: true,
         ..ListRow::default()
-    })
+    });
+    let row = tone_row(&laid, &mark, &live, &place);
+    if row_index == c.index {
+        format!("{}{row}{}", theme::SELECT_OPEN, theme::SELECT_CLOSE)
+    } else if i32::try_from(row_index).is_ok_and(|r| r == c.hover_row) {
+        theme::add_hover_span(&row)
+    } else {
+        row
+    }
+}
+
+/// The laid-out row with its markers: the live dot green, the place (project, worktree) dim.
+/// Added after layout, which strips control characters from a label.
+fn tone_row(laid: &str, mark: &str, live: &str, place: &str) -> String {
+    let Some(rest) = laid.strip_prefix(mark) else {
+        return laid.to_owned();
+    };
+    let mut out = mark.to_owned();
+    let rest = match rest.strip_prefix(live).filter(|_| !live.is_empty()) {
+        Some(after) => {
+            out.push(theme::TONE_LIVE);
+            out.push_str(live.trim_end());
+            out.push(theme::TONE_CLOSE);
+            out.push(' ');
+            after
+        }
+        None => rest,
+    };
+    match rest.strip_prefix(place).filter(|_| !place.is_empty()) {
+        Some(after) => {
+            out.push(theme::DIM_OPEN);
+            out.push_str(place);
+            out.push(theme::DIM_CLOSE);
+            out.push_str(after);
+        }
+        None => out.push_str(rest),
+    }
+    out
 }
 
 fn picker_footer(scope: PickerScope, g: &Glyphs, width: usize, plain: bool) -> Footer {
@@ -177,6 +220,8 @@ struct Built {
     footer: Footer,
     rows: Vec<(i32, Band)>,
     map: RowMap,
+    /// The selected row (absolute index): never hover-banded.
+    selected: i32,
 }
 
 /// `Get-PickerFrame`, memoised: a frame differing only in its hover repaints those lines.
@@ -192,7 +237,7 @@ pub fn picker_frame(v: &PickerView<'_>, memo: &mut Memo) -> Frame {
     }
     let g = glyphs(v.style.ascii);
     let key = memo_key(v);
-    if let Some(f) = memo.hit(key, v, g) {
+    if let Some(f) = memo.hit(key, v) {
         return f;
     }
     let fw = frame_width(v.width);
@@ -202,7 +247,7 @@ pub fn picker_frame(v: &PickerView<'_>, memo: &mut Memo) -> Frame {
         selected: Vec::new(),
     };
     let mut map = b.map;
-    let paint = painter(g);
+    let paint = painter();
     let lines = complete_frame(&b.lines, &b.footer, fw, v.style, &paint, &light, &mut map);
     let mut unpainted: Vec<String> = b
         .lines
@@ -227,6 +272,7 @@ pub fn picker_frame(v: &PickerView<'_>, memo: &mut Memo) -> Frame {
         footer_index,
         width: fw,
         map: map.clone(),
+        selected: b.selected,
     };
     Frame { lines, map }
 }
@@ -313,6 +359,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
                 list: Some(ListMap::default()),
                 ..RowMap::default()
             },
+            selected: -1,
         };
     }
     let wide = v.width >= TWO_PANE_WIDTH;
@@ -346,7 +393,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     list.resize(list_rows, String::new());
     let body = if wide {
         let detail: Vec<String> = pv
-            .card(right_width.saturating_sub(2), body_rows, v.scope)
+            .card(right_width.saturating_sub(2), body_rows, v.scope, v.chat)
             .into_iter()
             .map(|l| format!(" {l}"))
             .collect();
@@ -354,7 +401,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     } else {
         let mut body = list;
         body.extend(
-            pv.card(fw.saturating_sub(6), preview_rows, v.scope)
+            pv.card(fw.saturating_sub(6), preview_rows, v.scope, v.chat)
                 .into_iter()
                 .map(|l| format!("  {l}")),
         );
@@ -389,6 +436,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
             }),
             ..RowMap::default()
         },
+        selected: to_i(index),
     }
 }
 

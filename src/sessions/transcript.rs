@@ -325,7 +325,7 @@ fn plain_prompt_content(line: &str) -> bool {
     false
 }
 
-fn counts_as_prompt(line: &str) -> bool {
+pub(crate) fn counts_as_prompt(line: &str) -> bool {
     if !line.contains("\"user\"") {
         return false;
     }

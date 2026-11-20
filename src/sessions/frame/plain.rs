@@ -28,7 +28,7 @@ static EMPHASIS: LazyLock<[Regex; 4]> = LazyLock::new(|| {
 });
 
 /// The text with markdown markers removed, whitespace runs folded to one space.
-pub(super) fn plain(text: &str) -> String {
+pub(in crate::sessions) fn plain(text: &str) -> String {
     let text = LEAD.replace(text, "");
     let text = HEADING.replace_all(&text, "$1");
     let text = FENCE.replace_all(&text, "");

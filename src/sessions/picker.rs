@@ -3,7 +3,9 @@
 
 use serde_json::{Map, Value, json};
 
-use super::frame::{Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
+use super::chat::ChatMessage;
+use super::chat::pane::{ChatKey, ChatPane, ChatState};
+use super::frame::{ChatView, Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
 use super::listing::Session;
 use crate::frame::{Frame, Style};
 use crate::input::{KeyPress, vk};
@@ -69,6 +71,9 @@ pub struct PickerScreen<'a> {
     clock: Clock,
     style: Style,
     memo: Memo,
+    /// Loads the highlighted session's chat off the UI thread; `None` shows the summary's
+    /// recent messages instead (tests, a session from a plugin source).
+    chat: Option<ChatPane>,
 }
 
 impl std::fmt::Debug for PickerScreen<'_> {
@@ -128,10 +133,54 @@ impl<'a> PickerScreen<'a> {
             clock,
             style,
             memo: Memo::default(),
+            chat: None,
         };
         *s.bucket_mut() = open;
         s.started[slot(scope)] = true;
         s
+    }
+
+    /// The preview pane shows the chat `pane` loads.
+    #[must_use]
+    pub fn with_chat(mut self, pane: ChatPane) -> Self {
+        self.chat = Some(pane);
+        self
+    }
+
+    /// The highlighted session's chat from the pane (cached or loading); `None` when there is no
+    /// pane or no transcript, and the summary's recent messages stand in.
+    fn chat_state(&mut self, rows: usize) -> Option<ChatState> {
+        let i = usize::try_from(self.cursor.index).ok()?;
+        let s = self.bucket().sessions.get(*self.items.get(i)?)?;
+        if s.path.as_os_str().is_empty() {
+            return None;
+        }
+        let key = ChatKey {
+            path: s.path.clone(),
+            size: s.size_bytes,
+            modified_ms: s.modified_ms,
+        };
+        // Each message takes a label and a line at least, plus the gap between.
+        Some(self.chat.as_mut()?.view(&key, rows / 3 + 2))
+    }
+
+    fn recent(&self) -> Vec<ChatMessage> {
+        let Some(i) = usize::try_from(self.cursor.index).ok() else {
+            return Vec::new();
+        };
+        let at = self.items.get(i).copied();
+        at.and_then(|at| self.bucket().sessions.get(at))
+            .map(|s| {
+                s.recent
+                    .iter()
+                    .map(|m| ChatMessage {
+                        speaker: m.speaker,
+                        text: m.text.clone(),
+                        at_ms: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn bucket(&self) -> &Bucket {
@@ -293,6 +342,13 @@ impl Screen for PickerScreen<'_> {
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
         let mut memo = std::mem::take(&mut self.memo);
+        let state = self.chat_state(size.1);
+        let fallback = if state.is_none() { self.recent() } else { Vec::new() };
+        let chat = match &state {
+            Some(ChatState::Loading) => ChatView::Loading,
+            Some(ChatState::Ready(m)) => ChatView::Messages(m),
+            None => ChatView::Messages(&fallback),
+        };
         let b = self.bucket();
         let pool: Vec<&Session> = self.pool.iter().filter_map(|&i| b.sessions.get(i)).collect();
         let v = PickerView {
@@ -307,6 +363,7 @@ impl Screen for PickerScreen<'_> {
             project_name: &self.title,
             hover: self.cursor.hover,
             hover_row: self.cursor.hover_row,
+            chat,
         };
         let f = picker_frame(&v, &mut memo);
         self.memo = memo;
@@ -317,6 +374,10 @@ impl Screen for PickerScreen<'_> {
     /// AC27: a tall terminal lists more than the first page. One page per idle poll, so the
     /// first frame never waits for the pages a big window wants.
     fn idle(&mut self) -> bool {
+        // The chat first: collecting a finished load is cheap, a page of summaries is not.
+        if self.chat.as_mut().is_some_and(ChatPane::idle) {
+            return true;
+        }
         if self.fetch.is_none() || self.bucket().exhausted || self.resumable_count >= self.want {
             return false;
         }

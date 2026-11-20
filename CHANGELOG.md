@@ -8,6 +8,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Added
 
+- The session picker's preview is a chat: the newest messages fill the pane from the bottom,
+  Claude's on the left under an orange `claude · DD.MM HH:MM` label, yours on the right in cyan;
+  tool calls, tool results, notifications and subagent lines are left out, markdown is shown as
+  plain text, an older message is cut at 8 lines and the newest one, when taller than the pane,
+  shows its end. A worker thread reads only the transcript's tail (1 MB steps, 8 MB at most) once
+  the cursor rests, and keeps the last 32 chats; the pane says `loading…` until it lands. Debug
+  mode logs `picker.chat.load` with the bytes read. The `first`/`last`/`reply` lines are gone.
+- The picker has a colour hierarchy: the selected row is a grey fill in bold (the mouse hover a
+  darker one), ages and the project name dim, a green dot before a session live now, the card's
+  title bold and its meta line dim but for the message count and size.
 - Every screen repaints only the lines that changed since its last frame (a full rewrite on a
   resize, a new screen, after a child or a typed line), and input that arrives in one burst (mouse
   motion, key repeat) costs one frame; background work waits while input is pending. Debug mode
