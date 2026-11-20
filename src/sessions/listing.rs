@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::scan::scan_transcript;
 use super::transcript::{
     MAX_BYTES, clean_text, collapse_fences, field, head_lines, is_headless, parse_line, prompt_detail, record_text, slug_names, tail_lines,
     user_prompt,
@@ -45,7 +46,11 @@ pub struct Session {
     /// An int plus a flag, never "N+": the picker renders the '+' from the flag.
     pub prompt_count: i64,
     pub prompt_count_capped: bool,
+    /// Every user and assistant message of the whole transcript (`scan`).
+    pub message_count: i64,
+    /// The `/rename` title, else the newest AI title, else the first prompt.
     pub title: String,
+    pub first_prompt: String,
     pub last_user: String,
     pub last_assistant: String,
     pub recent: Vec<Message>,
@@ -108,19 +113,22 @@ pub(crate) fn summarize(path: &Path, project_path: Option<&str>, pre_filter: boo
         return Some(s);
     }
     let user_line = |l: &str| !pre_filter || !l.contains("\"type\"") || super::transcript::is_user_line(l);
-    let title = head_lines(path, HEAD_LINES)
+    let first = head_lines(path, HEAD_LINES)
         .iter()
         .filter(|l| user_line(l))
         .filter_map(|l| parse_line(l))
         .find_map(|r| user_prompt(&r));
     let (last_user, last_assistant, recent) = walk_tail(path, pre_filter);
     let (count, capped) = prompt_detail(path, max_bytes);
-    let title = title
+    let scan = scan_transcript(path);
+    let first = first
         .or_else(|| last_user.clone())
         .unwrap_or_else(|| format!("(no prompt) {}", short_id(&session_id)));
     s.prompt_count = count;
     s.prompt_count_capped = capped;
-    s.title = clean_text(&title);
+    s.message_count = scan.messages;
+    s.first_prompt = clean_text(&first);
+    s.title = scan.custom_title.or(scan.ai_title).unwrap_or_else(|| s.first_prompt.clone());
     s.last_user = clean_text(last_user.as_deref().unwrap_or(""));
     s.last_assistant = clean_text(last_assistant.as_deref().unwrap_or(""));
     s.recent = recent
@@ -252,7 +260,7 @@ fn remove_legacy_cache(path: &Path) {
 
 /// The summary logic's own content hash: a code change invalidates the cache, a touch does not.
 pub(crate) fn summary_version() -> String {
-    let src = [include_str!("transcript.rs"), include_str!("listing.rs")].concat();
+    let src = [include_str!("transcript.rs"), include_str!("listing.rs"), include_str!("scan.rs")].concat();
     crate::sys::sha256(src.as_bytes()).map_or_else(
         || "v2".to_owned(),
         |h| h.iter().take(8).map(|b| format!("{b:02X}")).collect::<Vec<_>>().concat(),
@@ -343,7 +351,9 @@ impl SessionCache {
 
     /// `Get-ClaudeSessions`: up to `limit` summaries after `skip`, over the scope, cached.
     pub fn list(&mut self, root: &Path, scope: Scope<'_>, skip: usize, limit: usize, cache_file: &Path) -> Vec<Session> {
-        if !root.exists() {
+        // A snapshot names its files: another account's sessions list although this account
+        // has no projects folder yet (AC29).
+        if !matches!(scope, Scope::Files(_)) && !root.exists() {
             return Vec::new();
         }
         let cache = self.read(cache_file);
