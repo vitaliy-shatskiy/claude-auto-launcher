@@ -4,8 +4,8 @@
 
 mod card;
 mod chat;
+mod markdown;
 mod memo;
-pub(super) mod plain;
 mod text;
 
 use super::listing::Session;

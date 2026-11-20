@@ -4,20 +4,20 @@
 │   ⌂ feature  session title 3   21 min │ ─────────────────────────────────────────────────────── │
 │   project-4  session title 4   28 min │                                                         │
 │   project-5  session title 5   35 min │ claude · 16.09 11:40                                    │
-│                                       │ Done. Every step is in the log. Every                   │
-│                                       │ step is in the log. Every step is in the                │
-│                                       │ log. Every step is in the log. Every step               │
-│                                       │ is in the log. Every step is in the log.                │
-│                                       │ Every step is in the log. Every step is                 │
-│                                       │ in the log. Every step is in the log.                   │
-│                                       │ Every step is in the log. Every step is                 │
-│                                       │ in the log. Every step is in the log.                   │
-│                                       │ Every step is in the log. Every step is                 │
-│                                       │ in the log. Every step is in the log.                   │
-│                                       │ Every step is in the log. Every step is                 │
-│                                       │ in the log. Every step is in the log.                   │
-│                                       │ Every step is in the log. Every step is                 │
-│                                       │ in the log. The last line of the newest                 │
-│                                       │ reply.                                                  │
+│                                       │   Done. Every step is in the log. Every                 │
+│                                       │   step is in the log. Every step is in the              │
+│                                       │   log. Every step is in the log. Every step             │
+│                                       │   is in the log. Every step is in the log.              │
+│                                       │   Every step is in the log. Every step is               │
+│                                       │   in the log. Every step is in the log.                 │
+│                                       │   Every step is in the log. Every step is               │
+│                                       │   in the log. Every step is in the log.                 │
+│                                       │   Every step is in the log. Every step is               │
+│                                       │   in the log. Every step is in the log.                 │
+│                                       │   Every step is in the log. Every step is               │
+│                                       │   in the log. Every step is in the log.                 │
+│                                       │   Every step is in the log. Every step is               │
+│                                       │   in the log. The last line of the newest               │
+│                                       │   … 1 more line                                         │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
   w/s move  ┊  [/] filter  ┊  [enter] open  ┊  [f] fork  ┊  [esc] back

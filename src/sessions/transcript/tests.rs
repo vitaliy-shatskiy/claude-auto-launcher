@@ -25,18 +25,6 @@ fn slug_parse_worktree_projects_and_single_segment() {
 }
 
 #[test]
-fn fences_collapse_with_real_line_counts() {
-    let plain = "plain text with `inline` backticks, no fence at all";
-    assert_eq!(collapse_fences(plain), plain);
-    let fenced = "Here:\n```powershell\nWrite-Host 'a'\nWrite-Host 'b'\nWrite-Host 'c'\n```\nDone.";
-    assert_eq!(collapse_fences(fenced), "Here:\n[code: 3 lines]\nDone.");
-    assert_eq!(
-        collapse_fences("```\none\n``` and ```\nx\ny\n```"),
-        "[code: 1 lines] and [code: 2 lines]"
-    );
-}
-
-#[test]
 fn clean_text_turns_markers_and_escapes_into_spaces() {
     assert_eq!(clean_text("a\u{4}b\u{5}c\u{1}d\u{2}e"), "a b c d e");
     assert_eq!(clean_text("x\u{1F}y"), "x y");

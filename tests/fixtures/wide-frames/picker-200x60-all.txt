@@ -28,32 +28,32 @@
 │                                                                        │                                                                                                                            │
 │                                                                        │                                                                                                                            │
 │                                                                        │                                                                                                          you · 16.09 11:01 │
-│                                                                        │                                                                                   first question about the start of it all │
+│                                                                        │                                                                                 first question about the start of it all   │
 │                                                                        │                                                                                                                            │
 │                                                                        │ claude · 16.09 11:02                                                                                                       │
-│                                                                        │ an older reply that is long enough to be cut an older reply that is long enough to be cut                                  │
-│                                                                        │ an older reply that is long enough to be cut an older reply that is long enough to be cut                                  │
-│                                                                        │ an older reply that is long enough to be cut an older reply that is long enough to be cut                                  │
-│                                                                        │ an older reply that is long enough to be cut an older reply that is long enough to be cut                                  │
-│                                                                        │ an older reply that is long enough to be cut an older reply that is long enough to be cut                                  │
-│                                                                        │ an older reply that is long enough to be cut an older reply that is long enough to be cut                                  │
+│                                                                        │   an older reply that is long enough to be cut an older reply that is long enough to be cut                                │
+│                                                                        │   an older reply that is long enough to be cut an older reply that is long enough to be cut                                │
+│                                                                        │   an older reply that is long enough to be cut an older reply that is long enough to be cut                                │
+│                                                                        │   an older reply that is long enough to be cut an older reply that is long enough to be cut                                │
+│                                                                        │   an older reply that is long enough to be cut an older reply that is long enough to be cut                                │
+│                                                                        │   an older reply that is long enough to be cut an older reply that is long enough to be cut                                │
 │                                                                        │                                                                                                                            │
 │                                                                        │                                                                                                          you · 16.09 11:10 │
-│                                                                        │                                                                                             make the picker preview a chat │
+│                                                                        │                                                                                           make the picker preview a chat   │
 │                                                                        │                                                                                                                            │
 │                                                                        │ claude · 16.09 11:11                                                                                                       │
-│                                                                        │ Plan: read the transcript tail on a worker thread, then render it.                                                         │
+│                                                                        │   Plan: read the transcript tail on a worker thread, then render it.                                                       │
 │                                                                        │                                                                                                                            │
 │                                                                        │                                                                                                          you · 16.09 11:12 │
-│                                                                        │                                                                                                                  ok, do it │
+│                                                                        │                                                                                                                ok, do it   │
 │                                                                        │                                                                                                                            │
 │                                                                        │ claude · 16.09 11:40                                                                                                       │
-│                                                                        │ Done. Every step is in the log. Every step is in the log. Every step is in the log. Every                                  │
-│                                                                        │ step is in the log. Every step is in the log. Every step is in the log. Every step is in                                   │
-│                                                                        │ the log. Every step is in the log. Every step is in the log. Every step is in the log.                                     │
-│                                                                        │ Every step is in the log. Every step is in the log. Every step is in the log. Every step is                                │
-│                                                                        │ in the log. Every step is in the log. Every step is in the log. Every step is in the log.                                  │
-│                                                                        │ Every step is in the log. Every step is in the log. Every step is in the log. The last line                                │
-│                                                                        │ of the newest reply.                                                                                                       │
+│                                                                        │   Done. Every step is in the log. Every step is in the log. Every step is in the log. Every                                │
+│                                                                        │   step is in the log. Every step is in the log. Every step is in the log. Every step is in                                 │
+│                                                                        │   the log. Every step is in the log. Every step is in the log. Every step is in the log.                                   │
+│                                                                        │   Every step is in the log. Every step is in the log. Every step is in the log. Every step is                              │
+│                                                                        │   in the log. Every step is in the log. Every step is in the log. Every step is in the log.                                │
+│                                                                        │   Every step is in the log. Every step is in the log. Every step is in the log. The last line                              │
+│                                                                        │   of the newest reply.                                                                                                     │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
   w/s move  ┊  [/] filter  ┊  [enter] open  ┊  [f] fork  ┊  [tab] this project  ┊  [esc] back

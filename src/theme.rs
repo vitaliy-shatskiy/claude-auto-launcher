@@ -66,12 +66,16 @@ pub const SELECT_OPEN: char = '\u{13}';
 pub const SELECT_CLOSE: char = '\u{14}';
 /// The selected row's fill (256-colour grey 240): the only colour this theme had none for.
 pub const SELECT_BG: &str = "\x1b[48;5;240m";
+/// Inline code in a chat message: a muted tan (256-colour 180), set apart from dim text.
+pub const TONE_CODE: char = '\u{15}';
+const CODE_FG: &str = "\x1b[38;5;180m";
 
-const TONES: [(char, &str); 4] = [
+const TONES: [(char, &str); 5] = [
     (TONE_BOLD, BOLD),
     (TONE_USER, BRIGHT_CYAN),
     (TONE_CLAUDE, ACCENT),
     (TONE_LIVE, GREEN),
+    (TONE_CODE, CODE_FG),
 ];
 
 /// Tone markers to their colour..Reset with colour on, to nothing with it off. An open marker

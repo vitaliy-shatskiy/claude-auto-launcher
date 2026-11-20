@@ -8,11 +8,11 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use super::frame::plain::plain;
 use super::listing::Speaker;
 use super::scan::{Kind, kind_of};
-use super::transcript::{clean_text, collapse_fences, counts_as_prompt, field, parse_line, record_text, user_prompt};
+use super::transcript::{counts_as_prompt, field, parse_line, record_text, user_prompt};
 use crate::config::{ps_str, ps_truthy};
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 /// One message as the chat pane shows it: who, the plain text, when (UTC ms) if recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,33 +89,31 @@ pub fn read_chat(r: &mut (impl Read + Seek), len: u64, want: usize, cap: u64) ->
     }
 }
 
-/// Which end of a long message the pane keeps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Keep {
-    /// An older message: shown from its start.
-    Head,
-    /// The newest message: shown from its end.
-    Tail,
+/// The start of the text the pane keeps: a message shows at most ~14 wrapped lines, and the
+/// markdown pass costs more than linear time on a long reply.
+pub(crate) fn bounded(text: &str) -> String {
+    text.chars().take(MAX_CHARS).collect()
 }
 
-impl Keep {
-    /// `Tail` for the newest message, `Head` for any other.
-    pub(crate) fn of(newest: bool) -> Self {
-        if newest { Self::Tail } else { Self::Head }
-    }
+/// Untrusted transcript text for the pane with its line structure kept: control and format
+/// characters become spaces, `\r` goes, trailing spaces go, the whole is trimmed.
+pub(crate) fn clean_lines(text: &str) -> String {
+    let lines: Vec<String> = text.replace('\r', "").split('\n').map(clean_line).collect();
+    lines.join("\n").trim_matches('\n').to_owned()
 }
 
-/// The text kept for the pane: `keep`'s end of it. Cut BEFORE the markdown pass: `plain` costs
-/// more than linear time on a long reply.
-pub(crate) fn bounded(text: &str, keep: Keep) -> String {
-    let count = text.chars().count();
-    if count <= MAX_CHARS {
-        return text.to_owned();
-    }
-    match keep {
-        Keep::Tail => text.chars().skip(count - MAX_CHARS).collect(),
-        Keep::Head => text.chars().take(MAX_CHARS).collect(),
-    }
+fn clean_line(line: &str) -> String {
+    let spaced: String = line
+        .chars()
+        .map(|c| {
+            if c == '\t' || matches!(get_general_category(c), GeneralCategory::Control | GeneralCategory::Format) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    spaced.trim_end().to_owned()
 }
 
 /// Classifies one line, newest first; an assistant message written as several lines (one per
@@ -146,18 +144,17 @@ fn take_message(line: &[u8], out: &mut Vec<(ChatMessage, Option<String>)>) {
         }
         Kind::CustomTitle | Kind::AiTitle | Kind::LastPrompt => return,
     };
-    let text = plain(&bounded(&clean_text(&collapse_fences(&raw)), Keep::of(out.is_empty())));
+    let text = bounded(&clean_lines(&raw));
     if text.is_empty() {
         return;
     }
-    let newest = out.len() == 1;
     if let Some((newer, newer_id)) = out.last_mut()
         && speaker == Speaker::Assistant
         && newer.speaker == Speaker::Assistant
         && id.is_some()
         && *newer_id == id
     {
-        newer.text = bounded(&format!("{text} {}", newer.text), Keep::of(newest));
+        newer.text = bounded(&format!("{text}\n\n{}", newer.text));
         return;
     }
     let at_ms = field(&rec, "timestamp").and_then(|t| iso_ms(&ps_str(t)));
