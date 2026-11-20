@@ -184,6 +184,23 @@ fn a_crash_bad_json_and_a_good_answer_through_real_processes() {
 }
 
 #[test]
+fn every_request_carries_protocol_1() {
+    let d = scratch("plugin-protocol");
+    // Answers with its own stdin: the request as the plugin saw it.
+    let echo = cmd(&d, "echo", r#"findstr "^""#);
+    for (verb, input) in [(&describe::VERB, json!({})), (&action::VERB, json!({"key":"g","context":{}}))] {
+        let seen = Process.call(&echo, verb, &input).unwrap();
+        assert_eq!(seen["protocol"], 1, "{}: {seen}", verb.name);
+        assert_eq!(
+            seen.as_object().map(serde_json::Map::len),
+            input.as_object().map(|o| o.len() + 1),
+            "the rest as sent"
+        );
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
 fn a_hang_past_its_timeout_is_killed_with_its_tree() {
     let d = scratch("plugin-hang");
     let mut hang = cmd(&d, "hang", "ping -n 30 127.0.0.1");

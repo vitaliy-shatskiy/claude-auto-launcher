@@ -107,6 +107,14 @@ pub fn load(specs: &[PluginSpec], cache_file: Option<&Path>, runner: &dyn Runner
         });
         match parsed {
             Ok((mut desc, w)) => {
+                if desc.protocol > describe::PROTOCOL {
+                    warnings.push(format!(
+                        "plugin {} speaks protocol {}; this launcher speaks {p} and uses only the protocol {p} fields",
+                        spec.name,
+                        desc.protocol,
+                        p = describe::PROTOCOL
+                    ));
+                }
                 warnings.extend(w.into_iter().map(|w| format!("plugin {}: {w}; skipped", spec.name)));
                 drop_taken_keys(&plugins, spec, &mut desc, &mut warnings);
                 plugins.list.push(Loaded { spec: spec.clone(), desc });

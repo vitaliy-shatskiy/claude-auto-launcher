@@ -479,7 +479,10 @@ no plugin: they use the cached `describe` answers only.
 "plugins": [{ "name": "sample", "path": "~/tools/plugin_sample.exe", "args": [], "timeoutMs": 3000 }]
 ```
 
-Protocol 1:
+Protocol 1. Every request carries `"protocol": 1` beside the fields below. Protocol 1 may gain
+optional fields in a later launcher: a plugin must ignore a field it does not know, and the
+launcher ignores unknown fields in a plugin's answers. A plugin may answer `describe` with a higher
+`protocol`; the launcher then uses only the protocol 1 fields and warns once.
 
 | verb | stdin | stdout | timeout |
 |---|---|---|---|
