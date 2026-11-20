@@ -20,7 +20,8 @@ pub const BRIGHT_YELLOW: &str = "\x1b[93m";
 pub const BRIGHT_WHITE: &str = "\x1b[97m";
 /// Claude Code's warm accent as a 256-colour index.
 pub const ACCENT: &str = "\x1b[38;5;209m";
-pub const BUTTON_BG: &str = "\x1b[48;5;238m";
+/// The hover fill (#1f1f1f; 256-colour 235 sits one step above the focused panel's tint).
+pub const BUTTON_BG: &str = "\x1b[48;5;235m";
 pub const BUTTON_FG: &str = "\x1b[38;5;250m";
 pub const ACCENT_BG: &str = "\x1b[48;5;209m";
 pub const ACCENT_FG: &str = "\x1b[38;5;232m";
@@ -64,8 +65,8 @@ pub const TONE_CLOSE: char = '\u{12}';
 /// band, and stronger than it (`SELECT_BG` is lighter than `BUTTON_BG` on a dark terminal).
 pub const SELECT_OPEN: char = '\u{13}';
 pub const SELECT_CLOSE: char = '\u{14}';
-/// The selected row's fill (256-colour grey 240): the only colour this theme had none for.
-pub const SELECT_BG: &str = "\x1b[48;5;240m";
+/// The selected row's fill (#262626; 256-colour 236 keeps it a step above the hover fill).
+pub const SELECT_BG: &str = "\x1b[48;5;236m";
 /// Inline code in a chat message: a muted tan (256-colour 180), set apart from dim text.
 pub const TONE_CODE: char = '\u{15}';
 const CODE_FG: &str = "\x1b[38;5;180m";
@@ -198,6 +199,32 @@ pub fn percent_color(p: i64) -> &'static str {
     } else {
         GREEN
     }
+}
+
+/// The 256-colour codes the cockpit uses and their exact truecolor forms.
+const TRUECOLOR: [(&str, &str); 8] = [
+    ("\x1b[48;5;233m", "\x1b[48;2;20;20;20m"),
+    ("\x1b[48;5;234m", "\x1b[48;2;27;27;27m"),
+    ("\x1b[48;5;235m", "\x1b[48;2;31;31;31m"),
+    ("\x1b[48;5;236m", "\x1b[48;2;38;38;38m"),
+    ("\x1b[38;5;173m", "\x1b[38;2;215;119;87m"),
+    ("\x1b[38;5;237m", "\x1b[38;2;58;58;58m"),
+    ("\x1b[38;5;243m", "\x1b[38;2;118;118;118m"),
+    ("\x1b[38;5;255m", "\x1b[38;2;242;242;242m"),
+];
+
+/// A painted line with the cockpit's 256-colour codes swapped for their exact 24-bit colours.
+pub fn to_truecolor(line: &str) -> String {
+    if !line.contains("\x1b[") {
+        return line.to_owned();
+    }
+    TRUECOLOR.iter().fold(line.to_owned(), |l, (from, to)| l.replace(from, to))
+}
+
+/// The terminal says it draws 24-bit colour: `COLORTERM` truecolor or 24bit, or Windows Terminal.
+pub fn truecolor_supported(colorterm: Option<&str>, wt_session: Option<&str>) -> bool {
+    colorterm.is_some_and(|v| v.eq_ignore_ascii_case("truecolor") || v.eq_ignore_ascii_case("24bit"))
+        || wt_session.is_some_and(|v| !v.is_empty())
 }
 
 /// `CLAUDE_AUTO_ASCII=1`, or a console not on UTF-8 (code page 65001).
@@ -373,6 +400,18 @@ mod tests {
         assert_eq!(new_bar(25, 2, &g, BarStyle::Blocks), "..", "0.5 rounds to even 0");
         assert_eq!(new_bar(75, 2, &g, BarStyle::Blocks), "##", "1.5 rounds to even 2");
         assert_eq!(new_bar(150, 3, &g, BarStyle::Line), "===");
+    }
+
+    #[test]
+    fn truecolor_swaps_only_the_cockpit_codes() {
+        let l = format!("\x1b[48;5;234ma{RESET}\x1b[38;5;173mb\x1b[38;5;209mc");
+        assert_eq!(
+            to_truecolor(&l),
+            format!("\x1b[48;2;27;27;27ma{RESET}\x1b[38;2;215;119;87mb\x1b[38;5;209mc")
+        );
+        assert!(truecolor_supported(Some("truecolor"), None));
+        assert!(truecolor_supported(None, Some("{guid}")));
+        assert!(!truecolor_supported(Some("256"), Some("")));
     }
 
     #[test]

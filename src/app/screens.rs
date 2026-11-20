@@ -108,7 +108,8 @@ pub(super) fn run_ui(
             return Ok(UiEnd::NoConsole);
         };
         let alt = !output_redirected && !input_redirected;
-        Box::new(ConsoleTerm::open(alt, Some(input), run.logger.clone()))
+        let truecolor = theme::truecolor_supported(var("COLORTERM").as_deref(), var("WT_SESSION").as_deref());
+        Box::new(ConsoleTerm::open(alt, Some(input), run.logger.clone()).with_truecolor(truecolor))
     };
 
     tm.end(console);

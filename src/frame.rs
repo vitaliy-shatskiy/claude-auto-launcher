@@ -591,19 +591,30 @@ pub fn complete_frame(
     light: &FooterLight,
     map: &mut RowMap,
 ) -> Vec<String> {
-    let footer_index = lines.len();
-    let mut out_lines: Vec<String> = lines.iter().map(|l| format_body_line(l, width, style, painter)).collect();
+    let body = lines.iter().map(|l| format_body_line(l, width, style, painter)).collect();
+    append_footer(body, footer, width, style, light, map)
+}
+
+/// Painted `lines` with the footer under them; the footer's row and clickable spans go to `map`.
+pub fn append_footer(
+    mut lines: Vec<String>,
+    footer: &Footer,
+    width: usize,
+    style: Style,
+    light: &FooterLight,
+    map: &mut RowMap,
+) -> Vec<String> {
+    map.footer_y = Some(i32::try_from(lines.len()).unwrap_or(0));
     let mut clickable = Vec::new();
     for fl in &footer.lines {
         let text = limit_line(&theme::add_dim_span_color(&fl.text, false), width, style.ascii);
         let len = i32::try_from(text.chars().count()).unwrap_or(i32::MAX);
         clickable.extend(fl.spans.iter().filter(|s| s.start >= 0 && s.end < len).cloned());
-        out_lines.push(add_hint_color(&text, &fl.spans, style.color, light));
+        lines.push(add_hint_color(&text, &fl.spans, style.color, light));
     }
-    map.footer_y = Some(i32::try_from(footer_index).unwrap_or(0));
     map.footer = clickable;
     map.footer_lines = footer.lines.len();
-    out_lines
+    lines
 }
 
 /// The size line first, so the numbers survive any cut.
