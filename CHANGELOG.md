@@ -116,6 +116,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - Self-update trusted its record of the installed build after the exe was replaced by hand, and
   hid the update; a start now forgets a record the exe does not match. A download cut off by an
   exit (`claude-auto.exe.<pid>-<id>.new`) is deleted an hour later once its process is gone.
+- Self-update `auto` downloaded ~10 MB again on every start after a failed update (a checksum
+  mismatch, a locked folder); it now retries that release a day later and repeats the reason.
 
 ## [0.8.2] — 2026-11-11
 

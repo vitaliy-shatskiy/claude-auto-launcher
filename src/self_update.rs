@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::background::Background;
 use crate::maintenance::FetchFailed;
-use check::{Release, State, Version};
+use check::{DAY_MS, Failed, Release, State, Version};
 use swap::{Files, RealFiles};
 
 /// Where releases come from unless config `updateRepo` names a fork.
@@ -184,6 +184,7 @@ impl Local {
 }
 
 const ALREADY_RUNNING: &str = "an update is already running";
+const QUITTING: &str = "the launcher is quitting";
 
 /// The one update or roll back of this process in flight; dropping it frees the slot.
 struct Busy<'a>(&'a AtomicBool);
@@ -215,13 +216,14 @@ fn update(local: &Local, release: &Release, net: &dyn Net, files: &dyn Files, cl
     let quitting = closed.lock().unwrap_or_else(PoisonError::into_inner);
     if *quitting {
         drop(std::fs::remove_file(&new));
-        return Err("the launcher is quitting".into());
+        return Err(QUITTING.into());
     }
     swap::swap_in(&local.exe, &new, files)?;
     let mut s = State::read(&local.state);
     s.previous = Version::current();
     s.installed = Some(release.version);
     s.rolled_back_from = None;
+    s.failed = None;
     s.write(&local.state);
     Ok(())
 }
@@ -262,9 +264,25 @@ fn run(local: &Local, now_ms: i64, net: &dyn Net, files: &dyn Files, closed: &Mu
     if !auto || held {
         return Some(Notice::Available(r.version));
     }
+    // A failure that would repeat (a bad checksum, a locked folder) costs one download a day, not
+    // ~10 MB on every start.
+    if let Some(f) = state.failed.filter(|f| f.version == r.version && (0..DAY_MS).contains(&now_ms.saturating_sub(f.at_ms))) {
+        return Some(Notice::Failed(r.version, f.why));
+    }
     Some(match update(local, &r, net, files, closed) {
         Ok(()) => Notice::Updated(r.version),
-        Err(e) => Notice::Failed(r.version, e),
+        Err(e) => {
+            if e != QUITTING && e != ALREADY_RUNNING {
+                let mut s = State::read(&local.state);
+                s.failed = Some(Failed {
+                    version: r.version,
+                    at_ms: now_ms,
+                    why: e.clone(),
+                });
+                s.write(&local.state);
+            }
+            Notice::Failed(r.version, e)
+        }
     })
 }
 

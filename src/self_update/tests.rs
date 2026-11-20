@@ -250,6 +250,41 @@ fn a_roll_back_is_not_undone_by_the_next_auto_start() {
 }
 
 #[test]
+fn a_failed_auto_update_waits_a_day_before_downloading_again() {
+    let t = tmp("backoff");
+    let l = local(&t.0, Mode::Auto);
+    let bad = Stub::new(&[
+        (API, Ok(release_json("v99.0.0"))),
+        (SHA_URL, Ok(sha_file(&t.0, b"new build"))),
+        (EXE_URL, Ok(b"tampered build".to_vec())),
+    ]);
+    let v99 = Version([99, 0, 0]);
+    let first = run(&l, NOW, &bad, &RealFiles, &Mutex::new(false));
+    assert!(matches!(&first, Some(Notice::Failed(v, _)) if *v == v99), "{first:?}");
+    let calls = bad.calls().len();
+    assert_eq!(
+        run(&l, NOW + 3_600_000, &bad, &RealFiles, &Mutex::new(false)),
+        first,
+        "the same failure is told again"
+    );
+    assert_eq!(bad.calls().len(), calls, "no download within the day");
+    let a_day_later = run(&l, NOW + 2 * 86_400_000, &full_stub(&t.0), &RealFiles, &Mutex::new(false));
+    assert_eq!(a_day_later, Some(Notice::Updated(v99)), "a day on, it tries again");
+    assert_eq!(State::read(&l.state).failed, None);
+}
+
+#[test]
+fn a_quit_is_no_failure_to_wait_out() {
+    let t = tmp("quitnobackoff");
+    let l = local(&t.0, Mode::Auto);
+    assert!(matches!(
+        run(&l, NOW, &full_stub(&t.0), &RealFiles, &Mutex::new(true)),
+        Some(Notice::Failed(..))
+    ));
+    assert_eq!(State::read(&l.state).failed, None);
+}
+
+#[test]
 fn a_preview_forces_self_update_off() {
     let t = tmp("preview");
     let preview = Local::from_env(Mode::Auto, &Repo::default(), &t.0, true);
