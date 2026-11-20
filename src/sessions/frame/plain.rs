@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn markdown_markers_are_dropped_and_lookalikes_stay() {
         let cases = [
-            ("**Закрыто:** CS-1561", "Закрыто: CS-1561"),
+            ("**Закрито:** CS-1561", "Закрито: CS-1561"),
             ("a __bold__ word", "a bold word"),
             ("an *em* and _em_ pair", "an em and em pair"),
             ("**a** **b**", "a b"),
@@ -82,7 +82,7 @@ mod tests {
             ("# Title here", "Title here"),
             ("### Plan", "Plan"),
             ("Intro. ## Next steps", "Intro. Next steps"),
-            ("- **Закрыто:** CS-1561", "Закрыто: CS-1561"),
+            ("- **Закрито:** CS-1561", "Закрито: CS-1561"),
             ("* item", "item"),
             ("1. first step", "first step"),
             ("read [the docs](https://x.y/z) first", "read the docs first"),
