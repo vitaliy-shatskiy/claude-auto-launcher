@@ -16,6 +16,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   a plugin's answers are ignored, and a plugin answering `describe` with a higher protocol is used
   for its protocol 1 fields with one warning (it was refused before). Protocol 1 may gain optional
   fields; a plugin must ignore fields it does not know.
+- `examples/plugin_git_branch.rs`, an example plugin: `preLaunch` sets `CLAUDE_AUTO_GIT_BRANCH`
+  to the launch directory's branch (read from `.git/HEAD`, no git process), launch-screen key `g`
+  shows the branch and the number of `git status --porcelain` entries (git runs windowless).
 
 ## [0.9.0] — 2026-11-20
 

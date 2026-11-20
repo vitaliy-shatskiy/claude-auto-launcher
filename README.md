@@ -519,6 +519,9 @@ launcher ignores unknown fields in a plugin's answers. A plugin may answer `desc
 [`examples/plugin_sample.rs`](examples/plugin_sample.rs) is a complete plugin: a `ticket` row whose
 value reaches claude as `SAMPLE_TICKET`, a `j` action, empty sources. `cargo build --example
 plugin_sample`, then list `target/debug/examples/plugin_sample.exe` by its full path.
+[`examples/plugin_git_branch.rs`](examples/plugin_git_branch.rs) is a useful one: `preLaunch`
+sets `CLAUDE_AUTO_GIT_BRANCH` to the launch directory's branch (read from `.git/HEAD`, no git
+process), and `g` on the launch screen shows the branch and the `git status --porcelain` count.
 
 ### Secrets
 

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use claude_auto::config::PluginSpec;
 use claude_auto::plugins::run::{self, Failure, Process, Runner as _};
-use claude_auto::plugins::{self, action, describe};
+use claude_auto::plugins::{self, action, describe, pre_launch};
 use serde_json::json;
 
 use super::{launcher, scratch, text};
@@ -197,6 +197,57 @@ fn every_request_carries_protocol_1() {
             "the rest as sent"
         );
     }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// An example exe: `cargo test` and `cargo nextest` build the examples into `target/<profile>/examples`,
+/// beside this test binary's `deps` folder.
+fn example_exe(name: &str) -> PathBuf {
+    let deps = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+    let exe = deps.parent().unwrap().join("examples").join(format!("{name}.exe"));
+    assert!(exe.is_file(), "{} is missing: cargo build --example {name}", exe.display());
+    exe
+}
+
+#[test]
+fn the_git_branch_example_sets_the_branch_and_reports_it_through_the_protocol() {
+    // Given: a repository on branch feat/x with two untracked entries, launched from a subfolder.
+    let d = scratch("plugin-git");
+    let repo = d.join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    let init = Command::new("git")
+        .args(["init", "-q", "-b", "feat/x"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init");
+    std::fs::write(repo.join("new.txt"), "x").unwrap();
+    std::fs::write(repo.join("src").join("a.rs"), "x").unwrap();
+    let spec = PluginSpec {
+        name: "git".into(),
+        path: example_exe("plugin_git_branch").to_string_lossy().into_owned(),
+        args: Vec::new(),
+        timeout_ms: Some(10_000),
+    };
+    // When: described, then preLaunch and its `g` action, each a real process.
+    let (p, w) = plugins::load(&[spec], None, &Process, true);
+    assert_eq!(w, Vec::<String>::new());
+    let mut w = Vec::new();
+    let src = repo.join("src").to_string_lossy().into_owned();
+    let out = pre_launch::run(&p, &|_| json!({ "project": src }), &Process, &mut w);
+    let msg = action::run(&p, 0, 'g', &json!({ "screen": "launch", "cwd": repo }), &Process);
+    // Then: the branch reaches claude's environment and the key reports it with the dirty count.
+    let want = pre_launch::Extra {
+        env: vec![("CLAUDE_AUTO_GIT_BRANCH".into(), "feat/x".into())],
+        args: Vec::new(),
+    };
+    assert_eq!((out, w), (pre_launch::Outcome::Go(want), Vec::new()));
+    assert_eq!(msg.as_deref(), Some("git: feat/x, 2 dirty file(s)"));
+    assert_eq!(
+        plugins::projects::collect(&p, &Process, &mut Vec::new()),
+        Vec::new(),
+        "a source of no projects"
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 
