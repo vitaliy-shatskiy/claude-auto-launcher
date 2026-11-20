@@ -14,7 +14,7 @@
     <img alt="Rust 1.99" src="https://img.shields.io/badge/Rust-1.99-B7410E">
   </p>
 
-  <p><a href="#quick-start">Quick start</a> · <a href="#what-you-get">What you get</a> · <a href="#install">Install</a> · <a href="#updating">Updating</a> · <a href="#usage">Usage</a> · <a href="#screens-and-keys">Keys</a> · <a href="#configuration">Configuration</a> · <a href="#plugins">Plugins</a> · <a href="#troubleshooting">Troubleshooting</a> · <a href="#stable-interface">Stable interface</a> · <a href="#development">Development</a></p>
+  <p><a href="#quick-start">Quick start</a> · <a href="#what-you-get">What you get</a> · <a href="#install">Install</a> · <a href="#updating">Updating</a> · <a href="#usage">Usage</a> · <a href="#screens-and-keys">Keys</a> · <a href="#configuration">Configuration</a> · <a href="#plugins">Plugins</a> · <a href="#troubleshooting">Troubleshooting</a> · <a href="#public-interface">Public interface</a> · <a href="#development">Development</a></p>
 </div>
 
 <br>
@@ -727,9 +727,10 @@ Nothing is installed outside your own user folder, and there is no uninstaller.
    junction `icacls <junction> /L /remove:d "<DOMAIN\user>"`, per secondary root
    `icacls <root> /remove:d "<DOMAIN\user>"` (`whoami` prints `<DOMAIN\user>`).
 
-## Stable interface
+## Public interface
 
-From 1.0 these follow SemVer: a breaking change to any of them comes only with a new major version.
+What scripts, plugins and other tools may build on. No compatibility promise: a change to any of
+them is named in the [CHANGELOG](CHANGELOG.md).
 
 - **Config keys** and their meaning, as [`schema/claude-auto.schema.json`](schema/claude-auto.schema.json)
   describes them. New optional keys may appear; `version` names the format.
