@@ -17,6 +17,7 @@ pub mod list;
 pub mod log;
 pub mod maintenance;
 pub mod out;
+pub mod perf;
 pub mod plugins;
 pub mod prefs;
 pub mod projects;

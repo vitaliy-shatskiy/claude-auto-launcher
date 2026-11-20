@@ -23,7 +23,9 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
-use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{
+    CreateMutexW, GetCurrentProcess, GetProcessIoCounters, IO_COUNTERS, ReleaseMutex, WaitForSingleObject,
+};
 use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 
 const GENERIC_READ: u32 = 0x8000_0000;
@@ -201,6 +203,17 @@ pub(crate) fn link_count(file: &std::fs::File) -> Option<u32> {
     // SAFETY: `file` keeps its handle open for the call; `info` is a valid out-pointer.
     let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) };
     (ok != 0).then_some(info.nNumberOfLinks)
+}
+
+/// The I/O counters of `process` (this one when `None`): read and write calls and bytes.
+pub(crate) fn io_counters(process: Option<HANDLE>) -> Option<IO_COUNTERS> {
+    let mut c = IO_COUNTERS::default();
+    // SAFETY: takes no argument; returns a pseudo handle that needs no closing.
+    let process = process.unwrap_or_else(|| unsafe { GetCurrentProcess() });
+    // SAFETY: the pseudo handle is always valid; a caller's handle is borrowed from an owner that
+    // keeps it open for the call; `c` is a valid out-pointer.
+    let ok = unsafe { GetProcessIoCounters(process, &raw mut c) };
+    (ok != 0).then_some(c)
 }
 
 pub(crate) fn sha256(data: &[u8]) -> Option<[u8; 32]> {
