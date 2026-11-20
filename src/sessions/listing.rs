@@ -276,13 +276,14 @@ fn remove_legacy_cache(path: &Path) {
     }
 }
 
-/// The summary logic's own content hash: a code change invalidates the cache, a touch does not.
+/// The cached summary's schema: bump it by hand when what a summary holds or how it is derived
+/// changes. A release that leaves summaries alone keeps every cache entry (a version taken from
+/// the source text rescanned every transcript from byte 0 on the first picker after an update).
+pub(crate) const SUMMARY_SCHEMA: u32 = 3;
+
+/// The cache key's version part: the schema alone, so a touch or a code change keeps the entry.
 pub(crate) fn summary_version() -> String {
-    let src = [include_str!("transcript.rs"), include_str!("listing.rs"), include_str!("scan.rs")].concat();
-    crate::sys::sha256(src.as_bytes()).map_or_else(
-        || "v2".to_owned(),
-        |h| h.iter().take(8).map(|b| format!("{b:02X}")).collect::<Vec<_>>().concat(),
-    )
+    format!("v{SUMMARY_SCHEMA}")
 }
 
 /// What one listing call covers. A snapshot carries its own scope, so slug and files exclude

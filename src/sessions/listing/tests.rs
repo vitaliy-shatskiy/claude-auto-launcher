@@ -396,3 +396,34 @@ fn a_grown_transcript_resumes_its_title_scan_from_the_cache() {
     assert_eq!(rows[0].message_count, 1002, "resumed from the cached scan, not rescanned");
     assert_eq!(cache_keys(&cache_file), 1, "the grown file's older entry is gone");
 }
+
+/// Re-keys every cache entry under `version` and marks its title, so a hit shows the mark.
+fn rekey_cache(cache_file: &Path, version: &str) {
+    let text = std::fs::read_to_string(cache_file).unwrap();
+    let map: BTreeMap<String, Session> = serde_json::from_str(&text).unwrap();
+    let moved: BTreeMap<String, Session> = map
+        .into_iter()
+        .map(|(k, mut s)| {
+            s.title = "from the cache".into();
+            let rest = k.split_once('|').unwrap().1;
+            (format!("{version}|{rest}"), s)
+        })
+        .collect();
+    std::fs::write(cache_file, serde_json::to_string(&moved).unwrap()).unwrap();
+}
+
+#[test]
+fn the_cache_version_is_the_schema_constant_not_the_source_text() {
+    let t = tmp("schema");
+    let root = t.0.join("projects");
+    put(&root.join("C--src-demo"), "s1.jsonl", &prompt("first", r"C:\src\demo"));
+    let cache_file = cache_path(&root);
+    SessionCache::default().list(&root, Scope::All, 0, 10, &cache_file);
+    // Written by any build with this schema: a release that only changed code still hits.
+    rekey_cache(&cache_file, &format!("v{SUMMARY_SCHEMA}"));
+    let rows = SessionCache::default().list(&root, Scope::Slug("C--src-demo"), 0, 10, &cache_file);
+    assert_eq!(rows[0].title, "from the cache", "same schema = a hit");
+    rekey_cache(&cache_file, &format!("v{}", SUMMARY_SCHEMA + 1));
+    let rows = SessionCache::default().list(&root, Scope::Slug("C--src-demo"), 0, 10, &cache_file);
+    assert_eq!(rows[0].title, "first", "another schema = a miss, summarised again");
+}
