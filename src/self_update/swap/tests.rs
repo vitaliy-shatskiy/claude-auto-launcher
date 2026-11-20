@@ -2,7 +2,7 @@ use super::*;
 use crate::maintenance::FetchFailed;
 use crate::self_update::Mode;
 use crate::self_update::check::Version;
-use crate::self_update::tests::{EXE_URL, SHA_URL, Stub, local, sha_file, tmp};
+use crate::self_update::tests::{EXE_URL, SHA_URL, Stub, downloads, local, sha_file, tmp};
 
 fn release() -> Release {
     Release {
@@ -48,7 +48,7 @@ fn a_hash_mismatch_deletes_the_download_and_leaves_the_exe() {
     let e = download(&l.exe, &release(), &net).unwrap_err();
     assert!(e.contains("does not match its published SHA-256"), "{e}");
     assert_eq!(std::fs::read(&l.exe).unwrap(), b"current build");
-    assert!(!sibling(&l.exe, ".new").exists(), "the bad download is gone");
+    assert_eq!(downloads(&t.0), Vec::<String>::new(), "the bad download is gone");
     assert!(!sibling(&l.exe, ".old").exists());
 }
 
@@ -104,4 +104,19 @@ fn a_build_directory_exe_is_refused() {
     let net = Stub::new(&[]);
     assert!(download(Path::new(r"C:\x\target\debug\claude-auto.exe"), &release(), &net).is_err());
     assert!(net.calls().is_empty(), "refused before any request");
+}
+
+#[test]
+fn every_download_gets_a_name_of_its_own() {
+    let t = tmp("names");
+    let l = local(&t.0, Mode::Notify);
+    let net = Stub::new(&[(SHA_URL, Ok(sha_file(&t.0, b"new build"))), (EXE_URL, Ok(b"new build".to_vec()))]);
+    let a = download(&l.exe, &release(), &net).unwrap();
+    let b = download(&l.exe, &release(), &net).unwrap();
+    assert_ne!(a, b, "a second download never writes into the first one's file");
+    let pid = format!(".{}-", std::process::id());
+    for p in [&a, &b] {
+        assert!(p.to_string_lossy().contains(&pid), "{}", p.display());
+        assert_eq!(std::fs::read(p).unwrap(), b"new build");
+    }
 }

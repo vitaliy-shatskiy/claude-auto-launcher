@@ -236,7 +236,8 @@ fn check_into(version: &mut VersionInfo, gate: &InstallGate, lines: &mut Vec<Not
 }
 
 /// `Invoke-MaintenanceScreen`, opened by `u` from the launch screen and returning to it.
-pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style) -> Result<(), UiStop> {
+/// `launcher`: the self-update of this process, shared with the launch screen's check.
+pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style, launcher: &crate::self_update::Local) -> Result<(), UiStop> {
     let tm = term.logger().timings.clone();
     let load = tm.begin(&["load", "maintenance"]);
     let preview = is_preview();
@@ -244,7 +245,7 @@ pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style) -> Result<(),
         install: Install::from_env(preview),
         preview,
         config_path: cfg.path.clone(),
-        launcher: crate::self_update::Local::from_env(cfg.self_update, &cfg.update_repo, &PathCtx::from_env().home, preview),
+        launcher: launcher.clone(),
     };
     let mut s = MaintScreen::new(&mut ops, &cfg.maintenance_actions, style);
     tm.end(load);

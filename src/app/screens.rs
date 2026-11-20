@@ -62,10 +62,8 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         maintenance::UpdateWatch::off(version.clone())
     });
     // The launcher's own release check: a thread, never in the way of the first frame.
-    let launcher = RefCell::new(crate::self_update::Watch::start(
-        crate::self_update::Local::from_env(run.cfg.self_update, &run.cfg.update_repo, &run.ctx.home, run.preview),
-        now_ms(),
-    ));
+    let self_update = crate::self_update::Local::from_env(run.cfg.self_update, &run.cfg.update_repo, &run.ctx.home, run.preview);
+    let launcher = RefCell::new(crate::self_update::Watch::start(self_update.clone(), now_ms()));
     let accounts = tm.begin(&["accounts"]);
     let rate_dir = var("CLAUDE_AUTO_RATE_LIMITS_DIR").map_or_else(|| run.ctx.home.join(".claude").join("rate-limits"), PathBuf::from);
     let defaults = label_defaults(&canonical_root, &account_dirs);
@@ -143,7 +141,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
             if is_hotkey(k, 'u') {
                 open_maintenance(&update, tm, t, run.preview, |t| {
-                    if maintenance::run_screen(t, &run.cfg, style).is_ok() {
+                    if maintenance::run_screen(t, &run.cfg, style, &self_update).is_ok() {
                         t.drain();
                     }
                 });
