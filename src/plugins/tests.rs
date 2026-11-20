@@ -152,6 +152,12 @@ fn pre_launch_may_not_set_the_account_or_its_credentials() {
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "claude_code_use_bedrock",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "USERPROFILE",
+        "home",
     ] {
         let fake = Fake::with(&[("describe", ticket()), ("preLaunch", json!({"env":{"OK":"1", key:"x"}}))]);
         let plugins = loaded(&fake);

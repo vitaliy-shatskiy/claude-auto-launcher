@@ -39,13 +39,19 @@ enum Answer {
 }
 
 /// Variables a plugin may never set: they pick the account or its credentials, which the launch
-/// screen owns. An entry ending in `*` is a prefix (case-insensitive, as Windows names are).
-const REFUSED_ENV: [&str; 5] = [
+/// screen owns - the config dir, an API key or OAuth token, another provider (Bedrock, Vertex,
+/// Foundry), or the home directory `~/.claude` is found from. An entry ending in `*` is a prefix
+/// (case-insensitive, as Windows names are).
+const REFUSED_ENV: [&str; 9] = [
     "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_*",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_*",
+    "USERPROFILE",
+    "HOME",
 ];
 
 fn refused_env(name: &str) -> bool {
