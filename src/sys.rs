@@ -374,9 +374,9 @@ pub(crate) fn size_fields(r: &RawRecord) -> (i32, i32) {
 
 #[cfg(any(feature = "rider-mcp", feature = "remote"))]
 mod ip_tables;
-#[cfg(any(feature = "rider-mcp", feature = "remote"))]
-pub(crate) use ip_tables::{Family, tcp_listeners};
 #[cfg(feature = "rider-mcp")]
 pub(crate) use ip_tables::Listener;
+#[cfg(any(feature = "rider-mcp", feature = "remote"))]
+pub(crate) use ip_tables::{Family, tcp_listeners};
 #[cfg(feature = "remote")]
 pub(crate) use ip_tables::{IpTable, sized_table, u32_at};
