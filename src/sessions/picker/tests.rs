@@ -223,6 +223,21 @@ fn a_click_selects_and_a_second_click_opens() {
     assert_eq!(s.cursor.index, 1, "a click past the end moves nothing");
 }
 
+#[test]
+fn without_a_chat_pane_the_summary_messages_show_as_plain_text() {
+    use crate::sessions::listing::{Message, Speaker};
+    let mut a = row("a", "x", 1);
+    a.recent = vec![Message {
+        speaker: Speaker::Assistant,
+        text: "**Done:** shipped `v1`".into(),
+    }];
+    let mut s = PickerScreen::new(vec![a], None, 0, &[], "", style(), clock());
+    let mut t = keys(&[]);
+    assert_eq!(run(&mut s, &mut t), Err(crate::ui::UiStop::KeysExhausted));
+    let frame = &t.frames.unwrap()[0];
+    assert!(frame.iter().any(|l| l.contains("Done: shipped v1")), "{frame:#?}");
+}
+
 /// AC3: the UI thread never waits on a chat load. The loader below is held until the run ends.
 #[test]
 fn a_key_draws_its_frame_while_a_chat_load_is_held() {

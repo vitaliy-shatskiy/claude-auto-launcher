@@ -175,7 +175,7 @@ impl<'a> PickerScreen<'a> {
                     .iter()
                     .map(|m| ChatMessage {
                         speaker: m.speaker,
-                        text: m.text.clone(),
+                        text: super::frame::plain::plain(&m.text),
                         at_ms: None,
                     })
                     .collect()
