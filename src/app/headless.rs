@@ -96,6 +96,14 @@ pub(super) fn prepare_run(req: &RunRequest, ctx: &PathCtx, cfg: &Config, roster:
     })
 }
 
+/// The request's built-in fields alone, on the roster before any plugin is described: a request
+/// refused here starts no plugin. Its `pluginRows` wait for `prepare_run`, after the plugins load.
+pub(super) fn check_builtin(req: &RunRequest, ctx: &PathCtx, cfg: &Config, roster: &Roster) -> Result<(), String> {
+    let mut builtin = req.clone();
+    builtin.plugin_rows.clear();
+    prepare_run(&builtin, ctx, cfg, roster).map(|_| ())
+}
+
 /// `--launcher-options`: one line of JSON on stdout. The version is the newest downloaded build,
 /// not `claude --version`, which would start a process.
 pub(super) fn print_options(ctx: &PathCtx, cfg: &Config, roster: &Roster) -> i32 {

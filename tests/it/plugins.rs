@@ -10,12 +10,12 @@ use super::{launcher, scratch, text};
 const DESCRIBE: &str =
     r#"{"protocol":1,"rows":[{"name":"ticket","label":"ticket","values":["none","ABC-1"]}],"hooks":["preLaunch","postLaunch"]}"#;
 
-/// `tick.cmd`: answers `describe`, saves what `preLaunch` and `postLaunch` were sent, and answers
-/// `preLaunch` with `pre`.
+/// `tick.cmd`: answers `describe` (and leaves `described` beside itself), saves what `preLaunch`
+/// and `postLaunch` were sent, and answers `preLaunch` with `pre`.
 fn plugin(dir: &Path, pre: &str) -> PathBuf {
     let p = dir.join("tick.cmd");
     let body = format!(
-        "@echo off\r\ngoto %~1\r\n:describe\r\necho {DESCRIBE}\r\nexit /b 0\r\n:preLaunch\r\nfindstr \"^\" > \"%~dp0pre-in.json\"\r\necho {pre}\r\nexit /b 0\r\n:postLaunch\r\nfindstr \"^\" > \"%~dp0post-in.json\"\r\necho {{}}\r\nexit /b 0\r\n"
+        "@echo off\r\ngoto %~1\r\n:describe\r\necho.> \"%~dp0described\"\r\necho {DESCRIBE}\r\nexit /b 0\r\n:preLaunch\r\nfindstr \"^\" > \"%~dp0pre-in.json\"\r\necho {pre}\r\nexit /b 0\r\n:postLaunch\r\nfindstr \"^\" > \"%~dp0post-in.json\"\r\necho {{}}\r\nexit /b 0\r\n"
     );
     std::fs::write(&p, body).unwrap();
     p
@@ -96,6 +96,34 @@ fn a_cancel_from_pre_launch_stops_the_launch_with_its_reason() {
     let out = text(&o);
     assert_eq!(o.status.code(), Some(1), "{out}");
     assert!(out.contains("launch cancelled by plugin tick: no ticket picked"), "{out}");
+    assert!(!d.join("claude-started").exists(), "claude never started");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_refused_launcher_run_starts_no_plugin_and_writes_no_plugin_cache() {
+    let d = scratch("plugin-refused");
+    let mut c = configured(&d, "{}");
+    let mut line: serde_json::Value = serde_json::from_str(&run_line(&d)).unwrap();
+    line["account"] = "nobody".into();
+    let o = c.args(["--launcher-run", &line.to_string()]).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o));
+    assert!(!d.join("described").exists(), "describe never ran");
+    assert!(!d.join("home").join("claude-auto-plugins.json").exists(), "no plugin cache written");
+    assert!(!d.join("claude-started").exists(), "claude never started");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_bad_plugin_row_value_is_still_refused_once_the_plugins_are_described() {
+    let d = scratch("plugin-bad-row");
+    let mut c = configured(&d, "{}");
+    let mut line: serde_json::Value = serde_json::from_str(&run_line(&d)).unwrap();
+    line["pluginRows"]["tick.ticket"] = "XYZ-9".into();
+    let o = c.args(["--launcher-run", &line.to_string()]).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("pluginRows"), "says which field");
+    assert!(d.join("described").exists(), "the row's plugin was described first");
     assert!(!d.join("claude-started").exists(), "claude never started");
     std::fs::remove_dir_all(&d).unwrap();
 }

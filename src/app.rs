@@ -132,6 +132,18 @@ pub fn run(args: Vec<String>) -> i32 {
     if cfg.project_screen == config::ProjectScreen::OnDemand {
         roster.add_action_row();
     }
+    if !wants_options {
+        for w in &cfg.warnings {
+            out::line(&format!("  config: {w}"), Fg::DarkYellow);
+        }
+    }
+    // A refused `--launcher-run` starts no plugin and writes no plugin cache: its built-in fields
+    // are checked first, its `pluginRows` by `prepare_run` once the plugins are described.
+    if let Some(req) = &run_request
+        && let Err(e) = headless::check_builtin(req, &ctx, &cfg, &roster)
+    {
+        return refuse(&e);
+    }
     let (plugins, plugin_warnings) = plugins::load(&cfg, &timings, &mut roster, !wants_options && !preview);
     if wants_options {
         // stderr: stdout is the one line of JSON the client parses.
@@ -142,9 +154,6 @@ pub fn run(args: Vec<String>) -> i32 {
             out::err_line(&format!("  {w}"));
         }
         return headless::print_options(&ctx, &cfg, &roster);
-    }
-    for w in &cfg.warnings {
-        out::line(&format!("  config: {w}"), Fg::DarkYellow);
     }
     for w in &plugin_warnings {
         out::line(&format!("  {w}"), Fg::DarkYellow);
