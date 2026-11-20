@@ -106,6 +106,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Fixed
 
+- The session picker opened late (seconds on a cold disk) after every update: it now shows its
+  rows at once, titled by their first prompt, and fills in titles and message counts as a
+  background scan finishes them; an update no longer discards the session summary cache.
 - With `sharing` off, the session picker lists the other accounts' sessions although the
   launching account has no `projects` folder yet.
 - The preview card's `last ›` showed the first prompt when a long turn's tool lines pushed the

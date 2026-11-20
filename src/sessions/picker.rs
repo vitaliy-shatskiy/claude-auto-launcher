@@ -2,6 +2,7 @@
 //! page buckets, the filter box (`filter`), paging on Down and the wheel, and what a chosen row means.
 
 mod filter;
+mod landed;
 
 use serde_json::{Map, Value, json};
 
@@ -77,6 +78,8 @@ pub struct PickerScreen<'a> {
     /// Loads the highlighted session's chat off the UI thread; `None` shows the summary's
     /// recent messages instead (tests, a session from a plugin source).
     chat: Option<ChatPane>,
+    /// Full summaries for rows first shown quick (`summaries`); `None` = every row is final.
+    landed: Option<std::sync::mpsc::Receiver<Vec<Session>>>,
 }
 
 impl std::fmt::Debug for PickerScreen<'_> {
@@ -137,6 +140,7 @@ impl<'a> PickerScreen<'a> {
             style,
             memo: Memo::default(),
             chat: None,
+            landed: None,
         };
         *s.bucket_mut() = open;
         s.started[slot(scope)] = true;
@@ -147,6 +151,13 @@ impl<'a> PickerScreen<'a> {
     #[must_use]
     pub fn with_chat(mut self, pane: ChatPane) -> Self {
         self.chat = Some(pane);
+        self
+    }
+
+    /// Rows shown quick take their full summaries from `landed` as the worker sends them.
+    #[must_use]
+    pub fn with_landed(mut self, landed: std::sync::mpsc::Receiver<Vec<Session>>) -> Self {
+        self.landed = Some(landed);
         self
     }
 
@@ -330,7 +341,7 @@ impl Screen for PickerScreen<'_> {
     /// first frame never waits for the pages a big window wants.
     fn idle(&mut self) -> bool {
         // The chat first: collecting a finished load is cheap, a page of summaries is not.
-        if self.chat.as_mut().is_some_and(ChatPane::idle) {
+        if self.chat.as_mut().is_some_and(ChatPane::idle) || self.take_landed() {
             return true;
         }
         if self.fetch.is_none() || self.bucket().exhausted || self.resumable_count >= self.want {
