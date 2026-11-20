@@ -122,6 +122,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   downloaded again; the check now lives until claude exits.
 - The picker's chat dropped `*` and `_` from paths and globs taken for emphasis
   (`src/**/*.rs`, `__init__.py`, `\__pycache__\`); next to `/`, `\` or `.` they stay.
+- The picker showed every time at today's UTC offset, so a message from before the DST change
+  was an hour off; each time now takes the offset of its own date.
 
 ## [0.8.2] — 2026-11-11
 

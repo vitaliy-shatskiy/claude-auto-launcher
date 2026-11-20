@@ -3,8 +3,9 @@
 
 use super::super::listing::Session;
 use super::PickerScope;
+use super::Zone;
 use super::chat::{ChatView, chat_lines};
-use super::text::{local_stamp, n0};
+use super::text::n0;
 use crate::layout::limit_line;
 use crate::theme::{DIM_CLOSE, DIM_OPEN, Glyphs, TONE_BOLD, TONE_CLOSE, strip_ctl};
 /// The selected session's preview: the detail pane (wide) or the block under the list (narrow).
@@ -12,7 +13,7 @@ pub(super) struct Preview<'a> {
     pub(super) s: &'a Session,
     pub(super) g: &'a Glyphs,
     pub(super) ascii: bool,
-    pub(super) offset: i32,
+    pub(super) zone: Zone,
 }
 
 impl Preview<'_> {
@@ -38,7 +39,7 @@ impl Preview<'_> {
         let dot = if self.ascii { '-' } else { '\u{B7}' };
         let sep = format!("{DIM_OPEN} {dot} {DIM_CLOSE}");
         let mut parts = vec![
-            format!("{DIM_OPEN}{}{DIM_CLOSE}", local_stamp(self.s.modified_ms, self.offset)),
+            format!("{DIM_OPEN}{}{DIM_CLOSE}", self.zone.stamp(self.s.modified_ms)),
             format!("{} msgs", n0_int(self.s.message_count)),
             size_text(self.s.size_bytes),
         ];
@@ -68,7 +69,7 @@ impl Preview<'_> {
             out.push(format!("{DIM_OPEN}{}{DIM_CLOSE}", h.to_string().repeat(width)));
         }
         let room = rows.saturating_sub(out.len());
-        out.extend(chat_lines(chat, width, room, self.ascii, self.offset));
+        out.extend(chat_lines(chat, width, room, self.ascii, self.zone));
         out
     }
 }

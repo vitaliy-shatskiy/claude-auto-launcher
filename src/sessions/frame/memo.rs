@@ -44,7 +44,7 @@ pub(super) fn memo_key(v: &PickerView<'_>) -> u64 {
         v.project_name,
     )
         .hash(&mut h);
-    (v.clock.now_ms.div_euclid(60_000), v.clock.offset_minutes, v.chat).hash(&mut h);
+    (v.clock.now_ms.div_euclid(60_000), v.clock.zone, v.chat).hash(&mut h);
     for s in v.sessions {
         s.hash(&mut h);
     }

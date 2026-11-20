@@ -18,7 +18,7 @@ fn row(id: &str, slug: &str, prompts: i64) -> Session {
 fn clock() -> Clock {
     Clock {
         now_ms: 1_789_560_000_000,
-        offset_minutes: 0,
+        zone: crate::sessions::frame::Zone(|_| 0),
     }
 }
 

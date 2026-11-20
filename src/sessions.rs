@@ -108,7 +108,7 @@ fn clock_now() -> Clock {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
     Clock {
         now_ms,
-        offset_minutes: crate::sys::local_now().map_or(0, |t| t.offset_minutes),
+        zone: frame::Zone::machine(),
     }
 }
 
