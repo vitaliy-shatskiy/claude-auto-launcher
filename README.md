@@ -460,10 +460,15 @@ Protocol 1:
 - `preLaunch`: `env` names may not hold `=` or a control character, values and `args` no NUL (at
   most 64 variables of 8 KiB, 32 arguments of 4 KiB); one bad entry refuses the plugin's whole
   answer with a warning. Plugins run at once; their variables and arguments apply in config order.
-- `actions`: one letter or digit; protocol 1 has the `launch` screen, whose own keys `u w a s d`
-  are refused with a warning, as is a key an earlier plugin took.
+  `preLaunch` may not set the account or its credentials: `CLAUDE_CONFIG_DIR`,
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` or any other `ANTHROPIC_*`
+  variable refuses the answer with a warning.
+- `actions`: one letter or digit. In protocol 1 actions sit only on the `launch` screen (any other
+  `screen` is refused with a warning), whose own keys `u w a s d` are refused too, as is a key an
+  earlier plugin took.
 - `projects` entries join the project screen as `name [plugin]`; a directory the launcher already
-  knows keeps its own row. `sessions` entries join the resume picker tagged `[plugin]` and resume
+  knows keeps its own row. Resume on a plugin-only project lists the sessions Claude stored for
+  that directory, or none - never every session. `sessions` entries join the resume picker tagged `[plugin]` and resume
   with `claude --resume <id>` (an id is letters, digits, `-`, `_`, not starting with `-`).
 - `hooks` and sources run only when the screens or the launch need them, not in preview.
 

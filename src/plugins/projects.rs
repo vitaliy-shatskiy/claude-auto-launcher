@@ -68,7 +68,16 @@ pub fn collect(plugins: &Plugins, runner: &dyn Runner, warnings: &mut Vec<String
     out
 }
 
+/// The folder name Claude Code stores a directory's transcripts under: every character but an
+/// ASCII letter or digit becomes `-`.
+pub fn claude_slug(path: &str) -> String {
+    path.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+}
+
 /// The registry's list with the plugin entries in, newest first; the tag shows whose row it is.
+/// A directory with sessions is already a registry row (that row wins), so a plugin-only row gets
+/// the one slug Claude would use for it: resume there lists that directory's sessions or none,
+/// never the whole account (empty slugs would mean "every project").
 pub fn merge(list: &[Project], extra: &[Entry]) -> Vec<Project> {
     let mut out = list.to_vec();
     for e in extra {
@@ -76,11 +85,12 @@ pub fn merge(list: &[Project], extra: &[Entry]) -> Vec<Project> {
         if out.iter().any(|p| project_key(&p.path) == key) {
             continue;
         }
+        let slug = claude_slug(&e.path);
         out.push(Project {
             name: format!("{} [{}]", e.name, e.plugin),
             path: e.path.clone(),
-            slug: String::new(),
-            slugs: Vec::new(),
+            slug: slug.clone(),
+            slugs: vec![slug],
             worktree: None,
             last_activity_ms: e.last_used_ms,
             hidden: false,

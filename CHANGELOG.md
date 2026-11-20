@@ -24,7 +24,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   launch screen, environment and arguments to the launch (or cancel it), a key on the launch
   screen, and entries to the project list and the resume picker, tagged with the plugin's name. A
   crash, a timeout (the process tree is killed) or bad output is one warning and the launch goes
-  on; nothing unlisted ever runs. `examples/plugin_sample.rs` is a complete plugin.
+  on; nothing unlisted ever runs. A plugin may not set `CLAUDE_CONFIG_DIR` or any `ANTHROPIC_*`
+  variable. `examples/plugin_sample.rs` is a complete plugin.
 
 ### Changed
 
