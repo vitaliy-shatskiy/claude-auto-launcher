@@ -1,9 +1,9 @@
 ╭─ project ─ 3 known ─────────────────────────────────────────────────────────────────────────────╮
-│   current directory                                                                C:\elsewhere │
+│   current directory  C:\elsewhere                                                               │
 │                                                                                                 │
-│ ❯ ↑ p-2                                                                            C:\w\p2 2 min│
-│   p-1                                                                              C:\w\p1 1 min│
-│   p-3                                                                              C:\w\p3 3 min│
+│ ❯ ↑ p-2              C:\w\p2      2 min                                                         │
+│   p-1                C:\w\p1      1 min                                                         │
+│   p-3                C:\w\p3      3 min                                                         │
 │                                                                                                 │
 │   + enter a path...                                                                             │
 │                                                                                                 │

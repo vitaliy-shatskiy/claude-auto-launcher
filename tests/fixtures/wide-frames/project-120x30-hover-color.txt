@@ -1,10 +1,10 @@
 ╭─ project ─ 4 known ─────────────────────────────────────────────────────────────────────────────────────────────────╮
-│   current directory                                                                            [2mC:\Users\sample\here[0m │
+│   current directory  [2mC:\Users\sample\here[0m                                                                           │
 │                                                                                                                     │
-│[48;5;238m   alpha                                                                 [2mC:\Users\sample\Desktop\Projects\alpha[0m[48;5;238m[2m 4 min[0m[48;5;238m[0m│
-│ [93m❯[0m beta-service                                           [2mC:\Users\sample\Desktop\Projects\workspace\beta-service[0m[2m 8 h[0m│
-│   [33m⌂[0m gamma                                               [2mC:\Users\sample\Desktop\Projects\gamma.worktrees\feature[0m[2m 3 d[0m│
-│   delta                                                                                            [2mD:\src\delta[0m[2m 23 d[0m│
+│[48;5;238m   alpha              [2mC:\Users\sample\Desktop\Projects\alpha[0m[48;5;238m                   [2m4 min[0m[48;5;238m                                 [0m│
+│ [93m❯[0m beta-service       [2mC:\Users\sample\Desktop\Projects\workspace\beta-service[0m    [2m8 h[0m                                 │
+│   [33m⌂[0m gamma            [2mC:\Users\sample\Desktop\Projects\gamma.worktrees\feature[0m   [2m3 d[0m                                 │
+│   delta              [2mD:\src\delta[0m                                              [2m23 d[0m                                 │
 │                                                                                                                     │
 │   [35m+[0m enter a path...                                                                                                 │
 │                                                                                                                     │

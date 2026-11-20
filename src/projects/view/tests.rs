@@ -84,6 +84,44 @@ fn plain(f: &Frame) -> Vec<String> {
     f.lines.iter().map(|l| theme::remove_ansi_color(l)).collect()
 }
 
+/// The cell column `needle` starts at in `line`.
+fn col(line: &str, needle: &str) -> usize {
+    display_width(line.split_once(needle).unwrap().0)
+}
+
+#[test]
+fn wide_rows_keep_name_path_and_age_in_compact_columns() {
+    let ps = golden_projects();
+    let lines = plain(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 200, 60)));
+    let row = |name: &str| lines.iter().find(|l| l.contains(name)).unwrap().clone();
+    let longest = r"C:\Users\sample\Desktop\Projects\gamma.worktrees\feature";
+    let path_col = col(&row("gamma"), longest);
+    assert_eq!(col(&row("alpha"), r"C:\Users"), path_col, "paths share one column");
+    assert_eq!(col(&row("delta"), r"D:\src"), path_col);
+    assert_eq!(col(&row("current directory"), r"C:\Users"), path_col, "the cwd row too");
+    assert_eq!(
+        path_col,
+        4 + display_width("current directory") + 2,
+        "two cells after the longest name"
+    );
+    let age_end = |l: &str, age: &str| col(l, age) + display_width(age);
+    let end = path_col + display_width(longest) + 1 + display_width("4 min");
+    assert_eq!(age_end(&row("alpha"), "4 min"), end, "ages right-aligned after the longest path");
+    assert_eq!(age_end(&row("delta"), "23 d"), end);
+}
+
+#[test]
+fn a_long_name_is_capped_at_forty_percent_and_the_path_cut_to_fit() {
+    let mut ps = golden_projects();
+    ps[0].name = "n".repeat(150);
+    let lines = plain(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 120, 30)));
+    let alpha = lines.iter().find(|l| l.contains("nnn")).unwrap();
+    let inner = 120 - 1 - 2;
+    assert_eq!(col(alpha, "C:"), 4 + inner * 2 / 5 + 2, "{alpha}");
+    assert!(alpha.contains('\u{2026}'), "the name ends in an ellipsis: {alpha}");
+    assert!(lines.iter().all(|l| display_width(l) <= 119));
+}
+
 #[test]
 fn golden_project_100x30() {
     let ps = golden_projects();
