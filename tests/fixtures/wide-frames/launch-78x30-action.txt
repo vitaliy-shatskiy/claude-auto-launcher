@@ -1,6 +1,6 @@
   ✻ claude-auto                                                           
 
- ❯ account      [work] ┊ personal ┊ low
+ ❯ account      [work] ┊ personal ┊ low  ‹ a/d ←/→ ›
    remote       ● [on] ○ off ○ on+QR ○ stop server
    action       ● [new] ○ project ○ continue ○ resume ○ worktree
    model        ‹ default ›
@@ -8,6 +8,22 @@
    advisor      ● [default] ○ fable ○ opus ○ off
    permission   ● [default] ○ plan ○ auto ○ acceptEdits ○ bypass
    mode         ● [normal] ○ safe
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   ─────────────────────────────────────────────────────────────────────────
   w/s row  ┊  a/d value  ┊  [enter] next  ┊  [u] maintenance  ┊  [esc] quit

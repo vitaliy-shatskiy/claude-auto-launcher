@@ -7,7 +7,7 @@ use std::time::Instant;
 use serde_json::{Map, Value, json};
 
 use super::{Activation, Hit, Term, UiStop, hit_at};
-use crate::frame::{Frame, RowMap};
+use crate::frame::{Area, Frame, RowMap};
 use crate::input::{Event, KeyPress, MouseEvent, is_hotkey, synthetic_key, vk};
 use crate::timing::{SpanId, Timings, view};
 
@@ -243,12 +243,15 @@ fn run_loop<S: Screen>(
         ..Guards::default()
     };
     let mut size = term.size();
+    let mut left = 0;
     loop {
         screen.before();
         if need_draw {
             size = term.size();
-            let f = screen.draw(view::body_size(tm, size));
-            term.paint(&view::with_footer(tm, f.lines, screen.name(), size));
+            let area = Area::of(size);
+            left = i32::try_from(area.left).unwrap_or(0);
+            let f = screen.draw(view::body_size(tm, area.size()));
+            term.paint(&area.place(view::with_footer(tm, f.lines, screen.name(), area.size())));
             map = Some(f.map);
             if let Some(p) = first_paint.take() {
                 tm.end(p);
@@ -290,7 +293,8 @@ fn run_loop<S: Screen>(
                 }
                 k
             }
-            Event::Mouse(m) => match mouse(screen, term, &m, map.as_ref(), &mut g) {
+            // The row map counts from the area's first column.
+            Event::Mouse(m) => match mouse(screen, term, &MouseEvent { x: m.x - left, ..m }, map.as_ref(), &mut g) {
                 MouseStep::Redraw(d) => {
                     need_draw = d;
                     continue;

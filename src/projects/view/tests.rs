@@ -114,6 +114,25 @@ fn golden_project_200x60_fills_the_terminal() {
     assert_eq!(display_width(&f.lines[0]), 199);
 }
 
+#[test]
+fn golden_project_400x150_draws_a_centred_240x80_page() {
+    let ps = golden_projects();
+    let area = frame::Area::of((400, 150));
+    let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", area.width, area.height));
+    let lines = area.place(f.lines);
+    assert_golden("project-400x150", &lines.join("\n"));
+    assert_eq!(lines.len(), 79);
+    assert!(lines.iter().all(|l| l.starts_with(&" ".repeat(80)) && display_width(l) <= 80 + 239));
+}
+
+#[test]
+fn the_action_row_shows_its_switch_keys() {
+    let ps = golden_projects();
+    let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", 100, 30));
+    let y = usize::try_from(f.map.action.as_ref().unwrap().y).unwrap();
+    assert!(f.lines[y].contains("\u{2039} a/d \u{2190}/\u{2192} \u{203A}"), "{}", f.lines[y]);
+}
+
 fn many(n: usize, prefix: &str) -> Vec<Project> {
     (1..=n)
         .map(|i| Project {

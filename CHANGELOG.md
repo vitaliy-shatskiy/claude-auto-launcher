@@ -52,6 +52,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - The preview card's `first ›`, `last ›` and `reply ›` show markdown as plain text: bold, emphasis,
   code and fence marks, `##` headings, a leading list marker and link targets are dropped; `2*3`,
   `a_b_c`, `*.rs` and paths stay as written. Titles are shown as they are.
+- Every screen is a full page: the launch screen, maintenance, the rows editor and the held-session
+  question span the terminal's width (boxes and rules included) with the footer on the last row
+  but one, like the project screen and the picker. A terminal over 240x80 gets a 240x80 page
+  centred horizontally at the top, clicks counted from its first column. From 155 columns the
+  launch screen's usage bars double to 16 cells.
+- A row that switches with a/d says so: the project screen's action row, and on the launch screen
+  the row under the cursor, end in a dim `‹ a/d ←/→ ›` (`< a/d <-/-> >` in ASCII).
 
 ### Fixed
 

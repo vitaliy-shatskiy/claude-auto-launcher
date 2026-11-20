@@ -139,7 +139,7 @@ pub(crate) fn maintenance_frame(
     }
     let g = glyphs(style.ascii);
     let fw = frame_width(width);
-    let box_width = fw.min(100);
+    let box_width = fw;
     let verdict = if info.matches {
         "yes - newest downloaded build"
     } else {
@@ -184,7 +184,8 @@ pub(crate) fn maintenance_frame(
                 .map(|l| format!("  {l}")),
         );
     }
-    let lines = new_box(&body, box_width, "maintenance", &g, style.ascii);
+    let mut lines = new_box(&body, box_width, "maintenance", &g, style.ascii);
+    crate::frame::pad_to_bottom(&mut lines, height, footer.lines.len());
     let mut map = RowMap::default();
     let painter = |l: &str, e: bool| crate::list::add_picker_color(l, e, &g);
     let lines = complete_frame(&lines, &footer, fw, style, &painter, &light, &mut map);
@@ -255,9 +256,9 @@ impl<'a> MaintScreen<'a> {
     /// Repaints the frame on screen with the current status, before a slow child runs.
     fn paint_running(&mut self, term: &mut dyn Term, text: String) {
         self.status = text;
-        let size = term.size();
-        let f = maintenance_frame(&self.info, size, &self.status, self.style, self.actions, self.cursor.hover);
-        term.paint(&f.lines);
+        let area = crate::frame::Area::of(term.size());
+        let f = maintenance_frame(&self.info, area.size(), &self.status, self.style, self.actions, self.cursor.hover);
+        term.paint(&area.place(f.lines));
     }
 
     fn arm(&mut self, key: char, now: Option<u64>, text: String) {

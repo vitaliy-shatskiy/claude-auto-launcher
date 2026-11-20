@@ -10,6 +10,69 @@ pub const MIN_HEIGHT: usize = 16;
 pub const TWO_PANE_WIDTH: usize = 100;
 pub const SHORT_PICKER_HEIGHT: usize = 30;
 
+/// The largest drawing area: past it a huge terminal gets a centred page, not stretched rows.
+pub const MAX_AREA_WIDTH: usize = 240;
+pub const MAX_AREA_HEIGHT: usize = 80;
+
+/// Where every screen draws: the terminal size capped at `MAX_AREA_*`, centred horizontally
+/// (`left` blank columns before it) and anchored at the top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Area {
+    pub left: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl Area {
+    pub fn of(size: (usize, usize)) -> Self {
+        let width = size.0.min(MAX_AREA_WIDTH);
+        Self {
+            left: (size.0 - width) / 2,
+            width,
+            height: size.1.min(MAX_AREA_HEIGHT),
+        }
+    }
+
+    pub fn size(self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
+    /// The frame's lines moved right to the area's first column.
+    pub fn place(self, lines: Vec<String>) -> Vec<String> {
+        if self.left == 0 {
+            return lines;
+        }
+        let pad = " ".repeat(self.left);
+        lines.into_iter().map(|l| format!("{pad}{l}")).collect()
+    }
+}
+
+/// Blank lines after `lines` so the `below` lines that follow end on the page's last row: the
+/// footer sits at the bottom of the area. The terminal's last row stays free (headroom: a frame
+/// filling it scrolls the alternate buffer by one). A body taller than the page is left alone.
+pub fn pad_to_bottom(lines: &mut Vec<String>, height: usize, below: usize) {
+    let page = height.saturating_sub(1).saturating_sub(below);
+    if lines.len() < page {
+        lines.resize(page, String::new());
+    }
+}
+
+/// The `‹ a/d ←/→ ›` hint drawn dim after the values of a row that switches with a/d and the
+/// arrows: the footer alone does not tell that the row moves.
+pub fn switch_hint(g: &Glyphs) -> String {
+    let arrows = if g.l_angle == '<' { "<-/->" } else { "\u{2190}/\u{2192}" };
+    format!("{}{} a/d {arrows} {}{}", theme::DIM_OPEN, g.l_angle, g.r_angle, theme::DIM_CLOSE)
+}
+
+/// `line` with the switch hint two cells after it, when the whole fits `max` cells.
+pub fn with_switch_hint(line: String, g: &Glyphs, max: usize) -> String {
+    let hint = switch_hint(g);
+    if display_width(&line) + 2 + display_width(&hint) > max {
+        return line;
+    }
+    format!("{line}  {hint}")
+}
+
 /// `Get-FrameWidth`: the last console column is never written (it wraps on some terminals).
 pub fn frame_width(width: usize) -> usize {
     width.saturating_sub(1)

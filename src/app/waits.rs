@@ -126,6 +126,7 @@ impl Screen for HeldConfirm {
                 .map(|l| format!("  {l}")),
         );
         lines.push(String::new());
+        frame::pad_to_bottom(&mut lines, height, footer.lines.len());
         let light = FooterLight {
             hover: frame::footer_hover(&footer, self.cursor.hover),
             selected: Vec::new(),

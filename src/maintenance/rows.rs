@@ -174,7 +174,7 @@ impl Screen for RowsEditor {
         }
         let g = glyphs(self.style.ascii);
         let fw = frame_width(width);
-        let box_w = fw.min(100);
+        let box_w = fw;
         let mut hits = Vec::new();
         let mut body: Vec<String> = Vec::new();
         for (i, (row, on)) in self.entries.iter().enumerate() {
@@ -236,7 +236,8 @@ impl Screen for RowsEditor {
             hover: footer_hover(&footer, self.cursor.hover),
             selected: Vec::new(),
         };
-        let lines = new_box(&body, box_w, "launch rows", &g, self.style.ascii);
+        let mut lines = new_box(&body, box_w, "launch rows", &g, self.style.ascii);
+        crate::frame::pad_to_bottom(&mut lines, height, footer.lines.len());
         let mut map = RowMap {
             rows: hits,
             ..RowMap::default()

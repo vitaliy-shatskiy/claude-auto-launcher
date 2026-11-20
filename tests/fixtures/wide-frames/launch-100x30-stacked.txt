@@ -2,7 +2,7 @@
 │ ✻ claude-auto                                                                                   │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
 
- ❯ account     [work 88%] ┊ personal ┊ low
+ ❯ account     [work 88%] ┊ personal ┊ low  ‹ a/d ←/→ ›
    5h                                                              ▓▓▓▓▓▓▓░  88%
    7d                                                              ░░░░░░░░   5%
    bucket-bucket-bucket-bucket-bucket-bucket-bucket-bucket-bucket- ▓▓▓▓▓░░░  61%   3 d ago
@@ -12,6 +12,18 @@
    advisor     ● [default] ○ fable ○ opus ○ off
    permission  ● [default] ○ plan ○ auto ○ acceptEdits ○ bypass
    mode        ● [normal] ○ safe
+
+
+
+
+
+
+
+
+
+
+
+
 
   ───────────────────────────────────────────────────────────────────────────────────────────────
   w/s row  ┊  a/d value  ┊  [enter] next  ┊  [u] maintenance  ┊  [esc] quit
