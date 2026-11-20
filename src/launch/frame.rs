@@ -9,8 +9,8 @@ use crate::frame::{
     self, CellSpan, Footer, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RadioSpec, RowHit, RowMap, Style, TWO_PANE_WIDTH,
     measure_cell_spans, new_hint_footer, new_radio_row,
 };
-use crate::layout::{display_width, new_box};
-use crate::theme::{self, BarStyle, Glyphs, new_bar};
+use crate::layout::display_width;
+use crate::theme::{self, Glyphs};
 use crate::types::{DefaultLabels, LimitRecord, Limits, VersionInfo};
 
 /// Everything the launch frame draws from.
@@ -27,19 +27,21 @@ pub struct LaunchFrameInput<'a> {
     pub default_advisor_label: &'a str,
     pub default_labels: &'a DefaultLabels,
     pub style: Style,
-    /// The self-update line, drawn dim under the restored status.
+    /// The self-update line, drawn dim on the page's last row.
     pub notice: Option<&'a str>,
+    /// How many warnings maintenance holds: the footer's badge.
+    pub warnings: usize,
 }
 
-/// One limit as label, percent and an age of its own, in drawing order: five hour, seven day,
-/// model bucket (aged when it came from a stale widget export).
-fn limit_items(l: &LimitRecord) -> Vec<(String, i64, String)> {
+/// The account's limits for the header's right end, `5h 4% · 7d 96% · fable 24% · 4 h ago`:
+/// percentages only, the data age last; empty without a record.
+pub fn limits_text(l: &LimitRecord, g: &Glyphs) -> String {
     let mut items = Vec::new();
     if let Some(p) = l.five_hour {
-        items.push(("5h".to_owned(), p, String::new()));
+        items.push(format!("5h {p}%"));
     }
     if let Some(p) = l.seven_day {
-        items.push(("7d".to_owned(), p, String::new()));
+        items.push(format!("7d {p}%"));
     }
     if let Some(p) = l.model {
         let label = l
@@ -48,94 +50,16 @@ fn limit_items(l: &LimitRecord) -> Vec<(String, i64, String)> {
             .filter(|s| !s.is_empty())
             .map_or_else(|| "model".to_owned(), str::to_lowercase);
         let age = l.model_age.as_deref().map_or_else(String::new, |a| format!(" ({a})"));
-        items.push((label, p, age));
+        items.push(format!("{label} {p}%{age}"));
     }
-    items
-}
-
-const WIDE_BAR: usize = 8;
-/// From `GROW_AT_INNER` cells (a 155-column terminal) the wide bars double, at most this wide.
-const GROWN_BAR: usize = 16;
-const GROW_AT_INNER: usize = 150;
-/// The narrow tier's bar widths, widest first.
-const NARROW_BARS: [usize; 3] = [8, 6, 4];
-/// The row labels' column: the narrow usage row moves here before it gives up its bars.
-const LABEL_COLUMN: usize = 3;
-const LIMIT_SEP: &str = "   ";
-
-/// The usage row under the account tabs: one fixed-width cell per limit (label padded to the
-/// longest, a bar, the percent right-aligned), the age last. It starts on the value column of the
-/// rows below. The wide tier stacks the cells one per line when they do not fit. The narrow tier
-/// tries narrower bars, then the label column, then drops the bars, then keeps the leading
-/// pieces that fit.
-pub fn limit_lines(l: &LimitRecord, indent: usize, inner: usize, wide: bool, g: &Glyphs) -> Vec<String> {
-    let items = limit_items(l);
     if items.is_empty() {
-        return Vec::new();
+        return String::new();
     }
-    let lw = items.iter().map(|(label, _, _)| label.chars().count()).max().unwrap_or(0);
-    let cells = |bar: usize| -> Vec<String> {
-        items
-            .iter()
-            .map(|(label, p, age)| {
-                if bar == 0 {
-                    format!("{label:<lw$} {p:>3}%{age}")
-                } else {
-                    format!("{label:<lw$} {} {p:>3}%{age}", new_bar(*p, bar, g, BarStyle::Blocks))
-                }
-            })
-            .collect()
-    };
-    let age = (!l.age_text.is_empty()).then_some(l.age_text.as_str());
-    let tries: Vec<(usize, usize)> = if wide {
-        let grown = if inner >= GROW_AT_INNER { GROWN_BAR } else { WIDE_BAR };
-        vec![(indent, grown), (indent, WIDE_BAR)]
-    } else {
-        [indent, LABEL_COLUMN]
-            .iter()
-            .flat_map(|i| NARROW_BARS.iter().map(move |b| (*i, *b)))
-            .chain([(LABEL_COLUMN, 0)])
-            .collect()
-    };
-    for (at, bar) in tries {
-        let mut pieces = cells(bar);
-        pieces.extend(age.map(str::to_owned));
-        let one = format!("{}{}", " ".repeat(at), pieces.join(LIMIT_SEP));
-        if display_width(&one) <= inner {
-            return vec![one];
-        }
+    if !l.age_text.is_empty() {
+        items.push(l.age_text.clone());
     }
-    if wide {
-        let stacked = cells(WIDE_BAR);
-        let last = stacked.len() - 1;
-        let fits = stacked
-            .iter()
-            .all(|c| indent + display_width(c) + LIMIT_SEP.len() + age.map_or(0, display_width) <= inner);
-        let lead = " ".repeat(if fits { indent } else { LABEL_COLUMN });
-        return stacked
-            .into_iter()
-            .enumerate()
-            .map(|(i, c)| match age.filter(|_| i == last) {
-                Some(a) => format!("{lead}{c}{LIMIT_SEP}{a}"),
-                None => format!("{lead}{c}"),
-            })
-            .collect();
-    }
-    let mut line = " ".repeat(LABEL_COLUMN);
-    for (i, p) in cells(0).into_iter().chain(age.map(str::to_owned)).enumerate() {
-        let next = if i == 0 {
-            format!("{line}{p}")
-        } else {
-            format!("{line}{LIMIT_SEP}{p}")
-        };
-        if display_width(&next) > inner {
-            break;
-        }
-        line = next;
-    }
-    (!line.trim().is_empty()).then_some(line).into_iter().collect()
+    items.join(&format!(" {} ", g.dot))
 }
-
 fn pad_right(s: &str, width: usize) -> String {
     format!("{s:<width$}")
 }
@@ -143,10 +67,7 @@ fn pad_right(s: &str, width: usize) -> String {
 #[expect(clippy::too_many_lines, reason = "one row loop, as in Screens.ps1")]
 pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let state = inp.state;
-    let (restored, restored_age): (Vec<String>, String) = inp.restored.map_or_else(
-        || (state.restored.clone(), state.restored_age.clone()),
-        |(r, a)| (r.to_vec(), a.to_owned()),
-    );
+    let restored: Vec<String> = inp.restored.map_or_else(|| state.restored.clone(), |(r, _)| r.to_vec());
     if inp.width < MIN_WIDTH || inp.height < MIN_HEIGHT {
         return Frame {
             lines: frame::too_small_frame(inp.width, inp.height, inp.style.ascii),
@@ -164,18 +85,15 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         roster.rows.iter().map(|r| r.label.len()).max().unwrap_or(0) + 3
     };
 
-    let left = format!(" {} claude-auto", g.sparkle);
-    let mut right = String::new();
+    let mut title = format!("{} claude-auto", g.sparkle);
     if let Some(inst) = inp.version.installed.as_deref().filter(|s| !s.is_empty()) {
-        right = format!("v{inst}");
+        title = format!("{title} {} v{inst}", g.h);
         if let Some(newest) = inp.version.newest.as_deref().filter(|n| !n.is_empty() && *n != inst) {
-            right = format!("{right}  {} {newest}", g.up);
+            title = format!("{title} {} {newest}", g.up);
         }
     }
-    let pad = inner.saturating_sub(display_width(&left) + display_width(&right)).max(1);
-    let header = format!("{left}{}{right}", " ".repeat(pad));
-
     let limit = inp.limits.get(&state.account);
+    let limits = limit.map_or_else(String::new, |l| limits_text(l, &g));
     let available = limit.and_then(|l| l.available_models.as_deref());
     let ctx = OptionText {
         default_model_label: inp.default_model_label,
@@ -255,72 +173,80 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         }
         hits.push((i, row.name.as_str(), body.len(), cells));
         body.push(line);
-        if row.name == RowName::Account
-            && let Some(l) = limit
-        {
-            body.extend(limit_lines(l, 3 + label_width, inner, wide, &g));
-        }
     }
 
-    let head: Vec<String> = if wide {
-        new_box(&[header], box_width, "", &g, inp.style.ascii)
-    } else {
-        vec![format!(" {header}")]
-    };
-    let offset = head.len() + 1;
+    // The rows sit inside the page frame: one row below its top border, one column right of its side.
     let mut map = RowMap {
         rows: hits
             .into_iter()
             .map(|(index, name, y, cells)| RowHit {
                 index,
                 name: name.to_owned(),
-                y: i32::try_from(offset + y).unwrap_or(0),
-                cells,
+                y: i32::try_from(1 + y).unwrap_or(0),
+                cells: cells
+                    .into_iter()
+                    .map(|c| CellSpan {
+                        start: c.start + 1,
+                        end: c.end + 1,
+                        ..c
+                    })
+                    .collect(),
             })
             .collect(),
         ..RowMap::default()
     };
-    let mut lines = head;
-    lines.push(String::new());
-    lines.extend(body);
-    lines.push(String::new());
-    let mut tail = vec![format!("  {}", std::iter::repeat_n(g.h, box_width - 4).collect::<String>())];
-    if !restored.is_empty() {
-        let when = if restored_age == "just now" {
-            "just now".to_owned()
-        } else {
-            format!("{restored_age} ago")
-        };
-        tail.push(format!("  * restored ({when}), ctrl+r resets"));
+    let extra = LaunchHints {
+        warnings: inp.warnings,
+        restored: !restored.is_empty(),
+    };
+    let footer = launch_footer(&g, fw, inp.style.color, &extra);
+    // The self-update notice is the page's last row, dim.
+    if let Some(n) = inp.notice {
+        let rows = inp.height.saturating_sub(4 + footer.lines.len());
+        body.resize(rows.max(body.len()), String::new());
+        body.push(format!("{}{}{n}{}", frame::PAD, theme::DIM_OPEN, theme::DIM_CLOSE));
     }
-    tail.extend(inp.notice.map(|n| format!("  {}{n}{}", theme::DIM_OPEN, theme::DIM_CLOSE)));
-    let footer = launch_footer(&g, fw, inp.style.color);
-    // The rule and the status close the page together with the footer.
-    frame::pad_to_bottom(&mut lines, inp.height, tail.len() + footer.lines.len());
-    lines.extend(tail);
+    let lines = frame::page(body, (inp.width, inp.height), footer.lines.len(), &title, &limits, inp.style);
     let light = FooterLight {
         hover: frame::footer_hover(&footer, state.hover),
         selected: Vec::new(),
     };
-    let painter = |l: &str, enabled: bool| add_launch_color(l, enabled, &g, roster);
+    // Painted inside the side border: the row painters anchor on the row's own first column.
+    let painter = |l: &str, enabled: bool| match l.strip_prefix(g.v) {
+        Some(rest) => format!("{}{}", g.v, add_launch_color(rest, enabled, &g, roster)),
+        None => add_launch_color(l, enabled, &g, roster),
+    };
     let lines = frame::complete_frame(&lines, &footer, fw, inp.style, &painter, &light, &mut map);
     Frame { lines, map }
 }
 
 /// The footer: arrows are not clickable ("w/s" names two directions), every single action is.
-pub fn launch_footer(g: &Glyphs, width: usize, color: bool) -> Footer {
-    new_hint_footer(
-        &[
-            Hint::plain("w/s", "row").kept(),
-            Hint::plain(frame::switch_keys(g), "switch").kept(),
-            Hint::key("enter", "next", "Enter"),
-            Hint::ch("u", "maintenance", 'u'),
-            Hint::key("esc", "quit", "Escape"),
-        ],
-        g,
-        width,
-        !color,
-    )
+pub fn launch_footer(g: &Glyphs, width: usize, color: bool, extra: &LaunchHints) -> Footer {
+    let badge = if extra.warnings > 0 {
+        format!("{} {}", g.warn, extra.warnings)
+    } else {
+        String::new()
+    };
+    let mut hints = vec![
+        Hint::plain("w/s", "row").kept(),
+        Hint::plain(frame::switch_keys(g), "switch").kept(),
+        Hint::key("enter", "next", "Enter"),
+        Hint::ch("u", "maintenance", 'u').badged(badge),
+    ];
+    if extra.restored {
+        hints.push(Hint::plain("ctrl+r", "reset").kept());
+    }
+    hints.push(Hint::key("esc", "quit", "Escape"));
+    new_hint_footer(&hints, g, width, !color)
+}
+
+/// What the launch footer shows besides its fixed keys.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LaunchHints {
+    /// Collected warnings: a yellow `⚠ N` badge on `u maintenance`.
+    pub warnings: usize,
+    /// A row was restored: `ctrl+r reset` is offered.
+    pub restored: bool,
 }
 
 #[expect(

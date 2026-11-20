@@ -29,6 +29,7 @@ impl Screen for List {
             key: "Enter".into(),
             ch: None,
             line: 0,
+            badge: 0,
         }];
         Frame {
             lines,

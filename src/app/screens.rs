@@ -157,7 +157,11 @@ pub(super) fn run_ui(
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
             if is_hotkey(k, 'u') {
                 open_maintenance(&update, tm, t, run.preview, |t| {
-                    if maintenance::run_screen(t, &run.cfg, style, local_update).is_ok() {
+                    let shown = maintenance::Shown {
+                        warnings: &run.warnings,
+                        version: &view.version,
+                    };
+                    if maintenance::run_screen(t, &run.cfg, style, local_update, &shown).is_ok() {
                         t.drain();
                     }
                 });
@@ -168,7 +172,8 @@ pub(super) fn run_ui(
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
             .with_rows(&mut rows_store)
             .with_update(&update)
-            .with_self_update(launcher);
+            .with_self_update(launcher)
+            .with_warnings(run.warnings.len());
         let Some(next) = crate::ui::screen_loop::run(&mut screen, term.as_mut())? else {
             break UiEnd::Cancelled;
         };

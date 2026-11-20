@@ -57,6 +57,8 @@ pub struct LaunchScreen<'a> {
     update: Option<&'a RefCell<UpdateWatch>>,
     /// The launcher's own update check: its line shows above the footer.
     launcher: Option<&'a RefCell<crate::self_update::Watch>>,
+    /// Warnings maintenance shows: the footer's badge count.
+    warnings: usize,
 }
 
 impl std::fmt::Debug for LaunchScreen<'_> {
@@ -113,6 +115,7 @@ impl<'a> LaunchScreen<'a> {
             disk: RowsConfig::default(),
             update: None,
             launcher: None,
+            warnings: 0,
         }
     }
 
@@ -130,6 +133,13 @@ impl<'a> LaunchScreen<'a> {
         self.update = Some(update);
         self.take_update();
         self.apply_update();
+        self
+    }
+
+    /// The number of collected warnings, badged on the footer's maintenance key.
+    #[must_use]
+    pub(crate) fn with_warnings(mut self, n: usize) -> Self {
+        self.warnings = n;
         self
     }
 
@@ -246,6 +256,7 @@ impl Screen for LaunchScreen<'_> {
             version: &self.view.version,
             restored: None,
             notice: notice.as_deref(),
+            warnings: self.warnings,
             default_model_label: &self.view.default_model_label,
             default_advisor_label: &self.view.default_advisor_label,
             default_labels: self.labels(),

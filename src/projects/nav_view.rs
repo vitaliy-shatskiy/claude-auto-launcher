@@ -63,7 +63,8 @@ pub(crate) fn navigator_frame(v: &NavView<'_>) -> Frame {
     let inner = fw.saturating_sub(2);
     let footer = new_hint_footer(&hints(v.nav.confirm.is_some()), &g, fw, !v.style.color);
     let rows = &v.nav.rows;
-    let list_lines = v.height.saturating_sub(7 + footer.lines.len()).max(3);
+    // Field, status, the list and the action row fill the page down to the footer.
+    let list_lines = v.height.saturating_sub(6 + footer.lines.len()).max(3);
     let index = v.index.min(rows.len().saturating_sub(1));
     let (start, visible) = viewport(rows.len(), index, list_lines);
     let field = format!(

@@ -240,6 +240,12 @@ fn repeat(c: char, n: usize) -> String {
 
 /// A frame of exactly `width` columns; content is truncated, never wrapped.
 pub fn new_box(lines: &[String], width: usize, title: &str, g: &Glyphs, ascii: bool) -> Vec<String> {
+    new_titled_box(lines, width, title, "", g, ascii)
+}
+
+/// `new_box` with `right` at the top border's right end: `╭─ title ──── right ─╮`. The right text
+/// goes first when the border is too narrow for both; the title is cut only after it.
+pub fn new_titled_box(lines: &[String], width: usize, title: &str, right: &str, g: &Glyphs, ascii: bool) -> Vec<String> {
     if width < 3 {
         return Vec::new();
     }
@@ -249,9 +255,18 @@ pub fn new_box(lines: &[String], width: usize, title: &str, g: &Glyphs, ascii: b
         top.push_str(&repeat(g.h, inner));
     } else {
         let label = limit_line(&format!(" {title} "), inner.saturating_sub(2), ascii);
+        let used = display_width(&label) + 1;
+        let right = format!(" {right} ");
         top.push(g.h);
         top.push_str(&label);
-        top.push_str(&repeat(g.h, inner.saturating_sub(display_width(&label) + 1)));
+        // One rule cell on each side of the right text, or it is left out.
+        if right.trim().is_empty() || used + 1 + display_width(&right) + 1 > inner {
+            top.push_str(&repeat(g.h, inner.saturating_sub(used)));
+        } else {
+            top.push_str(&repeat(g.h, inner - used - display_width(&right) - 1));
+            top.push_str(&right);
+            top.push(g.h);
+        }
     }
     top.push(g.tr);
     let mut out = vec![top];
@@ -339,6 +354,15 @@ mod tests {
         assert_eq!(b, ["+--------+", "|hi      |", "+--------+"]);
         let t = new_box(&[], 12, "T", &g, true);
         assert_eq!(t.first().map(String::as_str), Some("+- T ------+"));
+    }
+
+    #[test]
+    fn titled_box_puts_the_right_text_at_the_end_and_drops_it_first() {
+        let g = glyphs(true);
+        let top = |w: usize| new_titled_box(&[], w, "app - v1", "5h 4%", &g, true).remove(0);
+        assert_eq!(top(24), "+- app - v1 --- 5h 4% -+");
+        assert_eq!(top(20), "+- app - v1 -------+", "too narrow for both: the right text goes");
+        assert_eq!(top(20).len(), 20);
     }
 
     #[test]

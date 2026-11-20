@@ -3,7 +3,8 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use super::*;
-use crate::input::{Event, MouseEvent, vk};
+use crate::frame::{MIN_HEIGHT, RowMap, frame_width};
+use crate::input::{Event, MouseEvent};
 use crate::layout::display_width;
 use crate::ui::screen_loop::run;
 use crate::ui::{Activation, PreviewTerm, UiStop};
@@ -39,6 +40,24 @@ fn reindex() -> Vec<MaintenanceAction> {
     }]
 }
 
+/// The page as the screen builds it: built-in rows, then `actions`; `status` as the last
+/// action's report (done) when not empty.
+fn page_of(i: InstallInfo, status: &str, actions: &[MaintenanceAction]) -> Page {
+    Page {
+        info: i,
+        entries: entries(&[], actions),
+        last: "doctor".into(),
+        phase: if status.is_empty() { Phase::Idle } else { Phase::Done },
+        status: status.into(),
+        hover: -1,
+        ..Page::default()
+    }
+}
+
+fn draw(p: &Page, size: (usize, usize)) -> Frame {
+    maintenance_frame(p, size, plain())
+}
+
 fn widest(lines: &[String]) -> usize {
     lines
         .iter()
@@ -53,42 +72,36 @@ fn count(lines: &[String], needle: &str) -> usize {
 
 #[test]
 fn frame_fills_the_frame_width_and_shows_the_newest_version() {
-    let f = maintenance_frame(&info(false, Some("A"), Some("B")), (80, 24), "", plain(), &[], -1);
+    let f = draw(&page_of(info(true, Some("A"), Some("A")), "", &[]), (80, 24));
     assert_eq!(widest(&f.lines), frame_width(80));
-    assert_eq!(count(&f.lines, "2.1.230"), 1);
+    assert_eq!(count(&f.lines, "Claude Code  2.1.230 \u{b7} newest"), 1, "{:#?}", f.lines);
+    assert_eq!(f.lines.len(), 23, "the page reaches the footer, the last row stays free");
 }
 
 #[test]
-fn width_60_keeps_hash_version_and_size_whole() {
+fn an_older_install_says_an_update_is_available() {
+    let mut p = page_of(info(false, None, None), "", &[]);
+    p.installed = Some("2.1.226".into());
+    let f = draw(&p, (100, 30));
+    assert_eq!(count(&f.lines, "2.1.226 \u{b7} update available 2.1.230"), 1, "{:#?}", f.lines);
+}
+
+#[test]
+fn builds_on_disk_read_as_words_and_hashes_stay_off() {
     let (a, b) = ("a1".repeat(32), "b2".repeat(32));
     let mut i = info(false, Some(&a), Some(&b));
     i.version_count = 12;
     i.versions_bytes = 3_650_722_201;
-    let f = maintenance_frame(&i, (60, MIN_HEIGHT), "", plain(), &[], -1);
+    let f = draw(&page_of(i, "", &[]), (60, MIN_HEIGHT + 8));
     assert_eq!(widest(&f.lines), frame_width(60));
-    assert_eq!(count(&f.lines, a.get(..16).unwrap()), 1);
-    assert_eq!(count(&f.lines, "12 builds, 3.4 GB"), 1);
-}
-
-#[test]
-fn short_or_missing_hashes_render() {
-    let f = maintenance_frame(&info(false, Some("ab12c"), Some("de34f")), (78, 24), "", plain(), &[], -1);
-    assert_eq!(count(&f.lines, "hash        ab12c"), 1, "a short installed hash is drawn whole");
-    assert_eq!(count(&f.lines, "hash        de34f"), 1, "a short newest hash is drawn whole");
-    let bare = InstallInfo {
-        bin_path: BIN.into(),
-        ..InstallInfo::default()
-    };
-    let f = maintenance_frame(&bare, (78, 24), "", plain(), &[], -1);
-    assert_eq!(count(&f.lines, "Exception") + count(&f.lines, "error"), 0);
-    let f = maintenance_frame(&InstallInfo::default(), (78, 24), "", plain(), &[], -1);
-    assert_eq!(count(&f.lines, "missing") + count(&f.lines, "none downloaded"), 2);
+    assert_eq!(count(&f.lines, "12 builds on disk \u{b7} 3.4 GB"), 1, "{:#?}", f.lines);
+    assert_eq!(count(&f.lines, "a1a1"), 0, "no hash on the page");
 }
 
 #[test]
 fn a_multi_line_status_lands_one_row_per_line() {
     let s = "Running: native (2.1.229)\nPlatform: win32-x64\n\nNo installation issues found.";
-    let f = maintenance_frame(&info(false, None, None), (78, 24), s, plain(), &[], -1);
+    let f = draw(&page_of(info(false, None, None), s, &[]), (100, 30));
     assert_eq!(count(&f.lines, "\n"), 0);
     for needle in ["Running: native", "Platform: win32-x64", "No installation issues found"] {
         assert_eq!(count(&f.lines, needle), 1, "{needle}");
@@ -96,81 +109,151 @@ fn a_multi_line_status_lands_one_row_per_line() {
 }
 
 #[test]
-fn a_long_status_wraps_and_a_tall_one_is_capped_with_headroom() {
-    let one = "the updater could not overwrite the running claude.exe, so it was installed by rename: now 2.1.230, verified by hash";
-    let f = maintenance_frame(&info(false, None, None), (78, 24), one, plain(), &[], -1);
-    assert_eq!(count(&f.lines, "verified by hash"), 1);
+fn a_tall_status_is_capped_with_headroom_at_every_size() {
     let long: Vec<String> = (1..=40).map(|i| format!("status line {i}")).collect();
     let long = long.join("\n");
-    for h in [16, 24, 50] {
-        let f = maintenance_frame(&info(false, None, None), (78, h), &long, plain(), &[], -1);
-        assert!(f.lines.len() < h, "a spare row at height {h}");
+    for size in [(50, MIN_HEIGHT), (78, 24), (100, 30), (160, 45)] {
+        let f = draw(&page_of(info(false, None, None), &long, &reindex()), size);
+        assert!(f.lines.len() < size.1, "a spare row at {size:?}");
+        assert!(widest(&f.lines) < size.0, "{size:?}");
+        assert_eq!(count(&f.lines, "status line 40"), 0, "{size:?}");
     }
-    let f = maintenance_frame(&info(false, None, None), (78, 24), &long, plain(), &[], -1);
+    let f = draw(&page_of(info(false, None, None), &long, &[]), (100, 30));
     assert_eq!(count(&f.lines, "status line 1 "), 1, "the cap keeps the head");
-    assert_eq!(count(&f.lines, "status line 40"), 0);
     assert_eq!(count(&f.lines, "more lines"), 1);
 }
 
 #[test]
-fn both_verdicts_survive_the_minimum_width() {
-    for w in [50, 60] {
-        let f = maintenance_frame(&info(false, None, None), (w, MIN_HEIGHT), "", plain(), &[], -1);
-        assert_eq!(count(&f.lines, "press u to install it"), 1, "width {w}");
-        let f = maintenance_frame(&info(true, None, None), (w, MIN_HEIGHT), "", plain(), &[], -1);
-        assert_eq!(count(&f.lines, "newest downloaded build"), 1, "width {w}");
+fn every_action_has_one_row_with_its_chip_and_name() {
+    let f = draw(&page_of(info(true, None, None), "", &reindex()), (100, 24));
+    let keys: Vec<String> = f.map.rows.iter().map(|r| r.name.clone()).collect();
+    assert_eq!(keys, ["u", "r", "p", "d", "m", "l", "i"]);
+    for (key, name) in [
+        ('u', "update Claude Code"),
+        ('r', "update anyway (rename)"),
+        ('p', "delete old builds"),
+        ('d', "doctor"),
+        ('m', "MCP servers"),
+        ('l', "launch rows"),
+        ('i', "full reindex"),
+    ] {
+        assert_eq!(count(&f.lines, &format!("[{key}] {name}")), 1, "{key}: {:#?}", f.lines);
     }
+    let y = |k: &str| usize::try_from(f.map.rows.iter().find(|r| r.name == k).unwrap().y).unwrap();
+    assert!(f.lines[y("m")].contains("[m] MCP servers"), "the row map points at the drawn row");
 }
 
-fn footer_keys(map: &RowMap) -> String {
-    map.footer
+#[test]
+fn only_the_selected_row_shows_its_hint() {
+    let mut p = page_of(info(true, None, None), "", &reindex());
+    p.selected = 1;
+    let f = draw(&p, (120, 30));
+    assert_eq!(count(&f.lines, "while sessions hold claude.exe"), 1, "{:#?}", f.lines);
+    assert_eq!(count(&f.lines, "keeps the two newest"), 0, "no column of descriptions");
+    assert_eq!(count(&f.lines, "custom"), 0);
+    p.selected = 6;
+    assert_eq!(
+        count(&draw(&p, (120, 30)).lines, "custom"),
+        1,
+        "a configured action is marked custom"
+    );
+}
+
+#[test]
+fn the_name_column_lines_up_on_every_row() {
+    let f = draw(&page_of(info(true, None, None), "", &reindex()), (120, 30));
+    let cols: Vec<usize> = f
+        .map
+        .rows
         .iter()
-        .map(|s| s.ch.map_or_else(|| s.key.clone(), |c| c.to_string()))
-        .collect::<Vec<_>>()
-        .join(",")
+        .map(|r| {
+            let line = &f.lines[usize::try_from(r.y).unwrap()];
+            line.chars().position(|c| c == ']').unwrap()
+        })
+        .collect();
+    assert!(cols.windows(2).all(|w| w[0] == w[1]), "{cols:?}");
 }
 
 #[test]
-fn every_hint_is_clickable_even_at_50_columns_with_a_cjk_label() {
-    let f = maintenance_frame(&info(true, None, None), (100, 24), "", plain(), &reindex(), -1);
-    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,l,i,Escape");
-    let mut cjk = reindex();
-    cjk[0].label = "\u{5168}\u{91CF}\u{91CD}\u{5EFA}\u{7D22}\u{5F15}\u{FF08}\u{6162}\u{FF09}".into();
-    let f = maintenance_frame(&info(true, None, None), (50, 24), "", plain(), &cjk, -1);
-    assert_eq!(footer_keys(&f.map), "u,r,d,m,p,l,i,Escape");
-    assert!(widest(&f.lines) <= 49);
-    assert!(f.lines.join("\n").contains(&cjk[0].label));
+fn warnings_are_listed_with_the_place_to_fix_them() {
+    let mut p = page_of(info(true, None, None), "", &[]);
+    assert_eq!(count(&draw(&p, (120, 30)).lines, "Warnings     none"), 1);
+    p.warnings = vec!["config: unknown key \"colour\"".into(), "plugin git: describe timed out".into()];
+    p.config_path = r"C:\Users\sample\.claude\claude-auto.json".into();
+    let f = draw(&p, (160, 45));
+    assert_eq!(count(&f.lines, "\u{26a0} config: unknown key \"colour\""), 1, "{:#?}", f.lines);
+    assert_eq!(count(&f.lines, "fix it in C:\\Users\\sample\\.claude\\claude-auto.json"), 1);
+    assert_eq!(count(&f.lines, "\u{26a0} plugin git: describe timed out"), 1);
 }
 
 #[test]
-fn at_50_columns_every_hint_is_readable_and_the_frame_has_headroom() {
+fn the_last_action_reads_done_failed_or_its_live_step() {
+    let mut p = page_of(info(true, None, None), "", &[]);
+    "MCP servers".clone_into(&mut p.last);
+    for (phase, needle) in [
+        (
+            Phase::Running("checking\u{2026} \u{b7} 3 s".into()),
+            "MCP servers \u{b7} checking\u{2026} \u{b7} 3 s",
+        ),
+        (Phase::Done, "MCP servers \u{b7} done"),
+        (
+            Phase::Failed("1 of 2 connected".into()),
+            "MCP servers \u{b7} failed: 1 of 2 connected",
+        ),
+    ] {
+        p.phase = phase;
+        let f = draw(&p, (120, 30));
+        assert_eq!(count(&f.lines, needle), 1, "{needle}: {:#?}", f.lines);
+    }
+    p.phase = Phase::Done;
+    let colored = maintenance_frame(&p, (120, 30), Style { color: true, ascii: false });
+    assert!(colored.lines.iter().any(|l| l.contains(&format!("{}done", crate::theme::GREEN))));
+}
+
+#[test]
+fn mcp_list_output_becomes_a_count_and_the_server_lines() {
+    let out =
+        "Checking MCP server health\u{2026}\n\nalpha: npx alpha - \u{2714} Connected\nbeta: http://x (HTTP) - \u{2717} Failed to connect";
+    let v = mcp_summary(Verdict::done(out));
+    assert!(!v.ok);
+    assert_eq!(v.text.lines().next(), Some("1 of 2 connected"));
+    assert!(!v.text.contains("Checking"), "{}", v.text);
+    let all = mcp_summary(Verdict::done("Checking\u{2026}\n\nalpha: npx alpha - \u{2714} Connected"));
+    assert!(all.ok && all.text.starts_with("1 of 1 connected"), "{all:?}");
+    let none = mcp_summary(Verdict::done("No MCP servers configured."));
+    assert_eq!(none, Verdict::done("No MCP servers configured."));
+}
+
+/// The root cause of the stuck MCP check: `claude mcp list` exits while an MCP server it started
+/// still holds the inherited output pipe. Here `cmd` exits at once and leaves `ping` holding it for
+/// 40 s; the read must end about a second after the exit, past nextest's 30 s kill otherwise.
+#[test]
+fn a_grandchild_holding_the_pipe_never_holds_the_screen() {
+    let mut seen = Vec::new();
+    let mut step = |l: &str| seen.push(l.trim().to_owned());
+    let (text, code) = crate::maintenance::captured_live(
+        Path::new("cmd.exe"),
+        &["/d", "/c", "start /b ping -n 40 127.0.0.1 >nul & echo checked"],
+        &mut step,
+    )
+    .unwrap();
+    assert_eq!(code, 0);
+    assert!(text.contains("checked"), "{text}");
+    assert!(seen.iter().any(|l| l == "checked"), "every line reaches the step line: {seen:?}");
+}
+
+#[test]
+fn both_page_layouts_keep_the_frame_at_50_columns() {
     let long: Vec<String> = (1..=40).map(|i| format!("status line {i} with some words in it")).collect();
     for h in [MIN_HEIGHT, 24, 30] {
-        let f = maintenance_frame(&info(false, None, None), (50, h), &long.join("\n"), plain(), &reindex(), -1);
+        let f = draw(&page_of(info(false, None, None), &long.join("\n"), &reindex()), (50, h));
         let text = f.lines.join("\n");
-        for hint in [
-            "[u] update",
-            "[r] rename swap",
-            "[d] doctor",
-            "[m] mcp list",
-            "[p] prune",
-            "[i] full reindex",
-            "[esc] back",
-        ] {
-            assert!(text.contains(hint), "50x{h}: {hint}");
+        for row in ["[u] update Claude Code", "[l] launch rows", "[i] full reindex", "[esc] back"] {
+            assert!(text.contains(row), "50x{h}: {row}");
         }
+        assert!(f.lines[0].starts_with("\u{256d}\u{2500} maintenance"), "50x{h}: {}", f.lines[0]);
         assert!(f.lines.len() < h);
     }
-    let f = maintenance_frame(&info(false, None, None), (50, 24), "", plain(), &reindex(), -1);
-    assert!(f.map.footer_lines >= 2, "at 50 columns the footer wraps");
-}
-
-#[test]
-fn no_action_no_hint() {
-    let f = maintenance_frame(&info(false, None, None), (78, 24), "", plain(), &[], -1);
-    assert!(!f.lines.join("\n").contains("full reindex"));
-    let f = maintenance_frame(&info(false, None, None), (78, 24), "", plain(), &reindex(), -1);
-    assert!(f.lines.join("\n").contains("[i] full reindex"));
 }
 
 #[test]
@@ -262,22 +345,23 @@ impl Ops for FakeOps {
             ..InstallInfo::default()
         }
     }
-    fn update(&mut self) -> String {
+    fn update(&mut self, step: Step<'_>) -> Verdict {
+        step("downloading 45 %");
         self.log.borrow_mut().updates += 1;
-        "updated".into()
+        Verdict::done("updated")
     }
-    fn rename_swap(&mut self) -> String {
-        "swapped".into()
+    fn rename_swap(&mut self) -> Verdict {
+        Verdict::done("swapped")
     }
-    fn command_text(&mut self, args: &[&str]) -> String {
+    fn command_text(&mut self, args: &[&str], _step: Step<'_>) -> Verdict {
         self.log.borrow_mut().doctor += 1;
-        format!("doctor report for {}", args.join(" "))
+        Verdict::done(format!("doctor report for {}", args.join(" ")))
     }
     fn prune(&mut self) -> Pruned {
         self.log.borrow_mut().prunes += 1;
         Pruned::default()
     }
-    fn run(&mut self, script: &Path) -> Result<ScriptRun, String> {
+    fn run(&mut self, script: &Path, _step: Step<'_>) -> Result<ScriptRun, String> {
         self.log.borrow_mut().runs.push(script.display().to_string());
         Ok(ScriptRun {
             output: "fleet: 48/48 ok\nartifacts refreshed".into(),
@@ -317,7 +401,7 @@ fn l_saves_a_hidden_rows_value_and_names_it_in_the_status() {
     let mut t = PreviewTerm::new((100, 30), keys, true);
     assert!(run(&mut s, &mut t).unwrap().is_none());
     assert_eq!(log.borrow().hidden.get(&RowName::Model).map(String::as_str), Some("opus1m"));
-    assert!(s.status.contains("hidden model -> opus1m"), "{}", s.status);
+    assert!(s.page.status.contains("hidden model -> opus1m"), "{}", s.page.status);
 }
 
 #[test]
@@ -334,7 +418,7 @@ fn l_edits_the_launch_rows_and_saves_them() {
     let keys = crate::ui::parse_preview_keys("l,s,s,Spacebar,Enter,l,Enter,Escape").unwrap();
     let mut t = PreviewTerm::new((100, 30), keys, true);
     assert!(run(&mut s, &mut t).unwrap().is_none());
-    assert!(s.status.contains("launch rows saved: account, model"), "{}", s.status);
+    assert!(s.page.status.contains("launch rows saved: account, model"), "{}", s.page.status);
     let saved = vec![RowName::Account, RowName::Model];
     assert_eq!(log.borrow().rows, [saved.clone(), saved], "the next open starts from the save");
 }
@@ -371,7 +455,7 @@ fn only_a_plain_l_opens_the_rows_editor() {
     for stray in [shifted, bare_upper] {
         let (_, status, _, r) = go(vec![stray, esc()], &[], vec![], 0, (100, 24));
         assert_eq!(r, Ok(None), "Escape left the maintenance screen, no editor took it");
-        assert!(!status.contains("launch rows"), "{status}");
+        assert!(!status.contains("Last action"), "{status}");
     }
     let caps = Event::Key(KeyPress {
         caps_lock: true,
@@ -494,7 +578,8 @@ fn go_timed(
     let mut s = MaintScreen::new(&mut ops, actions, Style { color: true, ascii: false });
     let r = run(&mut s, &mut t);
     drop(s);
-    let status = t.frames.last().cloned().unwrap_or_default();
+    // The last frame without colour: what a reader sees.
+    let status = crate::theme::remove_ansi_color(&t.frames.last().cloned().unwrap_or_default());
     let log = std::mem::take(&mut *log.borrow_mut());
     (log, status, t, r)
 }
@@ -504,11 +589,11 @@ fn map_at(size: (usize, usize), actions: &[MaintenanceAction]) -> RowMap {
         log: Rc::default(),
         exit_code: 0,
     };
-    maintenance_frame(&o.info(), size, "", plain(), actions, -1).map
+    draw(&page_of(o.info(), "", actions), size).map
 }
 
-fn span(map: &RowMap, c: char) -> crate::frame::FooterSpan {
-    map.footer.iter().find(|s| s.ch == Some(c)).unwrap().clone()
+fn footer_span(map: &RowMap, key: &str) -> crate::frame::FooterSpan {
+    map.footer.iter().find(|s| s.key == key).unwrap().clone()
 }
 
 #[test]
@@ -524,19 +609,13 @@ fn ctrl_c_and_escape_leave() {
 }
 
 #[test]
-fn clicking_esc_back_leaves_and_one_column_past_a_hint_does_not() {
+fn clicking_esc_back_leaves_and_one_column_past_it_does_not() {
     let m = map_at((100, 24), &reindex());
-    let e = m.footer.iter().find(|s| s.key == "Escape").unwrap().clone();
-    let y = m.footer_y.unwrap();
-    let fy = |l: usize| y + i32::try_from(l).unwrap();
+    let e = footer_span(&m, "Escape");
+    let y = m.footer_y.unwrap() + i32::try_from(e.line).unwrap();
+    assert_eq!(go(vec![click(e.start, y, false)], &reindex(), vec![], 0, (100, 24)).3, Ok(None));
     assert_eq!(
-        go(vec![click(e.start, fy(e.line), false)], &reindex(), vec![], 0, (100, 24)).3,
-        Ok(None)
-    );
-    let d = span(&m, 'd');
-    assert_eq!(d.line, 0, "doctor sits on the first footer line");
-    assert_eq!(
-        go(vec![click(d.end + 1, fy(d.line), false)], &reindex(), vec![], 0, (100, 24)).3,
+        go(vec![click(e.end + 1, y, false)], &reindex(), vec![], 0, (100, 24)).3,
         Err(UiStop::KeysExhausted)
     );
 }
@@ -554,7 +633,7 @@ fn hovering_buttons_paints_three_distinct_frames() {
         })
     };
     let (_, _, t, _) = go(
-        vec![mv(&span(&m, 'd')), mv(&span(&m, 'p')), esc()],
+        vec![mv(&footer_span(&m, "Enter")), mv(&footer_span(&m, "Escape")), esc()],
         &reindex(),
         vec![],
         0,
@@ -587,73 +666,35 @@ fn one_press_only_warns_the_second_runs_once() {
     assert!(status.contains("confirm: press i"));
     let (log, status, t, _) = go(vec![key('i'), key('i'), esc()], &reindex(), vec![], 0, (100, 24));
     assert_eq!(log.runs.len(), 1);
-    assert!(status.contains("green"));
+    assert!(status.contains("full reindex \u{b7} done") && status.contains("green"), "{status}");
     assert_eq!(t.drains, 1, "the input queue is drained after a command that owned the screen");
     assert!(
-        t.frames.iter().any(|f| f.contains("running full reindex...")),
+        t.frames
+            .iter()
+            .any(|f| crate::theme::remove_ansi_color(f).contains("full reindex \u{b7} running")),
         "a running frame first"
     );
 }
 
-/// Where hint `c` sits in the frame drawn with `status`: the footer moves down as a status
-/// appears, and a reader clicks where it is.
-fn hint_at(size: (usize, usize), status: &str, c: char) -> (i32, i32) {
-    let mut o = FakeOps {
-        log: Rc::default(),
-        exit_code: 0,
-    };
-    let m = maintenance_frame(&o.info(), size, status, plain(), &reindex(), -1).map;
-    let s = span(&m, c);
-    (s.start, m.footer_y.unwrap() + i32::try_from(s.line).unwrap())
-}
-
-const ARMED_I: &str = "confirm: press i again to run full reindex (the screen will sit still while it runs)";
-
 #[test]
-fn clicking_the_hint_twice_runs_once_but_a_double_click_does_not_confirm() {
-    let (x1, y1) = hint_at((100, 24), "", 'i');
-    let (x2, y2) = hint_at((100, 24), ARMED_I, 'i');
-    let (log, ..) = go(
-        vec![click(x1, y1, false), click(x2, y2, false), esc()],
-        &reindex(),
-        vec![],
-        0,
-        (100, 24),
-    );
-    assert_eq!(log.runs.len(), 1);
-    let (log, ..) = go(
-        vec![click(x1, y1, false), click(x2, y2, true), esc()],
-        &reindex(),
-        vec![],
-        0,
-        (100, 24),
-    );
-    assert_eq!(log.runs.len(), 0);
+fn a_click_selects_a_row_and_enter_runs_it() {
+    let m = map_at((100, 24), &[]);
+    let d = m.rows.iter().find(|r| r.name == "d").unwrap();
+    let enter = Event::Key(KeyPress::named(vk::ENTER));
+    let (log, status, ..) = go(vec![click(4, d.y, false), enter, esc()], &[], vec![], 0, (100, 24));
+    assert_eq!(log.doctor, 1, "{status}");
+    let (log, ..) = go(vec![click(4, d.y, false), esc()], &[], vec![], 0, (100, 24));
+    assert_eq!(log.doctor, 0, "a click alone runs nothing");
 }
 
 #[test]
-fn a_hint_on_a_wrapped_footer_line_is_clicked_at_its_own_line() {
-    let m = map_at((50, 24), &reindex());
-    assert!(span(&m, 'i').line >= 1);
-    let (x1, y1) = hint_at((50, 24), "", 'i');
-    let (x2, y2) = hint_at((50, 24), ARMED_I, 'i');
-    let (log, ..) = go(
-        vec![click(x1, y1, false), click(x2, y2, false), esc()],
-        &reindex(),
-        vec![],
-        0,
-        (50, 24),
-    );
-    assert_eq!(log.runs.len(), 1);
-    let first = m.footer_y.unwrap();
-    let (log, ..) = go(
-        vec![click(x1, first, false), click(x1, first, false), esc()],
-        &reindex(),
-        vec![],
-        0,
-        (50, 24),
-    );
-    assert_eq!(log.runs.len(), 0, "the same column on the first footer line is not that hint");
+fn w_and_s_move_the_selection_when_no_row_owns_them() {
+    let enter = || Event::Key(KeyPress::named(vk::ENTER));
+    // Rows: u, r, p, d - three moves down land on doctor.
+    let (log, ..) = go(vec![key('s'), key('s'), key('s'), enter(), esc()], &[], vec![], 0, (100, 24));
+    assert_eq!(log.doctor, 1);
+    let four_down_one_up = vec![key('s'), key('s'), key('s'), key('s'), key('w'), enter(), esc()];
+    assert_eq!(go(four_down_one_up, &[], vec![], 0, (100, 24)).0.doctor, 1);
 }
 
 #[test]
@@ -805,7 +846,17 @@ fn update_draws_a_running_frame_and_drains() {
     let (log, status, t, _) = go(vec![key('u'), esc()], &[], vec![], 0, (100, 24));
     assert_eq!(log.updates, 1);
     assert!(status.contains("updated"));
-    assert!(t.frames.iter().any(|f| f.contains("running claude update...")));
+    assert!(
+        t.frames
+            .iter()
+            .any(|f| crate::theme::remove_ansi_color(f).contains("update Claude Code \u{b7} updating"))
+    );
+    assert!(
+        t.frames
+            .iter()
+            .any(|f| crate::theme::remove_ansi_color(f).contains("updating \u{b7} downloading 45 %")),
+        "every line the updater prints reaches the step line"
+    );
     assert_eq!(t.drains, 1);
 }
 
@@ -816,20 +867,20 @@ impl Ops for WithLauncher {
     fn info(&mut self) -> InstallInfo {
         self.0.info()
     }
-    fn update(&mut self) -> String {
-        self.0.update()
+    fn update(&mut self, step: Step<'_>) -> Verdict {
+        self.0.update(step)
     }
-    fn rename_swap(&mut self) -> String {
+    fn rename_swap(&mut self) -> Verdict {
         self.0.rename_swap()
     }
-    fn command_text(&mut self, args: &[&str]) -> String {
-        self.0.command_text(args)
+    fn command_text(&mut self, args: &[&str], step: Step<'_>) -> Verdict {
+        self.0.command_text(args, step)
     }
     fn prune(&mut self) -> Pruned {
         self.0.prune()
     }
-    fn run(&mut self, script: &Path) -> Result<ScriptRun, String> {
-        self.0.run(script)
+    fn run(&mut self, script: &Path, step: Step<'_>) -> Result<ScriptRun, String> {
+        self.0.run(script, step)
     }
     fn load_rows(&mut self) -> RowsConfig {
         self.0.load_rows()
@@ -843,7 +894,7 @@ impl Ops for WithLauncher {
 }
 
 #[test]
-fn the_running_frame_keeps_the_launcher_keys_in_the_footer() {
+fn the_running_frame_keeps_the_launcher_rows() {
     let mut ops = WithLauncher(FakeOps {
         log: Rc::default(),
         exit_code: 0,
@@ -859,6 +910,6 @@ fn the_running_frame_keeps_the_launcher_keys_in_the_footer() {
     };
     let mut s = MaintScreen::new(&mut ops, &[], plain());
     assert_eq!(run(&mut s, &mut t), Err(UiStop::KeysExhausted));
-    let running = t.frames.iter().find(|f| f.contains("running claude update")).unwrap();
+    let running = t.frames.iter().find(|f| f.contains("updating")).unwrap();
     assert!(running.contains("update claude-auto to 9.9.9"), "{running}");
 }

@@ -226,6 +226,10 @@ pub struct Glyphs {
     pub r_angle: char,
     /// Deliberately not `v`: a footer of V glyphs made one column look like a pane divider.
     pub hint_sep: char,
+    /// The warning badge on a footer hint.
+    pub warn: char,
+    /// Between the facts of a title (`5h 4% · 7d 96%`).
+    pub dot: char,
 }
 
 pub fn glyphs(ascii: bool) -> Glyphs {
@@ -252,6 +256,8 @@ pub fn glyphs(ascii: bool) -> Glyphs {
             l_angle: '<',
             r_angle: '>',
             hint_sep: ':',
+            warn: '!',
+            dot: '-',
         }
     } else {
         Glyphs {
@@ -276,6 +282,8 @@ pub fn glyphs(ascii: bool) -> Glyphs {
             l_angle: '\u{2039}',
             r_angle: '\u{203A}',
             hint_sep: '\u{250A}',
+            warn: '\u{26A0}',
+            dot: '\u{B7}',
         }
     }
 }

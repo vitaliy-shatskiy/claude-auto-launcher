@@ -1,29 +1,29 @@
-  ✻ claude-auto                                                           
-
- ❯ account      [work] ┊ personal ┊ low
-   remote       ● [on] ○ off ○ on+QR ○ stop server
-   model        ‹ default ›
-   effort       ‹ default ›
-   advisor      ● [default] ○ fable ○ opus ○ off
-   permission   ● [default] ○ plan ○ auto ○ acceptEdits ○ bypass
-   mode         ● [normal] ○ safe
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  ─────────────────────────────────────────────────────────────────────────
+╭─ ✻ claude-auto ───────────────────────────────────────────────────────────╮
+│ ❯ account      [work] ┊ personal ┊ low                                    │
+│   remote       ● [on] ○ off ○ on+QR ○ stop server                         │
+│   model        ‹ default ›                                                │
+│   effort       ‹ default ›                                                │
+│   advisor      ● [default] ○ fable ○ opus ○ off                           │
+│   permission   ● [default] ○ plan ○ auto ○ acceptEdits ○ bypass           │
+│   mode         ● [normal] ○ safe                                          │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+╰───────────────────────────────────────────────────────────────────────────╯
   w/s row          ┊  a/d ←/→ switch  ┊  [enter] next
   [u] maintenance  ┊  [esc] quit

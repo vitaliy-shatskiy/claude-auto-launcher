@@ -161,6 +161,19 @@ impl Local {
         out
     }
 
+    /// The mode and what the state file knows, for the maintenance facts (no network).
+    pub(crate) fn state_text(&self) -> String {
+        let mode = match self.mode {
+            Mode::Notify => "notify",
+            Mode::Auto => "auto",
+            Mode::Off => return "self-update off".into(),
+        };
+        match self.offered() {
+            Some(r) => format!("self-update {mode}, {} available", r.version),
+            None => format!("self-update {mode}, up to date"),
+        }
+    }
+
     /// A maintenance key: the status line it leaves, `None` when it is no key of this module.
     pub(crate) fn act(&self, key: char) -> Option<String> {
         self.act_with(key, &WinNet, &RealFiles)
