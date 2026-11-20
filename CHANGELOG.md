@@ -10,6 +10,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   account's with its name; resuming one copies the transcript into the launching account first
   (an older copy there kept as `.bak`, a newer one left alone, a failed copy stops the launch,
   preview copies nothing). Ported from Reva1v's fork.
+- `--launcher-options` prints what the launch screen offers as one line of JSON, starting nothing
+  and writing nothing; `--launcher-run '<json>'` launches with those choices after checking them
+  against the rows (exit `2` before any side effect when they do not fit) and does not save them.
+  Ported from Reva1v's fork, with a JSON request instead of its flags.
 
 ### Changed
 

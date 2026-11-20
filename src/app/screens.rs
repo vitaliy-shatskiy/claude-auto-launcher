@@ -365,7 +365,7 @@ pub(super) fn open_maintenance(
 }
 
 /// The `default (X)` labels: the canonical root's model and advisor, every account's defaults.
-fn label_defaults(canonical_root: &str, accounts: &[(String, String)]) -> LabelDefaults {
+pub(super) fn label_defaults(canonical_root: &str, accounts: &[(String, String)]) -> LabelDefaults {
     let settings = |root: &str| Path::new(root).join("settings.json");
     LabelDefaults {
         model: env::default_model_label(&settings(canonical_root)),

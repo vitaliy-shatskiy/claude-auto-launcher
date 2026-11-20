@@ -169,6 +169,19 @@ or the first shown one when it is hidden) with exactly those arguments. The laun
 command line; anywhere else they go to claude too. The launcher has no `--help` of its own:
 `claude-auto --help` and `--version` are claude's.
 
+Two screenless entries let another program (a phone bridge, a script) launch as the screen would.
+Each counts only as the first argument:
+
+- `claude-auto --launcher-options` prints one line of JSON: `rows` (each shown row with its values
+  and labels, without `account` and `remote`), `actions`, and per shown account its `limitPct`,
+  `hidden` values, `defaultLabels` and remembered `prefs`. It starts no process (the version is the
+  newest downloaded build), touches no network and writes nothing, not even a log.
+- `claude-auto --launcher-run '<json>'` takes `{"account", "project", "action", <every row
+  --launcher-options listed>, "resumeId"?, "fork"?}`, checks it against the rows as the screen would
+  offer them on that account, and launches. A request with a missing, extra or unoffered value,
+  a missing project folder, or `resume` without a `resumeId` exits `2` before anything is written,
+  logged or started. The choices last for that launch: the remembered rows are not saved.
+
 ### Keys
 
 <p align="center">

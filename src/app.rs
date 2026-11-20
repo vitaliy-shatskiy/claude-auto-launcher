@@ -1,6 +1,7 @@
 //! The launch, in the order `claude-auto.ps1` runs it: argv pass-through, config, log, the UI
 //! (launch screen -> project screen -> picker), profile, secrets, sharing, hooks, MCP, exec.
 
+mod headless;
 mod prompts;
 mod screens;
 
@@ -13,6 +14,7 @@ use serde_json::{Value, json};
 use crate::config::{self, Config, PathCtx};
 use crate::launch::screen::LaunchView;
 use crate::launch::{LAUNCH_MODES, LaunchState, Roster, launch_args};
+use crate::launcher_api;
 use crate::log::{self, Logger};
 use crate::log_data;
 use crate::out::{self, Fg};
@@ -75,6 +77,8 @@ struct Run {
     logger: Logger,
     /// Debug mode's root span: process start to the spawn of claude.
     process: SpanId,
+    /// `--launcher-run`, checked: this stands in for the screen's outcome.
+    headless: Option<headless::HeadlessRun>,
 }
 
 /// The whole launcher. Returns the process exit code.
@@ -83,6 +87,19 @@ pub fn run(args: Vec<String>) -> i32 {
         out::line(&format!("claude-auto {VERSION}"), Fg::Plain);
         return 0;
     }
+    // The screenless entries, only as the first argument: a pass-through line that happens to carry
+    // the words still reaches claude. A bad line is refused here, before the config is read.
+    let wants_options = args.first().is_some_and(|a| a == launcher_api::OPTIONS_FLAG);
+    if wants_options && args.len() > 1 {
+        return refuse(&format!("{} takes no arguments", launcher_api::OPTIONS_FLAG));
+    }
+    let run_request = match args.split_first() {
+        Some((flag, rest)) if flag == launcher_api::RUN_FLAG => match launcher_api::parse_run_args(rest) {
+            Ok(req) => Some(req),
+            Err(e) => return refuse(&e),
+        },
+        _ => None,
+    };
     let preview = var("CLAUDE_AUTO_PREVIEW").as_deref() == Some("1");
     let started = Instant::now();
     let debug = timing::debug_mode(&args, var("CLAUDE_AUTO_DEBUG").as_deref());
@@ -106,9 +123,21 @@ pub fn run(args: Vec<String>) -> i32 {
     if cfg.project_screen == config::ProjectScreen::OnDemand {
         roster.add_action_row();
     }
+    if wants_options {
+        // stderr: stdout is the one line of JSON the client parses.
+        for w in &cfg.warnings {
+            out::err_line(&format!("  config: {w}"));
+        }
+        return headless::print_options(&ctx, &cfg, &roster);
+    }
     for w in &cfg.warnings {
         out::line(&format!("  config: {w}"), Fg::DarkYellow);
     }
+    let headless = match run_request.map(|req| headless::prepare_run(&req, &ctx, &cfg, &roster)) {
+        Some(Ok(checked)) => Some(checked),
+        Some(Err(e)) => return refuse(&e),
+        None => None,
+    };
     let log_root = PathBuf::from(canonical.map_or_else(String::new, |(_, r)| r)).join("launcher-logs");
     if let Some(days) = timing::summary::parse_args(&args) {
         return print_timings(&log_root, days);
@@ -128,12 +157,19 @@ pub fn run(args: Vec<String>) -> i32 {
         roster,
         logger,
         process,
+        headless,
     };
     let code = launch(&run);
     // Every path but the spawn ends here; the spawn path ended and wrote these already.
     run.logger.timings.end(run.process);
     run.logger.write_timings();
     code
+}
+
+/// A request a screenless entry cannot take: exit 2 = "not started", said on stderr.
+fn refuse(why: &str) -> i32 {
+    out::err_line(&format!("claude-auto: {why}"));
+    2
 }
 
 /// `--timings [--days N]`: the table, then exit without the UI.
@@ -199,7 +235,9 @@ fn launch(run: &Run) -> i32 {
         let _s = run.logger.timings.scope(&["start log"]);
         log_start(run, input_redirected, output_redirected);
     }
-    let mut use_ui = run.preview || (!input_redirected && run.args.is_empty());
+    // `--launcher-run` arrives with the screen's answer already made: no screen, no prompts.
+    let screenless = run.headless.is_some();
+    let mut use_ui = !screenless && (run.preview || (!input_redirected && run.args.is_empty()));
     if use_ui && !run.preview && sys::Handle::open_console("CONOUT$").and_then(|h| sys::window_size(&h)).is_none() {
         use_ui = false;
     }
@@ -207,7 +245,7 @@ fn launch(run: &Run) -> i32 {
     let mut remote_on = run.cfg.remote;
     let mut show_qr = false;
     let mut stop_server = false;
-    let mut ui: Option<UiOutcome> = None;
+    let mut ui: Option<UiOutcome> = run.headless.as_ref().map(headless::HeadlessRun::outcome);
     if use_ui {
         let ui_span = run.logger.timings.begin(&["ui"]);
         let ended = run_ui(run, input_redirected, output_redirected);
@@ -239,13 +277,15 @@ fn launch(run: &Run) -> i32 {
                 return 1;
             }
         }
-    } else if !input_redirected && run.args.is_empty() {
+    } else if !screenless && !input_redirected && run.args.is_empty() {
         fallback_prompts(run, &mut choice, &mut remote_on, &mut show_qr, &mut stop_server);
     }
 
     let mut child = ChildEnv::default();
     if let Some(o) = &ui {
-        let saved = if run.preview {
+        // A screenless launch's choices last for that launch: saved, they would quietly become the
+        // next screen launch's remembered rows.
+        let saved = if run.preview || screenless {
             Value::Null
         } else {
             let (saved, written) = prefs::save_prefs(
@@ -388,6 +428,9 @@ fn launch(run: &Run) -> i32 {
     let argv = invocation::claude_invocation(&launch_argv, &mcp);
 
     if run.preview {
+        if let Some(h) = &run.headless {
+            headless::preview_project(h);
+        }
         preview_summary(&choice, &child, remote_on, show_qr, stop_server, &launch_argv, &claude, &argv);
         return 0;
     }
@@ -404,7 +447,7 @@ fn launch(run: &Run) -> i32 {
         );
     }
     let no_roam = var("CLAUDE_NO_ROAM").as_deref() == Some("1");
-    if run.cfg.remote && !selects_session && !no_roam && remote_on && (use_ui || launch_argv.is_empty()) {
+    if run.cfg.remote && !selects_session && !no_roam && remote_on && (use_ui || screenless || launch_argv.is_empty()) {
         let req = remote::CrcLaunch {
             argv: &argv,
             account: &choice,

@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+mod headless;
+
 const EXE: &str = env!("CARGO_BIN_EXE_claude-auto");
 
 fn scratch(name: &str) -> PathBuf {
