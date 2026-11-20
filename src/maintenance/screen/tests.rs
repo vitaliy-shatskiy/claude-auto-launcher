@@ -104,7 +104,7 @@ fn a_multi_line_status_lands_one_row_per_line() {
     let f = draw(&page_of(info(false, None, None), s, &[]), (100, 30));
     assert_eq!(count(&f.lines, "\n"), 0);
     for needle in ["Running: native", "Platform: win32-x64", "No installation issues found"] {
-        assert_eq!(count(&f.lines, needle), 1, "{needle}");
+        assert_eq!(count(&f.lines, needle), 1, "{needle}: {:#?}", f.lines);
     }
 }
 
@@ -148,8 +148,8 @@ fn only_the_selected_row_shows_its_hint() {
     let mut p = page_of(info(true, None, None), "", &reindex());
     p.selected = 1;
     let f = draw(&p, (120, 30));
-    assert_eq!(count(&f.lines, "while sessions hold claude.exe"), 1, "{:#?}", f.lines);
-    assert_eq!(count(&f.lines, "keeps the two newest"), 0, "no column of descriptions");
+    assert_eq!(count(&f.lines, "while claude.exe is in use"), 1, "{:#?}", f.lines);
+    assert_eq!(count(&f.lines, "keeps the 2 newest"), 0, "no column of descriptions");
     assert_eq!(count(&f.lines, "custom"), 0);
     p.selected = 6;
     assert_eq!(
@@ -193,17 +193,15 @@ fn the_last_action_reads_done_failed_or_its_live_step() {
     for (phase, needle) in [
         (
             Phase::Running("checking\u{2026} \u{b7} 3 s".into()),
-            "MCP servers \u{b7} checking\u{2026} \u{b7} 3 s",
+            "             checking\u{2026} \u{b7} 3 s",
         ),
-        (Phase::Done, "MCP servers \u{b7} done"),
-        (
-            Phase::Failed("1 of 2 connected".into()),
-            "MCP servers \u{b7} failed: 1 of 2 connected",
-        ),
+        (Phase::Done, "             done "),
+        (Phase::Failed("1 of 2 connected".into()), "             failed: 1 of 2 connected"),
     ] {
         p.phase = phase;
         let f = draw(&p, (120, 30));
         assert_eq!(count(&f.lines, needle), 1, "{needle}: {:#?}", f.lines);
+        assert_eq!(count(&f.lines, "Last action  MCP servers"), 1);
     }
     p.phase = Phase::Done;
     let colored = maintenance_frame(&p, (120, 30), Style { color: true, ascii: false });
@@ -666,12 +664,15 @@ fn one_press_only_warns_the_second_runs_once() {
     assert!(status.contains("confirm: press i"));
     let (log, status, t, _) = go(vec![key('i'), key('i'), esc()], &reindex(), vec![], 0, (100, 24));
     assert_eq!(log.runs.len(), 1);
-    assert!(status.contains("full reindex \u{b7} done") && status.contains("green"), "{status}");
+    assert!(
+        status.contains("Last action  full reindex") && status.contains("  done") && status.contains("green"),
+        "{status}"
+    );
     assert_eq!(t.drains, 1, "the input queue is drained after a command that owned the screen");
     assert!(
         t.frames
             .iter()
-            .any(|f| crate::theme::remove_ansi_color(f).contains("full reindex \u{b7} running")),
+            .any(|f| crate::theme::remove_ansi_color(f).contains("             running")),
         "a running frame first"
     );
 }
@@ -849,7 +850,7 @@ fn update_draws_a_running_frame_and_drains() {
     assert!(
         t.frames
             .iter()
-            .any(|f| crate::theme::remove_ansi_color(f).contains("update Claude Code \u{b7} updating"))
+            .any(|f| crate::theme::remove_ansi_color(f).contains("Last action  update Claude Code"))
     );
     assert!(
         t.frames

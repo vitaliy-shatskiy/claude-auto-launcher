@@ -154,7 +154,7 @@ fn warning_rows(p: &Page, g: &Glyphs) -> Vec<String> {
 }
 
 /// The last action: its name and state on one grid row, then what it reported.
-fn last_rows(p: &Page, g: &Glyphs, width: usize, room: usize) -> Vec<String> {
+fn last_rows(p: &Page, width: usize, room: usize) -> Vec<String> {
     let state = match &p.phase {
         Phase::Idle => return Vec::new(),
         Phase::Armed => tint(YELLOW_OPEN, "waiting for the second press"),
@@ -162,9 +162,9 @@ fn last_rows(p: &Page, g: &Glyphs, width: usize, room: usize) -> Vec<String> {
         Phase::Done => tint(GREEN_OPEN, "done"),
         Phase::Failed(why) => tint(RED_OPEN, &format!("failed: {}", strip_ctl(why))),
     };
-    let mut out = vec![row("Last action", &format!("{} {} {state}", strip_ctl(&p.last), g.dot))];
+    let mut out = vec![row("Last action", &strip_ctl(&p.last)), row("", &state)];
     let clean = p.status.replace(['\u{1}', '\u{2}', '\u{4}', '\u{5}'], "");
-    let lines = split_output_lines(&clean, width.saturating_sub(LABEL), room.saturating_sub(1).max(1));
+    let lines = split_output_lines(&clean, width.saturating_sub(LABEL), room.saturating_sub(2).max(1));
     out.extend(lines.iter().map(|l| row("", l)));
     out
 }
@@ -174,7 +174,7 @@ fn panel(p: &Page, g: &Glyphs, width: usize, room: usize) -> Vec<String> {
     let mut out = claude_code_rows(p, g);
     out.push(launcher_row(p, g));
     out.extend(warning_rows(p, g));
-    let last = last_rows(p, g, width, room.saturating_sub(out.len() + 1));
+    let last = last_rows(p, width, room.saturating_sub(out.len() + 1));
     if !last.is_empty() {
         out.push(String::new());
         out.extend(last);
@@ -235,7 +235,8 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
         // Wide enough for any row's hint, so the divider never moves with the selection.
         let name_w = p.entries.iter().map(|e| display_width(&e.name)).max().unwrap_or(0);
         let hint_w = p.entries.iter().map(|e| display_width(&e.about)).max().unwrap_or(0);
-        let left_w = (7 + name_w + 2 + hint_w + 2).min(inner * 3 / 5);
+        // The facts keep 50 cells: a report line beside them needs the room more than a hint does.
+        let left_w = (7 + name_w + 2 + hint_w + 2).min(inner.saturating_sub(50));
         let right_w = inner.saturating_sub(left_w + 1);
         let facts: Vec<String> = panel(p, &g, right_w.saturating_sub(2), room)
             .iter()

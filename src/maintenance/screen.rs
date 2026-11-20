@@ -181,10 +181,10 @@ const ROWS_KEY: char = 'l';
 /// cannot carry it.
 const BUILT_IN_ROWS: [(char, &str, &str); 6] = [
     ('u', "update Claude Code", ""),
-    ('r', "update anyway (rename)", "while sessions hold claude.exe"),
-    ('p', "delete old builds", "keeps the two newest and the running one"),
+    ('r', "update anyway (rename)", "while claude.exe is in use"),
+    ('p', "delete old builds", "keeps the 2 newest + the running one"),
     ('d', "doctor", ""),
-    ('m', "MCP servers", "checks every server's connection"),
+    ('m', "MCP servers", "checks each connection"),
     (ROWS_KEY, "launch rows", ""),
 ];
 
