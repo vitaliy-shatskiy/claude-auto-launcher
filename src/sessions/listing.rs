@@ -9,12 +9,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use self::files::{remove_legacy_cache, sweep_stale_temps, temp_suffix};
 use super::scan::{ScanState, scan_transcript};
 use super::transcript::{
     MAX_BYTES, clean_text, collapse_fences, field, head_lines, is_headless, parse_line, prompt_detail, record_text, slug_names, tail_lines,
     user_prompt,
 };
 use crate::config::ps_truthy;
+
+mod files;
 
 /// Who said a recent message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -258,23 +261,13 @@ pub(crate) fn physical_dir(path: &Path) -> PathBuf {
 }
 
 /// `Get-SessionsCachePath`. The PowerShell launcher that once owned this name is gone, so the Rust
-/// one took it back from `claude-auto-rs-sessions.json` (`LEGACY_CACHE_NAME`).
+/// one took it back from `claude-auto-rs-sessions.json` (`files::LEGACY_CACHE_NAME`).
 pub fn cache_path(projects_root: &Path) -> PathBuf {
     let physical = physical_dir(projects_root);
     physical.parent().unwrap_or(&physical).join(CACHE_NAME)
 }
 
 const CACHE_NAME: &str = "claude-auto-sessions.json";
-const LEGACY_CACHE_NAME: &str = "claude-auto-rs-sessions.json";
-
-/// The cache under its pre-0.9 name beside `path`, removed once a write under the new name landed.
-/// Exactly that name: its stranded temps and look-alikes are not ours to judge.
-fn remove_legacy_cache(path: &Path) {
-    let old = path.with_file_name(LEGACY_CACHE_NAME);
-    if path.file_name().is_some_and(|n| n == CACHE_NAME) && old.is_file() && std::fs::remove_file(&old).is_err() {
-        // Held by another instance: the next write retries.
-    }
-}
 
 /// The cached summary's schema: bump it by hand when what a summary holds or how it is derived
 /// changes. A release that leaves summaries alone keeps every cache entry (a version taken from
@@ -443,28 +436,6 @@ impl SessionCache {
             self.write(cache_file, &merged);
         }
         out
-    }
-}
-
-fn temp_suffix() -> u128 {
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    t ^ (u128::from(std::process::id()) << 64)
-}
-
-fn sweep_stale_temps(path: &Path) {
-    let (Some(dir), Some(leaf)) = (path.parent(), path.file_name()) else {
-        return;
-    };
-    let prefix = format!("{}.", leaf.to_string_lossy());
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    let cutoff = SystemTime::now().checked_sub(Duration::from_secs(60)).unwrap_or(UNIX_EPOCH);
-    for e in rd.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < cutoff);
-        let tmp = Path::new(&name).extension().is_some_and(|x| x.eq_ignore_ascii_case("tmp"));
-        if name.starts_with(&prefix) && tmp && old && std::fs::remove_file(e.path()).is_err() {
-            // Another instance may be removing it at the same moment.
-        }
     }
 }
 
