@@ -242,11 +242,15 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
 
 ### Layout
 
-- Every screen fills the terminal and redraws on resize. Over 240x80 it uses a 240x80 page centred
-  horizontally at the top. From 155 columns the usage bars double to 16 cells.
+- Every screen fills the whole terminal from its top-left corner, at any size, and redraws on
+  resize. A size report of 0 or over 10000 cells on a side is taken as 80x25 on that side. From
+  155 columns the usage bars double to 16 cells.
+- From 100 columns the project rows keep compact columns: the name (at most 40 % of the width),
+  the path two cells after the longest name, the age right-aligned after the longest path. A path
+  that does not fit is cut in the middle with `…`, keeping its drive and leaf.
 - Below 100 columns the launch screen collapses only the rows that do not fit to `‹ value ›`.
-- A row that switches with `a`/`d` says so with a dim `‹ a/d ←/→ ›`: the launch row under the
-  cursor and the project screen's action row.
+- The footer names the keys that switch a row: `a/d ←/→ switch` on the launch screen,
+  `a/d ←/→ action` on the project screen (`<-/->` in ASCII).
 - A screen repaints only the lines that changed, and a burst of input (mouse motion, key repeat)
   costs one frame.
 - Box drawing is ASCII when the console is not on UTF-8 or `CLAUDE_AUTO_ASCII=1`.
@@ -309,12 +313,12 @@ nothing. Headless sessions are left out.
 
 ```
 ╭─ project ─ 4 known ─────────────────────────────────────────────────────────────────────────────╮
-│   current directory                                                        C:\Users\sample\here │
+│   current directory  C:\Users\sample\here                                                       │
 │                                                                                                 │
-│ ❯ alpha                                             C:\Users\sample\Desktop\Projects\alpha 4 min│
-│   beta-service                       C:\Users\sample\Desktop\Projects\workspace\beta-service 8 h│
-│   ⌂ gamma                           C:\Users\sample\Desktop\Projects\gamma.worktrees\feature 3 d│
-│   delta                                                                        D:\src\delta 23 d│
+│ ❯ alpha              C:\Users\sample\Desktop\Projects\alpha                   4 min             │
+│   beta-service       C:\Users\sample\Desktop\Projects\workspace\beta-service    8 h             │
+│   ⌂ gamma            C:\Users\sample\Desktop\Projects\gamma.worktrees\feature   3 d             │
+│   delta              D:\src\delta                                              23 d             │
 │                                                                                                 │
 │   + enter a path...                                                                             │
 │                                                                                                 │
@@ -333,10 +337,10 @@ nothing. Headless sessions are left out.
 │                                                                                                 │
 │                                                                                                 │
 │                                                                                                 │
-│   action  ● [new] ○ continue ○ resume ○ worktree  ‹ a/d ←/→ ›                                   │
+│   action  ● [new] ○ continue ○ resume ○ worktree                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  w/s move    ┊  a/d action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
-  [/] filter  ┊  [p] pin     ┊  [h] hide     ┊  [v] hidden    ┊  [esc] back
+  w/s move    ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
+  [/] filter  ┊  [p] pin         ┊  [h] hide     ┊  [v] hidden    ┊  [esc] back
 
 ╭─ resume ─ 5 sessions ───────────────────────────────────────────────────────────────────────────╮
 │   project-1  session title 1    7 min │ session title 2                                         │

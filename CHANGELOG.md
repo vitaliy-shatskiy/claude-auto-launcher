@@ -34,6 +34,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Changed
 
+- Every screen fills the whole terminal from its top-left corner at any size (0.9.0 centred a
+  240x80 page on a larger terminal); clicks count from column 0. A size report of 0 or over
+  10000 cells on a side is taken as 80x25 on that side.
+- Project screen from 100 columns: compact columns instead of the path flushed right. The name
+  column is the longest visible name (at most 40 % of the width), the path follows two cells
+  after it, the age sits right-aligned just after the longest visible path.
+- No row carries the dim `‹ a/d ←/→ ›` hint any more; the footer says it: `a/d ←/→ switch` on the
+  launch screen, `a/d ←/→ action` on the project screen. On a narrow launch screen the footer
+  keeps `w/s row` and the switch hint and wraps to a second line.
 - The README states what 1.0 keeps stable (config keys, plugin protocol 1, the `--launcher-*`
   flags and their JSON, the `CLAUDE_AUTO_*` switches) and what stays internal.
 
