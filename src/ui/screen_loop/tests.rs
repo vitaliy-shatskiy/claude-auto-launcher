@@ -158,6 +158,128 @@ fn escape_and_ctrl_c_cancel() {
     assert_eq!(run(&mut s, &mut term(vec![Event::Key(ctrl_c)])), Ok(None));
 }
 
+/// `Events` whose queue is one input batch: `pending` says which queued events read as waiting input.
+struct Batch(Events, fn(&std::collections::VecDeque<Event>) -> bool);
+
+impl Term for Batch {
+    fn size(&mut self) -> (usize, usize) {
+        self.0.size()
+    }
+    fn paint(&mut self, lines: &[String]) {
+        self.0.paint(lines);
+    }
+    fn wait(&mut self, s: (usize, usize)) -> Result<Event, UiStop> {
+        self.0.wait(s)
+    }
+    fn window_top(&mut self) -> i32 {
+        0
+    }
+    fn input_pending(&mut self) -> bool {
+        (self.1)(&self.0.q)
+    }
+    fn record_time(&self) -> Option<u64> {
+        Some(1000)
+    }
+    fn last_activation(&mut self) -> &mut Option<Activation> {
+        self.0.last_activation()
+    }
+    fn drain(&mut self) {}
+    fn logger(&self) -> &crate::log::Logger {
+        self.0.logger()
+    }
+    fn read_line(&mut self, _prompt: &str) -> String {
+        String::new()
+    }
+}
+
+fn frames(t: &Batch) -> usize {
+    t.0.inner.frames.as_ref().map_or(0, Vec::len)
+}
+
+#[test]
+fn twenty_moves_in_one_input_batch_draw_one_frame() {
+    // Given: 20 motion records queued at once, each over another row, then an idle poll.
+    let mut s = List {
+        c: Cursor::at(0),
+        n: 6,
+        acts: 0,
+    };
+    let mut events: Vec<Event> = (0..20)
+        .map(|i| {
+            Event::Mouse(MouseEvent {
+                x: 5,
+                y: 1 + i % 6,
+                is_move: true,
+                ..MouseEvent::default()
+            })
+        })
+        .collect();
+    events.push(Event::Idle);
+    let mut t = Batch(term(events), |q| !q.is_empty());
+    // When: the screen runs through the batch.
+    assert_eq!(run(&mut s, &mut t), Err(UiStop::KeysExhausted));
+    // Then: the opening frame, then one frame for the whole batch, with the last hover.
+    assert_eq!(frames(&t), 2);
+    assert_eq!(s.c.hover_row, 19 % 6);
+}
+
+#[test]
+fn keys_queued_together_share_one_frame_and_each_still_moves() {
+    let mut s = List {
+        c: Cursor::at(0),
+        n: 6,
+        acts: 0,
+    };
+    let mut t = Batch(
+        term(vec![
+            Event::Key(KeyPress::named(vk::DOWN)),
+            Event::Key(KeyPress::named(vk::DOWN)),
+            Event::Key(KeyPress::named(vk::DOWN)),
+            Event::Idle,
+        ]),
+        |q| !q.is_empty(),
+    );
+    assert_eq!(run(&mut s, &mut t), Err(UiStop::KeysExhausted));
+    assert_eq!(frames(&t), 2);
+    assert_eq!(s.c.index, 3);
+}
+
+#[test]
+fn idle_work_waits_while_input_is_pending() {
+    // Given: a screen whose idle work is counted, and a key already queued behind the poll.
+    struct Busy {
+        c: Cursor,
+        idles: usize,
+    }
+    impl Screen for Busy {
+        type Output = ();
+        fn name(&self) -> &'static str {
+            "busy"
+        }
+        fn cursor(&mut self) -> &mut Cursor {
+            &mut self.c
+        }
+        fn draw(&mut self, _size: (usize, usize)) -> Frame {
+            Frame::default()
+        }
+        fn idle(&mut self) -> bool {
+            self.idles += 1;
+            false
+        }
+    }
+    let mut s = Busy {
+        c: Cursor::at(0),
+        idles: 0,
+    };
+    let mut t = Batch(term(vec![Event::Idle, Event::Key(KeyPress::char('x')), Event::Idle]), |q| {
+        matches!(q.front(), Some(Event::Key(_)))
+    });
+    // When: the loop polls idle with the key waiting, then idle again with nothing waiting.
+    assert_eq!(run(&mut s, &mut t), Err(UiStop::KeysExhausted));
+    // Then: only the last poll ran the idle work.
+    assert_eq!(s.idles, 1);
+}
+
 #[test]
 fn hover_paints_but_never_selects() {
     let mut s = List {

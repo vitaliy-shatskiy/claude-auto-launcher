@@ -23,6 +23,8 @@ pub struct Span {
     pub aborted: bool,
     /// A launch hook's exit code; `None` for every other span and a hook that never ended.
     pub exit: Option<i32>,
+    /// Numbers the span measured besides its time (bytes written or read), logged as fields.
+    pub fields: Vec<(String, u64)>,
     /// Dropped by [`Timings::discard`]: never shown, never logged.
     discarded: bool,
     logged: bool,
@@ -128,6 +130,7 @@ impl Timings {
             dur_us: None,
             aborted: false,
             exit: None,
+            fields: Vec::new(),
             discarded: false,
             logged: false,
         });
@@ -151,6 +154,7 @@ impl Timings {
             dur_us: Some(dur_us),
             aborted: false,
             exit,
+            fields: Vec::new(),
             discarded: false,
             logged: false,
         });
@@ -213,6 +217,14 @@ impl Timings {
         if nested { self.discard(id) } else { self.end(id) }
     }
 
+    /// Attaches a measured number to a span (ytes written or read); the log record carries it.
+    pub fn set_field(&self, id: SpanId, name: &str, value: u64) {
+        let Some(i) = &self.0 else { return };
+        if let Some(s) = i.borrow_mut().spans.get_mut(id.0) {
+            s.fields.push((name.to_owned(), value));
+        }
+    }
+
     /// A span that ends when the guard drops.
     pub fn scope(&self, parts: &[&str]) -> Scope<'_> {
         Scope {
@@ -259,6 +271,7 @@ impl Timings {
                     start_ms: ms(s.start_us),
                     aborted: s.aborted,
                     exit: s.exit,
+                    fields: s.fields.clone(),
                 });
             }
         }
@@ -279,6 +292,8 @@ pub struct TimingRecord {
     pub aborted: bool,
     /// A launch hook's exit code.
     pub exit: Option<i32>,
+    /// The span's measured numbers (`bytes`), each a field of the log record.
+    pub fields: Vec<(String, u64)>,
 }
 
 /// Ends its span on drop.

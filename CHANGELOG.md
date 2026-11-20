@@ -8,6 +8,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Added
 
+- Every screen repaints only the lines that changed since its last frame (a full rewrite on a
+  resize, a new screen, after a child or a typed line), and input that arrives in one burst (mouse
+  motion, key repeat) costs one frame; background work waits while input is pending. Debug mode
+  logs `<screen>.key`, `<screen>.frame.build` and `<screen>.frame.write` (with its `bytes`).
+
 - Pinned projects: `p` on the project screen pins the project under the cursor on top (config
   `pinnedProjects`, in pin order, whatever their recency), `p` again unpins it. Pinning a hidden
   project unhides it and hiding a pinned one unpins it; in a `/` search a pin only breaks ties. A
