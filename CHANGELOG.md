@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-20
+
 ### Added
 
 - Pinned projects: `p` on the project screen pins the project under the cursor on top (config
