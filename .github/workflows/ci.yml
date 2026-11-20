@@ -33,3 +33,8 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
+      # The built-in modules are cargo features: the build without all four must stay green too.
+      - name: Clippy without the optional modules
+        run: cargo clippy --no-default-features --all-targets --locked -- -D warnings
+      - name: Test without the optional modules
+        run: cargo test --no-default-features --locked

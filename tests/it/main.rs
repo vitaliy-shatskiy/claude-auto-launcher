@@ -216,6 +216,7 @@ fn missing_claude_exits_one() {
 }
 
 /// Maps the Unicode goldens onto the ASCII glyph set, for a console not on UTF-8.
+#[cfg(all(feature = "sharing", feature = "remote", feature = "rider-mcp"))]
 fn to_ascii(s: &str) -> String {
     let pairs = [
         ('\u{256D}', '+'),

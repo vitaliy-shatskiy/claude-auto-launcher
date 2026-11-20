@@ -26,6 +26,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   crash, a timeout (the process tree is killed) or bad output is one warning and the launch goes
   on; nothing unlisted ever runs. A plugin may not set `CLAUDE_CONFIG_DIR` or any `ANTHROPIC_*`
   variable. `examples/plugin_sample.rs` is a complete plugin.
+- The mouse, multi-account sharing, the Remote row and the Rider MCP scan are cargo features
+  (`mouse`, `sharing`, `remote`, `rider-mcp`), all on by default; a default build behaves as
+  before. `cargo build --no-default-features` leaves all four out; a left-out module's config key
+  (`mouse`, `sharing`, `remote`, `riderMcp`) warns as unknown and the module stays off. CI builds
+  and tests both ways.
 
 ### Changed
 
