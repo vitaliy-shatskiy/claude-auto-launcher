@@ -1,0 +1,11 @@
+{
+  "headroomPercent": 10,
+  "paths": {
+    "startup": { "counts": { "read_bytes": 430760, "read_ops": 71 } },
+    "project_screen": { "counts": { "read_bytes": 436515, "read_ops": 72 } },
+    "picker_open_cold": { "counts": { "read_bytes": 127957698, "read_ops": 365, "write_bytes": 18325 } },
+    "picker_open_warm": { "counts": { "read_bytes": 49385, "read_ops": 9, "write_bytes": 18325 } },
+    "picker_cursor": { "counts": { "frame_bytes": 3844, "full_frame_bytes": 18517 } },
+    "chat_load": { "counts": { "chat_bytes_read": 8388608, "read_bytes": 8388608 } }
+  }
+}
