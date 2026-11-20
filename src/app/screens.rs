@@ -26,7 +26,12 @@ use super::{Run, UiEnd, UiOutcome, now_ms, var};
 
 /// The UI: launch screen, project screen, held-session warning, picker - until a launch.
 #[expect(clippy::too_many_lines, reason = "the screen sequence reads top to bottom as in claude-auto.ps1")]
-pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool) -> Result<UiEnd, UiStop> {
+pub(super) fn run_ui(
+    run: &Run,
+    input_redirected: bool,
+    output_redirected: bool,
+    (self_update, launcher): (&crate::self_update::Local, &RefCell<crate::self_update::Watch>),
+) -> Result<UiEnd, UiStop> {
     let style = Style {
         color: theme::color_supported(var("NO_COLOR").as_deref(), var("TERM").as_deref()),
         ascii: theme::ascii_required(var("CLAUDE_AUTO_ASCII").as_deref(), sys::output_code_page()),
@@ -61,9 +66,6 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     } else {
         maintenance::UpdateWatch::off(version.clone())
     });
-    // The launcher's own release check: a thread, never in the way of the first frame.
-    let self_update = crate::self_update::Local::from_env(run.cfg.self_update, &run.cfg.update_repo, &run.ctx.home, run.preview);
-    let launcher = RefCell::new(crate::self_update::Watch::start(self_update.clone(), now_ms()));
     let accounts = tm.begin(&["accounts"]);
     let rate_dir = var("CLAUDE_AUTO_RATE_LIMITS_DIR").map_or_else(|| run.ctx.home.join(".claude").join("rate-limits"), PathBuf::from);
     let defaults = label_defaults(&canonical_root, &account_dirs);
@@ -141,7 +143,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
             if is_hotkey(k, 'u') {
                 open_maintenance(&update, tm, t, run.preview, |t| {
-                    if maintenance::run_screen(t, &run.cfg, style, &self_update).is_ok() {
+                    if maintenance::run_screen(t, &run.cfg, style, self_update).is_ok() {
                         t.drain();
                     }
                 });
@@ -152,7 +154,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
             .with_rows(&mut rows_store)
             .with_update(&update)
-            .with_self_update(&launcher);
+            .with_self_update(launcher);
         let Some(next) = crate::ui::screen_loop::run(&mut screen, term.as_mut())? else {
             break UiEnd::Cancelled;
         };

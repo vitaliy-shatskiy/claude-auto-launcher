@@ -118,6 +118,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   exit (`claude-auto.exe.<pid>-<id>.new`) is deleted an hour later once its process is gone.
 - Self-update `auto` downloaded ~10 MB again on every start after a failed update (a checksum
   mismatch, a locked folder); it now retries that release a day later and repeats the reason.
+- Self-update `auto` dropped a download still running when the screens closed, so each start
+  downloaded again; the check now lives until claude exits.
 
 ## [0.8.2] — 2026-11-11
 

@@ -229,9 +229,17 @@ fn launch(run: &Run) -> i32 {
     let mut show_qr = false;
     let mut stop_server = false;
     let mut ui: Option<UiOutcome> = run.headless.as_ref().map(headless::HeadlessRun::outcome);
+    // The launcher's own release check: a thread, never in the way of the first frame. It lives
+    // until this function returns, after claude exits: a download that outlasts the screens still
+    // lands, and the drop keeps a swap from starting once the launcher is quitting.
+    let self_update = crate::self_update::Local::from_env(run.cfg.self_update, &run.cfg.update_repo, &run.ctx.home, run.preview);
+    let launcher = std::cell::RefCell::new(crate::self_update::Watch::start(
+        if use_ui { self_update.clone() } else { self_update.off() },
+        now_ms(),
+    ));
     if use_ui {
         let ui_span = run.logger.timings.begin(&["ui"]);
-        let ended = run_ui(run, input_redirected, output_redirected);
+        let ended = run_ui(run, input_redirected, output_redirected, (&self_update, &launcher));
         run.logger.timings.end(ui_span);
         match ended {
             Ok(UiEnd::Launch(o)) => ui = Some(*o),

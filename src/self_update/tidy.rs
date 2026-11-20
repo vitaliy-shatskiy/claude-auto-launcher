@@ -101,8 +101,13 @@ mod tests {
         for n in names {
             std::fs::write(t.0.join(n), b"partial").unwrap();
         }
-        for n in ["claude-auto.exe.1-a.new", "claude-auto.exe.2-b.new", "claude-auto.exe.old", "other.exe.1-a.new"] {
-            age(&t.0.join(n), Duration::from_secs(2 * 3600));
+        for n in [
+            "claude-auto.exe.1-a.new",
+            "claude-auto.exe.2-b.new",
+            "claude-auto.exe.old",
+            "other.exe.1-a.new",
+        ] {
+            age(&t.0.join(n), Duration::from_hours(2));
         }
         let now = written_ms(&t.0.join("claude-auto.exe.3-c.new")).unwrap();
         sweep_partials(&l.exe, now, &|pid, _| pid == 2);
@@ -122,10 +127,18 @@ mod tests {
         let l = local(&t.0, Mode::Notify);
         let recorded = Some(Version([99, 0, 0]));
         let written = written_ms(&l.exe).unwrap();
-        State { installed: recorded, ..State::default() }.write(&l.state);
+        State {
+            installed: recorded,
+            ..State::default()
+        }
+        .write(&l.state);
         forget_stale_install(&l, Some(Version([1, 0, 0])), Some(written - 1));
         assert_eq!(State::read(&l.state).installed, recorded, "swapped in after this start: kept");
         forget_stale_install(&l, Some(Version([1, 0, 0])), Some(written + 1));
-        assert_eq!(State::read(&l.state).installed, Some(Version([1, 0, 0])), "a hand install: forgotten");
+        assert_eq!(
+            State::read(&l.state).installed,
+            Some(Version([1, 0, 0])),
+            "a hand install: forgotten"
+        );
     }
 }

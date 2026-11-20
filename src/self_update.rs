@@ -122,6 +122,14 @@ impl Local {
         }
     }
 
+    /// The same exe and state with no check: a start that shows no screen.
+    pub(crate) fn off(&self) -> Self {
+        Self {
+            mode: Mode::Off,
+            ..self.clone()
+        }
+    }
+
     /// A release newer than this build, from the state file only (no network).
     fn offered(&self) -> Option<Release> {
         let state = State::read(&self.state);
@@ -266,7 +274,10 @@ fn run(local: &Local, now_ms: i64, net: &dyn Net, files: &dyn Files, closed: &Mu
     }
     // A failure that would repeat (a bad checksum, a locked folder) costs one download a day, not
     // ~10 MB on every start.
-    if let Some(f) = state.failed.filter(|f| f.version == r.version && (0..DAY_MS).contains(&now_ms.saturating_sub(f.at_ms))) {
+    if let Some(f) = state
+        .failed
+        .filter(|f| f.version == r.version && (0..DAY_MS).contains(&now_ms.saturating_sub(f.at_ms)))
+    {
         return Some(Notice::Failed(r.version, f.why));
     }
     Some(match update(local, &r, net, files, closed) {
