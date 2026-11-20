@@ -12,8 +12,7 @@ use serde_json::Value;
 use self::files::{remove_legacy_cache, sweep_stale_temps, temp_suffix};
 use super::scan::{ScanState, Scanned, scan_transcript};
 use super::transcript::{
-    MAX_BYTES, clean_text, collapse_fences, field, head_lines, is_headless, parse_line, prompt_detail, record_text, slug_names, tail_lines,
-    user_prompt,
+    MAX_BYTES, clean_text, field, head_lines, is_headless, parse_line, prompt_detail, record_text, slug_names, tail_lines, user_prompt,
 };
 use crate::config::ps_truthy;
 
@@ -67,6 +66,9 @@ pub struct Session {
     /// who launches, so it never enters the summary cache.
     #[serde(skip)]
     pub account: String,
+    /// A running Claude Code has it open now (`holder::live_ids`); never cached.
+    #[serde(skip)]
+    pub live: bool,
 }
 
 const HEAD_LINES: usize = 400;
@@ -171,7 +173,7 @@ fn summarize_from(path: &Path, project_path: Option<&str>, pre_filter: bool, max
         .into_iter()
         .map(|m| Message {
             speaker: m.speaker,
-            text: clean_text(&collapse_fences(&m.text)),
+            text: super::chat::clean_lines(&m.text),
         })
         .collect();
     Some(s)

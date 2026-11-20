@@ -4,17 +4,25 @@
 mod filter;
 mod landed;
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value, json};
 
 use self::filter::scope_name;
-use super::chat::pane::{ChatKey, ChatPane, ChatState};
-use super::chat::{ChatMessage, Keep, bounded};
+use super::chat::pane::{ChatKey, ChatPane, ChatState, Fill};
+use super::chat::{ChatMessage, bounded};
 use super::frame::{ChatView, Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
 use super::listing::Session;
 use crate::frame::{Frame, Style};
 use crate::input::KeyPress;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
+
+/// Reads the ids of the sessions a running Claude Code has open (`holder::live_ids`).
+pub type LiveScan<'a> = Box<dyn FnMut() -> HashSet<String> + 'a>;
+
+/// Idle polls (~60 ms each) between two reads of the live set.
+const LIVE_POLLS: u32 = 50;
 
 /// The next page of a scope: called with the rows fetched so far and the scope's slugs.
 pub type Fetch<'a> = &'a mut dyn FnMut(usize, &[String]) -> Vec<Session>;
@@ -78,8 +86,14 @@ pub struct PickerScreen<'a> {
     /// Loads the highlighted session's chat off the UI thread; `None` shows the summary's
     /// recent messages instead (tests, a session from a plugin source).
     chat: Option<ChatPane>,
+    /// The pane size the last frame had: what a stream fills.
+    chat_fill: Fill,
     /// Full summaries for rows first shown quick (`summaries`); `None` = every row is final.
     landed: Option<std::sync::mpsc::Receiver<Vec<Session>>>,
+    /// Reads the ids a live process has open: once at open, again every `LIVE_POLLS` idle polls.
+    live_scan: Option<LiveScan<'a>>,
+    live: HashSet<String>,
+    live_polls: u32,
 }
 
 impl std::fmt::Debug for PickerScreen<'_> {
@@ -140,7 +154,11 @@ impl<'a> PickerScreen<'a> {
             style,
             memo: Memo::default(),
             chat: None,
+            chat_fill: Fill { rows: 0, cols: 0 },
             landed: None,
+            live_scan: None,
+            live: HashSet::new(),
+            live_polls: 0,
         };
         *s.bucket_mut() = open;
         s.started[slot(scope)] = true;
@@ -154,6 +172,27 @@ impl<'a> PickerScreen<'a> {
         self
     }
 
+    /// Rows a running process has open get the green dot; `scan` runs now and on idle refreshes.
+    #[must_use]
+    pub fn with_live(mut self, mut scan: LiveScan<'a>) -> Self {
+        self.live = scan();
+        self.live_scan = Some(scan);
+        self
+    }
+
+    /// A re-read of the live set every `LIVE_POLLS` idle polls; `true` when it changed.
+    fn refresh_live(&mut self) -> bool {
+        self.live_polls += 1;
+        let Some(scan) = self.live_scan.as_mut().filter(|_| self.live_polls >= LIVE_POLLS) else {
+            return false;
+        };
+        self.live_polls = 0;
+        let now = scan();
+        let changed = now != self.live;
+        self.live = now;
+        changed
+    }
+
     /// Rows shown quick take their full summaries from `landed` as the worker sends them.
     #[must_use]
     pub fn with_landed(mut self, landed: std::sync::mpsc::Receiver<Vec<Session>>) -> Self {
@@ -161,23 +200,42 @@ impl<'a> PickerScreen<'a> {
         self
     }
 
-    /// The highlighted session's chat from the pane (cached or loading); `None` when there is no
-    /// pane or no transcript, and the summary's recent messages stand in.
-    fn chat_state(&mut self, rows: usize) -> Option<ChatState> {
-        let i = usize::try_from(self.cursor.index).ok()?;
-        let s = self.bucket().sessions.get(*self.items.get(i)?)?;
-        if s.path.as_os_str().is_empty() {
-            return None;
-        }
-        let key = ChatKey {
+    /// The chat key of the row at `item` (an index into `items`); `None` without a transcript.
+    fn chat_key(&self, item: usize) -> Option<ChatKey> {
+        let s = self.bucket().sessions.get(*self.items.get(item)?)?;
+        (!s.path.as_os_str().is_empty()).then(|| ChatKey {
             path: s.path.clone(),
             size: s.size_bytes,
             modified_ms: s.modified_ms,
-        };
-        // Each message takes a label and a line at least, plus the gap between.
-        Some(self.chat.as_mut()?.view(&key, rows / 3 + 2))
+        })
     }
 
+    /// The highlighted session's chat from the pane (streamed so far or loading); `None` when
+    /// there is no pane or no transcript, and the summary's recent messages stand in.
+    fn chat_state(&mut self, size: (usize, usize)) -> Option<ChatState> {
+        let key = self.chat_key(usize::try_from(self.cursor.index).ok()?)?;
+        self.chat_fill = Fill {
+            rows: size.1,
+            cols: size.0 / 2,
+        };
+        let fill = self.chat_fill;
+        Some(self.chat.as_mut()?.view(&key, fill))
+    }
+
+    /// The sessions the pane prefetches: 2 either side of the cursor, then the newest 5.
+    fn prefetch_keys(&self) -> Vec<ChatKey> {
+        let at = usize::try_from(self.cursor.index).unwrap_or(0);
+        let near = [at + 1, at.wrapping_sub(1), at + 2, at.wrapping_sub(2)];
+        let mut keys: Vec<ChatKey> = Vec::new();
+        for i in near.into_iter().chain(0..5) {
+            if let Some(k) = self.chat_key(i)
+                && !keys.contains(&k)
+            {
+                keys.push(k);
+            }
+        }
+        keys
+    }
     fn recent(&self) -> Vec<ChatMessage> {
         let Some(i) = usize::try_from(self.cursor.index).ok() else {
             return Vec::new();
@@ -185,13 +243,11 @@ impl<'a> PickerScreen<'a> {
         let at = self.items.get(i).copied();
         at.and_then(|at| self.bucket().sessions.get(at))
             .map(|s| {
-                let newest = s.recent.len().saturating_sub(1);
                 s.recent
                     .iter()
-                    .enumerate()
-                    .map(|(i, m)| ChatMessage {
+                    .map(|m| ChatMessage {
                         speaker: m.speaker,
-                        text: super::frame::plain::plain(&bounded(&m.text, Keep::of(i == newest))),
+                        text: bounded(&m.text),
                         at_ms: None,
                     })
                     .collect()
@@ -308,11 +364,12 @@ impl Screen for PickerScreen<'_> {
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
         let mut memo = std::mem::take(&mut self.memo);
-        let state = self.chat_state(size.1);
+        let state = self.chat_state(size);
         let fallback = if state.is_none() { self.recent() } else { Vec::new() };
         let chat = match &state {
             Some(ChatState::Loading) => ChatView::Loading,
             Some(ChatState::Ready(m)) => ChatView::Messages(m),
+            Some(ChatState::Updating(m)) => ChatView::Updating(m),
             None => ChatView::Messages(&fallback),
         };
         let b = self.bucket();
@@ -341,7 +398,12 @@ impl Screen for PickerScreen<'_> {
     /// first frame never waits for the pages a big window wants.
     fn idle(&mut self) -> bool {
         // The chat first: collecting a finished load is cheap, a page of summaries is not.
-        if self.chat.as_mut().is_some_and(ChatPane::idle) || self.take_landed() {
+        let keys = if self.chat.is_some() { self.prefetch_keys() } else { Vec::new() };
+        let fill = self.chat_fill;
+        if let Some(pane) = self.chat.as_mut() {
+            pane.prefetch(keys, fill);
+        }
+        if self.chat.as_mut().is_some_and(ChatPane::idle) || self.take_landed() || self.refresh_live() {
             return true;
         }
         if self.fetch.is_none() || self.bucket().exhausted || self.resumable_count >= self.want {
@@ -370,6 +432,14 @@ impl Screen for PickerScreen<'_> {
         }
         if self.fill_rows > 0 {
             self.fill_to(self.fill_rows);
+        }
+        let bucket = match self.scope {
+            PickerScope::Project => &mut self.project,
+            PickerScope::All => &mut self.all,
+            PickerScope::None => &mut self.none,
+        };
+        for s in &mut bucket.sessions {
+            s.live = self.live.contains(&s.session_id);
         }
         self.pool = self.pool_of();
         let b = self.bucket();

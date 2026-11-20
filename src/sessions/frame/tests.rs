@@ -131,7 +131,7 @@ fn wide_frames_match_the_powershell_goldens() {
 #[test]
 fn chat_frames_match_their_goldens_in_colour_and_ascii() {
     let mut owned = golden_sessions();
-    owned[0].modified_ms = GOLDEN_NOW - 20_000;
+    owned[0].live = true;
     let s: Vec<&Session> = owned.iter().collect();
     let ascii = PickerView {
         style: Style { color: false, ascii: true },
@@ -169,7 +169,7 @@ fn right_pane(f: &Frame) -> Vec<String> {
 }
 
 #[test]
-fn the_chat_fills_from_the_bottom_user_right_claude_left_newest_shown_from_its_end() {
+fn the_chat_fills_from_the_bottom_user_right_claude_left_bodies_inset_each_from_its_start() {
     let owned = golden_sessions();
     let s: Vec<&Session> = owned.iter().collect();
     let f = picker_frame(&view(&s, 1, 120, 30), &mut Memo::default());
@@ -189,9 +189,18 @@ fn the_chat_fills_from_the_bottom_user_right_claude_left_newest_shown_from_its_e
     let width = crate::layout::display_width(you);
     assert!(you.starts_with("    "), "the owner's label sits right: {you:?}");
     let prompt = chat.iter().find(|l| l.trim() == "ok, do it").unwrap();
-    assert_eq!(crate::layout::display_width(prompt), width, "and his text ends at the same edge");
+    assert_eq!(
+        crate::layout::display_width(prompt) + 2,
+        width,
+        "his text ends 2 cells in from that edge"
+    );
+    let reply = chat.iter().find(|l| l.contains("Plan: read")).unwrap();
+    assert!(
+        reply.starts_with("   Plan"),
+        "Claude's body sits 2 cells in from his label: {reply:?}"
+    );
     assert!(!chat.iter().any(|l| l.contains("first question")), "the first prompt does not fit");
-    // A newest reply taller than the pane shows its end, cut at the top with `…`.
+    // A newest reply taller than the pane shows from its start, the rest counted.
     let mut long = golden_chat().to_vec();
     long.push(msg(Speaker::Assistant, &format!("START {} END", "word ".repeat(600)), 50));
     let f = picker_frame(
@@ -202,10 +211,10 @@ fn the_chat_fills_from_the_bottom_user_right_claude_left_newest_shown_from_its_e
         &mut Memo::default(),
     );
     let right = right_pane(&f);
-    assert!(right[3].starts_with(" claude · 16.09 11:50"), "{right:#?}");
-    assert!(right[4].starts_with(" …"), "{right:#?}");
-    assert!(right.iter().any(|l| l.ends_with("END")), "{right:#?}");
-    assert!(!right.iter().any(|l| l.contains("START")), "{right:#?}");
+    let at = right.iter().position(|l| l.starts_with(" claude · 16.09 11:50")).unwrap();
+    assert!(right[at + 1].starts_with("   START"), "{right:#?}");
+    assert!(right[at + 15].contains("more lines"), "{right:#?}");
+    assert!(!right.iter().any(|l| l.contains("END")), "{right:#?}");
 }
 
 #[test]

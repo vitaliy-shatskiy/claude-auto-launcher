@@ -39,7 +39,6 @@ static SIDECHAIN: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)"isSidechain"\s*:
 static META: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)"isMeta"\s*:\s*true"#));
 static MESSAGE_OPEN: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)"message"\s*:\s*\{"#));
 static CONTENT_PLAIN: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)^"content"\s*:\s*"[^<"\\\s]"#));
-static FENCE: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)```[^\n]*\r?\n(.*?)```"));
 static ENTRYPOINT: LazyLock<Regex> = LazyLock::new(|| re(r#""entrypoint":\s?"([^"]*)""#));
 static ENTRYPOINT_OPEN: LazyLock<Regex> = LazyLock::new(|| re(r#""entrypoint":\s?""#));
 static SIDECHAIN_HEAD: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)"isSidechain":\s?true"#));
@@ -133,20 +132,6 @@ pub(crate) fn user_prompt(rec: &Value) -> Option<String> {
         return None;
     }
     Some(text)
-}
-
-/// A fenced block becomes `[code: N lines]`.
-pub(crate) fn collapse_fences(text: &str) -> String {
-    if !text.contains("```") {
-        return text.to_owned();
-    }
-    FENCE
-        .replace_all(text, |c: &regex::Captures<'_>| {
-            let body = c.get(1).map_or("", |m| m.as_str()).trim_end_matches(['\r', '\n']);
-            let n = if body.is_empty() { 0 } else { body.split('\n').count() };
-            format!("[code: {n} lines]")
-        })
-        .into_owned()
 }
 
 /// Control and format characters become spaces, whitespace runs one

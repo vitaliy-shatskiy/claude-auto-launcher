@@ -45,9 +45,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   keeps `w/s row` and the switch hint and wraps to a second line.
 - The README states what 1.0 keeps stable (config keys, plugin protocol 1, the `--launcher-*`
   flags and their JSON, the `CLAUDE_AUTO_*` switches) and what stays internal.
+- Picker chat: messages keep their markdown shape (paragraphs, `•` and numbered items with a
+  hanging indent, bold headings, dimmed code blocks and tables, bold and inline code styled, no raw
+  markers), bodies sit 2 cells in from their label's side, and each message shows from its start,
+  capped at 14 lines plus `… N more lines`. Preview mode renders the same way.
+- Picker chat streams the transcript backwards in 64 KB steps, newest message first, until the
+  pane plus one screen is filled (8 MB cap): the first messages show after one small read instead
+  of an up-to-8 MB tail read. A session seen once is kept while the picker is open (going back
+  reads nothing); a grown transcript shows its earlier chat marked `updating…` meanwhile. A
+  below-normal prefetch reads one step per idle moment for the sessions beside the cursor and the
+  newest five (one pane, 1 MB each). Speed budget: `chat_load` 8 MB -> 64 KB, new `chat_revisit`
+  (0 bytes) and `chat_prefetch_open`.
 
 ### Fixed
 
+- The picker's green dot marked any session written to in the last minute; it now marks only a
+  session a running Claude Code has open (`sessions\<pid>.json` in any account root, the pid alive
+  with its recorded start time, so a reused pid does not count).
 - The session picker opened late (seconds on a cold disk) after every update: it now shows its
   rows at once, titled by their first prompt, and fills in titles and message counts as a
   background scan finishes them; an update no longer discards the session summary cache.

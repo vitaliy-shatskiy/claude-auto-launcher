@@ -1,5 +1,5 @@
 //! The picker's chat preview, read side: the newest human and Claude messages of a transcript,
-//! read backwards from its end in bounded steps (`read_chat`, `load_chat`). Tool calls, tool
+//! streamed backwards from its end in small chunks (`ChatStream`, `read_chat`). Tool calls, tool
 //! results, notifications and subagent lines are not messages. `pane` runs it off the UI thread.
 
 pub mod pane;
@@ -8,11 +8,11 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use super::frame::plain::plain;
 use super::listing::Speaker;
 use super::scan::{Kind, kind_of};
-use super::transcript::{clean_text, collapse_fences, counts_as_prompt, field, parse_line, record_text, user_prompt};
+use super::transcript::{counts_as_prompt, field, parse_line, record_text, user_prompt};
 use crate::config::{ps_str, ps_truthy};
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 /// One message as the chat pane shows it: who, the plain text, when (UTC ms) if recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,21 +29,113 @@ pub struct ChatLoad {
     pub bytes_read: u64,
 }
 
-/// The first read from the end; each further step reads as much again, further back.
-pub const FIRST_READ: u64 = 1 << 20;
-/// Never more than this per load, whatever the transcript's size (they reach 80+ MB).
-pub const MAX_READ: u64 = 8 << 20;
-/// The pane shows at most ~8 lines of an older message; a few KB of text is plenty to wrap.
-const MAX_CHARS: usize = 4000;
-
-/// The newest `want` messages of the transcript at `path`; empty when it cannot be read.
-pub fn load_chat(path: &Path, want: usize) -> ChatLoad {
-    let Ok(mut f) = File::open(path) else { return ChatLoad::default() };
-    let Ok(len) = f.metadata().map(|m| m.len()) else {
-        return ChatLoad::default();
-    };
-    read_chat(&mut f, len, want, MAX_READ)
+/// A transcript read backwards in `CHUNK` steps, newest message first: each `step` reads the
+/// chunk before the last, carries the line its start cut to the next step, and classifies every
+/// whole line, so a caller can show what it has after any step and stop or resume between steps.
+#[derive(Debug)]
+pub struct ChatStream<R> {
+    r: R,
+    pos: u64,
+    read: u64,
+    cap: u64,
+    carry: Vec<u8>,
+    newest_first: Vec<(ChatMessage, Option<String>)>,
 }
+
+impl ChatStream<File> {
+    /// The stream of the transcript at `path`, from its current end; `None` when it cannot be read.
+    pub fn open(path: &Path) -> Option<Self> {
+        let f = File::open(path).ok()?;
+        let len = f.metadata().ok()?.len();
+        Some(Self::new(f, len, MAX_READ))
+    }
+}
+
+impl<R: Read + Seek> ChatStream<R> {
+    /// A stream over `r` of `len` bytes that never reads more than `cap`.
+    pub fn new(r: R, len: u64, cap: u64) -> Self {
+        Self {
+            r,
+            pos: len,
+            read: 0,
+            cap,
+            carry: Vec::new(),
+            newest_first: Vec::new(),
+        }
+    }
+
+    /// The file's start or the cap was reached: nothing more to read.
+    pub fn done(&self) -> bool {
+        self.pos == 0 || self.read >= self.cap
+    }
+
+    /// Bytes read so far.
+    pub fn bytes_read(&self) -> u64 {
+        self.read
+    }
+
+    /// Messages found so far.
+    pub fn found(&self) -> usize {
+        self.newest_first.len()
+    }
+
+    /// The messages found so far, oldest first.
+    pub fn messages(&self) -> Vec<ChatMessage> {
+        self.newest_first.iter().rev().map(|(m, _)| m.clone()).collect()
+    }
+
+    /// About how many pane rows the messages so far take at `cols` cells: a label and a gap each,
+    /// plus their wrapped lines up to the pane's per-message cap.
+    pub fn rows(&self, cols: usize) -> usize {
+        let cols = cols.max(8);
+        self.newest_first
+            .iter()
+            .map(|(m, _)| {
+                let lines: usize = m.text.split('\n').map(|l| l.chars().count() / cols + 1).sum();
+                2 + lines.min(MESSAGE_ROWS)
+            })
+            .sum()
+    }
+
+    /// Reads one chunk; `false` when done or the read failed (then the stream is done).
+    pub fn step(&mut self) -> bool {
+        if self.done() {
+            return false;
+        }
+        let take = CHUNK.min(self.pos).min(self.cap - self.read);
+        let Some(mut buf) = read_at(&mut self.r, self.pos - take, take) else {
+            self.pos = 0;
+            return false;
+        };
+        self.pos -= take;
+        self.read += u64::try_from(buf.len()).unwrap_or(take);
+        buf.append(&mut self.carry);
+        if self.pos > 0 {
+            let Some(nl) = buf.iter().position(|b| *b == b'\n') else {
+                self.carry = buf;
+                return true;
+            };
+            let rest = buf.split_off(nl + 1);
+            buf.pop();
+            self.carry = std::mem::replace(&mut buf, rest);
+        }
+        for line in buf.split(|b| *b == b'\n').rev() {
+            take_message(line, &mut self.newest_first);
+        }
+        true
+    }
+}
+
+/// One backward read step. Small: the pane shows the first message after one step on a chatty
+/// transcript, and a newer cursor target is taken between steps.
+pub const CHUNK: u64 = 64 << 10;
+/// Never more than this per stream, whatever the transcript's size (they reach 80+ MB of tool
+/// output).
+pub const MAX_READ: u64 = 8 << 20;
+/// The pane shows at most this many lines of one message (`frame::markdown`).
+const MESSAGE_ROWS: usize = 15;
+/// The pane shows at most ~14 lines of a message; a few KB of text is plenty to wrap.
+const MAX_CHARS: usize = 4000;
 
 fn read_at(r: &mut (impl Read + Seek), pos: u64, n: u64) -> Option<Vec<u8>> {
     r.seek(SeekFrom::Start(pos)).ok()?;
@@ -52,70 +144,43 @@ fn read_at(r: &mut (impl Read + Seek), pos: u64, n: u64) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// Walks back from `len` in steps (1 MB, then 1 MB more each time) until `want` messages are
-/// found, the file starts, or `cap` bytes were read. A line cut by a step's start is carried to the
-/// next step, so every line is classified whole.
+/// The newest messages of `r` until at least `want` are found, the start, or `cap` bytes.
 pub fn read_chat(r: &mut (impl Read + Seek), len: u64, want: usize, cap: u64) -> ChatLoad {
-    let mut pos = len;
-    let mut read = 0u64;
-    let mut carry: Vec<u8> = Vec::new();
-    let mut newest_first: Vec<(ChatMessage, Option<String>)> = Vec::new();
-    while pos > 0 && read < cap && newest_first.len() < want {
-        let take = FIRST_READ.min(pos).min(cap - read);
-        let Some(mut buf) = read_at(r, pos - take, take) else { break };
-        pos -= take;
-        read += u64::try_from(buf.len()).unwrap_or(take);
-        buf.append(&mut carry);
-        if pos > 0 {
-            let Some(nl) = buf.iter().position(|b| *b == b'\n') else {
-                carry = buf;
-                continue;
-            };
-            let rest = buf.split_off(nl + 1);
-            buf.pop();
-            carry = std::mem::replace(&mut buf, rest);
-        }
-        for line in buf.split(|b| *b == b'\n').rev() {
-            if newest_first.len() >= want {
-                break;
-            }
-            take_message(line, &mut newest_first);
-        }
-    }
-    let messages = newest_first.into_iter().rev().map(|(m, _)| m).collect();
+    let mut s = ChatStream::new(r, len, cap);
+    while s.found() < want && s.step() {}
+    let mut messages = s.messages();
+    messages.drain(..messages.len().saturating_sub(want));
     ChatLoad {
         messages,
-        bytes_read: read,
+        bytes_read: s.bytes_read(),
     }
 }
 
-/// Which end of a long message the pane keeps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Keep {
-    /// An older message: shown from its start.
-    Head,
-    /// The newest message: shown from its end.
-    Tail,
+/// The start of the text the pane keeps: a message shows at most ~14 wrapped lines, and the
+/// markdown pass costs more than linear time on a long reply.
+pub(crate) fn bounded(text: &str) -> String {
+    text.chars().take(MAX_CHARS).collect()
 }
 
-impl Keep {
-    /// `Tail` for the newest message, `Head` for any other.
-    pub(crate) fn of(newest: bool) -> Self {
-        if newest { Self::Tail } else { Self::Head }
-    }
+/// Untrusted transcript text for the pane with its line structure kept: control and format
+/// characters become spaces, `\r` goes, trailing spaces go, the whole is trimmed.
+pub(crate) fn clean_lines(text: &str) -> String {
+    let lines: Vec<String> = text.replace('\r', "").split('\n').map(clean_line).collect();
+    lines.join("\n").trim_matches('\n').to_owned()
 }
 
-/// The text kept for the pane: `keep`'s end of it. Cut BEFORE the markdown pass: `plain` costs
-/// more than linear time on a long reply.
-pub(crate) fn bounded(text: &str, keep: Keep) -> String {
-    let count = text.chars().count();
-    if count <= MAX_CHARS {
-        return text.to_owned();
-    }
-    match keep {
-        Keep::Tail => text.chars().skip(count - MAX_CHARS).collect(),
-        Keep::Head => text.chars().take(MAX_CHARS).collect(),
-    }
+fn clean_line(line: &str) -> String {
+    let spaced: String = line
+        .chars()
+        .map(|c| {
+            if c == '\t' || matches!(get_general_category(c), GeneralCategory::Control | GeneralCategory::Format) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    spaced.trim_end().to_owned()
 }
 
 /// Classifies one line, newest first; an assistant message written as several lines (one per
@@ -146,18 +211,17 @@ fn take_message(line: &[u8], out: &mut Vec<(ChatMessage, Option<String>)>) {
         }
         Kind::CustomTitle | Kind::AiTitle | Kind::LastPrompt => return,
     };
-    let text = plain(&bounded(&clean_text(&collapse_fences(&raw)), Keep::of(out.is_empty())));
+    let text = bounded(&clean_lines(&raw));
     if text.is_empty() {
         return;
     }
-    let newest = out.len() == 1;
     if let Some((newer, newer_id)) = out.last_mut()
         && speaker == Speaker::Assistant
         && newer.speaker == Speaker::Assistant
         && id.is_some()
         && *newer_id == id
     {
-        newer.text = bounded(&format!("{text} {}", newer.text), Keep::of(newest));
+        newer.text = bounded(&format!("{text}\n\n{}", newer.text));
         return;
     }
     let at_ms = field(&rec, "timestamp").and_then(|t| iso_ms(&ps_str(t)));

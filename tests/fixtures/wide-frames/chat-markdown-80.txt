@@ -1,0 +1,21 @@
+Plan
+
+First paragraph with bold words and cargo test inline, long enough to wrap
+across the pane at a narrow width.
+Second line of it.
+
+• r rename swap. The update moves the exe aside first
+• glob src/**/*.rs and __init__.py stay
+  • nested item
+
+1. first step
+2. second step that is quite a bit longer than the first one
+
+fn main() {
+    println!("hi");
+}
+
+| a | b |
+|---|---|
+
+Done.

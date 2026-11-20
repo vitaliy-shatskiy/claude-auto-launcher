@@ -1,5 +1,6 @@
 //! Another live claude.exe on a session. Fail open: any unreadable input answers "not held".
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -21,16 +22,22 @@ pub(crate) struct Holder {
 }
 
 fn record(path: &Path, session_id: &str) -> Option<Holder> {
+    live_record(path, Some(session_id), &super::win::process_start)
+}
+
+/// The record at `path` when its pid runs and started at its `procStart` (`start_of` reads a
+/// pid's creation FILETIME); `want` filters on the session id first.
+fn live_record(path: &Path, want: Option<&str>, start_of: &dyn Fn(u32) -> Option<u64>) -> Option<Holder> {
     let text = std::fs::read_to_string(path).ok()?;
     let r: Value = serde_json::from_str(&text).ok()?;
     let o = r.as_object()?;
     let get = |k: &str| o.get(k).map(ps_str).unwrap_or_default();
-    if get("sessionId") != session_id {
+    if want.is_some_and(|w| get("sessionId") != w) || get("sessionId").is_empty() {
         return None;
     }
     let pid = get("pid").parse::<i32>().ok().filter(|p| *p > 0)?;
     let pid = u32::try_from(pid).ok()?;
-    let started = super::win::process_start(pid)?;
+    let started = start_of(pid)?;
     if started.to_string() != get("procStart") {
         return None;
     }
@@ -63,6 +70,25 @@ pub(crate) fn find_holder(dirs: &[PathBuf], session_id: &str) -> Option<Holder> 
         }
     }
     None
+}
+
+/// The ids of the sessions a live Claude Code process has open, across every account's
+/// `sessions\` folder: the same record twice (sharing links the folders) counts once. Stale
+/// records (a dead pid, a reused one with another start) and unreadable ones never count.
+pub(crate) fn live_ids(dirs: &[PathBuf], start_of: &dyn Fn(u32) -> Option<u64>) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    for dir in dirs {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("json"))
+                && let Some(h) = live_record(&p, None, start_of)
+            {
+                ids.insert(h.session_id);
+            }
+        }
+    }
+    ids
 }
 
 /// The newest transcript of the project's own slugs that `claude -c`
@@ -214,6 +240,30 @@ mod tests {
             "ok-bg",
             "a background holder is passed over"
         );
+    }
+
+    #[test]
+    fn live_ids_are_the_records_whose_pid_runs_with_its_recorded_start() {
+        // Given: pid 10 runs since 500; pid 20 is gone; pid 30 runs since 900 (reused).
+        let start_of = |pid: u32| match pid {
+            10 => Some(500),
+            30 => Some(900),
+            _ => None,
+        };
+        let t = Tmp(std::env::temp_dir().join(format!("cars-live-ids-{}", std::process::id())));
+        let (a, b) = (t.0.join("a").join("sessions"), t.0.join("b").join("sessions"));
+        put(&a.join("10.json"), &rec(10, "live-1", "500", "", "interactive"));
+        put(&a.join("20.json"), &rec(20, "dead-2", "500", "", "interactive"));
+        put(&a.join("30.json"), &rec(30, "reused-3", "400", "", "interactive"));
+        put(&a.join("40.json"), "{ not json");
+        put(&a.join("notes.txt"), &rec(10, "not-a-record", "500", "", "interactive"));
+        // And: sharing shows the same record under a second account.
+        put(&b.join("10.json"), &rec(10, "live-1", "500", "", "interactive"));
+        // When: the live set is read over both, plus a missing folder.
+        let ids = live_ids(&[a, b, t.0.join("missing")], &start_of);
+        // Then: only the live match counts, once.
+        assert_eq!(ids, HashSet::from(["live-1".to_owned()]));
+        assert!(live_ids(&[t.0.join("missing")], &start_of).is_empty());
     }
 
     #[test]

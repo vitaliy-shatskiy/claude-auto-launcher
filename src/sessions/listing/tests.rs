@@ -85,7 +85,11 @@ fn recent_messages_are_real_exchanges_oldest_first() {
         }
     );
     let f = standalone(&fixture("code-fence.jsonl"));
-    assert_eq!(f.recent[1].text, "Here: [code: 3 lines] Done.");
+    assert!(
+        f.recent[1].text.starts_with("Here:\n```"),
+        "the fence stays for the renderer: {:?}",
+        f.recent[1].text
+    );
 }
 
 #[test]

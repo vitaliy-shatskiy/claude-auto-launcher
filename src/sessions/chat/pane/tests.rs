@@ -1,133 +1,181 @@
 use super::*;
-use crate::sessions::listing::Speaker;
-use std::sync::Mutex;
-use std::sync::mpsc::Receiver as Rx;
+use crate::sessions::chat::{CHUNK, MAX_READ};
+use std::fmt::Write as _;
+use std::path::Path;
 
-fn key(name: &str) -> ChatKey {
+/// A temp folder of synthetic transcripts, removed at the end.
+struct Tmp(PathBuf);
+impl Drop for Tmp {
+    fn drop(&mut self) {
+        if std::fs::remove_dir_all(&self.0).is_err() {}
+    }
+}
+
+fn tmp(name: &str) -> Tmp {
+    let d = std::env::temp_dir().join(format!("cars-chat-pane-{name}-{}", std::process::id()));
+    if d.exists() {
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+    std::fs::create_dir_all(&d).unwrap();
+    Tmp(d)
+}
+
+/// `turns` exchanges, each followed by `filler` bytes of tool output (no chat line).
+fn transcript(turns: usize, filler: usize) -> String {
+    let tool = format!("{{\"type\":\"progress\",\"data\":\"{}\"}}\n", "x".repeat(990));
+    let mut s = String::new();
+    for n in 0..turns {
+        writeln!(
+            s,
+            "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"question {n}\"}},\"uuid\":\"u{n}\"}}"
+        )
+        .unwrap();
+        s.push_str(&tool.repeat(filler / tool.len()));
+        writeln!(
+            s,
+            "{{\"type\":\"assistant\",\"uuid\":\"a{n}\",\"message\":{{\"id\":\"m{n}\",\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"answer {n}\"}}]}}}}"
+        )
+        .unwrap();
+    }
+    s
+}
+
+fn key_of(path: &Path) -> ChatKey {
     ChatKey {
-        path: PathBuf::from(format!(r"C:\p\{name}.jsonl")),
-        size: 10,
+        path: path.to_path_buf(),
+        size: std::fs::metadata(path).unwrap().len(),
         modified_ms: 1,
     }
 }
 
-fn one(text: &str) -> ChatLoad {
-    ChatLoad {
-        messages: vec![ChatMessage {
-            speaker: Speaker::User,
-            text: text.into(),
-            at_ms: None,
-        }],
-        bytes_read: 10,
-    }
-}
-
-/// A loader that names each load on `calls` and answers the path's file stem.
-fn counting() -> (Loader, Rx<PathBuf>) {
-    let (tx, rx) = channel();
-    let tx = Mutex::new(tx);
-    let loader: Loader = Arc::new(move |p: &Path, _want: usize| {
-        tx.lock().unwrap().send(p.to_path_buf()).unwrap();
-        one(&p.file_stem().unwrap().to_string_lossy())
-    });
-    (loader, rx)
-}
-
-/// Polls until the worker's answer lands; returns how many polls said "redraw".
+/// Idle polls until the workers have nothing left; returns how many said "redraw".
 fn settle(p: &mut ChatPane) -> usize {
     let mut redraws = 0;
-    while p.in_flight.is_some() {
+    while !p.quiet() {
         redraws += usize::from(p.idle());
         std::thread::yield_now();
     }
     redraws
 }
 
-#[test]
-fn a_load_starts_after_the_cursor_rests_and_its_arrival_asks_one_redraw() {
-    // Given: a pane with nothing cached.
-    let (loader, calls) = counting();
-    let mut p = ChatPane::new(loader, Timings::default());
-    // When: the highlighted session is shown, then idle polls come.
-    assert_eq!(p.view(&key("a"), 10), ChatState::Loading);
-    assert!(!p.idle(), "one poll is no rest yet");
-    assert!(p.in_flight.is_none());
-    assert!(!p.idle());
-    assert_eq!(p.in_flight, Some(key("a")), "the second poll starts the load");
-    // Then: its arrival is one redraw, and the next view is the chat.
-    assert_eq!(settle(&mut p), 1);
-    assert!(!p.idle(), "no second redraw");
-    assert_eq!(p.view(&key("a"), 10), ChatState::Ready(Arc::new(one("a").messages)));
-    assert_eq!(calls.try_iter().count(), 1);
-}
+const PANE: Fill = Fill { rows: 20, cols: 80 };
 
 #[test]
-fn a_cursor_that_keeps_moving_loads_nothing_and_a_cached_chat_needs_no_load() {
-    let (loader, calls) = counting();
-    let mut p = ChatPane::new(loader, Timings::default());
-    for name in ["a", "b", "c"] {
-        assert_eq!(p.view(&key(name), 10), ChatState::Loading);
+fn a_stream_fills_the_pane_plus_a_screen_and_a_revisit_reads_nothing() {
+    // Given: a 700 KB transcript of short exchanges between tool output.
+    let t = tmp("fill");
+    let f = t.0.join("a.jsonl");
+    std::fs::write(&f, transcript(300, 2000)).unwrap();
+    let mut p = ChatPane::new(Timings::default());
+    // When: the session is highlighted and the cursor rests.
+    assert_eq!(p.view(&key_of(&f), PANE), ChatState::Loading);
+    assert!(settle(&mut p) >= 1, "the arrival asks a redraw");
+    // Then: one chunk filled 40 rows (the pane plus one screen), newest last.
+    assert_eq!(p.bytes_read(), CHUNK);
+    let ChatState::Ready(m) = p.view(&key_of(&f), PANE) else {
+        panic!("ready")
+    };
+    assert!(m.len() >= 12, "{} messages", m.len());
+    assert_eq!(m.last().map(|m| m.text.as_str()), Some("answer 299"));
+    // And: going back to it reads nothing.
+    assert_eq!(p.view(&key_of(&f), PANE), ChatState::Ready(m));
+    for _ in 0..5 {
         assert!(!p.idle());
     }
-    assert!(p.in_flight.is_none(), "every view restarted the rest");
-    assert!(!p.idle());
+    assert_eq!(p.bytes_read(), CHUNK, "a revisit reads 0 bytes");
+}
+
+#[test]
+fn a_grown_transcript_shows_the_old_chat_updating_then_streams_only_its_new_tail() {
+    let t = tmp("grown");
+    let f = t.0.join("g.jsonl");
+    std::fs::write(&f, transcript(300, 2000)).unwrap();
+    let mut p = ChatPane::new(Timings::default());
+    p.view(&key_of(&f), PANE);
     settle(&mut p);
-    assert_eq!(calls.try_iter().collect::<Vec<_>>(), [key("c").path]);
-    assert!(matches!(p.view(&key("c"), 10), ChatState::Ready(_)));
-    assert!(!p.idle());
-    assert!(!p.idle());
-    assert!(p.in_flight.is_none(), "a cached chat starts no load");
-}
-
-#[test]
-fn a_grown_transcript_is_another_key() {
-    let (loader, _calls) = counting();
-    let mut p = ChatPane::new(loader, Timings::default());
-    p.view(&key("a"), 10);
-    p.idle();
-    p.idle();
+    // When: the transcript grows by one exchange.
+    let mut grown = std::fs::read_to_string(&f).unwrap();
+    grown.push_str(
+        &transcript(1, 0)
+            .replace("question 0", "late question")
+            .replace("answer 0", "late answer"),
+    );
+    std::fs::write(&f, grown).unwrap();
+    // Then: the old chat shows at once, marked updating, and the new one streams one chunk.
+    assert!(matches!(p.view(&key_of(&f), PANE), ChatState::Updating(_)));
     settle(&mut p);
-    let grown = ChatKey { size: 20, ..key("a") };
-    assert_eq!(p.view(&grown, 10), ChatState::Loading);
+    let ChatState::Ready(m) = p.view(&key_of(&f), PANE) else {
+        panic!("ready")
+    };
+    assert_eq!(m.last().map(|m| m.text.as_str()), Some("late answer"));
+    assert_eq!(p.bytes_read(), 2 * CHUNK, "the bounded tail, never the whole file");
 }
 
 #[test]
-fn the_cache_keeps_the_newest_thirty_two() {
-    let (loader, _calls) = counting();
-    let mut p = ChatPane::new(loader, Timings::default());
-    for i in 0..33 {
-        p.insert(key(&i.to_string()), Vec::new());
-    }
-    assert_eq!(p.cache.len(), CACHE_SIZE);
-    assert_eq!(p.view(&key("0"), 10), ChatState::Loading, "the oldest went");
-    assert!(matches!(p.view(&key("32"), 10), ChatState::Ready(_)));
+fn a_transcript_of_tool_output_only_stops_at_the_cap() {
+    let t = tmp("cap");
+    let f = t.0.join("c.jsonl");
+    std::fs::write(&f, transcript(1, 9 << 20)).unwrap();
+    let mut p = ChatPane::new(Timings::default());
+    p.view(&key_of(&f), PANE);
+    settle(&mut p);
+    assert_eq!(p.bytes_read(), MAX_READ);
+    let ChatState::Ready(m) = p.view(&key_of(&f), PANE) else {
+        panic!("ready")
+    };
+    assert_eq!(m.len(), 1, "the one message in reach");
 }
 
 #[test]
-fn a_reply_that_lands_after_the_cursor_moved_is_kept_under_its_own_session() {
-    // Given: A's load is held in the worker.
-    let (go, held) = channel::<()>();
-    let (started, loading) = channel::<()>();
-    let (held, started) = (Mutex::new(held), Mutex::new(started));
-    let loader: Loader = Arc::new(move |p: &Path, _want: usize| {
-        // Either end may be gone once the test has its answer.
-        let _told = started.lock().unwrap().send(());
-        let _released = held.lock().unwrap().recv();
-        one(&p.file_stem().unwrap().to_string_lossy())
-    });
-    let mut p = ChatPane::new(loader, Timings::default());
-    p.view(&key("a"), 10);
+fn prefetch_waits_for_idle_polls_reads_one_chunk_per_poll_and_stops_at_its_cap() {
+    // Given: two transcripts of tool output only (nothing fills their pane).
+    let t = tmp("prefetch");
+    let (a, b) = (t.0.join("a.jsonl"), t.0.join("b.jsonl"));
+    std::fs::write(&a, transcript(1, 3 << 20)).unwrap();
+    std::fs::write(&b, transcript(1, 3 << 20)).unwrap();
+    let mut p = ChatPane::new(Timings::default());
+    p.prefetch(vec![key_of(&a), key_of(&b)], PANE);
+    // Then: no idle poll (input pending), no read.
+    assert!(p.prefetching.is_none());
+    assert_eq!(p.bytes_read(), 0);
+    // And: the cursor's rest comes first, then one chunk per grant.
+    assert!(!p.idle());
+    assert!(p.prefetching.is_none(), "one poll is no rest yet");
+    p.idle();
+    assert_eq!(p.prefetching, Some(key_of(&a)));
+    settle(&mut p);
+    // Then: each session read up to the prefetch cap, no further.
+    assert_eq!(p.bytes_read(), 2 * PREFETCH_BYTES);
+}
+
+#[test]
+fn prefetch_yields_to_the_highlighted_session() {
+    let t = tmp("yield");
+    let (a, b) = (t.0.join("a.jsonl"), t.0.join("b.jsonl"));
+    std::fs::write(&a, transcript(300, 2000)).unwrap();
+    std::fs::write(&b, transcript(300, 2000)).unwrap();
+    let mut p = ChatPane::new(Timings::default());
+    p.prefetch(vec![key_of(&b)], PANE);
+    p.view(&key_of(&a), PANE);
     p.idle();
     p.idle();
-    loading.recv().unwrap();
-    // When: the cursor moves to B, then A's answer lands.
-    assert_eq!(p.view(&key("b"), 10), ChatState::Loading);
-    go.send(()).unwrap();
-    while p.cache.is_empty() {
-        p.idle();
-        std::thread::yield_now();
+    assert_eq!(p.in_flight.as_ref().map(|(k, _)| k.clone()), Some(key_of(&a)));
+    assert!(p.prefetching.is_none(), "no prefetch while the cursor's session streams");
+    settle(&mut p);
+    assert!(matches!(p.view(&key_of(&a), PANE), ChatState::Ready(_)));
+    assert_eq!(p.bytes_read(), 2 * CHUNK, "a's fill, then b's one prefetch chunk");
+}
+
+#[test]
+fn both_workers_end_when_the_picker_closes() {
+    let t = tmp("close");
+    let f = t.0.join("a.jsonl");
+    std::fs::write(&f, transcript(1, 3 << 20)).unwrap();
+    let mut p = ChatPane::new(Timings::default());
+    p.prefetch(vec![key_of(&f)], PANE);
+    p.idle();
+    p.idle();
+    for h in p.close() {
+        h.join().unwrap();
     }
-    // Then: B still loads, and A's chat is A's.
-    assert_eq!(p.view(&key("b"), 10), ChatState::Loading);
-    assert_eq!(p.view(&key("a"), 10), ChatState::Ready(Arc::new(one("a").messages)));
 }

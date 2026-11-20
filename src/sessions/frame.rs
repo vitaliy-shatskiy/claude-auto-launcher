@@ -4,8 +4,8 @@
 
 mod card;
 mod chat;
+mod markdown;
 mod memo;
-pub(super) mod plain;
 mod text;
 
 use super::listing::Session;
@@ -135,8 +135,8 @@ fn session_row(it: &Session, row_index: usize, c: &RowCtx<'_>) -> String {
         format!("[{}] {place}", it.account).trim_end().clone_into(&mut place);
     }
     let age = relative_age(it.modified_ms, c.clock.now_ms);
-    // A session written to within the minute is live now: a green dot before its title.
-    let live = if age == "now" { format!("{} ", c.g.on) } else { String::new() };
+    // A session a running Claude Code has open: a green dot before its title.
+    let live = if it.live { format!("{} ", c.g.on) } else { String::new() };
     let what = [&it.title, &it.last_user]
         .into_iter()
         .find(|t| !t.is_empty())

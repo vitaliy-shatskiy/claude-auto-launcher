@@ -10,21 +10,22 @@ fn texts(load: &ChatLoad) -> Vec<(Speaker, &str)> {
 }
 
 #[test]
-fn only_human_prompts_and_claude_text_are_messages_markdown_stripped() {
+fn only_human_prompts_and_claude_text_are_messages_their_markdown_kept() {
     // Given: a transcript with tool calls and results, reminders, notifications, a subagent, a
     // meta record, a system record, thinking, and one reply split over three lines.
     let bytes = fixture();
     let len = u64::try_from(bytes.len()).unwrap();
     // When: the chat is read.
     let load = read_chat(&mut Cursor::new(bytes), len, 50, MAX_READ);
-    // Then: four messages, oldest first, plain text, the split reply joined in order.
+    // Then: four messages, oldest first, markdown and line breaks kept for the renderer, the
+    // split reply joined in order a paragraph apart.
     assert_eq!(
         texts(&load),
         [
-            (Speaker::User, "first question about the parser"),
-            (Speaker::Assistant, "Plan - read scan.rs first then fix it"),
+            (Speaker::User, "first question about the **parser**"),
+            (Speaker::Assistant, "## Plan\n- read `scan.rs` first\n\nthen *fix* it"),
             (Speaker::User, "second question"),
-            (Speaker::Assistant, "Done: shipped"),
+            (Speaker::Assistant, "**Done:** shipped"),
         ]
     );
     assert_eq!(load.messages[2].at_ms, iso_ms("2026-11-20T18:06:00.000Z"));
@@ -38,12 +39,12 @@ fn want_stops_the_walk_at_the_newest_messages() {
     let load = read_chat(&mut Cursor::new(bytes), len, 2, MAX_READ);
     assert_eq!(
         texts(&load),
-        [(Speaker::User, "second question"), (Speaker::Assistant, "Done: shipped")]
+        [(Speaker::User, "second question"), (Speaker::Assistant, "**Done:** shipped")]
     );
 }
 
 #[test]
-fn a_long_message_keeps_its_head_and_the_newest_its_tail() {
+fn a_long_message_keeps_its_head_the_newest_too() {
     let older = format!("HEAD {} TAILOLD", "word ".repeat(2000));
     let newest = format!("START {} END", "more ".repeat(2000));
     let line = |t: &str, text: &str, id: &str| {
@@ -53,7 +54,7 @@ fn a_long_message_keeps_its_head_and_the_newest_its_tail() {
     let len = u64::try_from(text.len()).unwrap();
     let load = read_chat(&mut Cursor::new(text.into_bytes()), len, 10, MAX_READ);
     assert!(load.messages[0].text.starts_with("HEAD") && !load.messages[0].text.ends_with("TAILOLD"));
-    assert!(load.messages[1].text.ends_with("END") && !load.messages[1].text.starts_with("START"));
+    assert!(load.messages[1].text.starts_with("START") && !load.messages[1].text.ends_with("END"));
 }
 
 #[test]
@@ -121,11 +122,38 @@ fn a_full_pane_stops_after_the_first_step() {
     let line = |i: i32| format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"prompt {i}\"}},\"uuid\":\"{i}\"}}\n");
     let text = (0..40_000).map(line).collect::<Vec<_>>().concat();
     let len = u64::try_from(text.len()).unwrap();
-    assert!(len > 2 * FIRST_READ);
+    assert!(len > 2 * CHUNK);
     let load = read_chat(&mut Cursor::new(text.into_bytes()), len, 30, MAX_READ);
     assert_eq!(load.messages.len(), 30);
     assert_eq!(load.messages[29].text, "prompt 39999");
-    assert_eq!(load.bytes_read, FIRST_READ);
+    assert_eq!(load.bytes_read, CHUNK);
+}
+
+#[test]
+fn a_stream_hands_out_the_newest_message_after_one_chunk_then_older_ones_step_by_step() {
+    // Given: five prompts, each followed by 100 KB of tool output.
+    let filler = format!("{{\"type\":\"progress\",\"data\":\"{}\"}}\n", "x".repeat(1000)).repeat(100);
+    let text: String = (0..5)
+        .flat_map(|i| {
+            [
+                format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"prompt {i}\"}},\"uuid\":\"{i}\"}}\n"),
+                filler.clone(),
+            ]
+        })
+        .collect();
+    let len = u64::try_from(text.len()).unwrap();
+    let mut s = ChatStream::new(Cursor::new(text.into_bytes()), len, MAX_READ);
+    // When: one chunk is read, nothing is found yet past the newest filler; then more chunks.
+    let mut seen = Vec::new();
+    while s.step() {
+        seen.push(s.found());
+    }
+    // Then: each chunk read 64 KB at most, the messages came one by one, newest first.
+    assert_eq!(seen.len(), usize::try_from(len.div_ceil(CHUNK)).unwrap());
+    assert!(seen.windows(2).all(|w| w[1] - w[0] <= 1), "{seen:?}");
+    assert_eq!(seen.iter().position(|n| *n == 1), Some(1), "prompt 4 sits 100 KB from the end");
+    assert_eq!(s.messages().first().map(|m| m.text.as_str()), Some("prompt 0"));
+    assert!(s.done());
 }
 
 #[test]

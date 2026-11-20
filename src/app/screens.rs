@@ -264,6 +264,7 @@ pub(super) fn run_ui(
             project_slugs: &slugs,
             project_name: &name,
             style,
+            live_dirs: &held_dirs,
             preview: run.preview,
         };
         let project = state.project.clone();
