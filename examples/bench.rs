@@ -38,7 +38,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let mut budget = serde_json::Map::new();
-    println!("{:<18} {:>10} {:>10}  counts", "path", "median ms", "p80 ms");
+    println!("{:<24} {:>10} {:>10}  counts", "path", "median ms", "p80 ms");
     for (name, run) in world::PATHS {
         let mut times = Vec::with_capacity(runs);
         let mut counts = Vec::new();
@@ -57,7 +57,7 @@ fn main() -> ExitCode {
         times.sort_by(f64::total_cmp);
         let shown: Vec<String> = counts.iter().map(|(m, v)| format!("{m}={v}")).collect();
         println!(
-            "{name:<18} {:>10.3} {:>10.3}  {}",
+            "{name:<24} {:>10.3} {:>10.3}  {}",
             quantile(&times, 50),
             quantile(&times, 80),
             shown.join(" ")

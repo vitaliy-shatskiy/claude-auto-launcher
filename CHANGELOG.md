@@ -27,6 +27,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   when a path reads or writes more than its budget plus 10 %. Counts come from the OS I/O counters,
   so the check does not depend on machine load; `examples/bench.rs` prints the counts with wall
   times for reference (`perf/README.md`).
+- The speed budget covers the interactive picker's cold open in two counts: what the UI thread
+  reads before the first frame (cache hits and quick rows only, 2.9 MB on the budget's world) and
+  what the summary worker then reads to finish those pages (128 MB). A full scan moved back onto
+  the UI thread fails the check.
 
 ## [0.9.0] — 2026-11-20
 

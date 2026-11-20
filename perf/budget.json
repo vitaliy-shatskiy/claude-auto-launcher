@@ -28,6 +28,12 @@
       "counts": { "read_bytes": 49385, "read_ops": 9, "write_bytes": 18325 },
       "wallMsRef": { "median": 4.137, "p80": 5.007 }
     },
+    "picker_ui_open_cold": {
+      "counts": { "read_bytes": 2902816, "read_ops": 238 }
+    },
+    "picker_worker_scan_cold": {
+      "counts": { "read_bytes": 127926790, "read_ops": 358, "write_bytes": 18235 }
+    },
     "picker_cursor": {
       "counts": { "frame_bytes": 3844, "full_frame_bytes": 18517 },
       "wallMsRef": { "median": 0.005, "p80": 0.006 }

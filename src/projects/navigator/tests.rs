@@ -265,38 +265,45 @@ fn a_symlink_to_a_file_is_not_a_folder() {
     assert_eq!(list_dirs(&root).unwrap(), ["alpha", "alpine", "beta", "to-dir"]);
 }
 
-static SLOW_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Opened by the test: the slow share answers only then.
-static SLOW_GATE: (std::sync::Mutex<bool>, std::sync::Condvar) = (std::sync::Mutex::new(false), std::sync::Condvar::new());
+/// The slow share's calls so far and whether the test opened its gate; the condvar signals both.
+static SLOW: (std::sync::Mutex<(usize, bool)>, std::sync::Condvar) = (std::sync::Mutex::new((0, false)), std::sync::Condvar::new());
 
 #[expect(clippy::unnecessary_wraps, reason = "the Lister signature")]
 fn slow_share(_: &str) -> Result<Vec<String>, String> {
-    SLOW_CALLS.fetch_add(1, Ordering::SeqCst);
-    let (lock, cv) = &SLOW_GATE;
-    let mut open = lock.lock().unwrap();
-    while !*open {
-        open = cv.wait(open).unwrap();
+    let (lock, cv) = &SLOW;
+    let mut state = lock.lock().unwrap();
+    state.0 += 1;
+    cv.notify_all();
+    while !state.1 {
+        state = cv.wait(state).unwrap();
     }
     Ok(vec!["late".into()])
 }
 
 #[test]
 fn a_slow_share_keeps_one_worker_and_its_late_answer_is_used() {
+    // Given: a share whose worker answers only once the gate opens; a zero limit, so a Tab while
+    // it is shut never answers, whatever the machine's load.
     let share = r"\\claude-auto-slow-604\share\";
-    let mut n = Navigator::new(slow_share, Duration::from_millis(10));
+    let mut n = Navigator::new(slow_share, Duration::ZERO);
     typed(&mut n, share);
     n.tab();
     assert!(n.notice.contains("no answer"), "{}", n.notice);
     n.notice.clear();
     n.refresh();
     n.tab();
-    assert_eq!(SLOW_CALLS.load(Ordering::SeqCst), 1, "a second Tab waits on the same worker");
-    let (lock, cv) = &SLOW_GATE;
-    *lock.lock().unwrap() = true;
+    // Then: the one worker is in the share (waited on its signal, never on time), no second one.
+    let (lock, cv) = &SLOW;
+    let mut state = cv.wait_while(lock.lock().unwrap(), |s| s.0 == 0).unwrap();
+    assert_eq!(state.0, 1, "a second Tab waits on the same worker");
+    // When: the share answers and Tab waits without a limit (`recv_timeout` past `Instant` = `recv`).
+    state.1 = true;
     cv.notify_all();
-    n.limit = Duration::from_secs(5);
+    drop(state);
+    n.limit = Duration::MAX;
     n.notice.clear();
     n.tab();
+    // Then: the late answer completes; a worker started per Tab would have answered instead.
     assert_eq!(n.text, format!(r"{share}late\"), "the late answer completes");
-    assert_eq!(SLOW_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(lock.lock().unwrap().0, 1);
 }

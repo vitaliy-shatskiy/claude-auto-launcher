@@ -5,13 +5,17 @@
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use claude_auto::frame::Style;
 use claude_auto::perf::IoCounts;
 use claude_auto::sessions::chat::load_chat;
 use claude_auto::sessions::frame::resumable;
+use claude_auto::sessions::listing::plan::Entry;
 use claude_auto::sessions::listing::{Scope, SessionCache, session_files};
+use claude_auto::sessions::summaries::{Summarize, Summarizer};
 use claude_auto::sessions::{PickerRequest, run_picker};
 use claude_auto::ui::{PreviewTerm, Shown, parse_preview_keys};
 
@@ -300,15 +304,79 @@ pub(crate) fn chat_load(w: &World) -> io::Result<Measured> {
     Ok((vec![("chat_bytes_read", load.bytes_read), ("read_bytes", io.read_bytes)], took))
 }
 
+/// Which thread's work `picker_interactive` returns.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Side {
+    /// The UI thread, start to the first frame: cache hits and quick rows only.
+    Ui,
+    /// The worker, the full summaries of the first frame's pages (the cache write included).
+    Worker,
+}
+
+/// (f) The interactive picker's cold open as `run_picker` runs it off preview: the UI thread
+/// pages through `Summarizer::page` until 10 resumable rows while the worker is held at its first
+/// full summary, so the process counters hold the UI thread's work alone; then the worker is let
+/// go and measured until it has stored every page.
+pub(crate) fn picker_interactive(w: &World, side: Side) -> io::Result<Measured> {
+    let d = scratch("picker-interactive")?;
+    let cache_file = d.join("claude-auto-sessions.json");
+    let root = w.projects();
+    let gate = Arc::new(RwLock::new(()));
+    let held = gate.write().unwrap_or_else(PoisonError::into_inner);
+    let worker_gate = Arc::clone(&gate);
+    // The production summary, run once the test lets the worker go.
+    let full: Summarize = Arc::new(move |e: &Entry| {
+        drop(worker_gate.read());
+        e.summarize()
+    });
+    let (done, landed) = channel();
+    let worker = Summarizer::start(full, done);
+    let (before, t) = (own()?, Instant::now());
+    let snap = session_files(&root, &[]);
+    let mut store = SessionCache::new(false);
+    let mut rows = Vec::new();
+    while rows.iter().filter(|s| resumable(s)).count() < 10 {
+        let page = worker.page(&mut store, &root, &snap, rows.len(), 10, &cache_file);
+        if page.is_empty() {
+            break;
+        }
+        rows.extend(page);
+    }
+    let (ui, ui_took) = (before.since(own()?), t.elapsed());
+    let (before, t) = (own()?, Instant::now());
+    drop(held);
+    // The worker ends once its queue is done and the last handle is gone: `landed` then closes.
+    drop(worker);
+    let landed_rows: usize = landed.iter().map(|batch| batch.len()).sum();
+    let (full_io, full_took) = (before.since(own()?), t.elapsed());
+    std::fs::remove_dir_all(&d)?;
+    if rows.is_empty() || landed_rows != rows.len() {
+        return Err(io::Error::other(format!("{} rows listed, {landed_rows} summarised", rows.len())));
+    }
+    Ok(match side {
+        Side::Ui => (vec![("read_bytes", ui.read_bytes), ("read_ops", ui.read_ops)], ui_took),
+        Side::Worker => (
+            vec![
+                ("read_bytes", full_io.read_bytes),
+                ("read_ops", full_io.read_ops),
+                ("write_bytes", full_io.write_bytes),
+            ],
+            full_took,
+        ),
+    })
+}
+
 /// A path's runner; `exe` is the built `claude-auto.exe`.
 pub(crate) type Run = fn(&Path, &World) -> io::Result<Measured>;
 
 /// Every measured path by its budget name, in table order.
-pub(crate) const PATHS: [(&str, Run); 6] = [
+pub(crate) const PATHS: [(&str, Run); 8] = [
     ("startup", startup),
     ("project_screen", project_screen),
     ("picker_open_cold", |_, w| picker_open(w, false)),
     ("picker_open_warm", |_, w| picker_open(w, true)),
+    ("picker_ui_open_cold", |_, w| picker_interactive(w, Side::Ui)),
+    ("picker_worker_scan_cold", |_, w| picker_interactive(w, Side::Worker)),
     ("picker_cursor", |_, w| picker_cursor(w)),
     ("chat_load", |_, w| chat_load(w)),
 ];

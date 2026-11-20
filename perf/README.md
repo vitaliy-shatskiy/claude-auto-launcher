@@ -15,8 +15,10 @@ The real `~\.claude` is never read: the launcher runs with `USERPROFILE` on the 
 |---|---|---|
 | `startup` | the launcher in preview, start to the launch screen's first frame (the registry scan joined) | the child's `read_bytes`, `read_ops` |
 | `project_screen` | the same through Enter, to the project screen's first frame | as above |
-| `picker_open_cold` | the picker's first page (pages of 10 until 10 resumable rows), no summary cache | this process's `read_bytes`, `read_ops`, `write_bytes` (the cache write) |
+| `picker_open_cold` | the picker's first page (pages of 10 until 10 resumable rows) on the synchronous `list` path preview uses, no summary cache | this process's `read_bytes`, `read_ops`, `write_bytes` (the cache write) |
 | `picker_open_warm` | the same with the cache an earlier open wrote | as above |
+| `picker_ui_open_cold` | the interactive picker's UI thread, no summary cache: the same pages through `Summarizer::page` (cache hits and quick rows, the first 256 KB plus the tail per miss) while the worker is held, so the counts are the UI thread's alone | this process's `read_bytes`, `read_ops` |
+| `picker_worker_scan_cold` | the worker then let go: the full summaries of those pages and the cache write, until it has stored every page | this process's `read_bytes`, `read_ops`, `write_bytes` |
 | `picker_cursor` | one Down in the picker at 250x68, colour on | `frame_bytes` the line-diff writer sends, `full_frame_bytes` of the frame before |
 | `chat_load` | the chat pane's load of the newest (83 MB) transcript | `chat_bytes_read` (the loader's own count), `read_bytes` |
 
