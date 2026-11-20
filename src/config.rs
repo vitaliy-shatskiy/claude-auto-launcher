@@ -15,7 +15,7 @@ pub use roster::{Account, parse_roster};
 /// Distinct on purpose: two accounts sharing a colour is the confusion a tint exists to prevent.
 pub const ALLOWED_TINTS: [&str; 6] = ["Green", "Magenta", "Cyan", "Blue", "Yellow", "Red"];
 const ALLOWED_RIDER_MODES: [&str; 3] = ["auto", "on", "off"];
-const KNOWN_KEYS: [&str; 16] = [
+const KNOWN_KEYS: [&str; 17] = [
     "accounts",
     "sharing",
     "remote",
@@ -29,6 +29,7 @@ const KNOWN_KEYS: [&str; 16] = [
     "hiddenValues",
     "modelOrder",
     "hiddenProjects",
+    "pinnedProjects",
     "hideHeadlessProjects",
     "projectScreen",
     "mouse",
@@ -171,6 +172,8 @@ pub struct Config {
     pub model_order: Option<Vec<String>>,
     /// Projects hidden by hand: full paths, kept when the directory is gone.
     pub hidden_projects: Vec<String>,
+    /// Projects pinned on top in this order (`p`): full paths, kept when the directory is gone.
+    pub pinned_projects: Vec<String>,
     pub hide_headless_projects: bool,
     pub project_screen: ProjectScreen,
     pub mouse: bool,
@@ -197,6 +200,7 @@ impl Config {
             hidden_values: BTreeMap::new(),
             model_order: None,
             hidden_projects: Vec::new(),
+            pinned_projects: Vec::new(),
             hide_headless_projects: true,
             project_screen: ProjectScreen::Always,
             mouse: true,
@@ -538,6 +542,9 @@ fn parse_screen_keys(obj: &serde_json::Map<String, Value>, ctx: &PathCtx, cfg: &
     }
     if let Some(v) = present("hiddenProjects") {
         cfg.hidden_projects = path_list(v, "hiddenProjects", ctx, &mut cfg.warnings);
+    }
+    if let Some(v) = present("pinnedProjects") {
+        cfg.pinned_projects = path_list(v, "pinnedProjects", ctx, &mut cfg.warnings);
     }
     if let Some(v) = present("hideHeadlessProjects") {
         let (b, w) = to_bool(Some(v), cfg.hide_headless_projects, "hideHeadlessProjects");

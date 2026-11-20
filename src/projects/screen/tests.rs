@@ -97,8 +97,8 @@ fn opening_map(f: &Fx) -> crate::frame::RowMap {
     s.draw((80, 24)).map
 }
 
-/// One launcher run's project screen over `config`: `hiddenProjects` read from the file, every
-/// change saved back to it as the launcher saves it.
+/// One launcher run's project screen over `config`: `hiddenProjects` and `pinnedProjects` read
+/// from the file, every change saved back to it as the launcher saves it.
 fn run_with_config(f: &Fx, config: &str, ks: &[&str]) -> Vec<Vec<String>> {
     run_events_with_config(f, config, keys(ks))
 }
@@ -112,6 +112,7 @@ fn run_events_with_config(f: &Fx, config: &str, events: Vec<Event>) -> Vec<Vec<S
     let save = |path: &str, change: HideChange| crate::projects::save_hidden_project(config, &ctx, path, change).map_err(|e| e.to_string());
     let hiding = Hiding {
         paths: RefCell::new(cfg.hidden_projects),
+        pinned: RefCell::new(cfg.pinned_projects),
         save: &save,
     };
     run_hiding(f, &hiding, events)
@@ -151,3 +152,4 @@ mod hide;
 mod keys;
 mod mouse;
 mod nav;
+mod pins;

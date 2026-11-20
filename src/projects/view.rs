@@ -114,6 +114,8 @@ pub(crate) struct ProjectView<'a> {
     pub projects: &'a [Project],
     /// Project keys drawn with a hidden mark: the show-hidden view's hidden projects.
     pub marked: &'a [String],
+    /// Project keys drawn dimmed and marked missing: the pins whose folder is gone.
+    pub dimmed: &'a [String],
     pub index: usize,
     pub filter: &'a str,
     pub typing: bool,
@@ -157,6 +159,7 @@ fn footer_hints(v: &ProjectView<'_>) -> Vec<Hint> {
             .filter_map(|m| m.hotkey.map(|k| Hint::ch(&k.to_string(), m.name, k))),
     );
     h.push(Hint::ch("/", "filter", '/'));
+    h.push(Hint::ch("p", "pin", 'p'));
     h.push(Hint::ch("h", "hide", 'h'));
     h.push(Hint::ch("v", if v.show_hidden { "back" } else { "hidden" }, 'v'));
     h.push(Hint::key("esc", if v.filter.is_empty() { "back" } else { "clear" }, "Escape"));
@@ -244,12 +247,38 @@ fn add_match_color(line: &str, enabled: bool) -> String {
     }
 }
 
+/// The whole row after its mark dimmed, as one span (the dim tail's own markers dropped: dim
+/// spans do not nest).
+fn dim_after_mark(row: &str, mark: usize) -> String {
+    let mut out = String::new();
+    let mut seen = 0;
+    for c in row.chars().filter(|c| *c != theme::DIM_OPEN && *c != theme::DIM_CLOSE) {
+        if !c.is_control() {
+            if seen == mark {
+                out.push(theme::DIM_OPEN);
+            }
+            seen += 1;
+        }
+        out.push(c);
+    }
+    out.push(theme::DIM_CLOSE);
+    out
+}
+
 /// One list row's text: project, cwd, or the free-path row.
 fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &ProjectView<'_>, g: &Glyphs) -> String {
     let ascii = v.style.ascii;
-    let marked = r.kind == RowKind::Project && v.marked.contains(&project_key(&r.path));
+    let key = project_key(&r.path);
+    let marked = r.kind == RowKind::Project && v.marked.contains(&key);
+    let missing = r.kind == RowKind::Project && v.dimmed.contains(&key);
     let named = |n: &str| {
-        let n = if marked { format!("{n} (hidden)") } else { n.to_owned() };
+        let n = if marked {
+            format!("{n} (hidden)")
+        } else if missing {
+            format!("{n} (missing)")
+        } else {
+            n.to_owned()
+        };
         if r.worktree { format!("{} {n}", g.worktree) } else { n }
     };
     let age = r.last_activity_ms.map(|t| relative_age(t, v.now_ms)).unwrap_or_default();
@@ -289,6 +318,7 @@ fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &Pr
                     ..base
                 })
             };
+            let row = if missing { dim_after_mark(&row, mark.chars().count()) } else { row };
             // The mark and the age are never matched: only name and path are.
             let shown: String = row.chars().filter(|c| !c.is_control()).collect();
             let to = if age.is_empty() { None } else { shown.rfind(&age) }

@@ -220,6 +220,14 @@ fn project_hiding_keys_parse() {
 }
 
 #[test]
+fn pinned_projects_parse_like_hidden_ones() {
+    let cfg = parse_config(r#"{"pinnedProjects":["~/top","rel","D:/x/"]}"#, "x", &ctx());
+    assert_eq!(cfg.pinned_projects, [r"C:\Users\someone\top", r"D:\x\"]);
+    assert_eq!(cfg.warnings, ["pinnedProjects: 'rel' is not an absolute path; skipped"]);
+    assert_eq!(Config::defaults(&ctx(), "x").pinned_projects, [] as [&str; 0]);
+}
+
+#[test]
 fn project_screen_key_parses() {
     let on = parse_config(r#"{"projectScreen":"ondemand"}"#, "x", &ctx());
     assert_eq!(on.project_screen, ProjectScreen::OnDemand);

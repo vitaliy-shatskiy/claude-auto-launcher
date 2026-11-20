@@ -123,6 +123,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     };
     let hiding = projects::Hiding {
         paths: std::cell::RefCell::new(run.cfg.hidden_projects.clone()),
+        pinned: std::cell::RefCell::new(run.cfg.pinned_projects.clone()),
         save: &save_hidden,
     };
     let mut project_source = String::new();

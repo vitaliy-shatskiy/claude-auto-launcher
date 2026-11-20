@@ -72,6 +72,7 @@ fn a_failed_save_says_the_hide_lasts_this_run_only() {
     let save = |_: &str, _: HideChange| Err("disk full".to_owned());
     let hiding = Hiding {
         paths: RefCell::new(Vec::new()),
+        pinned: RefCell::new(Vec::new()),
         save: &save,
     };
     let frames = run_hiding(&f, &hiding, keys(&["s", "h", "Escape"]));

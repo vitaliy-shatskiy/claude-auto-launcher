@@ -3,6 +3,7 @@
 //! check, and the path navigator the free-path row opens in the same screen.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
@@ -19,28 +20,38 @@ use crate::launch::LAUNCH_MODES;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
 
-/// What one `h` press does to a project.
+/// What one `h` or `p` press does to a project. Hide also unpins and Pin also unhides (D2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HideChange {
     Hide,
     Show,
+    Pin,
+    Unpin,
 }
 
-/// Projects hidden by hand (config `hiddenProjects`, full paths) and how a change is saved.
+/// Projects hidden (config `hiddenProjects`) and pinned (`pinnedProjects`) by hand, full paths,
+/// and how a change is saved.
 pub struct Hiding<'a> {
     pub paths: RefCell<Vec<String>>,
+    /// Pinned on top in this order.
+    pub pinned: RefCell<Vec<String>>,
     /// Saves one change for the project at this path; `Err` says why it was not saved.
     pub save: &'a dyn Fn(&str, HideChange) -> Result<(), String>,
 }
 
 impl std::fmt::Debug for Hiding<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Hiding").field("paths", &self.paths).finish_non_exhaustive()
+        f.debug_struct("Hiding")
+            .field("paths", &self.paths)
+            .field("pinned", &self.pinned)
+            .finish_non_exhaustive()
     }
 }
 
-/// `h` hides or shows the project under the cursor, `v` lists the hidden ones marked.
+/// `h` hides or shows the project under the cursor, `p` pins or unpins it, `v` lists the hidden
+/// ones marked.
 const HIDE_KEY: char = 'h';
+const PIN_KEY: char = 'p';
 const SHOW_HIDDEN_KEY: char = 'v';
 
 /// The project screen's own state; the loop's cursor carries the index and the hover.
@@ -52,6 +63,12 @@ pub(crate) struct ProjectScreen<'a> {
     view: Vec<Project>,
     /// Keys of the hidden projects the show-hidden view lists; empty otherwise.
     marked: Vec<String>,
+    /// Keys of the pins whose folder is gone, drawn dimmed (AC5).
+    dimmed: Vec<String>,
+    /// Folder checks of the pins the registry does not list, once per key per run.
+    absent: BTreeMap<String, bool>,
+    /// The project a `p` moved: the cursor follows it on the next frame.
+    follow: Option<String>,
     cwd: String,
     style: Style,
     clock: &'a dyn Fn() -> i64,
@@ -90,6 +107,9 @@ impl<'a> ProjectScreen<'a> {
             show_hidden: false,
             view: projects.to_vec(),
             marked: Vec::new(),
+            dimmed: Vec::new(),
+            absent: BTreeMap::new(),
+            follow: None,
             cwd: cwd.to_owned(),
             style,
             clock,
@@ -140,6 +160,7 @@ impl Screen for ProjectScreen<'_> {
         } else {
             self.rebuild_view();
             self.rows = project_rows(&self.view, &self.filter, &self.cwd);
+            self.follow_moved();
             self.rows.len()
         };
         let n = i32::try_from(n).unwrap_or(1);
@@ -163,6 +184,7 @@ impl Screen for ProjectScreen<'_> {
         project_frame(&ProjectView {
             projects: &self.view,
             marked: &self.marked,
+            dimmed: &self.dimmed,
             index: usize::try_from(self.cursor.index).unwrap_or(0),
             filter: &self.filter,
             typing: self.cursor.typing,
@@ -283,8 +305,8 @@ impl Screen for ProjectScreen<'_> {
     }
 
     /// A new KEY retires the last notice (a mouse gesture never does); the navigator or the open
-    /// filter box takes the key. `h` writes the config, so it is matched exactly: a split mouse
-    /// report's Shift + upper-case letter never hides a project.
+    /// filter box takes the key. `h` and `p` write the config, so they are matched exactly: a split
+    /// mouse report's Shift + upper-case letter never hides or pins a project.
     fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
         self.notice.clear();
         if self.nav.is_some() {
@@ -295,6 +317,10 @@ impl Screen for ProjectScreen<'_> {
         }
         if is_hotkey_exact(key, HIDE_KEY) {
             self.toggle_hide();
+            return true;
+        }
+        if is_hotkey_exact(key, PIN_KEY) {
+            self.toggle_pin();
             return true;
         }
         false

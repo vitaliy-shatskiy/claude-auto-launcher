@@ -35,6 +35,7 @@ fn view<'a>(ps: &'a [Project], index: usize, cwd: &'a str, w: usize, h: usize) -
     ProjectView {
         projects: ps,
         marked: &[],
+        dimmed: &[],
         index,
         filter: "",
         typing: false,
@@ -149,7 +150,8 @@ fn a_scrolled_list_maps_its_real_start() {
     let ps = many(30, "scrollproj");
     let f = project_frame(&view(&ps, 29, r"C:\somewhere", 78, 24));
     let l = f.map.list.unwrap();
-    assert_eq!((l.first_row_y, l.row_count, l.start), (1, 16, 16));
+    // 0.9.0: the footer's `p` button takes a third footer line at 78 columns, one list row less.
+    assert_eq!((l.first_row_y, l.row_count, l.start), (1, 15, 17));
 }
 
 #[test]
@@ -248,7 +250,7 @@ fn action_field_radio_cells_and_compact_form() {
         text(&f80).contains("a/d action") && text(&f80).contains("[esc] back"),
         "a footer too wide keeps its buttons and the kept hints"
     );
-    assert_eq!(f80.map.footer_lines, 2);
+    assert_eq!(f80.map.footer_lines, 3, "0.9.0: the p button wraps the footer to a third line");
 }
 
 /// Item 5: w/s and a/d survive every width from 78 to 120, beside every button.
@@ -384,4 +386,5 @@ fn title_shows_typing_and_notice() {
     assert!(!text(&project_frame(&view(&ps, 0, r"C:\cwd", 100, 24))).contains("path not found"));
 }
 
+mod pins;
 mod rows;
