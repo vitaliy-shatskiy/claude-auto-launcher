@@ -175,25 +175,40 @@ pub fn remove_stale_preview_cache(dir: &Path) {
     registry::remove_stale_preview_cache_at(dir, SystemTime::now());
 }
 
-/// `h` saved: one entry of the config's `hiddenProjects` changes. Hiding appends `project`; showing
-/// removes every entry that expands to the same directory. Every other entry stays as written
-/// (`~`, `%VAR%`, even one the parser skips).
+/// `h` or `p` saved in one write: (the list `project` joins, the list it leaves). D2: a hide
+/// leaves the pins, a pin leaves the hidden.
+fn change_lists(change: HideChange) -> (Option<&'static str>, Option<&'static str>) {
+    match change {
+        HideChange::Hide => (Some("hiddenProjects"), Some("pinnedProjects")),
+        HideChange::Show => (None, Some("hiddenProjects")),
+        HideChange::Pin => (Some("pinnedProjects"), Some("hiddenProjects")),
+        HideChange::Unpin => (None, Some("pinnedProjects")),
+    }
+}
+
+/// `h` or `p` saved: joining appends `project` to `hiddenProjects` or `pinnedProjects`; leaving
+/// removes every entry that expands to the same directory (a list not in the file stays absent).
+/// Every other entry stays as written (`~`, `%VAR%`, even one the parser skips).
 pub fn save_hidden_project(config: &str, ctx: &PathCtx, project: &str, change: HideChange) -> std::io::Result<()> {
+    let (join, leave) = change_lists(change);
+    let list_of = |v: Value| match v {
+        Value::Null => Vec::new(),
+        Value::Array(a) => a,
+        other => vec![other],
+    };
     crate::config::update_config(config, |obj| {
-        let entry = obj.entry("hiddenProjects").or_insert(Value::Null);
-        let mut list = match std::mem::take(entry) {
-            Value::Null => Vec::new(),
-            Value::Array(a) => a,
-            other => vec![other],
-        };
-        match change {
-            HideChange::Hide => list.push(Value::String(project.to_owned())),
-            HideChange::Show => {
-                let key = project_key(project);
-                list.retain(|e| !e.as_str().is_some_and(|s| is_rooted_raw(s) && project_key(&ctx.expand(s)) == key));
-            }
+        if let Some(entry) = leave.and_then(|k| obj.get_mut(k)) {
+            let key = project_key(project);
+            let mut list = list_of(std::mem::take(entry));
+            list.retain(|e| !e.as_str().is_some_and(|s| is_rooted_raw(s) && project_key(&ctx.expand(s)) == key));
+            *entry = Value::Array(list);
         }
-        *entry = Value::Array(list);
+        if let Some(k) = join {
+            let entry = obj.entry(k).or_insert(Value::Null);
+            let mut list = list_of(std::mem::take(entry));
+            list.push(Value::String(project.to_owned()));
+            *entry = Value::Array(list);
+        }
     })
 }
 

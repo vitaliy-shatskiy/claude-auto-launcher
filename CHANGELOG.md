@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- Pinned projects: `p` on the project screen pins the project under the cursor on top (config
+  `pinnedProjects`, in pin order, whatever their recency), `p` again unpins it. Pinning a hidden
+  project unhides it and hiding a pinned one unpins it; in a `/` search a pin only breaks ties. A
+  pinned folder that no longer exists stays in the config and is listed dimmed, marked `(missing)`.
+  The footer's `p` button takes a third footer line at 78-80 columns.
+
 ## [0.8.2] — 2026-11-11
 
 ### Fixed

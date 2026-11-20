@@ -6,6 +6,7 @@ use std::path::Path;
 
 use super::Project;
 use super::paths::{DriveCache, path_present, project_key};
+use super::registry::leaf_name;
 
 /// The filter's words, lower-cased, each stripped of the quotes a pasted path carries.
 pub(crate) fn filter_words(filter: &str) -> Vec<String> {
@@ -49,6 +50,40 @@ pub(crate) fn select_match<'a>(projects: &'a [Project], filter: &str, cwd: &str)
         .collect();
     hits.sort_by_key(|(hidden, rank, _)| (*hidden, *rank));
     hits.into_iter().map(|(_, _, p)| p).collect()
+}
+
+/// D1: the pinned projects first in `pins` order, then the rest in registry order (recency). A
+/// pin is never hidden (D2: pinning unhides); spellings of one folder count once. A pin the
+/// registry does not list (its folder gone, its transcripts pruned) stays, named by its leaf and
+/// undated. `select_match` sorts stably, so under a filter a pin only breaks ties.
+pub(crate) fn pinned_first(projects: &[Project], pins: &[String]) -> Vec<Project> {
+    let mut keys: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+    for pin in pins {
+        let key = project_key(pin);
+        if key.is_empty() || keys.contains(&key) {
+            continue;
+        }
+        let known = projects.iter().find(|p| project_key(&p.path) == key);
+        out.push(known.map_or_else(
+            || Project {
+                name: leaf_name(pin),
+                path: pin.clone(),
+                slug: String::new(),
+                slugs: Vec::new(),
+                worktree: None,
+                last_activity_ms: None,
+                hidden: false,
+            },
+            |p| Project {
+                hidden: false,
+                ..p.clone()
+            },
+        ));
+        keys.push(key);
+    }
+    out.extend(projects.iter().filter(|p| !keys.contains(&project_key(&p.path))).cloned());
+    out
 }
 
 /// The kind of a project-screen row.
@@ -252,6 +287,40 @@ pub(crate) mod tests {
         ps[2].hidden = true;
         let names: Vec<&str> = select_match(&ps, "api", "").iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["api-new", "api-two", "my-api", "one", "api-old"]);
+    }
+
+    /// D2: in `/` search a pin only breaks ties; the pins among one rank keep their pin order.
+    #[test]
+    fn a_pin_only_breaks_ties_in_the_filter_ranking() {
+        let ps = vec![
+            proj("N", r"C:\w\api-new", "api-new"),
+            proj("T", r"C:\w\api-two", "api-two"),
+            proj("M", r"C:\w\my-api", "my-api"),
+            proj("O", r"C:\w\api-old", "api-old"),
+        ];
+        let pins = [r"C:\w\my-api".to_owned(), r"C:\w\api-old".to_owned(), r"C:\w\api-two".to_owned()];
+        let listed = pinned_first(&ps, &pins);
+        let names: Vec<&str> = select_match(&listed, "api", "").iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["api-old", "api-two", "api-new", "my-api"]);
+    }
+
+    #[test]
+    fn pinned_first_unhides_dedupes_spellings_and_keeps_a_pin_the_registry_lost() {
+        let mut ps = two();
+        ps[1].hidden = true;
+        let pins = [
+            r"C:\w\gone\".to_owned(),
+            "c:/W/BETA".to_owned(),
+            r"C:\w\beta".to_owned(),
+            String::new(),
+        ];
+        let listed = pinned_first(&ps, &pins);
+        let rows: Vec<(&str, bool, bool)> = listed
+            .iter()
+            .map(|p| (p.name.as_str(), p.hidden, p.last_activity_ms.is_some()))
+            .collect();
+        assert_eq!(rows, [("gone", false, false), ("beta", false, true), ("alpha", false, true)]);
+        assert_eq!(listed[0].path, r"C:\w\gone\", "named by its leaf, its path as written");
     }
 
     #[test]

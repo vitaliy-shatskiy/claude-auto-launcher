@@ -204,7 +204,7 @@ fn is_git_root(path: &str) -> bool {
 }
 
 /// `Split-Path -Leaf`, with a drive root named as `C:`, not as the whole path again.
-fn leaf_name(path: &str) -> String {
+pub(crate) fn leaf_name(path: &str) -> String {
     let trimmed = path.trim_end_matches(['\\', '/']);
     let leaf = trimmed.rsplit(['\\', '/']).next().unwrap_or_default();
     if leaf.is_empty() { path.to_owned() } else { leaf.to_owned() }
