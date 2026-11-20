@@ -102,3 +102,32 @@ fn the_cache_keeps_the_newest_thirty_two() {
     assert_eq!(p.view(&key("0"), 10), ChatState::Loading, "the oldest went");
     assert!(matches!(p.view(&key("32"), 10), ChatState::Ready(_)));
 }
+
+#[test]
+fn a_reply_that_lands_after_the_cursor_moved_is_kept_under_its_own_session() {
+    // Given: A's load is held in the worker.
+    let (go, held) = channel::<()>();
+    let (started, loading) = channel::<()>();
+    let (held, started) = (Mutex::new(held), Mutex::new(started));
+    let loader: Loader = Arc::new(move |p: &Path, _want: usize| {
+        // Either end may be gone once the test has its answer.
+        let _told = started.lock().unwrap().send(());
+        let _released = held.lock().unwrap().recv();
+        one(&p.file_stem().unwrap().to_string_lossy())
+    });
+    let mut p = ChatPane::new(loader, Timings::default());
+    p.view(&key("a"), 10);
+    p.idle();
+    p.idle();
+    loading.recv().unwrap();
+    // When: the cursor moves to B, then A's answer lands.
+    assert_eq!(p.view(&key("b"), 10), ChatState::Loading);
+    go.send(()).unwrap();
+    while p.cache.is_empty() {
+        p.idle();
+        std::thread::yield_now();
+    }
+    // Then: B still loads, and A's chat is A's.
+    assert_eq!(p.view(&key("b"), 10), ChatState::Loading);
+    assert_eq!(p.view(&key("a"), 10), ChatState::Ready(Arc::new(one("a").messages)));
+}

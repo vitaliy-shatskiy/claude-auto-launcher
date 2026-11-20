@@ -33,7 +33,7 @@ fn view<'a>(s: &'a [&'a Session], index: usize, w: usize, h: usize) -> PickerVie
         height: h,
         clock: Clock {
             now_ms: GOLDEN_NOW,
-            offset_minutes: 0,
+            zone: Zone(|_| 0),
         },
         style: Style {
             color: false,
@@ -441,4 +441,32 @@ fn relative_age_and_counts() {
     assert_eq!(relative_age(now - 3 * 3_600_000, now), "3 h");
     assert_eq!(relative_age(now - 2 * 86_400_000, now), "2 d");
     assert_eq!(text::n0(1234.5), "1,235");
+}
+
+#[test]
+fn each_chat_stamp_takes_the_offset_of_its_own_date() {
+    // Kyiv: +3 until the DST change on 25.10.2026 01:00 UTC, +2 after it.
+    fn kyiv(ms: i64) -> i32 {
+        if ms < crate::sys::days_from_civil(2026, 10, 25) * 86_400_000 + 3_600_000 {
+            180
+        } else {
+            120
+        }
+    }
+    let ten_utc = |m: u32, d: u32| Some(crate::sys::days_from_civil(2026, m, d) * 86_400_000 + 10 * 3_600_000);
+    let msgs = [
+        ChatMessage {
+            speaker: Speaker::User,
+            text: "summer".into(),
+            at_ms: ten_utc(10, 20),
+        },
+        ChatMessage {
+            speaker: Speaker::Assistant,
+            text: "winter".into(),
+            at_ms: ten_utc(11, 20),
+        },
+    ];
+    let lines = chat::chat_lines(ChatView::Messages(&msgs), 60, 10, true, Zone(kyiv)).join("\n");
+    assert!(lines.contains("20.10 13:00"), "{lines}");
+    assert!(lines.contains("20.11 12:00"), "{lines}");
 }

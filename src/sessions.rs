@@ -10,8 +10,9 @@ pub mod holder;
 pub mod listing;
 pub mod picker;
 pub mod scan;
+pub mod summaries;
 pub mod transcript;
-mod win;
+pub(crate) mod win;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -108,7 +109,7 @@ fn clock_now() -> Clock {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
     Clock {
         now_ms,
-        offset_minutes: crate::sys::local_now().map_or(0, |t| t.offset_minutes),
+        zone: frame::Zone::machine(),
     }
 }
 
@@ -132,6 +133,13 @@ pub fn run_picker_with(
     let mut cache = SessionCache::new(req.preview);
     let mut snapshots: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut extras: HashMap<String, Vec<listing::Session>> = HashMap::new();
+    // Off preview the UI thread lists cache hits and quick rows only; the worker summarises the
+    // misses and their rows update as each page lands. Preview lists in place and writes nothing.
+    let (landed_tx, landed) = std::sync::mpsc::channel();
+    let worker = (!req.preview).then(|| {
+        let full: summaries::Summarize = std::sync::Arc::new(listing::plan::Entry::summarize);
+        summaries::Summarizer::start(full, landed_tx)
+    });
     let mut fetch = |have: usize, slugs: &[String]| {
         let added = extras.entry(slugs.join("|")).or_insert_with(|| extra(slugs));
         let snap = snapshots
@@ -139,7 +147,10 @@ pub fn run_picker_with(
             .or_insert_with(|| joined_snapshot(session_files(&root, slugs), req.others, slugs));
         // `have` counts the extra rows the first page carried; the file snapshot never held them.
         let from_files = if have == 0 { 0 } else { have.saturating_sub(added.len()) };
-        let mut page = cache.list(&root, Scope::Files(snap), from_files, PAGE_SIZE, &cache_file);
+        let mut page = match &worker {
+            Some(w) => w.page(&mut cache, &root, snap, from_files, PAGE_SIZE, &cache_file),
+            None => cache.list(&root, Scope::Files(snap), from_files, PAGE_SIZE, &cache_file),
+        };
         tag_sessions(&mut page, req.others);
         if have == 0 && !added.is_empty() {
             page.extend(added.iter().cloned());
@@ -154,7 +165,7 @@ pub fn run_picker_with(
     // it shows the summary's recent messages instead.
     if !req.preview {
         let loader: chat::pane::Loader = std::sync::Arc::new(chat::load_chat);
-        screen = screen.with_chat(chat::pane::ChatPane::new(loader, tm.clone()));
+        screen = screen.with_chat(chat::pane::ChatPane::new(loader, tm.clone())).with_landed(landed);
     }
     tm.end(load);
     let picked = crate::ui::screen_loop::run(&mut screen, term)?;

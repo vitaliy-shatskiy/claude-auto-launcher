@@ -6,7 +6,7 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_ABANDONED, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, SYSTEMTIME, WAIT_ABANDONED, WAIT_OBJECT_0};
 use windows_sys::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING,
@@ -238,28 +238,44 @@ pub(crate) struct LocalNow {
     pub(crate) offset_minutes: i32,
 }
 
+/// The local wall time of a FILETIME by the zone rules in force at that instant (a summer instant
+/// gets the summer offset whatever today's is), and its offset from UTC in minutes.
+fn local_at(ft: &FILETIME) -> Option<(SYSTEMTIME, i64)> {
+    // SAFETY: plain data.
+    let mut utc: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    // SAFETY: valid in and out pointers.
+    if unsafe { FileTimeToSystemTime(ft, &raw mut utc) } == 0 {
+        return None;
+    }
+    // SAFETY: plain data.
+    let mut local: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    // SAFETY: null = the current time zone; valid in and out pointers.
+    if unsafe { SystemTimeToTzSpecificLocalTime(ptr::null(), &raw const utc, &raw mut local) } == 0 {
+        return None;
+    }
+    let minutes = |t: &SYSTEMTIME| {
+        days_from_civil(i32::from(t.wYear), u32::from(t.wMonth), u32::from(t.wDay)) * 1440 + i64::from(t.wHour) * 60 + i64::from(t.wMinute)
+    };
+    Some((local, minutes(&local) - minutes(&utc)))
+}
+
+/// This machine's offset from UTC in minutes at `ms` (Unix ms), DST as it was then.
+pub(crate) fn local_offset_at(ms: i64) -> Option<i32> {
+    let ticks = u64::try_from(ms.checked_add(11_644_473_600_000)?).ok()?.checked_mul(10_000)?;
+    let ft = FILETIME {
+        dwLowDateTime: u32::try_from(ticks & 0xFFFF_FFFF).ok()?,
+        dwHighDateTime: u32::try_from(ticks >> 32).ok()?,
+    };
+    i32::try_from(local_at(&ft)?.1).ok()
+}
+
 pub(crate) fn local_now() -> Option<LocalNow> {
     // SAFETY: plain data out parameters.
     let mut ft = unsafe { std::mem::zeroed() };
     // SAFETY: valid out pointer.
     unsafe { GetSystemTimeAsFileTime(&raw mut ft) };
-    // SAFETY: plain data.
-    let mut utc = unsafe { std::mem::zeroed() };
-    // SAFETY: valid in and out pointers.
-    if unsafe { FileTimeToSystemTime(&raw const ft, &raw mut utc) } == 0 {
-        return None;
-    }
-    // SAFETY: plain data.
-    let mut local: windows_sys::Win32::Foundation::SYSTEMTIME = unsafe { std::mem::zeroed() };
-    // SAFETY: null = the current time zone; valid in and out pointers.
-    if unsafe { SystemTimeToTzSpecificLocalTime(ptr::null(), &raw const utc, &raw mut local) } == 0 {
-        return None;
-    }
+    let (local, offset) = local_at(&ft)?;
     let ticks100 = (u64::from(ft.dwHighDateTime) << 32 | u64::from(ft.dwLowDateTime)) % 10_000_000;
-    let minutes = |t: &windows_sys::Win32::Foundation::SYSTEMTIME| {
-        days_from_civil(i32::from(t.wYear), u32::from(t.wMonth), u32::from(t.wDay)) * 1440 + i64::from(t.wHour) * 60 + i64::from(t.wMinute)
-    };
-    let offset = minutes(&local) - minutes(&utc);
     Some(LocalNow {
         year: i32::from(local.wYear),
         month: u32::from(local.wMonth),

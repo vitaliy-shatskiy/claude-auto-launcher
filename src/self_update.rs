@@ -5,6 +5,7 @@
 
 mod check;
 mod swap;
+mod tidy;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::background::Background;
 use crate::maintenance::FetchFailed;
-use check::{Release, State, Version};
+use check::{DAY_MS, Failed, Release, State, Version};
 use swap::{Files, RealFiles};
 
 /// Where releases come from unless config `updateRepo` names a fork.
@@ -94,6 +95,13 @@ impl Net for WinNet {
     }
 }
 
+/// What kind of start this is: a preview makes no request and writes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    Launch,
+    Preview,
+}
+
 /// The exe, the state file and the mode: what both the check and the maintenance keys act on.
 #[derive(Debug, Clone)]
 pub struct Local {
@@ -109,15 +117,23 @@ pub struct Local {
 impl Local {
     /// This process: `mode` forced off by `CLAUDE_AUTO_NO_SELF_UPDATE=1`, a preview, or an exe
     /// path that cannot be read.
-    pub fn from_env(mode: Mode, repo: &Repo, home: &Path, preview: bool) -> Self {
+    pub fn from_env(mode: Mode, repo: &Repo, home: &Path, start: Start) -> Self {
         let exe = std::env::current_exe().ok();
-        let off = preview || std::env::var("CLAUDE_AUTO_NO_SELF_UPDATE").as_deref() == Ok("1") || exe.is_none();
+        let off = start == Start::Preview || std::env::var("CLAUDE_AUTO_NO_SELF_UPDATE").as_deref() == Ok("1") || exe.is_none();
         Self {
             mode: if off { Mode::Off } else { mode },
             repo: repo.clone(),
             exe: exe.unwrap_or_default(),
             state: home.join(".claude").join(STATE_FILE),
             busy: Arc::default(),
+        }
+    }
+
+    /// The same exe and state with no check: a start that shows no screen.
+    pub(crate) fn off(&self) -> Self {
+        Self {
+            mode: Mode::Off,
+            ..self.clone()
         }
     }
 
@@ -169,6 +185,8 @@ impl Local {
                         let was = s.installed.or_else(Version::current);
                         s.installed = s.previous;
                         s.previous = was;
+                        // A roll back from a newer build holds it out of `auto`; rolling forward lifts it.
+                        s.rolled_back_from = was.filter(|w| s.installed.is_none_or(|i| *w > i));
                         s.write(&self.state);
                         "rolled back - takes effect next start".to_owned()
                     }
@@ -181,6 +199,7 @@ impl Local {
 }
 
 const ALREADY_RUNNING: &str = "an update is already running";
+const QUITTING: &str = "the launcher is quitting";
 
 /// The one update or roll back of this process in flight; dropping it frees the slot.
 struct Busy<'a>(&'a AtomicBool);
@@ -212,12 +231,14 @@ fn update(local: &Local, release: &Release, net: &dyn Net, files: &dyn Files, cl
     let quitting = closed.lock().unwrap_or_else(PoisonError::into_inner);
     if *quitting {
         drop(std::fs::remove_file(&new));
-        return Err("the launcher is quitting".into());
+        return Err(QUITTING.into());
     }
     swap::swap_in(&local.exe, &new, files)?;
     let mut s = State::read(&local.state);
     s.previous = Version::current();
     s.installed = Some(release.version);
+    s.rolled_back_from = None;
+    s.failed = None;
     s.write(&local.state);
     Ok(())
 }
@@ -248,17 +269,38 @@ fn run(local: &Local, now_ms: i64, net: &dyn Net, files: &dyn Files, closed: &Mu
         Mode::Auto => true,
     };
     let r = check::newer(check::latest(&local.state, &local.repo, now_ms, net), Version::current())?;
-    let installed = State::read(&local.state).installed;
-    if installed == Some(r.version) {
+    let state = State::read(&local.state);
+    if state.installed == Some(r.version) {
         // Already swapped in by an earlier start's background update; it waits for this restart.
         return Some(Notice::Updated(r.version));
     }
-    if !auto {
+    // The user rolled this build back: only the update key installs it again.
+    let held = state.rolled_back_from.is_some_and(|v| r.version <= v);
+    if !auto || held {
         return Some(Notice::Available(r.version));
+    }
+    // A failure that would repeat (a bad checksum, a locked folder) costs one download a day, not
+    // ~10 MB on every start.
+    if let Some(f) = state
+        .failed
+        .filter(|f| f.version == r.version && (0..DAY_MS).contains(&now_ms.saturating_sub(f.at_ms)))
+    {
+        return Some(Notice::Failed(r.version, f.why));
     }
     Some(match update(local, &r, net, files, closed) {
         Ok(()) => Notice::Updated(r.version),
-        Err(e) => Notice::Failed(r.version, e),
+        Err(e) => {
+            if e != QUITTING && e != ALREADY_RUNNING {
+                let mut s = State::read(&local.state);
+                s.failed = Some(Failed {
+                    version: r.version,
+                    at_ms: now_ms,
+                    why: e.clone(),
+                });
+                s.write(&local.state);
+            }
+            Notice::Failed(r.version, e)
+        }
     })
 }
 
@@ -281,7 +323,12 @@ impl Watch {
         let closed = Arc::new(Mutex::new(false));
         let job = (local.mode != Mode::Off).then(|| {
             let theirs = Arc::clone(&closed);
-            Background::start("self-update", move || run(&local, now_ms, net.as_ref(), files.as_ref(), &theirs)).unjoined()
+            Background::start("self-update", move || {
+                tidy::sweep_partials(&local.exe, now_ms, &tidy::alive_since);
+                tidy::forget_stale_install(&local, Version::current(), tidy::started_ms());
+                run(&local, now_ms, net.as_ref(), files.as_ref(), &theirs)
+            })
+            .unjoined()
         });
         Self { job, closed, told: false }
     }

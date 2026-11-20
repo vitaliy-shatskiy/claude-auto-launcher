@@ -4,7 +4,7 @@
 
 use super::super::chat::ChatMessage;
 use super::super::listing::Speaker;
-use super::text::local_stamp;
+use super::Zone;
 use crate::layout::{display_width, ellipsis, limit_cells_right, limit_line, split_text_lines};
 use crate::theme::{DIM_CLOSE, DIM_OPEN, TONE_CLAUDE, TONE_CLOSE, TONE_USER, strip_ctl};
 
@@ -22,7 +22,7 @@ const MIN_BLOCK: usize = 16;
 
 /// `rows` lines: the newest messages, bottom-aligned, the oldest shown one cut at the top. The
 /// newest message always ends on the last row; when it alone is taller than the pane its END shows.
-pub(super) fn chat_lines(chat: ChatView<'_>, width: usize, rows: usize, ascii: bool, offset: i32) -> Vec<String> {
+pub(super) fn chat_lines(chat: ChatView<'_>, width: usize, rows: usize, ascii: bool, zone: Zone) -> Vec<String> {
     if rows == 0 || width == 0 {
         return Vec::new();
     }
@@ -45,7 +45,7 @@ pub(super) fn chat_lines(chat: ChatView<'_>, width: usize, rows: usize, ascii: b
         } else {
             split_text_lines(&text, block_w, OLDER_LINES, ascii)
         };
-        let block = render(m, &body, width, ascii, offset);
+        let block = render(m, &body, width, ascii, zone);
         used += block.len() + 1;
         blocks.push(block);
     }
@@ -76,9 +76,9 @@ fn tail(text: &str, width: usize, room: usize, ascii: bool) -> Vec<String> {
 }
 
 /// One message: its label line, then its text; the owner's block right-aligned.
-fn render(m: &ChatMessage, body: &[String], width: usize, ascii: bool, offset: i32) -> Vec<String> {
+fn render(m: &ChatMessage, body: &[String], width: usize, ascii: bool, zone: Zone) -> Vec<String> {
     let dot = if ascii { '-' } else { '\u{B7}' };
-    let when = m.at_ms.map(|t| format!(" {dot} {}", local_stamp(t, offset))).unwrap_or_default();
+    let when = m.at_ms.map(|t| format!(" {dot} {}", zone.stamp(t))).unwrap_or_default();
     match m.speaker {
         Speaker::User => {
             let label = format!("you{when}");

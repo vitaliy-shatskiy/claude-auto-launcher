@@ -106,11 +106,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Fixed
 
+- The session picker opened late (seconds on a cold disk) after every update: it now shows its
+  rows at once, titled by their first prompt, and fills in titles and message counts as a
+  background scan finishes them; an update no longer discards the session summary cache.
 - With `sharing` off, the session picker lists the other accounts' sessions although the
   launching account has no `projects` folder yet.
 - The preview card's `last ›` showed the first prompt when a long turn's tool lines pushed the
   last prompt out of the tail read; the transcript scan now keeps Claude Code's `last-prompt`
   record and the card falls back to it (a prompt found in the tail still wins).
+- Self-update `auto` installed a build again on the next start after `b` rolled it back; a
+  rolled-back build now comes back only through `c`, and a newer release updates as before.
+- Self-update trusted its record of the installed build after the exe was replaced by hand, and
+  hid the update; a start now forgets a record the exe does not match. A download cut off by an
+  exit (`claude-auto.exe.<pid>-<id>.new`) is deleted an hour later once its process is gone.
+- Self-update `auto` downloaded ~10 MB again on every start after a failed update (a checksum
+  mismatch, a locked folder); it now retries that release a day later and repeats the reason.
+- Self-update `auto` dropped a download still running when the screens closed, so each start
+  downloaded again; the check now lives until claude exits.
+- The picker's chat dropped `*` and `_` from paths and globs taken for emphasis
+  (`src/**/*.rs`, `__init__.py`, `\__pycache__\`); next to `/`, `\` or `.` they stay.
+- The picker showed every time at today's UTC offset, so a message from before the DST change
+  was an hour off; each time now takes the offset of its own date.
 
 ## [0.8.2] — 2026-11-11
 

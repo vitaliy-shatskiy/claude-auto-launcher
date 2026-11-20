@@ -1,14 +1,18 @@
 //! The session picker screen (`Invoke-SessionPicker`, `Expand-SessionPage`): the scope and its
-//! page buckets, the filter box, paging on Down and the wheel, and what a chosen row means.
+//! page buckets, the filter box (`filter`), paging on Down and the wheel, and what a chosen row means.
+
+mod filter;
+mod landed;
 
 use serde_json::{Map, Value, json};
 
+use self::filter::scope_name;
 use super::chat::pane::{ChatKey, ChatPane, ChatState};
-use super::chat::{ChatMessage, bounded};
+use super::chat::{ChatMessage, Keep, bounded};
 use super::frame::{ChatView, Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
 use super::listing::Session;
 use crate::frame::{Frame, Style};
-use crate::input::{KeyPress, vk};
+use crate::input::KeyPress;
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
 
@@ -74,6 +78,8 @@ pub struct PickerScreen<'a> {
     /// Loads the highlighted session's chat off the UI thread; `None` shows the summary's
     /// recent messages instead (tests, a session from a plugin source).
     chat: Option<ChatPane>,
+    /// Full summaries for rows first shown quick (`summaries`); `None` = every row is final.
+    landed: Option<std::sync::mpsc::Receiver<Vec<Session>>>,
 }
 
 impl std::fmt::Debug for PickerScreen<'_> {
@@ -134,6 +140,7 @@ impl<'a> PickerScreen<'a> {
             style,
             memo: Memo::default(),
             chat: None,
+            landed: None,
         };
         *s.bucket_mut() = open;
         s.started[slot(scope)] = true;
@@ -144,6 +151,13 @@ impl<'a> PickerScreen<'a> {
     #[must_use]
     pub fn with_chat(mut self, pane: ChatPane) -> Self {
         self.chat = Some(pane);
+        self
+    }
+
+    /// Rows shown quick take their full summaries from `landed` as the worker sends them.
+    #[must_use]
+    pub fn with_landed(mut self, landed: std::sync::mpsc::Receiver<Vec<Session>>) -> Self {
+        self.landed = Some(landed);
         self
     }
 
@@ -177,7 +191,7 @@ impl<'a> PickerScreen<'a> {
                     .enumerate()
                     .map(|(i, m)| ChatMessage {
                         speaker: m.speaker,
-                        text: super::frame::plain::plain(&bounded(&m.text, i == newest)),
+                        text: super::frame::plain::plain(&bounded(&m.text, Keep::of(i == newest))),
                         at_ms: None,
                     })
                     .collect()
@@ -279,56 +293,6 @@ impl<'a> PickerScreen<'a> {
     fn chosen(&self, fork: bool) -> Flow<Picked> {
         self.take(fork).map_or(Flow::Continue, |p| Flow::Done(Some(p)))
     }
-
-    fn log_typing(&mut self, term: &dyn Term, fields: &[(&str, Value)]) {
-        let mut d = Map::new();
-        d.insert("screen".into(), json!("picker"));
-        for (k, v) in fields {
-            d.insert((*k).into(), v.clone());
-        }
-        d.insert("scope".into(), json!(scope_name(self.scope)));
-        term.logger().write("key", d);
-    }
-
-    /// The filter box owns every key while open; only its two closes are logged, never the text.
-    fn type_filter(&mut self, key: &KeyPress, term: &dyn Term) {
-        if key.is(vk::ENTER) {
-            self.cursor.typing = false;
-            let n = self.filter.chars().count();
-            self.log_typing(
-                term,
-                &[("key", json!("Enter")), ("filter", json!("close")), ("filterLength", json!(n))],
-            );
-        } else if key.is(vk::ESCAPE) || key.is_ctrl(vk::C) {
-            let n = self.filter.chars().count();
-            let index = self.cursor.index;
-            self.log_typing(
-                term,
-                &[
-                    ("key", json!("Escape")),
-                    ("filter", json!("clear")),
-                    ("filterLength", json!(n)),
-                    ("index", json!(index)),
-                ],
-            );
-            self.cursor.typing = false;
-            self.filter.clear();
-            self.cursor.index = 0;
-        } else if key.is(vk::BACKSPACE) {
-            self.filter.pop();
-        } else if key.ch.is_alphanumeric() || key.ch == ' ' || key.ch == '-' {
-            self.filter.push(key.ch);
-            self.cursor.index = 0;
-        }
-    }
-}
-
-fn scope_name(s: PickerScope) -> &'static str {
-    match s {
-        PickerScope::None => "none",
-        PickerScope::Project => "project",
-        PickerScope::All => "all",
-    }
 }
 
 impl Screen for PickerScreen<'_> {
@@ -377,7 +341,7 @@ impl Screen for PickerScreen<'_> {
     /// first frame never waits for the pages a big window wants.
     fn idle(&mut self) -> bool {
         // The chat first: collecting a finished load is cheap, a page of summaries is not.
-        if self.chat.as_mut().is_some_and(ChatPane::idle) {
+        if self.chat.as_mut().is_some_and(ChatPane::idle) || self.take_landed() {
             return true;
         }
         if self.fetch.is_none() || self.bucket().exhausted || self.resumable_count >= self.want {

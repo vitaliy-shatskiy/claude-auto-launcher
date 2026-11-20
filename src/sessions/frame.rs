@@ -24,11 +24,43 @@ pub use memo::Memo;
 use memo::{Band, memo_key, painter};
 pub use text::{local_stamp, relative_age};
 
-/// The clock a frame is drawn against: now, and the local offset from UTC.
+/// The clock a frame is drawn against: now, and the zone its stamps are shown in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Clock {
     pub now_ms: i64,
-    pub offset_minutes: i32,
+    pub zone: Zone,
+}
+
+/// A UTC instant's offset from UTC in minutes, by the rules in force at that instant: a message
+/// from before a DST change keeps the offset it was written under.
+#[derive(Debug, Clone, Copy)]
+pub struct Zone(pub fn(i64) -> i32);
+
+// By address: the frame memo keys on the zone, and one process uses one zone function.
+impl PartialEq for Zone {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::fn_addr_eq(self.0, other.0)
+    }
+}
+
+impl Eq for Zone {}
+
+impl std::hash::Hash for Zone {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self.0 as usize).hash(state);
+    }
+}
+
+impl Zone {
+    /// This machine's time zone.
+    pub fn machine() -> Self {
+        Self(|ms| crate::sys::local_offset_at(ms).unwrap_or(0))
+    }
+
+    /// `ms` as `DD.MM HH:MM` local.
+    pub(super) fn stamp(self, ms: i64) -> String {
+        local_stamp(ms, (self.0)(ms))
+    }
 }
 
 /// `none` = no project context (no tab hint); `project` = the pool is one project; `all`.
@@ -378,7 +410,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
         s,
         g,
         ascii,
-        offset: v.clock.offset_minutes,
+        zone: v.clock.zone,
     };
     // AC27: the box always fills the terminal; the panes pad to the full body height.
     list.resize(list_rows, String::new());

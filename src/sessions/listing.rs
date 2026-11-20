@@ -2,19 +2,25 @@
 //! file snapshot a picker pages over, and the summary cache shared by every account root that
 //! reaches the same physical projects directory.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::scan::{ScanState, scan_transcript};
+use self::files::{remove_legacy_cache, sweep_stale_temps, temp_suffix};
+use super::scan::{ScanState, Scanned, scan_transcript};
 use super::transcript::{
     MAX_BYTES, clean_text, collapse_fences, field, head_lines, is_headless, parse_line, prompt_detail, record_text, slug_names, tail_lines,
     user_prompt,
 };
 use crate::config::ps_truthy;
+
+mod files;
+pub mod plan;
+
+use self::plan::{Entry, Row};
 
 /// Who said a recent message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -95,17 +101,23 @@ pub(crate) fn project_path_from_transcript(dir: &Path) -> Option<String> {
 /// prompt count reads at most `max_bytes` (`MAX_BYTES`; a test passes a small cap).
 #[cfg(test)]
 pub(crate) fn summarize(path: &Path, project_path: Option<&str>, pre_filter: bool, max_bytes: usize) -> Option<Session> {
-    summarize_from(path, project_path, pre_filter, max_bytes, None)
+    summarize_from(path, project_path, pre_filter, max_bytes, Depth::Full(None))
 }
 
-/// `summarize`, the title scan resumed from an earlier summary's `scan` of the same file.
-fn summarize_from(
-    path: &Path,
-    project_path: Option<&str>,
-    pre_filter: bool,
-    max_bytes: usize,
-    prior: Option<&ScanState>,
-) -> Option<Session> {
+/// How far a summary reads.
+#[derive(Debug, Clone, Copy)]
+enum Depth<'a> {
+    /// Head and tail only, prompts counted in the first `QUICK_BYTES`: the first prompt is the
+    /// title and no message is counted. Never cached.
+    Quick,
+    /// The whole file: the title scan, resumed from an earlier summary's `scan` of the same file.
+    Full(Option<&'a ScanState>),
+}
+
+/// What a quick row counts prompts over (its count then reads "N+" on a longer file).
+const QUICK_BYTES: usize = 256 * 1024;
+
+fn summarize_from(path: &Path, project_path: Option<&str>, pre_filter: bool, max_bytes: usize, depth: Depth<'_>) -> Option<Session> {
     let meta = std::fs::metadata(path).ok()?;
     let session_id = path.file_stem()?.to_string_lossy().into_owned();
     let slug = path.parent()?.file_name()?.to_string_lossy().into_owned();
@@ -133,18 +145,24 @@ fn summarize_from(
         .filter_map(|l| parse_line(l))
         .find_map(|r| user_prompt(&r));
     let (last_user, last_assistant, recent) = walk_tail(path, pre_filter);
-    let (count, capped) = prompt_detail(path, max_bytes);
-    let scanned = scan_transcript(path, prior);
+    let (count, capped) = match depth {
+        Depth::Quick => prompt_detail(path, max_bytes.min(QUICK_BYTES)),
+        Depth::Full(_) => prompt_detail(path, max_bytes),
+    };
+    let scanned = match depth {
+        Depth::Quick => Scanned::default(),
+        Depth::Full(prior) => scan_transcript(path, prior),
+    };
     let first = first
         .or_else(|| last_user.clone())
         .unwrap_or_else(|| format!("(no prompt) {}", short_id(&session_id)));
-    let found = scanned.found;
+    let Scanned { found, resume, .. } = scanned;
     s.prompt_count = count;
     s.prompt_count_capped = capped;
     s.message_count = found.messages;
     s.first_prompt = clean_text(&first);
     s.title = found.custom_title.or(found.ai_title).unwrap_or_else(|| s.first_prompt.clone());
-    s.scan = scanned.resume;
+    s.scan = resume;
     // A prompt the tail found is the newest; the scan's `last-prompt` covers one that a long
     // turn's tool lines pushed out of the tail (it lags a turn still running, so it comes second).
     s.last_user = clean_text(last_user.or(found.last_prompt).as_deref().unwrap_or(""));
@@ -258,31 +276,22 @@ pub(crate) fn physical_dir(path: &Path) -> PathBuf {
 }
 
 /// `Get-SessionsCachePath`. The PowerShell launcher that once owned this name is gone, so the Rust
-/// one took it back from `claude-auto-rs-sessions.json` (`LEGACY_CACHE_NAME`).
+/// one took it back from `claude-auto-rs-sessions.json` (`files::LEGACY_CACHE_NAME`).
 pub fn cache_path(projects_root: &Path) -> PathBuf {
     let physical = physical_dir(projects_root);
     physical.parent().unwrap_or(&physical).join(CACHE_NAME)
 }
 
 const CACHE_NAME: &str = "claude-auto-sessions.json";
-const LEGACY_CACHE_NAME: &str = "claude-auto-rs-sessions.json";
 
-/// The cache under its pre-0.9 name beside `path`, removed once a write under the new name landed.
-/// Exactly that name: its stranded temps and look-alikes are not ours to judge.
-fn remove_legacy_cache(path: &Path) {
-    let old = path.with_file_name(LEGACY_CACHE_NAME);
-    if path.file_name().is_some_and(|n| n == CACHE_NAME) && old.is_file() && std::fs::remove_file(&old).is_err() {
-        // Held by another instance: the next write retries.
-    }
-}
+/// The cached summary's schema: bump it by hand when what a summary holds or how it is derived
+/// changes. A release that leaves summaries alone keeps every cache entry (a version taken from
+/// the source text rescanned every transcript from byte 0 on the first picker after an update).
+pub(crate) const SUMMARY_SCHEMA: u32 = 3;
 
-/// The summary logic's own content hash: a code change invalidates the cache, a touch does not.
+/// The cache key's version part: the schema alone, so a touch or a code change keeps the entry.
 pub(crate) fn summary_version() -> String {
-    let src = [include_str!("transcript.rs"), include_str!("listing.rs"), include_str!("scan.rs")].concat();
-    crate::sys::sha256(src.as_bytes()).map_or_else(
-        || "v2".to_owned(),
-        |h| h.iter().take(8).map(|b| format!("{b:02X}")).collect::<Vec<_>>().concat(),
-    )
+    format!("v{SUMMARY_SCHEMA}")
 }
 
 /// What one listing call covers. A snapshot carries its own scope, so slug and files exclude
@@ -367,103 +376,40 @@ impl SessionCache {
         }
     }
 
-    /// `Get-ClaudeSessions`: up to `limit` summaries after `skip`, over the scope, cached.
+    /// `Get-ClaudeSessions`: up to `limit` summaries after `skip`, over the scope, cached. Every
+    /// miss is summarised here, on the caller's thread (preview, tests, the perf world).
     pub fn list(&mut self, root: &Path, scope: Scope<'_>, skip: usize, limit: usize, cache_file: &Path) -> Vec<Session> {
-        // A snapshot names its files: another account's sessions list although this account
-        // has no projects folder yet (AC29).
-        if !matches!(scope, Scope::Files(_)) && !root.exists() {
+        let Some(plan) = self.plan(root, scope, skip, limit, cache_file) else {
             return Vec::new();
-        }
-        let cache = self.read(cache_file);
-        let all: Vec<PathBuf> = match scope {
-            Scope::Files(f) => f.iter().filter(|p| p.is_file()).cloned().collect(),
-            Scope::Slug(s) => session_files(root, &[s.to_owned()]),
-            Scope::All => session_files(root, &[]),
         };
-        let window: Vec<&PathBuf> = all.iter().skip(skip).take(limit).collect();
-        let window_len = window.len();
-        let version = summary_version();
-        let named = root.to_string_lossy().into_owned();
-        let named = if named.chars().count() > 3 {
-            named.trim_end_matches(['\\', '/']).to_owned()
-        } else {
-            named
-        };
-        let physical = physical_dir(root).to_string_lossy().into_owned();
-        let mut dirs: HashMap<PathBuf, Option<String>> = HashMap::new();
-        let mut fresh = BTreeMap::new();
-        let mut superseded: Vec<String> = Vec::new();
-        let mut out = Vec::new();
-        for f in window {
-            let Ok(meta) = std::fs::metadata(f) else { continue };
-            let full = f.to_string_lossy().into_owned();
-            let key_path = match full.get(..named.len()) {
-                Some(head) if named != physical && head.eq_ignore_ascii_case(&named) => {
-                    format!("{physical}{}", full.get(named.len()..).unwrap_or(""))
-                }
-                _ => full.clone(),
-            };
-            let same_file = format!("{version}|{key_path}|");
-            let key = format!("{same_file}{}|{}", meta.modified().map_or(0, ticks), meta.len());
-            let dir = f.parent().map(Path::to_path_buf).unwrap_or_default();
-            let project_path = dirs
-                .entry(dir.clone())
-                .or_insert_with(|| project_path_from_transcript(&dir))
-                .clone();
-            let summary = if let Some(hit) = cache.get(&key) {
-                let mut s = hit.clone();
-                s.path.clone_from(f);
-                s.project = clean_text(&project_path.as_deref().map_or_else(|| slug_names(&s.slug).0, leaf));
-                s
-            } else {
-                // A changed file: its last summary's scan resumes where it stopped.
-                let prior = cache
-                    .iter()
-                    .filter(|(k, _)| k.starts_with(&same_file))
-                    .map(|(_, s)| &s.scan)
-                    .max_by_key(|scan| scan.offset);
-                let Some(s) = summarize_from(f, project_path.as_deref(), true, MAX_BYTES, prior) else {
-                    continue;
-                };
-                s
-            };
-            superseded.push(same_file);
-            fresh.insert(key, summary.clone());
-            out.push(summary);
-        }
-        let survey = matches!(scope, Scope::All) && skip == 0 && window_len == all.len();
-        if survey {
+        let rows: Vec<(Entry, Session)> = plan
+            .rows
+            .into_iter()
+            .filter_map(|r| match r {
+                Row::Hit(e, s) => Some((e, *s)),
+                Row::Miss(e) => e.summarize().map(|s| (e, s)),
+            })
+            .collect();
+        if plan.survey {
+            let fresh = rows.iter().map(|(e, s)| (e.key.clone(), s.clone())).collect();
             self.write(cache_file, &fresh);
         } else {
-            let mut merged = cache;
-            // One entry per file: a grown transcript's older summary goes.
-            merged.retain(|k, _| !superseded.iter().any(|p| k.starts_with(p.as_str())));
-            merged.extend(fresh);
-            self.write(cache_file, &merged);
+            self.merge_write(plan.cache, cache_file, &rows);
         }
-        out
+        rows.into_iter().map(|(_, s)| s).collect()
     }
-}
 
-fn temp_suffix() -> u128 {
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    t ^ (u128::from(std::process::id()) << 64)
-}
+    /// Full summaries made elsewhere (the picker's worker) merged into the cache file as it is now.
+    pub fn store(&mut self, cache_file: &Path, rows: &[(Entry, Session)]) {
+        let cache = self.read(cache_file);
+        self.merge_write(cache, cache_file, rows);
+    }
 
-fn sweep_stale_temps(path: &Path) {
-    let (Some(dir), Some(leaf)) = (path.parent(), path.file_name()) else {
-        return;
-    };
-    let prefix = format!("{}.", leaf.to_string_lossy());
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    let cutoff = SystemTime::now().checked_sub(Duration::from_secs(60)).unwrap_or(UNIX_EPOCH);
-    for e in rd.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < cutoff);
-        let tmp = Path::new(&name).extension().is_some_and(|x| x.eq_ignore_ascii_case("tmp"));
-        if name.starts_with(&prefix) && tmp && old && std::fs::remove_file(e.path()).is_err() {
-            // Another instance may be removing it at the same moment.
-        }
+    fn merge_write(&mut self, mut cache: BTreeMap<String, Session>, cache_file: &Path, rows: &[(Entry, Session)]) {
+        // One entry per file: a grown transcript's older summary goes.
+        cache.retain(|k, _| !rows.iter().any(|(e, _)| k.starts_with(e.same_file.as_str())));
+        cache.extend(rows.iter().map(|(e, s)| (e.key.clone(), s.clone())));
+        self.write(cache_file, &cache);
     }
 }
 

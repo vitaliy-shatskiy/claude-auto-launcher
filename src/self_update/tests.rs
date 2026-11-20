@@ -217,6 +217,85 @@ fn maintenance_offers_update_then_roll_back_and_both_work() {
 }
 
 #[test]
+fn a_roll_back_is_not_undone_by_the_next_auto_start() {
+    let t = tmp("rolledback");
+    let l = local(&t.0, Mode::Auto);
+    let stub = full_stub(&t.0);
+    let v99 = Version([99, 0, 0]);
+    assert_eq!(run(&l, NOW, &stub, &RealFiles, &Mutex::new(false)), Some(Notice::Updated(v99)));
+    assert_eq!(
+        l.act_with(ROLLBACK_KEY, &NoNet, &RealFiles).as_deref(),
+        Some("rolled back - takes effect next start")
+    );
+    let an_hour_later = run(&l, NOW + 3_600_000, &stub, &RealFiles, &Mutex::new(false));
+    assert_eq!(an_hour_later, Some(Notice::Available(v99)), "offered, never installed again");
+    assert_eq!(std::fs::read(&l.exe).unwrap(), b"current build", "the rolled-away build stays out");
+    assert_eq!(
+        l.entries().first(),
+        Some(&(UPDATE_KEY, "update claude-auto to 99.0.0".to_owned())),
+        "the update key still offers it"
+    );
+    let newer = Stub::new(&[
+        (API, Ok(release_json("v100.0.0"))),
+        (SHA_URL, Ok(sha_file(&t.0, b"newer build"))),
+        (EXE_URL, Ok(b"newer build".to_vec())),
+    ]);
+    let two_days_later = NOW + 2 * 86_400_000;
+    assert_eq!(
+        run(&l, two_days_later, &newer, &RealFiles, &Mutex::new(false)),
+        Some(Notice::Updated(Version([100, 0, 0]))),
+        "a newer release installs again"
+    );
+    assert_eq!(State::read(&l.state).rolled_back_from, None, "and clears the hold");
+}
+
+#[test]
+fn a_failed_auto_update_waits_a_day_before_downloading_again() {
+    let t = tmp("backoff");
+    let l = local(&t.0, Mode::Auto);
+    let bad = Stub::new(&[
+        (API, Ok(release_json("v99.0.0"))),
+        (SHA_URL, Ok(sha_file(&t.0, b"new build"))),
+        (EXE_URL, Ok(b"tampered build".to_vec())),
+    ]);
+    let v99 = Version([99, 0, 0]);
+    let first = run(&l, NOW, &bad, &RealFiles, &Mutex::new(false));
+    assert!(matches!(&first, Some(Notice::Failed(v, _)) if *v == v99), "{first:?}");
+    let calls = bad.calls().len();
+    assert_eq!(
+        run(&l, NOW + 3_600_000, &bad, &RealFiles, &Mutex::new(false)),
+        first,
+        "the same failure is told again"
+    );
+    assert_eq!(bad.calls().len(), calls, "no download within the day");
+    let a_day_later = run(&l, NOW + 2 * 86_400_000, &full_stub(&t.0), &RealFiles, &Mutex::new(false));
+    assert_eq!(a_day_later, Some(Notice::Updated(v99)), "a day on, it tries again");
+    assert_eq!(State::read(&l.state).failed, None);
+}
+
+#[test]
+fn a_quit_is_no_failure_to_wait_out() {
+    let t = tmp("quitnobackoff");
+    let l = local(&t.0, Mode::Auto);
+    assert!(matches!(
+        run(&l, NOW, &full_stub(&t.0), &RealFiles, &Mutex::new(true)),
+        Some(Notice::Failed(..))
+    ));
+    assert_eq!(State::read(&l.state).failed, None);
+}
+
+#[test]
+fn a_preview_forces_self_update_off() {
+    let t = tmp("preview");
+    let preview = Local::from_env(Mode::Auto, &Repo::default(), &t.0, Start::Preview);
+    assert_eq!(preview.mode, Mode::Off);
+    if std::env::var("CLAUDE_AUTO_NO_SELF_UPDATE").as_deref() != Ok("1") {
+        let launch = Local::from_env(Mode::Auto, &Repo::default(), &t.0, Start::Launch);
+        assert_eq!(launch.mode, Mode::Auto, "only the preview turned it off");
+    }
+}
+
+#[test]
 fn config_values_parse_strictly() {
     assert_eq!(Mode::parse(" Auto "), Some(Mode::Auto));
     assert_eq!(Mode::parse("daily"), None);

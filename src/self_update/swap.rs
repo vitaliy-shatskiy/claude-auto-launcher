@@ -74,9 +74,6 @@ pub(crate) fn download(exe: &Path, release: &Release, net: &dyn Net) -> Result<P
     // hashed and then moves in.
     let new = sibling(exe, &format!(".{}-{}.new", std::process::id(), crate::log::new_run_id()));
     std::fs::write(&new, &body).map_err(|e| format!("cannot write into {}: {e}", exe.parent().unwrap_or(exe).display()))?;
-    // A file this process wrote carries no mark of the web; one left by another tool would make
-    // SmartScreen ask on the next start.
-    remove_quietly(&sibling(&new, ":Zone.Identifier"));
     let got = crate::maintenance::win::sha256_file(&new);
     if !got.is_some_and(|g| g.eq_ignore_ascii_case(&want)) {
         remove_quietly(&new);

@@ -281,7 +281,7 @@ impl<'a> MaintScreen<'a> {
     fn paint_running(&mut self, term: &mut dyn Term, text: String) {
         self.status = text;
         let area = crate::frame::Area::of(term.size());
-        let f = maintenance_frame(&self.info, area.size(), &self.status, self.style, self.actions, self.cursor.hover);
+        let f = maintenance_frame(&self.info, area.size(), &self.status, self.style, &self.keys, self.cursor.hover);
         term.paint(&area.place(f.lines));
     }
 

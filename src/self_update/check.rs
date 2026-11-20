@@ -12,7 +12,7 @@ use super::{Net, Repo};
 /// The two assets `.github/workflows/release.yml` publishes; no other asset is ever fetched.
 pub(crate) const EXE_ASSET: &str = "claude-auto.exe";
 pub(crate) const SHA_ASSET: &str = "claude-auto.exe.sha256";
-const DAY_MS: i64 = 24 * 60 * 60_000;
+pub(super) const DAY_MS: i64 = 24 * 60 * 60_000;
 const API_CAP: usize = 1024 * 1024;
 
 /// A release version, `major.minor.patch` and nothing else.
@@ -67,6 +67,19 @@ pub(crate) struct State {
     pub(crate) latest: Option<Release>,
     pub(crate) installed: Option<Version>,
     pub(crate) previous: Option<Version>,
+    /// The build the user rolled back from: `auto` never installs it again, only a newer one.
+    pub(crate) rolled_back_from: Option<Version>,
+    /// The last failed background update: `auto` waits a day before downloading that release again.
+    pub(crate) failed: Option<Failed>,
+}
+
+/// A background update that failed, when, and why (the launch screen line repeats it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Failed {
+    pub(crate) version: Version,
+    pub(crate) at_ms: i64,
+    pub(crate) why: String,
 }
 
 impl State {

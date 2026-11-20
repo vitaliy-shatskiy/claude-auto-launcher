@@ -229,9 +229,11 @@ fn launch(run: &Run) -> i32 {
     let mut show_qr = false;
     let mut stop_server = false;
     let mut ui: Option<UiOutcome> = run.headless.as_ref().map(headless::HeadlessRun::outcome);
+    // Held until this function returns, after claude exits (see `self_update_watch`).
+    let (self_update, launcher) = screens::self_update_watch(run, use_ui);
     if use_ui {
         let ui_span = run.logger.timings.begin(&["ui"]);
-        let ended = run_ui(run, input_redirected, output_redirected);
+        let ended = run_ui(run, input_redirected, output_redirected, (&self_update, &launcher));
         run.logger.timings.end(ui_span);
         match ended {
             Ok(UiEnd::Launch(o)) => ui = Some(*o),

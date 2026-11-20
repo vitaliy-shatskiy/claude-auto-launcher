@@ -1,6 +1,6 @@
 use super::*;
 use crate::frame::{CellSpan, FooterSpan, ListMap};
-use crate::ui::PreviewTerm;
+use crate::ui::{Activation, PreviewTerm};
 
 /// A list of `n` rows; Enter and an activation return the index.
 struct List {
@@ -688,4 +688,29 @@ fn a_key_that_opens_a_nested_screen_is_dropped_and_the_footer_reads_its_own_scre
     assert_eq!(keys, ["key:list", "key:outer"], "the u key spanned the nested screen: {recs:?}");
     let nested = recs.iter().find(|r| r.name == "screen:list").unwrap();
     assert_eq!(nested.parent.as_deref(), Some("screen:outer"));
+}
+
+#[test]
+fn input_that_never_pauses_still_draws_a_frame_every_32_events() {
+    // Given: 99 motion records and input that always reads as pending.
+    let mut s = List {
+        c: Cursor::at(0),
+        n: 6,
+        acts: 0,
+    };
+    let events: Vec<Event> = (0..99)
+        .map(|i| {
+            Event::Mouse(MouseEvent {
+                x: 5,
+                y: 1 + i % 6,
+                is_move: true,
+                ..MouseEvent::default()
+            })
+        })
+        .collect();
+    let mut t = Batch(term(events), |_| true);
+    // When: the screen runs through them.
+    assert_eq!(run(&mut s, &mut t), Err(UiStop::KeysExhausted));
+    // Then: besides the opening frame, at least one per 33 events (32 deferred, then a draw).
+    assert!(frames(&t) > 99 / 33, "{} frames", frames(&t));
 }
