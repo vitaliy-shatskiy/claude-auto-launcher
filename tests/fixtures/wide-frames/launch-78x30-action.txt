@@ -1,6 +1,6 @@
   ✻ claude-auto                                                           
 
- ❯ account      [work] ┊ personal ┊ low  ‹ a/d ←/→ ›
+ ❯ account      [work] ┊ personal ┊ low
    remote       ● [on] ○ off ○ on+QR ○ stop server
    action       ● [new] ○ project ○ continue ○ resume ○ worktree
    model        ‹ default ›
@@ -24,6 +24,6 @@
 
 
 
-
   ─────────────────────────────────────────────────────────────────────────
-  w/s row  ┊  a/d value  ┊  [enter] next  ┊  [u] maintenance  ┊  [esc] quit
+  w/s row          ┊  a/d ←/→ switch  ┊  [enter] next
+  [u] maintenance  ┊  [esc] quit

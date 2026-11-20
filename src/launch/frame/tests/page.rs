@@ -56,12 +56,16 @@ fn a_400x150_terminal_gets_a_400x150_page_from_the_top_left() {
 }
 
 #[test]
-fn the_switch_hint_sits_on_the_cursor_row_only() {
+fn the_switch_keys_sit_in_the_footer_only() {
     let r = four();
     let mut s = real_state(&r);
     s.row = 3;
     let (f, lines) = page(&r, &s, (160, 40));
-    let with_hint: Vec<usize> = (0..lines.len()).filter(|i| lines[*i].contains("a/d \u{2190}/\u{2192}")).collect();
-    let effort = f.map.rows.iter().find(|h| h.name == "Effort").unwrap();
-    assert_eq!(with_hint, [usize::try_from(effort.y).unwrap()], "{lines:#?}");
+    let with_keys: Vec<usize> = (0..lines.len()).filter(|i| lines[*i].contains("a/d")).collect();
+    assert_eq!(with_keys, [usize::try_from(f.map.footer_y.unwrap()).unwrap()], "{lines:#?}");
+    assert!(
+        lines[with_keys[0]].contains("a/d \u{2190}/\u{2192} switch"),
+        "{}",
+        lines[with_keys[0]]
+    );
 }

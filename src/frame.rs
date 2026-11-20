@@ -47,20 +47,9 @@ pub fn pad_to_bottom(lines: &mut Vec<String>, height: usize, below: usize) {
     }
 }
 
-/// The `‹ a/d ←/→ ›` hint drawn dim after the values of a row that switches with a/d and the
-/// arrows: the footer alone does not tell that the row moves.
-pub fn switch_hint(g: &Glyphs) -> String {
-    let arrows = if g.l_angle == '<' { "<-/->" } else { "\u{2190}/\u{2192}" };
-    format!("{}{} a/d {arrows} {}{}", theme::DIM_OPEN, g.l_angle, g.r_angle, theme::DIM_CLOSE)
-}
-
-/// `line` with the switch hint two cells after it, when the whole fits `max` cells.
-pub fn with_switch_hint(line: String, g: &Glyphs, max: usize) -> String {
-    let hint = switch_hint(g);
-    if display_width(&line) + 2 + display_width(&hint) > max {
-        return line;
-    }
-    format!("{line}  {hint}")
+/// The footer token of the keys that switch a row's value: `a/d ←/→` (`a/d <-/->` in ASCII).
+pub fn switch_keys(g: &Glyphs) -> &'static str {
+    if g.l_angle == '<' { "a/d <-/->" } else { "a/d \u{2190}/\u{2192}" }
 }
 
 /// The last console column is never written (it wraps on some terminals).

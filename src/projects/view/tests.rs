@@ -164,11 +164,13 @@ fn golden_project_400x150_fills_the_terminal_from_the_top_left() {
 }
 
 #[test]
-fn the_action_row_shows_its_switch_keys() {
+fn the_footer_names_the_action_switch_keys_and_the_action_row_does_not() {
     let ps = golden_projects();
     let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", 100, 30));
     let y = usize::try_from(f.map.action.as_ref().unwrap().y).unwrap();
-    assert!(f.lines[y].contains("\u{2039} a/d \u{2190}/\u{2192} \u{203A}"), "{}", f.lines[y]);
+    assert!(!f.lines[y].contains("a/d"), "{}", f.lines[y]);
+    let fy = usize::try_from(f.map.footer_y.unwrap()).unwrap();
+    assert!(f.lines[fy].contains("a/d \u{2190}/\u{2192} action"), "{}", f.lines[fy]);
 }
 
 fn many(n: usize, prefix: &str) -> Vec<Project> {
@@ -326,7 +328,7 @@ fn action_field_radio_cells_and_compact_form() {
     assert_eq!(step_project_action("not-an-action", 0), "new");
     let f80 = project_frame(&view(&ps, 0, r"C:\cwd", 80, 24));
     assert!(
-        text(&f80).contains("a/d action") && text(&f80).contains("[esc] back"),
+        text(&f80).contains("a/d \u{2190}/\u{2192} action") && text(&f80).contains("[esc] back"),
         "a footer too wide keeps its buttons and the kept hints"
     );
     assert_eq!(f80.map.footer_lines, 3, "0.9.0: the p button wraps the footer to a third line");
@@ -342,7 +344,7 @@ fn the_move_and_action_hints_survive_78_to_120_columns() {
         let footer = f.lines[fy..].join("\n");
         for hint in [
             "w/s move",
-            "a/d action",
+            "a/d \u{2190}/\u{2192} action",
             "[enter] run",
             "[c] continue",
             "[/] filter",

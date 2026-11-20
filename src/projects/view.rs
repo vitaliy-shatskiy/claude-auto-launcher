@@ -157,7 +157,7 @@ fn footer_hints(v: &ProjectView<'_>) -> Vec<Hint> {
     }
     let mut h = vec![
         Hint::plain("w/s", "move").kept(),
-        Hint::plain("a/d", "action").kept(),
+        Hint::plain(frame::switch_keys(&glyphs(v.style.ascii)), "action").kept(),
         Hint::key("enter", "run", "Enter"),
     ];
     h.extend(
@@ -379,7 +379,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
 
     let radio = action_radio(v.action, v.hover_value, inner, &g);
     let action_index = body.len();
-    body.push(frame::with_switch_hint(radio.text.clone(), &g, inner));
+    body.push(radio.text.clone());
 
     let lines = new_box(&body, fw, &title(v, &g), &g, v.style.ascii);
     let first_row_y = lines.len() - body.len() - 1;

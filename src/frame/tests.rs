@@ -172,17 +172,7 @@ fn a_broken_size_report_falls_back_per_axis() {
 }
 
 #[test]
-fn switch_hint_names_keys_and_arrows_and_only_where_it_fits() {
-    let g = glyphs(true);
-    assert_eq!(crate::theme::add_dim_span_color(&switch_hint(&g), false), "< a/d <-/-> >");
-    assert_eq!(
-        crate::theme::add_dim_span_color(&switch_hint(&glyphs(false)), false),
-        "\u{2039} a/d \u{2190}/\u{2192} \u{203A}"
-    );
-    let line = "row".to_owned();
-    assert_eq!(
-        crate::theme::add_dim_span_color(&with_switch_hint(line.clone(), &g, 18), false),
-        "row  < a/d <-/-> >"
-    );
-    assert_eq!(with_switch_hint(line, &g, 17), "row", "one cell short: no hint");
+fn switch_keys_name_the_letters_and_the_arrows() {
+    assert_eq!(switch_keys(&glyphs(true)), "a/d <-/->");
+    assert_eq!(switch_keys(&glyphs(false)), "a/d \u{2190}/\u{2192}");
 }
