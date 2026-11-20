@@ -18,11 +18,25 @@ use crate::out;
 use crate::prefs;
 use crate::types::{LabelDefaults, VersionInfo};
 use crate::ui::{ConsoleTerm, PreviewTerm, Term, UiStop, parse_preview_keys, parse_preview_size};
-use crate::{env, maintenance, projects, sessions, sys, theme};
+use crate::{env, maintenance, projects, self_update, sessions, sys, theme};
 
 use super::plugins::{launch_key, project_entries, session_entries};
 use super::waits::{confirm_held, open_maintenance, wait_on_screen};
 use super::{Run, UiEnd, UiOutcome, now_ms, var};
+
+/// The launcher's own release check: a thread, never in the way of the first frame, started only
+/// for a start with screens. The caller holds it until claude exits: a download that outlasts the
+/// screens still lands, and its drop keeps a swap from starting once the launcher is quitting.
+pub(super) fn self_update_watch(run: &Run, use_ui: bool) -> (self_update::Local, RefCell<self_update::Watch>) {
+    let start = if run.preview {
+        self_update::Start::Preview
+    } else {
+        self_update::Start::Launch
+    };
+    let local = self_update::Local::from_env(run.cfg.self_update, &run.cfg.update_repo, &run.ctx.home, start);
+    let checked = if use_ui { local.clone() } else { local.off() };
+    (local, RefCell::new(self_update::Watch::start(checked, now_ms())))
+}
 
 /// The UI: launch screen, project screen, held-session warning, picker - until a launch.
 #[expect(clippy::too_many_lines, reason = "the screen sequence reads top to bottom as in claude-auto.ps1")]
@@ -30,7 +44,7 @@ pub(super) fn run_ui(
     run: &Run,
     input_redirected: bool,
     output_redirected: bool,
-    (self_update, launcher): (&crate::self_update::Local, &RefCell<crate::self_update::Watch>),
+    (local_update, launcher): (&self_update::Local, &RefCell<self_update::Watch>),
 ) -> Result<UiEnd, UiStop> {
     let style = Style {
         color: theme::color_supported(var("NO_COLOR").as_deref(), var("TERM").as_deref()),
@@ -143,7 +157,7 @@ pub(super) fn run_ui(
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
             if is_hotkey(k, 'u') {
                 open_maintenance(&update, tm, t, run.preview, |t| {
-                    if maintenance::run_screen(t, &run.cfg, style, self_update).is_ok() {
+                    if maintenance::run_screen(t, &run.cfg, style, local_update).is_ok() {
                         t.drain();
                     }
                 });
