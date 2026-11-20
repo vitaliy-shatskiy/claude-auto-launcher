@@ -371,3 +371,28 @@ fn capped_count_is_a_flag_beside_an_int() {
     assert_eq!((s.prompt_count, s.prompt_count_capped), (3, true));
     assert_eq!(prompt_detail(&big, 16 << 10), (4, false));
 }
+
+#[test]
+fn a_grown_transcript_resumes_its_title_scan_from_the_cache() {
+    use std::io::Write as _;
+    let t = tmp("resume");
+    let root = t.0.join("projects");
+    let p = put(&root.join("C--src-demo"), "s1.jsonl", &prompt("first", r"C:\src\demo"));
+    let cache_file = cache_path(&root);
+    let rows = SessionCache::default().list(&root, Scope::All, 0, 10, &cache_file);
+    assert_eq!(rows[0].message_count, 1);
+    // Mark the cached scan: a resumed scan carries the mark, a full rescan would drop it.
+    let text = std::fs::read_to_string(&cache_file).unwrap();
+    let mut map: BTreeMap<String, Session> = serde_json::from_str(&text).unwrap();
+    for s in map.values_mut() {
+        s.scan.messages += 1000;
+    }
+    std::fs::write(&cache_file, serde_json::to_string(&map).unwrap()).unwrap();
+    let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+    f.write_all(prompt("second", r"C:\src\demo").as_bytes()).unwrap();
+    drop(f);
+    let slug = "C--src-demo";
+    let rows = SessionCache::default().list(&root, Scope::Slug(slug), 0, 10, &cache_file);
+    assert_eq!(rows[0].message_count, 1002, "resumed from the cached scan, not rescanned");
+    assert_eq!(cache_keys(&cache_file), 1, "the grown file's older entry is gone");
+}

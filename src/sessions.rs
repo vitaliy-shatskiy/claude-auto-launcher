@@ -8,7 +8,7 @@ pub mod frame;
 pub mod holder;
 pub mod listing;
 pub mod picker;
-mod scan;
+pub mod scan;
 pub mod transcript;
 mod win;
 
