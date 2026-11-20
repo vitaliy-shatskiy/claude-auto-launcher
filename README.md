@@ -50,7 +50,7 @@ Copy `target\release\claude-auto.exe` to a folder on your PATH and run `claude-a
     <td width="50%" valign="top">
       <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-accounts-dark.svg"><img alt="" src="docs/media/feature-accounts-light.svg" width="48" height="48"></picture><br>
       <b>Several accounts, one launcher</b><br>
-      A tab per account, each remembering its own model, effort, advisor and permission. Usage bars appear when your statusline writes them.
+      A tab per account, each remembering its own model, effort, advisor and permission. Usage percentages appear on the top border when your statusline writes them.
     </td>
     <td width="50%" valign="top">
       <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-rows-dark.svg"><img alt="" src="docs/media/feature-rows-light.svg" width="48" height="48"></picture><br>
@@ -225,12 +225,12 @@ picker when you resume. `u` on the launch screen opens maintenance.
 
 | Screen | Keys |
 |---|---|
-| **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices · `enter` next (with `projectScreen: "onDemand"`: launch) · `u` maintenance · a plugin's action key · `esc` quit |
+| **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices (named in the footer only when a row was restored, marked `*`) · `enter` next (with `projectScreen: "onDemand"`: launch) · `u` maintenance · a plugin's action key · `esc` quit |
 | **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `p` pin or unpin the project on top (saved to `pinnedProjects`) · `h` hide or show the project (saved to `hiddenProjects`) · `v` list the hidden projects, marked · `esc` back one step: an open filter, then a kept filter, then the hidden view, then the launch screen |
 | **Project filter** (`/`) | type words · `↑`/`↓` move while typing · `←`/`→` the action · `enter` runs the highlighted row (`no project matches` on the current directory when nothing matches) · `esc` clears |
 | **Path navigator** (`enter a path...`) | type a path · `↑`/`↓` move · `enter` or `→` enters the folder (on `use this folder`: picks it) · `←` up one folder · `backspace` on an empty segment goes up · `ctrl+backspace` drops a segment · `tab` completes, a second `tab` cycles · `esc` back to the list |
 | **Session picker** | `enter` open · `f` fork · `tab` this project or every project · `/` filter · `esc` back |
-| **Maintenance** | `u` update Claude Code · `r` rename swap · `d` doctor · `m` mcp list · `p` prune old Claude Code builds · `l` launch rows editor · `c` update claude-auto · `b` roll back claude-auto (`c` and `b` when offered) · one key per `maintenanceActions` entry · `esc` back |
+| **Maintenance** | `w`/`s` or arrows select an action, `enter` or the action's key runs it: `u` update Claude Code · `r` update anyway (rename) · `p` delete old builds · `d` doctor · `m` MCP servers · `l` launch rows · `c` update claude-auto · `b` roll back claude-auto (`c` and `b` when offered) · one key per `maintenanceActions` entry (marked `custom`) · `esc` back |
 | **Rows editor** (`l`) | `w`/`s` row · `ctrl+w`/`ctrl+s` or `alt+↑`/`alt+↓` move it · `ctrl+x` or `space` hide/show (not `account`) · `a`/`d` or `←`/`→` the value a hidden row launches with · `enter` save to `rows` and `hiddenValues` · `esc` cancel |
 | **Mouse** | hover highlights · a click selects a row, a second click on that row runs it · click a footer button to press its key · wheel scrolls |
 
@@ -243,8 +243,15 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
 ### Layout
 
 - Every screen fills the whole terminal from its top-left corner, at any size, and redraws on
-  resize. A size report of 0 or over 10000 cells on a side is taken as 80x25 on that side. From
-  155 columns the usage bars double to 16 cells.
+  resize. A size report of 0 or over 10000 cells on a side is taken as 80x25 on that side.
+- Every screen is one page: a frame from the top row down to the footer, the title on its top
+  border (`─ <screen> ─ <facts> ─`), the text three cells in from the frame (the cursor column and
+  a space), the key footer under it. On the launch screen the title is `✻ claude-auto ─ <version>`
+  and the account's limits sit at the top border's right end (`5h 4% · 7d 96% · fable 24% · 5 h
+  ago`, coloured by level, the age dim); a narrow terminal drops the limits before anything else.
+- Warnings (an unknown config key, a plugin that failed to describe) are listed on the maintenance
+  screen, and the launch footer badges `u maintenance ⚠ 2` in yellow. A start without screens
+  prints them as before.
 - From 100 columns the project rows keep compact columns: the name (at most 40 % of the width),
   the path two cells after the longest name, the age right-aligned after the longest path. A path
   that does not fit is cut in the middle with `…`, keeping its drive and leaf.
@@ -254,6 +261,16 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
 - A screen repaints only the lines that changed, and a burst of input (mouse motion, key repeat)
   costs one frame.
 - Box drawing is ASCII when the console is not on UTF-8 or `CLAUDE_AUTO_ASCII=1`.
+
+### Maintenance
+
+The left column lists the actions, one row each: key and name; the selected row adds a short hint
+where the name needs one. The right column is a grid of facts: the installed Claude Code and
+whether it is the newest, the builds on disk and their size, claude-auto's version and
+self-update, the warnings with where to fix them, and the last action. A long action shows its
+step within a second (what the command last printed, the seconds so far), then `done` or
+`failed: <reason>` with its report below; `m` ends with `N of M connected` and one line per
+server. `p` asks for a second press. Below 100 columns the facts follow the list.
 
 ### Project screen
 
@@ -702,9 +719,9 @@ The launcher sets `CLAUDE_AUTO_LAUNCHED=1` on the session it starts.
   one set per launcher that started it (`remote: true` only), not swept.
 - `<file>.pre-relink` and its dated copies beside a shared file a sharing repair replaced.
 
-The launch screen's usage bars read `~/.claude/rate-limits/<key>.json`
+The launch screen's usage percentages read `~/.claude/rate-limits/<key>.json`
 (`{"fiveHour": 34, "sevenDay": 61, "atMs": <epoch ms>}`). Nothing in this repo writes that file:
-without a writer of your own (a statusline script, say) the bars stay empty.
+without a writer of your own (a statusline script, say) the top border shows none.
 
 </details>
 

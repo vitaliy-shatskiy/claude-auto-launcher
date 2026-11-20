@@ -1,7 +1,6 @@
-//! The maintenance screen: install info, a
-//! status box, the five built-in keys and the configured actions. Every action reports through the
-//! status line, slow ones draw a "running ..." frame first, and confirm-twice actions gate on the
-//! input RECORD time so a paste is never two presses.
+//! The maintenance screen: a list of actions (built-in, claude-auto's own, configured) beside the
+//! facts about the install. Every action shows a live step line while it runs and ends done or
+//! failed; confirm-twice actions gate on the input RECORD time so a paste is never two presses.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -13,20 +12,19 @@ use unicode_general_category::{GeneralCategory, get_general_category};
 use super::install::{InstallInfo, Pruned};
 use super::rows::RowsEditor;
 use crate::config::{MaintenanceAction, RowsConfig};
-use crate::frame::{
-    FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, complete_frame, footer_hover, frame_width, new_hint_footer,
-    too_small_frame,
-};
-use crate::input::{KeyPress, is_hotkey_exact};
+use crate::frame::{Frame, Style};
+use crate::input::{KeyPress, is_hotkey_exact, vk};
 use crate::launch::RowName;
-use crate::layout::{new_box, split_output_lines};
 use crate::theme::{glyphs, strip_ctl};
-use crate::ui::Term;
-use crate::ui::screen_loop::{Cursor, Screen};
+use crate::types::VersionInfo;
+use crate::ui::screen_loop::{Cursor, Flow, Screen};
+use crate::ui::{Hit, Term};
+
+mod view;
+pub(crate) use view::{Entry, Page, Phase, maintenance_frame};
 
 /// Two presses closer than this are one paste, not a confirmation.
 pub(crate) const CONFIRM_MIN_MS: u64 = 150;
-const BUILT_IN: [char; 5] = ['u', 'r', 'd', 'm', 'p'];
 const GIB: u64 = 1024 * 1024 * 1024;
 
 static CSI: LazyLock<Regex> = LazyLock::new(|| crate::theme::re(r"\x1b\[[0-9;?]*[A-Za-z]"));
@@ -117,125 +115,139 @@ pub(crate) fn gib(bytes: u64) -> String {
     format!("{grouped}.{}", tenths % 10)
 }
 
-fn prefix16(hash: Option<&str>, none: &str) -> String {
-    hash.map_or_else(|| none.to_owned(), |h| h.chars().take(16).collect())
+/// How an action ended: done or failed, and what it reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Verdict {
+    pub(crate) ok: bool,
+    pub(crate) text: String,
 }
 
-/// `hover` is a clickable footer-button index, -1 for none.
-pub(crate) fn maintenance_frame(
-    info: &InstallInfo,
-    size: (usize, usize),
-    status: &str,
-    style: Style,
-    actions: &[MaintenanceAction],
-    hover: i32,
-) -> Frame {
-    let (width, height) = size;
-    if width < MIN_WIDTH || height < MIN_HEIGHT {
-        return Frame {
-            lines: too_small_frame(width, height, style.ascii),
-            map: RowMap::default(),
-        };
-    }
-    let g = glyphs(style.ascii);
-    let fw = frame_width(width);
-    let box_width = fw;
-    let verdict = if info.matches {
-        "yes - newest downloaded build"
-    } else {
-        "NO - older; press u to install it"
-    };
-    let mut hints = vec![
-        Hint::ch("u", "update", 'u'),
-        Hint::ch("r", "rename swap", 'r'),
-        Hint::ch("d", "doctor", 'd'),
-        Hint::ch("m", "mcp list", 'm'),
-        Hint::ch("p", "prune", 'p'),
-        Hint::ch("l", "rows", ROWS_KEY),
-    ];
-    for a in actions {
-        if let Some(c) = a.key.chars().next() {
-            hints.push(Hint::ch(&strip_ctl(&a.key), &strip_ctl(&a.label), c));
+impl Verdict {
+    pub(crate) fn done(text: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            text: text.into(),
         }
     }
-    hints.push(Hint::key("esc", "back", "Escape"));
-    let footer = new_hint_footer(&hints, &g, fw, !style.color);
-    let light = FooterLight {
-        hover: footer_hover(&footer, hover),
-        selected: Vec::new(),
-    };
-    let mut body = vec![
-        format!("  installed   {}", strip_ctl(&info.bin_path)),
-        format!("  hash        {}", prefix16(info.installed_hash.as_deref(), "missing")),
-        format!("  newest      {}", strip_ctl(info.newest_version.as_deref().unwrap_or_default())),
-        format!("  hash        {}", prefix16(info.newest_hash.as_deref(), "none downloaded")),
-        format!("  match       {verdict}"),
-        format!("  versions    {} builds, {} GB", info.version_count, gib(info.versions_bytes)),
-    ];
-    if !status.is_empty() {
-        // 10 = box borders, six info rows, the blank separator and one headroom row: a frame that
-        // fills the terminal exactly scrolls the alternate buffer by one.
-        let room = height.saturating_sub(10 + footer.lines.len()).max(1);
-        body.push(String::new());
-        let clean = status.replace(['\u{1}', '\u{2}', '\u{4}', '\u{5}'], "");
-        body.extend(
-            split_output_lines(&clean, box_width.saturating_sub(4), room)
-                .into_iter()
-                .map(|l| format!("  {l}")),
-        );
+
+    pub(crate) fn failed(text: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            text: text.into(),
+        }
     }
-    let mut lines = new_box(&body, box_width, "maintenance", &g, style.ascii);
-    crate::frame::pad_to_bottom(&mut lines, height, footer.lines.len());
-    let mut map = RowMap::default();
-    let painter = |l: &str, e: bool| crate::list::add_picker_color(l, e, &g);
-    let lines = complete_frame(&lines, &footer, fw, style, &painter, &light, &mut map);
-    Frame { lines, map }
 }
+
+/// A step sink: every line a long action prints, `""` as a tick that only advances the clock.
+pub(crate) type Step<'s> = &'s mut dyn FnMut(&str);
 
 /// What the screen's keys do to the machine; the seam that keeps tests off the real install.
 pub(crate) trait Ops {
     /// The install info, refreshed by every draw.
     fn info(&mut self) -> InstallInfo;
-    /// The Claude Code update's status message.
-    fn update(&mut self) -> String;
-    /// The rename swap's status message.
-    fn rename_swap(&mut self) -> String;
-    /// `claude <args>` reduced to status text, never a failure.
-    fn command_text(&mut self, args: &[&str]) -> String;
+    /// The Claude Code update.
+    fn update(&mut self, step: Step<'_>) -> Verdict;
+    /// The rename swap.
+    fn rename_swap(&mut self) -> Verdict;
+    /// `claude <args>` reduced to status text; ok when it exited 0.
+    fn command_text(&mut self, args: &[&str], step: Step<'_>) -> Verdict;
     /// Prunes old Claude Code builds, keeping two.
     fn prune(&mut self) -> Pruned;
     /// The maintenance script runner.
-    fn run(&mut self, script: &Path) -> Result<ScriptRun, String>;
+    fn run(&mut self, script: &Path, step: Step<'_>) -> Result<ScriptRun, String>;
     /// Config `rows`, `hiddenValues` and the keys shaping them, as the file holds them now.
     fn load_rows(&mut self) -> RowsConfig;
     /// Writes config `rows` and `hiddenValues`, every other key untouched.
     fn save_rows(&mut self, rows: &[RowName], hidden: &BTreeMap<RowName, String>) -> Result<(), String>;
-    /// The launcher's own update entries (key, label), shown as keys like the configured actions.
+    /// The launcher's own update entries (key, label), shown as rows like the configured actions.
     fn launcher_entries(&mut self) -> Vec<(char, String)> {
         Vec::new()
     }
-    /// Runs a launcher entry's key: the status line it leaves.
-    fn launcher_key(&mut self, _key: char) -> String {
+    /// Runs a launcher entry's key.
+    fn launcher_key(&mut self, _key: char) -> Verdict {
+        Verdict::done("")
+    }
+    /// claude-auto's self-update mode and state in words (`notify · up to date`).
+    fn launcher_state(&mut self) -> String {
         String::new()
     }
-}
-
-/// Launcher entries as footer keys; an empty script marks them, a configured action always has one.
-fn launcher_actions(entries: Vec<(char, String)>) -> Vec<MaintenanceAction> {
-    entries
-        .into_iter()
-        .map(|(key, label)| MaintenanceAction {
-            key: key.to_string(),
-            label,
-            script: String::new(),
-            confirm_twice: false,
-        })
-        .collect()
 }
 
 /// Opens the launch-rows editor. Lower case and matched exactly: a Shift + upper-case letter is
 /// what a split mouse report looks like. Config reserves it, so no action takes it.
 const ROWS_KEY: char = 'l';
+
+/// The built-in rows: key, name, and the short hint the selected row shows when the name alone
+/// cannot carry it.
+const BUILT_IN_ROWS: [(char, &str, &str); 6] = [
+    ('u', "update Claude Code", ""),
+    ('r', "update anyway (rename)", "while claude.exe is in use"),
+    ('p', "delete old builds", "keeps the 2 newest + the running one"),
+    ('d', "doctor", ""),
+    ('m', "MCP servers", "checks each connection"),
+    (ROWS_KEY, "launch rows", ""),
+];
+
+/// The rows: built-ins, then the launcher's own entries, then the configured actions (a
+/// configured action never takes a key already listed).
+fn entries(launcher: &[(char, String)], actions: &[MaintenanceAction]) -> Vec<Entry> {
+    let mut out: Vec<Entry> = BUILT_IN_ROWS
+        .iter()
+        .map(|(key, name, about)| Entry {
+            key: *key,
+            name: (*name).into(),
+            about: (*about).into(),
+        })
+        .collect();
+    for (key, label) in launcher {
+        out.push(Entry {
+            key: *key,
+            name: label.clone(),
+            about: String::new(),
+        });
+    }
+    for a in actions {
+        if let Some(key) = a.key.chars().next()
+            && !out.iter().any(|e| e.key == key)
+        {
+            out.push(Entry {
+                key,
+                name: strip_ctl(&a.label),
+                about: "custom".into(),
+            });
+        }
+    }
+    out
+}
+
+/// `claude mcp list` as a count and the per-server lines; a run with no server line is left as it is.
+fn mcp_summary(v: Verdict) -> Verdict {
+    if !v.ok {
+        return v;
+    }
+    let servers: Vec<&str> = v
+        .text
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.contains(": ") && l.contains(" - "))
+        .collect();
+    if servers.is_empty() {
+        return v;
+    }
+    let connected = servers
+        .iter()
+        .filter(|l| l.ends_with("Connected") && !l.contains("Not connected"))
+        .count();
+    let head = format!("{connected} of {} connected", servers.len());
+    let text = std::iter::once(head.as_str())
+        .chain(servers.iter().copied())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Verdict {
+        ok: connected == servers.len(),
+        text,
+    }
+}
 
 /// The screen's state between keys.
 pub(crate) struct MaintScreen<'a> {
@@ -243,20 +255,18 @@ pub(crate) struct MaintScreen<'a> {
     pub(crate) ops: &'a mut dyn Ops,
     pub(crate) actions: &'a [MaintenanceAction],
     pub(crate) style: Style,
-    pub(crate) info: InstallInfo,
-    pub(crate) status: String,
+    /// What the page draws; `status` is the last action's report.
+    pub(crate) page: Page,
     /// The key whose confirm is armed, and the record time it was armed at. State, never a parse
     /// of the status text: any press consumes it.
     pending: Option<char>,
     pending_at: Option<u64>,
-    /// The launcher's own update entries, then the configured actions: the footer's keys.
-    keys: Vec<MaintenanceAction>,
 }
 
 impl std::fmt::Debug for MaintScreen<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MaintScreen")
-            .field("status", &self.status)
+            .field("page", &self.page)
             .field("pending", &self.pending)
             .finish_non_exhaustive()
     }
@@ -269,55 +279,73 @@ impl<'a> MaintScreen<'a> {
             ops,
             actions,
             style,
-            info: InstallInfo::default(),
-            status: String::new(),
+            page: Page::default(),
             pending: None,
             pending_at: None,
-            keys: actions.to_vec(),
         }
     }
 
-    /// Repaints the frame on screen with the current status, before a slow child runs.
-    fn paint_running(&mut self, term: &mut dyn Term, text: String) {
-        self.status = text;
-        let area = crate::frame::Area::of(term.size());
-        let f = maintenance_frame(&self.info, area.size(), &self.status, self.style, &self.keys, self.cursor.hover);
-        term.paint(&f.lines);
+    /// The facts that do not change while the screen is up: warnings, the installed version, the
+    /// config path the warnings point at.
+    #[must_use]
+    pub(crate) fn with_facts(mut self, warnings: &[String], version: &VersionInfo, config_path: &str) -> Self {
+        self.page.warnings = warnings.to_vec();
+        self.page.installed.clone_from(&version.installed);
+        self.page.newest.clone_from(&version.newest);
+        config_path.clone_into(&mut self.page.config_path);
+        self
     }
 
-    fn arm(&mut self, key: char, now: Option<u64>, text: String) {
+    fn arm(&mut self, key: char, now: Option<u64>, name: &str, text: String) {
         self.pending = Some(key);
         self.pending_at = now;
-        self.status = text;
+        name.clone_into(&mut self.page.last);
+        self.page.phase = Phase::Armed;
+        self.page.status = text;
     }
 
-    fn built_in(&mut self, c: char, term: &mut dyn Term, confirmed: bool, now: Option<u64>) {
-        match c {
-            'u' => {
-                self.paint_running(term, "running claude update...".into());
-                self.status = self.ops.update();
-                term.drain();
+    /// Runs `act` with a step line repainted on every line it prints and every tick, then
+    /// records done or failed.
+    fn live(&mut self, term: &mut dyn Term, name: &str, doing: &str, act: impl FnOnce(&mut dyn Ops, Step<'_>) -> Verdict) {
+        name.clone_into(&mut self.page.last);
+        self.page.status.clear();
+        let started = std::time::Instant::now();
+        let (page, style) = (&self.page, self.style);
+        let mut line = String::new();
+        let mut paint = |text: &str| {
+            if let Some(l) = status_text(text).lines().rev().find(|l| !l.trim().is_empty()) {
+                l.trim().clone_into(&mut line);
             }
-            'r' => {
-                self.status = self.ops.rename_swap();
-                term.drain();
+            let secs = started.elapsed().as_secs();
+            let mut step = doing.to_owned();
+            if secs > 0 {
+                step = format!("{step} {} {secs} s", glyphs(style.ascii).dot);
             }
-            'd' => {
-                self.paint_running(term, "running claude doctor...".into());
-                self.status = self.ops.command_text(&["doctor"]);
-                term.drain();
+            if !line.is_empty() {
+                step = format!("{step} {} {line}", glyphs(style.ascii).dot);
             }
-            'm' => {
-                self.paint_running(term, "running claude mcp list...".into());
-                self.status = self.ops.command_text(&["mcp", "list"]);
-                term.drain();
-            }
-            _ if confirmed => {
-                let p = self.ops.prune();
-                self.status = format!("deleted {} builds, freed {} GB", p.deleted.len(), gib(p.freed_bytes));
-            }
-            _ => self.arm('p', now, "confirm: press p again to delete all but the 2 newest builds".into()),
+            let shown = Page {
+                phase: Phase::Running(step),
+                ..page.clone()
+            };
+            let area = crate::frame::Area::of(term.size());
+            term.paint(&maintenance_frame(&shown, area.size(), style).lines);
+        };
+        paint("");
+        let v = act(&mut *self.ops, &mut paint);
+        if v.ok {
+            self.page.phase = Phase::Done;
+            self.page.status = v.text;
+        } else {
+            // The head of the first line is the reason; the rest of the report stays below it.
+            let first = v.text.lines().next().unwrap_or_default();
+            let reason = first.split(" - ").next().unwrap_or_default();
+            let rest: Vec<&str> = v.text.lines().skip(usize::from(reason == first)).collect();
+            let reason = if reason.trim().is_empty() { "no reason given" } else { reason };
+            self.page.phase = Phase::Failed(reason.to_owned());
+            self.page.status = rest.join("\n");
         }
+        term.drain();
     }
 
     /// The rows editor, opened on the config as the file holds it now; a save is reported in the
@@ -326,35 +354,84 @@ impl<'a> MaintScreen<'a> {
     fn edit_rows(&mut self, term: &mut dyn Term) {
         let current = self.ops.load_rows();
         let mut editor = RowsEditor::new(&current, self.style);
-        self.status = match crate::ui::screen_loop::run(&mut editor, term) {
+        "launch rows".clone_into(&mut self.page.last);
+        let (ok, text) = match crate::ui::screen_loop::run(&mut editor, term) {
             Ok(Some((rows, hidden))) => match self.ops.save_rows(&rows, &hidden) {
                 Ok(()) => {
                     let mut parts = vec![rows.iter().map(|r| r.as_str().to_lowercase()).collect::<Vec<_>>().join(", ")];
                     parts.extend(hidden.iter().map(|(r, v)| format!("hidden {} -> {v}", r.as_str().to_lowercase())));
-                    format!("launch rows saved: {} - shown on return to the launch screen", parts.join("; "))
+                    (
+                        true,
+                        format!("launch rows saved: {} - shown on return to the launch screen", parts.join("; ")),
+                    )
                 }
-                Err(e) => format!("launch rows not saved: {e}"),
+                Err(e) => (false, format!("launch rows not saved: {e}")),
             },
-            Ok(None) | Err(_) => "launch rows unchanged".into(),
+            Ok(None) | Err(_) => (true, "launch rows unchanged".into()),
         };
+        self.page.phase = if ok { Phase::Done } else { Phase::Failed("not saved".into()) };
+        self.page.status = text;
     }
 
-    fn action(&mut self, a: &MaintenanceAction, key: char, term: &mut dyn Term, confirmed: bool, now: Option<u64>) {
-        if a.confirm_twice && !confirmed {
-            self.arm(
-                key,
+    /// One row's key: the built-ins, the launcher's entries, the configured actions.
+    fn press(&mut self, key: char, term: &mut dyn Term, confirmed: bool, now: Option<u64>) {
+        let ell = crate::layout::ellipsis(self.style.ascii);
+        match key {
+            ROWS_KEY => self.edit_rows(term),
+            'u' => self.live(term, "update Claude Code", "updating", |ops, s| ops.update(s)),
+            'r' => self.live(term, "update anyway (rename)", "swapping", |ops, _| ops.rename_swap()),
+            'd' => self.live(term, "doctor", "running claude doctor", |ops, s| ops.command_text(&["doctor"], s)),
+            'm' => self.live(term, "MCP servers", &format!("checking{ell}"), |ops, s| {
+                mcp_summary(ops.command_text(&["mcp", "list"], s))
+            }),
+            'p' if confirmed => {
+                let p = self.ops.prune();
+                "delete old builds".clone_into(&mut self.page.last);
+                if p.message.is_empty() {
+                    self.page.phase = Phase::Done;
+                    self.page.status = format!("deleted {} builds, freed {} GB", p.deleted.len(), gib(p.freed_bytes));
+                } else {
+                    self.page.phase = Phase::Failed(p.message);
+                    self.page.status.clear();
+                }
+            }
+            'p' => self.arm(
+                'p',
                 now,
-                format!(
-                    "confirm: press {key} again to run {} (the screen will sit still while it runs)",
-                    a.label
-                ),
-            );
+                "delete old builds",
+                "confirm: press p again to delete all but the 2 newest builds".into(),
+            ),
+            _ => self.press_other(key, term, confirmed, now),
+        }
+    }
+
+    fn press_other(&mut self, key: char, term: &mut dyn Term, confirmed: bool, now: Option<u64>) {
+        let launcher = self.ops.launcher_entries();
+        if let Some((_, label)) = launcher.iter().find(|(k, _)| *k == key) {
+            self.live(term, label, label, |ops, _| ops.launcher_key(key));
             return;
         }
-        self.paint_running(term, format!("running {}...", a.label));
-        let ops = &mut *self.ops;
-        self.status = run_script(Path::new(&a.script), &a.label, &mut |p| ops.run(p)).message;
-        term.drain();
+        let actions = self.actions;
+        let Some(a) = actions.iter().find(|a| a.key.starts_with(key)) else {
+            return;
+        };
+        let label = strip_ctl(&a.label);
+        if a.confirm_twice && !confirmed {
+            let text = format!("confirm: press {key} again to run {label}");
+            self.arm(key, now, &label, text);
+            return;
+        }
+        self.live(term, &label, "running", |ops, s| {
+            let r = run_script(Path::new(&a.script), &label, &mut |p| ops.run(p, &mut *s));
+            Verdict { ok: r.ok, text: r.message }
+        });
+    }
+
+    /// Confirm bookkeeping, then `key` pressed: two presses closer than `CONFIRM_MIN_MS` are a paste.
+    fn press_checked(&mut self, key: char, term: &mut dyn Term, was_pending: Option<char>, armed_at: Option<u64>) {
+        let now = term.record_time();
+        let too_fast = matches!((now, armed_at), (Some(n), Some(a)) if n.checked_sub(a).is_none_or(|d| d < CONFIRM_MIN_MS));
+        self.press(key, term, was_pending == Some(key) && !too_fast, now);
     }
 }
 
@@ -369,57 +446,53 @@ impl Screen for MaintScreen<'_> {
         &mut self.cursor
     }
 
-    fn draw(&mut self, size: (usize, usize)) -> Frame {
-        self.info = self.ops.info();
-        self.keys = launcher_actions(self.ops.launcher_entries());
-        self.keys.extend_from_slice(self.actions);
-        maintenance_frame(&self.info, size, &self.status, self.style, &self.keys, self.cursor.hover)
+    fn before(&mut self) {
+        let last = self.page.entries.len().saturating_sub(1);
+        self.page.selected = usize::try_from(self.cursor.index).unwrap_or(0).min(last);
+        self.page.hover = self.cursor.hover;
     }
 
-    /// Every key passes here first: the confirm bookkeeping, then the built-in keys and the
-    /// configured actions (a configured action never takes a built-in letter). Escape and Ctrl+C
-    /// fall through to the loop. No rows and no left/right, so no WASD alias shadows a menu key.
+    fn draw(&mut self, size: (usize, usize)) -> Frame {
+        self.page.info = self.ops.info();
+        self.page.launcher = self.ops.launcher_state();
+        self.page.entries = entries(&self.ops.launcher_entries(), self.actions);
+        maintenance_frame(&self.page, size, self.style)
+    }
+
+    fn rows(&self) -> Option<i32> {
+        Some(i32::try_from(self.page.entries.len().max(1)).unwrap_or(1))
+    }
+
+    /// A click selects a row; enter or its key runs it.
+    fn click(&mut self, hit: &Hit) -> Flow<()> {
+        if let Hit::LaunchRow { row, .. } = hit {
+            self.cursor.index = i32::try_from(*row).unwrap_or(0);
+        }
+        Flow::Continue
+    }
+
+    /// Every key passes here first: the confirm bookkeeping, then Enter on the selected row, then
+    /// a row's own key (a configured action never takes a built-in letter). Escape and Ctrl+C
+    /// fall through to the loop, and so do w/s and the arrows when no row owns the letter.
     fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
         let was_pending = self.pending.take();
         let armed_at = self.pending_at.take();
-        let now = term.record_time();
-        let too_fast = matches!((now, armed_at), (Some(n), Some(a)) if n.checked_sub(a).is_none_or(|d| d < CONFIRM_MIN_MS));
-        if was_pending.is_some_and(|p| !is_hotkey_exact(key, p)) {
-            self.status.clear();
+        let row_key = if key.is(vk::ENTER) {
+            self.page.entries.get(self.page.selected).map(|e| e.key)
+        } else {
+            self.page.entries.iter().map(|e| e.key).find(|c| is_hotkey_exact(key, *c))
+        };
+        if was_pending.is_some_and(|p| row_key != Some(p)) {
+            self.page.phase = Phase::Idle;
+            self.page.status.clear();
         }
-        if is_hotkey_exact(key, ROWS_KEY) {
-            self.edit_rows(term);
-            return true;
+        let Some(c) = row_key else { return false };
+        if let Some(i) = self.page.entries.iter().position(|e| e.key == c) {
+            self.cursor.index = i32::try_from(i).unwrap_or(0);
+            self.page.selected = i;
         }
-        if let Some(c) = BUILT_IN.into_iter().find(|c| is_hotkey_exact(key, *c)) {
-            let confirmed = was_pending == Some(c) && !too_fast;
-            self.built_in(c, term, confirmed, now);
-            return true;
-        }
-        let launcher = self.keys.iter().filter(|a| a.script.is_empty());
-        if let Some((c, label)) = launcher.into_iter().find_map(|a| {
-            a.key
-                .chars()
-                .next()
-                .filter(|c| is_hotkey_exact(key, *c))
-                .map(|c| (c, a.label.clone()))
-        }) {
-            self.paint_running(term, format!("{label}..."));
-            self.status = self.ops.launcher_key(c);
-            term.drain();
-            return true;
-        }
-        let actions = self.actions;
-        let hit = actions.iter().find_map(|a| {
-            let c = a.key.chars().next()?;
-            (!BUILT_IN.contains(&c) && is_hotkey_exact(key, c)).then_some((a, c))
-        });
-        if let Some((a, c)) = hit {
-            let confirmed = was_pending == Some(c) && !too_fast;
-            self.action(a, c, term, confirmed, now);
-            return true;
-        }
-        false
+        self.press_checked(c, term, was_pending, armed_at);
+        true
     }
 
     fn silent(&self) -> bool {

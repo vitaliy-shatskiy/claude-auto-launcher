@@ -88,6 +88,9 @@ struct Run {
     headless: Option<headless::HeadlessRun>,
     /// The described plugins (config `plugins`).
     plugins: crate::plugins::Plugins,
+    /// Config and plugin warnings: the maintenance screen lists them; a start without screens
+    /// prints them.
+    warnings: Vec<String>,
 }
 
 /// The whole launcher. Returns the process exit code.
@@ -132,11 +135,6 @@ pub fn run(args: Vec<String>) -> i32 {
     if cfg.project_screen == config::ProjectScreen::OnDemand {
         roster.add_action_row();
     }
-    if !wants_options {
-        for w in &cfg.warnings {
-            out::line(&format!("  config: {w}"), Fg::DarkYellow);
-        }
-    }
     // A refused `--launcher-run` starts no plugin and writes no plugin cache: its built-in fields
     // are checked first, its `pluginRows` by `prepare_run` once the plugins are described.
     if let Some(req) = &run_request
@@ -155,9 +153,7 @@ pub fn run(args: Vec<String>) -> i32 {
         }
         return headless::print_options(&ctx, &cfg, &roster);
     }
-    for w in &plugin_warnings {
-        out::line(&format!("  {w}"), Fg::DarkYellow);
-    }
+    let warnings: Vec<String> = cfg.warnings.iter().map(|w| format!("config: {w}")).chain(plugin_warnings).collect();
     let headless = match run_request.map(|req| headless::prepare_run(&req, &ctx, &cfg, &roster)) {
         Some(Ok(checked)) => Some(checked),
         Some(Err(e)) => return refuse(&e),
@@ -184,6 +180,7 @@ pub fn run(args: Vec<String>) -> i32 {
         process,
         headless,
         plugins,
+        warnings,
     };
     let code = launch(&run);
     // Every path but the spawn ends here; the spawn path ended and wrote these already.
@@ -210,6 +207,13 @@ fn ui_stop_type(e: crate::ui::UiStop) -> &'static str {
     }
 }
 
+/// The warnings a start without screens still owes the user, one yellow line each.
+fn print_warnings(run: &Run) {
+    for w in &run.warnings {
+        out::line(&format!("  {w}"), Fg::DarkYellow);
+    }
+}
+
 #[expect(clippy::too_many_lines, reason = "the launch order reads top to bottom as in claude-auto.ps1")]
 fn launch(run: &Run) -> i32 {
     let input_redirected = !std::io::stdin().is_terminal();
@@ -231,6 +235,9 @@ fn launch(run: &Run) -> i32 {
     let mut ui: Option<UiOutcome> = run.headless.as_ref().map(headless::HeadlessRun::outcome);
     // Held until this function returns, after claude exits (see `self_update_watch`).
     let (self_update, launcher) = screens::self_update_watch(run, use_ui);
+    if !use_ui {
+        print_warnings(run);
+    }
     if use_ui {
         let ui_span = run.logger.timings.begin(&["ui"]);
         let ended = run_ui(run, input_redirected, output_redirected, (&self_update, &launcher));
@@ -251,6 +258,7 @@ fn launch(run: &Run) -> i32 {
             }
             Ok(UiEnd::NoConsole) => {
                 use_ui = false;
+                print_warnings(run);
                 fallback_prompts(run, &mut choice, &mut remote_on, &mut show_qr, &mut stop_server);
             }
             Err(e) => {

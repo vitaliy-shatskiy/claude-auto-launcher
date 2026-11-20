@@ -1,7 +1,7 @@
 //! Frame pieces every screen shares: the footer as data, radio rows, click
 //! spans, the row map, and the per-line truncate-then-paint chain. Pure.
 
-use crate::layout::{display_width, limit_line};
+use crate::layout::{display_width, limit_line, new_titled_box};
 use crate::theme::{self, Glyphs};
 
 /// 50 columns: a phone over RDP. 16 rows: the worst launch frame at 50 columns plus one.
@@ -52,6 +52,22 @@ pub fn switch_keys(g: &Glyphs) -> &'static str {
     if g.l_angle == '<' { "a/d <-/->" } else { "a/d \u{2190}/\u{2192}" }
 }
 
+/// The page every screen draws: `body` in a box from the top row down to the footer, `title`
+/// (`<screen> ─ <facts>`) on the top border and `right` at its right end. A body taller than the
+/// page is never cut here.
+pub fn page(mut body: Vec<String>, size: (usize, usize), footer_lines: usize, title: &str, right: &str, style: Style) -> Vec<String> {
+    let g = theme::glyphs(style.ascii);
+    // Two borders, the footer and the headroom row.
+    let rows = size.1.saturating_sub(3 + footer_lines);
+    if body.len() < rows {
+        body.resize(rows, String::new());
+    }
+    new_titled_box(&body, frame_width(size.0), title, right, &g, style.ascii)
+}
+
+/// The left padding of every page's text inside the frame: the cursor column and a space.
+pub const PAD: &str = "   ";
+
 /// The last console column is never written (it wraps on some terminals).
 pub fn frame_width(width: usize) -> usize {
     width.saturating_sub(1)
@@ -75,6 +91,8 @@ pub struct Hint {
     pub ch: Option<char>,
     /// A plain hint that stays when a narrow footer drops the plain ones.
     pub keep: bool,
+    /// Drawn after the label in yellow (`⚠ 2`): it is part of the click span.
+    pub badge: String,
 }
 
 impl Hint {
@@ -86,6 +104,7 @@ impl Hint {
             key: String::new(),
             ch: None,
             keep: false,
+            badge: String::new(),
         }
     }
 
@@ -93,6 +112,12 @@ impl Hint {
     #[must_use]
     pub fn kept(self) -> Self {
         Self { keep: true, ..self }
+    }
+
+    /// With a yellow badge after the label; an empty badge draws nothing.
+    #[must_use]
+    pub fn badged(self, badge: String) -> Self {
+        Self { badge, ..self }
     }
 
     pub fn key(token: &str, label: &str, key: &str) -> Self {
@@ -103,6 +128,7 @@ impl Hint {
             key: key.into(),
             ch: None,
             keep: false,
+            badge: String::new(),
         }
     }
 
@@ -114,6 +140,7 @@ impl Hint {
             key: String::new(),
             ch: Some(ch),
             keep: false,
+            badge: String::new(),
         }
     }
 }
@@ -129,6 +156,8 @@ pub struct FooterSpan {
     pub key: String,
     pub ch: Option<char>,
     pub line: usize,
+    /// Characters at the end of the span drawn as the yellow badge.
+    pub badge: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,9 +188,11 @@ pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) ->
     };
     let piece_of = |h: &Hint| {
         let mut piece = token_of(h);
-        if !h.label.is_empty() {
-            piece.push(' ');
-            piece.push_str(&h.label);
+        for part in [&h.label, &h.badge] {
+            if !part.is_empty() {
+                piece.push(' ');
+                piece.push_str(part);
+            }
         }
         piece
     };
@@ -213,6 +244,7 @@ pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) ->
                 key: if h.clickable { h.key.clone() } else { String::new() },
                 ch: if h.clickable { h.ch } else { None },
                 line: r,
+                badge: h.badge.chars().count(),
             });
         }
         lines.push(FooterLine { text, spans });
@@ -295,9 +327,19 @@ pub fn add_hint_color(line: &str, spans: &[FooterSpan], enabled: bool, light: &F
             && cursor < chars.len()
         {
             let label_end = end.min(chars.len() - 1);
+            let badge_at = (label_end + 1).saturating_sub(s.badge).max(cursor);
             out.push_str(label_tint);
-            out.push_str(&char_slice(&chars, cursor, label_end));
+            out.push_str(
+                &chars
+                    .get(cursor..badge_at)
+                    .map_or_else(String::new, |c| c.iter().collect::<String>()),
+            );
             out.push_str(theme::RESET);
+            if badge_at <= label_end {
+                out.push_str(theme::YELLOW);
+                out.push_str(&char_slice(&chars, badge_at, label_end));
+                out.push_str(theme::RESET);
+            }
             cursor = label_end + 1;
         }
     }

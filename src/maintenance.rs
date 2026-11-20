@@ -24,7 +24,7 @@ use crate::out::Fg;
 use crate::types::VersionInfo;
 use crate::ui::{Term, UiStop};
 use install::{Install, InstallInfo, Pruned};
-use screen::{MaintScreen, Ops, ScriptRun};
+use screen::{MaintScreen, Ops, ScriptRun, Verdict};
 
 const PREVIEW_NOTE: &str = "preview - nothing was run";
 
@@ -56,6 +56,69 @@ fn claude_output(args: &[&str]) -> Result<String, String> {
     captured(&exe, args).map(|(t, _)| t)
 }
 
+/// How long the pipes are still read once the child has exited.
+const AFTER_EXIT: std::time::Duration = std::time::Duration::from_secs(1);
+const TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Runs `exe args` with stdout and stderr read line by line: every line goes to `step` as it
+/// arrives, a `""` tick every 250 ms. The read ends one second after the child EXITS, not at the
+/// pipes' end: a grandchild that inherited them (an MCP server `claude mcp list` started) can hold
+/// them open long after, and `output()` waited for it with the screen stuck.
+pub(crate) fn captured_live(exe: &Path, args: &[&str], step: screen::Step<'_>) -> Result<(String, i32), String> {
+    use std::io::BufRead as _;
+    let mut child = Command::new(exe)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let pipes: [Option<Box<dyn std::io::Read + Send>>; 2] = [
+        child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+        child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    ];
+    for pipe in pipes.into_iter().flatten() {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let mut r = std::io::BufReader::new(pipe);
+            let mut buf = Vec::new();
+            while r.read_until(b'\n', &mut buf).is_ok_and(|n| n > 0) {
+                if tx.send(String::from_utf8_lossy(&buf).into_owned()).is_err() {
+                    break;
+                }
+                buf.clear();
+            }
+        });
+    }
+    drop(tx);
+    let mut text = String::new();
+    let mut exit: Option<(i32, std::time::Instant)> = None;
+    loop {
+        match rx.recv_timeout(TICK) {
+            Ok(line) => {
+                step(&line);
+                text.push_str(&line);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => step(""),
+        }
+        if exit.is_none()
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            exit = Some((status.code().unwrap_or(1), std::time::Instant::now()));
+        }
+        if exit.is_some_and(|(_, at)| at.elapsed() >= AFTER_EXIT) {
+            break;
+        }
+    }
+    let code = match exit {
+        Some((c, _)) => c,
+        None => child.wait().map_or(1, |s| s.code().unwrap_or(1)),
+    };
+    Ok((text, code))
+}
+
 /// The machine behind the screen's keys. A preview reads the install and changes nothing.
 #[derive(Debug)]
 struct RealOps {
@@ -70,27 +133,41 @@ impl Ops for RealOps {
         self.install.info()
     }
 
-    fn update(&mut self) -> String {
+    fn update(&mut self, step: screen::Step<'_>) -> Verdict {
         if self.preview {
-            return PREVIEW_NOTE.into();
+            return Verdict::done(PREVIEW_NOTE);
         }
-        self.install.update(|| claude_output(&["update"])).message
+        let u = self.install.update(|| {
+            let exe = crate::invocation::resolve_claude()?;
+            let out = captured_live(&exe, &["update"], &mut *step).map(|(t, _)| t);
+            step("verifying the installed build");
+            out
+        });
+        Verdict {
+            ok: u.matches,
+            text: u.message,
+        }
     }
 
-    fn rename_swap(&mut self) -> String {
+    fn rename_swap(&mut self) -> Verdict {
         if self.preview {
-            return PREVIEW_NOTE.into();
+            return Verdict::done(PREVIEW_NOTE);
         }
-        self.install.rename_swap().message
+        let o = self.install.rename_swap();
+        Verdict { ok: o.ok, text: o.message }
     }
 
-    fn command_text(&mut self, args: &[&str]) -> String {
+    fn command_text(&mut self, args: &[&str], step: screen::Step<'_>) -> Verdict {
         if self.preview {
-            return PREVIEW_NOTE.into();
+            return Verdict::done(PREVIEW_NOTE);
         }
-        match claude_output(args) {
-            Ok(text) => screen::status_text(&text),
-            Err(e) => format!("claude {} could not be started: {e}", args.join(" ")),
+        let ran = crate::invocation::resolve_claude()
+            .map_err(str::to_owned)
+            .and_then(|exe| captured_live(&exe, args, step));
+        match ran {
+            Ok((text, 0)) => Verdict::done(screen::status_text(&text)),
+            Ok((text, code)) => Verdict::failed(format!("claude {} exited {code}\n{}", args.join(" "), screen::status_text(&text))),
+            Err(e) => Verdict::failed(format!("claude {} could not be started: {e}", args.join(" "))),
         }
     }
 
@@ -101,12 +178,12 @@ impl Ops for RealOps {
         self.install.prune(2)
     }
 
-    fn run(&mut self, script: &Path) -> Result<ScriptRun, String> {
+    fn run(&mut self, script: &Path, step: screen::Step<'_>) -> Result<ScriptRun, String> {
         if self.preview {
             return Err(PREVIEW_NOTE.into());
         }
         let p = script.to_string_lossy();
-        captured(Path::new("pwsh"), &["-NoProfile", "-File", &p]).map(|(output, exit_code)| ScriptRun { output, exit_code })
+        captured_live(Path::new("pwsh"), &["-NoProfile", "-File", &p], step).map(|(output, exit_code)| ScriptRun { output, exit_code })
     }
 
     fn load_rows(&mut self) -> RowsConfig {
@@ -124,12 +201,30 @@ impl Ops for RealOps {
         self.launcher.entries()
     }
 
-    fn launcher_key(&mut self, key: char) -> String {
+    fn launcher_key(&mut self, key: char) -> Verdict {
         if self.preview {
-            return PREVIEW_NOTE.into();
+            return Verdict::done(PREVIEW_NOTE);
         }
-        self.launcher.act(key).unwrap_or_default()
+        let text = self.launcher.act(key).unwrap_or_default();
+        // The module's own words: a success says "updated" or "rolled back".
+        if text.contains("fail") || text.contains("could not") {
+            Verdict::failed(text)
+        } else {
+            Verdict::done(text)
+        }
     }
+
+    fn launcher_state(&mut self) -> String {
+        self.launcher.state_text()
+    }
+}
+
+/// What the maintenance screen shows besides the install: collected warnings and the versions
+/// the launch screen read.
+#[derive(Debug, Clone, Copy)]
+pub struct Shown<'a> {
+    pub warnings: &'a [String],
+    pub version: &'a VersionInfo,
 }
 
 /// `claude --version` reduced to its bare version; `None` when it cannot run.
@@ -237,7 +332,13 @@ fn check_into(version: &mut VersionInfo, gate: &InstallGate, lines: &mut Vec<Not
 
 /// The maintenance screen, opened by `u` from the launch screen and returning to it.
 /// `launcher`: the self-update of this process, shared with the launch screen's check.
-pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style, launcher: &crate::self_update::Local) -> Result<(), UiStop> {
+pub fn run_screen(
+    term: &mut dyn Term,
+    cfg: &Config,
+    style: Style,
+    launcher: &crate::self_update::Local,
+    shown: &Shown<'_>,
+) -> Result<(), UiStop> {
     let tm = term.logger().timings.clone();
     let load = tm.begin(&["load", "maintenance"]);
     let preview = is_preview();
@@ -247,7 +348,7 @@ pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style, launcher: &cr
         config_path: cfg.path.clone(),
         launcher: launcher.clone(),
     };
-    let mut s = MaintScreen::new(&mut ops, &cfg.maintenance_actions, style);
+    let mut s = MaintScreen::new(&mut ops, &cfg.maintenance_actions, style).with_facts(shown.warnings, shown.version, &cfg.path);
     tm.end(load);
     crate::ui::screen_loop::run(&mut s, term).map(|_| ())
 }

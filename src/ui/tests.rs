@@ -10,6 +10,7 @@ fn span(start: i32, end: i32, line: usize) -> FooterSpan {
         key: "Enter".into(),
         ch: None,
         line,
+        badge: 0,
     }
 }
 

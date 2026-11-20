@@ -66,6 +66,7 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
         version: c.version,
         restored: None,
         notice: None,
+        warnings: 0,
         default_model_label: c.model_label,
         default_advisor_label: "default",
         default_labels: c.labels,
@@ -178,7 +179,7 @@ fn wide_frames_match_the_powershell_goldens() {
 }
 
 #[test]
-fn narrow_tier_draws_compact_rows_and_one_limit_line() {
+fn narrow_tier_draws_compact_rows_inside_the_frame() {
     let r = four();
     let limits = golden_limits();
     let s = r.new_state();
@@ -192,6 +193,7 @@ fn narrow_tier_draws_compact_rows_and_one_limit_line() {
         version: &v,
         restored: None,
         notice: None,
+        warnings: 0,
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -200,17 +202,12 @@ fn narrow_tier_draws_compact_rows_and_one_limit_line() {
     let f = launch_frame(&r, &inp);
     assert!(f.lines.iter().all(|l| display_width(l) <= 49), "{:#?}", f.lines);
     assert!(
-        f.lines.iter().any(|l| l == "   5h     41%   7d     63%   fable  15%"),
-        "the usage row keeps the model bucket before the age: {:#?}",
-        f.lines
-    );
-    assert!(
-        f.lines.iter().any(|l| l == "   effort       < default >"),
+        f.lines.iter().any(|l| l.starts_with("|   effort       < default >")),
         "too wide rows collapse: {:#?}",
         f.lines
     );
     assert!(
-        f.lines.iter().any(|l| l == "   mode         * [normal] - safe"),
+        f.lines.iter().any(|l| l.starts_with("|   mode         * [normal] - safe")),
         "a row that fits stays a radio list: {:#?}",
         f.lines
     );
@@ -228,6 +225,7 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
         version: &v,
         restored: None,
         notice: None,
+        warnings: 0,
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -237,17 +235,6 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
         },
     };
     launch_frame(r, &inp)
-}
-
-/// The column where the values of the row named `name` start.
-fn value_column(f: &Frame, r: &Roster, name: &str) -> usize {
-    let hit = f.map.rows.iter().find(|h| h.name == name).unwrap();
-    let line = &f.lines[usize::try_from(hit.y).unwrap()];
-    let label = &r.rows[hit.index].label;
-    let chars: Vec<char> = line.chars().collect();
-    let label: Vec<char> = label.chars().collect();
-    let at = chars.windows(label.len()).position(|w| w == label.as_slice()).unwrap() + label.len();
-    at + chars.iter().skip(at).take_while(|c| **c == ' ' || **c == '*').count()
 }
 
 /// The value row named `name`, as drawn.
@@ -303,7 +290,7 @@ fn narrow_and_wide_frames_match_their_goldens() {
 }
 
 #[test]
-fn the_usage_row_starts_on_the_value_column_and_keeps_the_model_bucket() {
+fn the_limits_sit_on_the_top_border_and_go_before_the_frame_does() {
     let r = four();
     let personal: Limits = [(
         "work".to_owned(),
@@ -319,28 +306,80 @@ fn the_usage_row_starts_on_the_value_column_and_keeps_the_model_bucket() {
     )]
     .into();
     let s = r.new_state();
-    for limits in [golden_limits(), personal] {
-        for width in [50, 58, 60, 80, 100, 120] {
-            let f = frame_at(&r, &s, &limits, width);
-            let account_y = usize::try_from(f.map.rows.iter().find(|h| h.name == "Account").unwrap().y).unwrap();
-            let usage = &f.lines[account_y + 1];
-            let col = value_column(&f, &r, "Model");
-            let lead = usage.chars().take_while(|c| *c == ' ').count();
-            assert!(
-                lead == col || (width < 100 && lead == 3),
-                "{width}: value or label column: {usage:?}"
-            );
-            assert!(usage.contains("fable"), "{width}: {usage:?}");
-            assert!(usage.contains("7d "), "{width}: {usage:?}");
-            let l = &limits["work"];
-            if width >= 58 {
-                assert!(usage.contains("fable") && usage.ends_with(&l.age_text), "{width}: {usage:?}");
-            }
-            if width >= 80 || (width >= 58 && l.five_hour.is_none()) {
-                assert!(usage.contains('░'), "{width}: bars kept: {usage:?}");
-            }
-        }
+    let wide = frame_at(&r, &s, &golden_limits(), 160);
+    assert!(
+        wide.lines[0].ends_with("\u{2500} 5h 41% \u{b7} 7d 63% \u{b7} fable 15% \u{b7} 12 min ago \u{2500}\u{256e}"),
+        "{}",
+        wide.lines[0]
+    );
+    let no_five = frame_at(&r, &s, &personal, 160);
+    assert!(
+        no_five.lines[0].contains(" 7d 83% \u{b7} fable 1% \u{b7} just now "),
+        "{}",
+        no_five.lines[0]
+    );
+    assert!(
+        !wide.lines.iter().any(|l| l.contains('\u{2591}') || l.contains('\u{2593}')),
+        "no bar glyphs"
+    );
+    for width in [50, 58, 60] {
+        let f = frame_at(&r, &s, &golden_limits(), width);
+        assert!(
+            f.lines[0].starts_with("\u{256d}\u{2500} \u{273b} claude-auto"),
+            "{width}: {}",
+            f.lines[0]
+        );
+        assert!(f.lines[0].ends_with('\u{256e}'), "{width}: the frame stays: {}", f.lines[0]);
+        assert!(!f.lines[0].contains("5h"), "{width}: the limits go first: {}", f.lines[0]);
+        assert_eq!(display_width(&f.lines[0]), width - 1);
     }
+    let y = |name: &str| wide.map.rows.iter().find(|h| h.name == name).unwrap().y;
+    assert_eq!(y("Remote"), y("Account") + 1, "the account row takes one line");
+}
+
+#[test]
+fn ctrl_r_reset_and_the_warning_badge_show_only_when_they_apply() {
+    let r = four();
+    let g = theme::glyphs(false);
+    let text = |extra: LaunchHints| {
+        launch_footer(&g, 159, false, &extra)
+            .lines
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<String>()
+    };
+    let none = text(LaunchHints::default());
+    assert!(!none.contains("ctrl+r") && !none.contains('\u{26a0}'), "{none}");
+    let both = text(LaunchHints {
+        warnings: 2,
+        restored: true,
+    });
+    assert!(
+        both.contains("[u] maintenance \u{26a0} 2") && both.contains("ctrl+r reset"),
+        "{both}"
+    );
+    let colored = launch_footer(
+        &g,
+        159,
+        true,
+        &LaunchHints {
+            warnings: 2,
+            restored: false,
+        },
+    );
+    let line: String = colored
+        .lines
+        .iter()
+        .map(|l| frame::add_hint_color(&l.text, &l.spans, true, &FooterLight::default()))
+        .collect();
+    assert!(
+        line.contains(&format!("{}\u{26a0} 2", theme::YELLOW)),
+        "the badge is yellow: {line:?}"
+    );
+    let f = frame_at(&r, &real_state(&r), &Limits::new(), 120);
+    assert!(f.lines.iter().any(|l| l.contains("ctrl+r reset")), "restored rows offer the reset");
+    assert!(!f.lines.iter().any(|l| l.contains("restored (")), "no restored status line");
+    assert!(f.lines.iter().any(|l| l.contains("model*")), "the restored rows keep their mark");
 }
 
 #[test]
@@ -358,6 +397,7 @@ fn row_map_points_at_the_drawn_lines() {
         version: &v,
         restored: None,
         notice: None,
+        warnings: 0,
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -417,9 +457,7 @@ fn model_row_weak_to_strong_and_fable_cell() {
             && at("Opus 5.5[1M]") < at("Fable 5.2"),
         "haiku, sonnet, opus, fable: {line}"
     );
-    let y = |name: &str| usize::try_from(f.map.rows.iter().find(|h| h.name == name).unwrap().y).unwrap();
-    let usage = f.lines[y("Account") + 1..y("Remote")].join("\n");
-    assert!(usage.contains("fable") && usage.contains("15% (2 h ago)"), "{usage}");
+    assert!(f.lines[0].contains("fable 15% (2 h ago)"), "{}", f.lines[0]);
 
     let mut ordered = four();
     ordered.apply_model_order(&["fable".to_owned(), "haiku".to_owned()]);
@@ -443,6 +481,7 @@ fn too_small_terminal_gets_the_size_frame() {
         version: &v,
         restored: None,
         notice: None,
+        warnings: 0,
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &d,

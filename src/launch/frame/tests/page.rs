@@ -21,6 +21,7 @@ fn page(r: &Roster, state: &LaunchState, size: (usize, usize)) -> (Frame, Vec<St
         version: &version,
         restored: None,
         notice: None,
+        warnings: 0,
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,

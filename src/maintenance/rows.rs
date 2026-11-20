@@ -16,7 +16,7 @@ use crate::frame::{
 };
 use crate::input::{KeyPress, vk};
 use crate::launch::{CONFIG_ROWS, LaunchState, Roster, RowName, step_option};
-use crate::layout::{display_width, new_box};
+use crate::layout::display_width;
 use crate::theme::{DIM_CLOSE, DIM_OPEN, add_hover_span, glyphs};
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
@@ -210,9 +210,13 @@ impl Screen for RowsEditor {
             });
         }
         body.push(String::new());
-        body.push("  a/d or a click on its value: what a hidden row launches with".into());
         body.push(format!(
-            "  {}",
+            "{}a/d or a click on its value: what a hidden row launches with",
+            crate::frame::PAD
+        ));
+        body.push(format!(
+            "{}{}",
+            crate::frame::PAD,
             if self.notice.is_empty() {
                 "saved to the config; the launch screen shows it on return"
             } else {
@@ -236,8 +240,7 @@ impl Screen for RowsEditor {
             hover: footer_hover(&footer, self.cursor.hover),
             selected: Vec::new(),
         };
-        let mut lines = new_box(&body, box_w, "launch rows", &g, self.style.ascii);
-        crate::frame::pad_to_bottom(&mut lines, height, footer.lines.len());
+        let lines = crate::frame::page(body, (width, height), footer.lines.len(), "launch rows", "", self.style);
         let mut map = RowMap {
             rows: hits,
             ..RowMap::default()
