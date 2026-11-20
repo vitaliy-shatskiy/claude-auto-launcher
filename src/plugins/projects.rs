@@ -32,8 +32,13 @@ fn clean(s: &str) -> String {
 }
 
 fn entry(plugin: &str, v: &Value) -> Option<Entry> {
-    let path = v.get("path").and_then(Value::as_str).filter(|p| is_rooted(p) && p.len() <= MAX_TEXT && !p.contains('\0'))?;
-    let leaf = std::path::Path::new(path).file_name().map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned());
+    let path = v
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|p| is_rooted(p) && p.len() <= MAX_TEXT && !p.contains('\0'))?;
+    let leaf = std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned());
     let name = v.get("name").and_then(Value::as_str).map_or(leaf, clean);
     Some(Entry {
         plugin: plugin.to_owned(),

@@ -29,13 +29,22 @@ impl Fake {
     }
 
     fn calls(&self, verb: &str) -> Vec<Value> {
-        self.calls.lock().unwrap().iter().filter(|c| c.1 == verb).map(|c| c.2.clone()).collect()
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.1 == verb)
+            .map(|c| c.2.clone())
+            .collect()
     }
 }
 
 impl Runner for Fake {
     fn call(&self, spec: &PluginSpec, verb: &Verb, input: &Value) -> Result<Value, Failure> {
-        self.calls.lock().unwrap().push((spec.name.clone(), verb.name.into(), input.clone()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push((spec.name.clone(), verb.name.into(), input.clone()));
         self.answers
             .iter()
             .find(|(v, _)| *v == verb.name)
@@ -71,7 +80,11 @@ fn a_described_row_reaches_the_screen_and_its_value_reaches_pre_launch() {
     let plugins = loaded(&fake);
     let mut roster = four();
     plugins.add_rows(&mut roster);
-    let row = roster.rows.iter().position(|r| r.label == "ticket").expect("the row is on the screen");
+    let row = roster
+        .rows
+        .iter()
+        .position(|r| r.label == "ticket")
+        .expect("the row is on the screen");
     let mut state = roster.new_state();
     assert_eq!(state.get(RowName::Plugin(0)), "none", "starts on its default");
     state.row = row;
@@ -86,7 +99,10 @@ fn a_described_row_reaches_the_screen_and_its_value_reaches_pre_launch() {
 
 #[test]
 fn pre_launch_env_and_args_come_back_and_cancel_stops() {
-    let go = Fake::with(&[("describe", ticket()), ("preLaunch", json!({"env":{"TICKET":"ABC-1"},"args":["--x"]}))]);
+    let go = Fake::with(&[
+        ("describe", ticket()),
+        ("preLaunch", json!({"env":{"TICKET":"ABC-1"},"args":["--x"]})),
+    ]);
     let plugins = loaded(&go);
     let state = four().new_state();
     let mut w = Vec::new();
@@ -167,7 +183,10 @@ fn a_key_a_second_plugin_also_declares_is_refused_with_a_warning() {
 fn source_entries_merge_into_the_lists_marked_by_plugin() {
     let fake = Fake::with(&[
         ("describe", ticket()),
-        ("projects", json!([{"path":r"C:\jira\ABC","name":"ABC","lastUsed":5},{"path":"relative"}])),
+        (
+            "projects",
+            json!([{"path":r"C:\jira\ABC","name":"ABC","lastUsed":5},{"path":"relative"}]),
+        ),
         ("sessions", json!([{"id":"s-1","title":"from jira","updated":7},{"id":"-bad"}])),
     ]);
     let plugins = loaded(&fake);
@@ -187,7 +206,9 @@ fn source_entries_merge_into_the_lists_marked_by_plugin() {
     assert_eq!(w.len(), 1, "the relative path is named: {w:?}");
     let s = sessions::collect(&plugins, r"C:\known", &fake, &mut w);
     assert_eq!(
-        s.iter().map(|s| (s.session_id.as_str(), s.account.as_str(), s.title.as_str())).collect::<Vec<_>>(),
+        s.iter()
+            .map(|s| (s.session_id.as_str(), s.account.as_str(), s.title.as_str()))
+            .collect::<Vec<_>>(),
         [("s-1", "tick", "from jira")]
     );
     assert_eq!(fake.calls("sessions"), [json!({"project": r"C:\known"})]);
@@ -224,14 +245,20 @@ fn a_plugin_session_joins_the_picker_and_resumes_without_a_transfer() {
         style: crate::frame::Style { color: false, ascii: true },
         preview: true,
     };
-    let fake = Fake::with(&[("describe", ticket()), ("sessions", json!([{"id":"s-1","title":"from jira","updated":7}]))]);
+    let fake = Fake::with(&[
+        ("describe", ticket()),
+        ("sessions", json!([{"id":"s-1","title":"from jira","updated":7}])),
+    ]);
     let plugins = loaded(&fake);
     let extra = |_: &[String]| sessions::collect(&plugins, "", &fake, &mut Vec::new());
     let mut t = crate::ui::PreviewTerm::new((100, 30), crate::ui::parse_preview_keys("Enter").unwrap(), true);
     let got = crate::sessions::run_picker_with(&mut t, &req, &extra).unwrap().unwrap();
     assert_eq!((got.session_id.as_str(), got.transfer), ("s-1", None));
     let frames = t.frames.unwrap();
-    assert!(frames.iter().flatten().any(|l| l.contains("[tick]")), "the row names its plugin: {frames:?}");
+    assert!(
+        frames.iter().flatten().any(|l| l.contains("[tick]")),
+        "the row names its plugin: {frames:?}"
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -274,7 +301,11 @@ fn a_crash_bad_json_and_a_good_answer_through_real_processes() {
     assert!(matches!(Process.call(&crash, &describe::VERB, &json!({})), Err(Failure::Exit(3))));
     assert!(matches!(Process.call(&bad, &describe::VERB, &json!({})), Err(Failure::BadJson(_))));
     let (p, w) = load(&[crash, bad, good], None, &Process, true);
-    assert_eq!(p.list.iter().map(|l| l.spec.name.as_str()).collect::<Vec<_>>(), ["good"], "the rest goes on");
+    assert_eq!(
+        p.list.iter().map(|l| l.spec.name.as_str()).collect::<Vec<_>>(),
+        ["good"],
+        "the rest goes on"
+    );
     assert_eq!(w.len(), 2, "{w:?}");
     assert!(w.first().is_some_and(|l| l.starts_with("plugin crash describe: exit 3")), "{w:?}");
     std::fs::remove_dir_all(&d).unwrap();
@@ -289,7 +320,12 @@ fn a_hang_past_its_timeout_is_killed_with_its_tree() {
         panic!("a timeout");
     };
     assert_eq!(ms, 300);
-    let left: Vec<_> = crate::sys::process_table().into_iter().filter(|r| r.pid == pid || r.parent == pid).collect();
+    // conhost.exe is the console host Windows starts beside a console child, outside the job; it
+    // exits on its own once its client is gone (seen in the full suite).
+    let left: Vec<_> = crate::sys::process_table()
+        .into_iter()
+        .filter(|r| (r.pid == pid || r.parent == pid) && !r.name.eq_ignore_ascii_case("conhost.exe"))
+        .collect();
     assert_eq!(left.len(), 0, "the plugin and its ping are gone: {left:?}");
     std::fs::remove_dir_all(&d).unwrap();
 }

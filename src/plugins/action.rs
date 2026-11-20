@@ -34,10 +34,13 @@ pub fn run(plugins: &Plugins, plugin: usize, key: char, context: &Value, runner:
     let l = plugins.list.get(plugin)?;
     let input = json!({ "key": key.to_string(), "context": context });
     match runner.call(&l.spec, &VERB, &input) {
-        Ok(v) => v
-            .get("message")
-            .and_then(Value::as_str)
-            .map(|m| format!("{}: {}", l.spec.name, m.chars().filter(|c| !c.is_control()).take(MAX_MESSAGE).collect::<String>())),
+        Ok(v) => v.get("message").and_then(Value::as_str).map(|m| {
+            format!(
+                "{}: {}",
+                l.spec.name,
+                m.chars().filter(|c| !c.is_control()).take(MAX_MESSAGE).collect::<String>()
+            )
+        }),
         Err(e) => Some(warning(&l.spec, &VERB, &e)),
     }
 }

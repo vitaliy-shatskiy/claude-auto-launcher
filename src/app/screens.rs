@@ -171,7 +171,11 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         );
         let extra = plugin_projects.get_or_insert_with(|| {
             let mut w = Vec::new();
-            let found = if run.preview { Vec::new() } else { plugins::projects::collect(&run.plugins, &plugins::run::Process, &mut w) };
+            let found = if run.preview {
+                Vec::new()
+            } else {
+                plugins::projects::collect(&run.plugins, &plugins::run::Process, &mut w)
+            };
             plugin_lines.borrow_mut().extend(w);
             found
         });

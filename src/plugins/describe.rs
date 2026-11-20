@@ -69,7 +69,11 @@ fn ident(s: &str) -> bool {
 }
 
 fn row(v: &Value) -> Result<Row, String> {
-    let name = v.get("name").and_then(Value::as_str).filter(|n| ident(n)).ok_or("a row needs a name of letters, digits, '-', '_'")?;
+    let name = v
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| ident(n))
+        .ok_or("a row needs a name of letters, digits, '-', '_'")?;
     let values: Vec<String> = v
         .get("values")
         .and_then(Value::as_array)
@@ -204,7 +208,11 @@ mod tests {
         ]}))
         .unwrap();
         assert_eq!(d.rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["b", "e"]);
-        assert_eq!(d.rows.first().and_then(|r| r.values.get(1)).map(String::as_str), Some("[2J"), "escape dropped");
+        assert_eq!(
+            d.rows.first().and_then(|r| r.values.get(1)).map(String::as_str),
+            Some("[2J"),
+            "escape dropped"
+        );
         assert_eq!(d.rows.get(1).map(|r| r.default.as_str()), Some("x"), "no default = the first value");
         assert_eq!(w.len(), 2, "{w:?}");
     }

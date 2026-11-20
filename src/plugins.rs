@@ -121,9 +121,15 @@ pub fn load(specs: &[PluginSpec], cache_file: Option<&Path>, runner: &dyn Runner
 /// An action key an earlier plugin already holds on that screen: the first one wins.
 fn drop_taken_keys(plugins: &Plugins, spec: &PluginSpec, desc: &mut Description, warnings: &mut Vec<String>) {
     desc.actions.retain(|a| {
-        let taken = plugins.list.iter().find(|l| l.desc.actions.iter().any(|b| b.key == a.key && b.screen == a.screen));
+        let taken = plugins
+            .list
+            .iter()
+            .find(|l| l.desc.actions.iter().any(|b| b.key == a.key && b.screen == a.screen));
         if let Some(l) = taken {
-            warnings.push(format!("plugin {}: action '{}' is taken by plugin {}; skipped", spec.name, a.key, l.spec.name));
+            warnings.push(format!(
+                "plugin {}: action '{}' is taken by plugin {}; skipped",
+                spec.name, a.key, l.spec.name
+            ));
         }
         taken.is_none()
     });
@@ -132,14 +138,20 @@ fn drop_taken_keys(plugins: &Plugins, spec: &PluginSpec, desc: &mut Description,
 impl Plugins {
     /// Every plugin row in order with its plugin's index: row `i` here is `RowName::Plugin(i)`.
     fn rows(&self) -> impl Iterator<Item = (usize, &Row)> {
-        self.list.iter().enumerate().flat_map(|(p, l)| l.desc.rows.iter().map(move |r| (p, r)))
+        self.list
+            .iter()
+            .enumerate()
+            .flat_map(|(p, l)| l.desc.rows.iter().map(move |r| (p, r)))
     }
 
     /// The plugin rows onto the launch screen, after the built-in ones.
     pub fn add_rows(&self, roster: &mut Roster) {
         for (p, r) in self.rows() {
             let plugin = self.list.get(p).map_or("", |l| l.spec.name.as_str());
-            if roster.add_plugin_row(&format!("{plugin}.{}", r.name), &r.label, &r.values, &r.default).is_none() {
+            if roster
+                .add_plugin_row(&format!("{plugin}.{}", r.name), &r.label, &r.values, &r.default)
+                .is_none()
+            {
                 break;
             }
         }
@@ -169,7 +181,12 @@ impl Plugins {
     }
 
     /// Every plugin that wants `verb`, called at once; answers (or warnings) in config order.
-    pub fn call_each(&self, verb: &Verb, input: &(dyn Fn(usize) -> Value + Sync), runner: &dyn Runner) -> Vec<(usize, Result<Value, String>)> {
+    pub fn call_each(
+        &self,
+        verb: &Verb,
+        input: &(dyn Fn(usize) -> Value + Sync),
+        runner: &dyn Runner,
+    ) -> Vec<(usize, Result<Value, String>)> {
         std::thread::scope(|s| {
             let running: Vec<_> = self
                 .list
@@ -183,7 +200,13 @@ impl Plugins {
                 .collect();
             running
                 .into_iter()
-                .map(|(i, t)| (i, t.join().unwrap_or_else(|_| Err(format!("plugin call {} panicked; skipped", verb.name)))))
+                .map(|(i, t)| {
+                    (
+                        i,
+                        t.join()
+                            .unwrap_or_else(|_| Err(format!("plugin call {} panicked; skipped", verb.name))),
+                    )
+                })
                 .collect()
         })
     }

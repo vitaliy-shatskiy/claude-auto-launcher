@@ -7,7 +7,8 @@ use std::process::Command;
 
 use super::{launcher, scratch, text};
 
-const DESCRIBE: &str = r#"{"protocol":1,"rows":[{"name":"ticket","label":"ticket","values":["none","ABC-1"]}],"hooks":["preLaunch","postLaunch"]}"#;
+const DESCRIBE: &str =
+    r#"{"protocol":1,"rows":[{"name":"ticket","label":"ticket","values":["none","ABC-1"]}],"hooks":["preLaunch","postLaunch"]}"#;
 
 /// `tick.cmd`: answers `describe`, saves what `preLaunch` and `postLaunch` were sent, and answers
 /// `preLaunch` with `pre`.
@@ -79,7 +80,11 @@ fn a_plugin_row_reaches_pre_launch_and_claude_starts_with_its_env_and_args() {
         .env("CLAUDE_AUTO_PREVIEW_KEYS", "Escape")
         .output()
         .unwrap();
-    assert!(text(&preview).contains("ticket"), "the row is on the launch screen: {}", text(&preview));
+    assert!(
+        text(&preview).contains("ticket"),
+        "the row is on the launch screen: {}",
+        text(&preview)
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 

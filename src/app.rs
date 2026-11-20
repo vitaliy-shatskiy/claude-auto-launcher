@@ -527,7 +527,9 @@ fn launch(run: &Run) -> i32 {
 /// `cancel` is the exit code of a launch that does not happen.
 fn pre_launch(run: &Run, o: &UiOutcome, child: &mut ChildEnv) -> Result<Vec<String>, i32> {
     let mut warnings = Vec::new();
-    let choices: Vec<Value> = (0..run.plugins.list.len()).map(|i| run.plugins.choice(i, &o.state, o.resume_id.as_deref())).collect();
+    let choices: Vec<Value> = (0..run.plugins.list.len())
+        .map(|i| run.plugins.choice(i, &o.state, o.resume_id.as_deref()))
+        .collect();
     let choice = |i: usize| choices.get(i).cloned().unwrap_or(Value::Null);
     let outcome = plugins::pre_launch::run(&run.plugins, &choice, &plugins::run::Process, &mut warnings);
     for w in &warnings {
@@ -543,10 +545,8 @@ fn pre_launch(run: &Run, o: &UiOutcome, child: &mut ChildEnv) -> Result<Vec<Stri
         plugins::pre_launch::Outcome::Cancel { plugin, reason } => {
             let why = if reason.is_empty() { String::new() } else { format!(": {reason}") };
             out::line(&format!("  launch cancelled by plugin {plugin}{why}"), Fg::Red);
-            run.logger.write(
-                "cancelled",
-                log_data! { "ms" => ms(run), "plugin" => plugin, "reason" => reason },
-            );
+            run.logger
+                .write("cancelled", log_data! { "ms" => ms(run), "plugin" => plugin, "reason" => reason });
             Err(1)
         }
     }
@@ -555,7 +555,9 @@ fn pre_launch(run: &Run, o: &UiOutcome, child: &mut ChildEnv) -> Result<Vec<Stri
 /// `postLaunch` once claude has ended; its warnings are the last lines.
 fn post_launch(run: &Run, ui: Option<&UiOutcome>, code: i32) {
     let Some(o) = ui else { return };
-    let choices: Vec<Value> = (0..run.plugins.list.len()).map(|i| run.plugins.choice(i, &o.state, o.resume_id.as_deref())).collect();
+    let choices: Vec<Value> = (0..run.plugins.list.len())
+        .map(|i| run.plugins.choice(i, &o.state, o.resume_id.as_deref()))
+        .collect();
     let choice = |i: usize| choices.get(i).cloned().unwrap_or(Value::Null);
     for w in plugins::post_launch::run(&run.plugins, &choice, code, &plugins::run::Process) {
         out::line(&format!("  {w}"), Fg::DarkYellow);

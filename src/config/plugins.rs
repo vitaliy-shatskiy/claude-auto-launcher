@@ -34,7 +34,9 @@ fn parse_one(item: &Value, ctx: &PathCtx, taken: &[PluginSpec]) -> Result<Plugin
         ));
     }
     if taken.iter().any(|p| p.name.eq_ignore_ascii_case(&name)) {
-        return Err(format!("plugins: duplicate name '{name}'; the first one wins, this entry is skipped"));
+        return Err(format!(
+            "plugins: duplicate name '{name}'; the first one wins, this entry is skipped"
+        ));
     }
     let raw_path = o.get("path").and_then(Value::as_str).unwrap_or_default().trim();
     if !is_rooted_raw(raw_path) {
@@ -92,7 +94,10 @@ mod tests {
 
     #[test]
     fn a_full_entry_parses_and_tilde_expands() {
-        let (p, w) = parse_plugins(&json!([{"name":"jira","path":"~/bin/jira.exe","args":["--x"],"timeoutMs":500}]), &ctx());
+        let (p, w) = parse_plugins(
+            &json!([{"name":"jira","path":"~/bin/jira.exe","args":["--x"],"timeoutMs":500}]),
+            &ctx(),
+        );
         assert_eq!(w, Vec::<String>::new());
         assert_eq!(
             p,

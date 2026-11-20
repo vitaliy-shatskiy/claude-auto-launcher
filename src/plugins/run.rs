@@ -29,7 +29,10 @@ pub enum Failure {
     Missing,
     Start(std::io::Error),
     /// Killed with its tree after `ms`.
-    Timeout { ms: u64, pid: u32 },
+    Timeout {
+        ms: u64,
+        pid: u32,
+    },
     Exit(i32),
     TooLarge,
     BadJson(String),

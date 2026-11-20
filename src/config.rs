@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::launch::{CONFIG_ROWS, MODEL_FAMILY_KEYS, Roster, RowName};
-use roster::default_account;
 pub use plugins::{PluginSpec, parse_plugins};
+use roster::default_account;
 pub use roster::{Account, parse_roster};
 
 /// Distinct on purpose: two accounts sharing a colour is the confusion a tint exists to prevent.

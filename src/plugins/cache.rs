@@ -53,7 +53,9 @@ impl Cache {
     }
 
     pub(crate) fn store(&mut self, spec: &PluginSpec, answer: &Value) {
-        let Some((size, mtime)) = stamp(Path::new(&spec.path)) else { return };
+        let Some((size, mtime)) = stamp(Path::new(&spec.path)) else {
+            return;
+        };
         self.entries.insert(
             key(spec),
             json!({ "size": size, "mtime": mtime.to_string(), "args": spec.args, "describe": answer }),
