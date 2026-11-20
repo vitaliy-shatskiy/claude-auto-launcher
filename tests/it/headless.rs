@@ -148,6 +148,10 @@ fn launcher_run_refuses_a_bad_request_before_any_side_effect() {
         ("the project action", run_json(&d, &[("action", "project".into())])),
         ("missing directory", run_json(&d, &[("project", missing.into())])),
         ("resume without an id", run_json(&d, &[("action", "resume".into())])),
+        (
+            "a resume id over 128 characters",
+            run_json(&d, &[("action", "resume".into()), ("resumeId", "a".repeat(129).into())]),
+        ),
         ("unknown key", run_json(&d, &[("whatever", 1.into())])),
         ("not JSON", "--model haiku".to_owned()),
     ];

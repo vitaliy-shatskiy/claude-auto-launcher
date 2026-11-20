@@ -28,6 +28,18 @@ use self::picker::PickerScreen;
 /// Rows per page: the first frame costs one page of summarising.
 const PAGE_SIZE: usize = 10;
 
+/// The longest session id taken from outside (`--launcher-run`, a source plugin).
+const MAX_SESSION_ID: usize = 128;
+
+/// A session id from outside: it becomes an argument of `claude`, so one leading `-` would read as
+/// an option; letters, digits, `-` and `_` only, at most `MAX_SESSION_ID` long.
+pub fn valid_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_SESSION_ID
+        && !id.starts_with('-')
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// What the picker returns: the session to resume, and whether to fork it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PickedSession {
