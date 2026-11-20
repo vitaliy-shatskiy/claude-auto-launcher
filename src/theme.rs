@@ -54,7 +54,7 @@ pub const HOVER_OPEN: char = '\u{4}';
 pub const HOVER_CLOSE: char = '\u{5}';
 
 static ANSI_COLOR: LazyLock<Regex> = LazyLock::new(|| re(r"\x1b\[[0-9;]*m"));
-static CTL: LazyLock<Regex> = LazyLock::new(|| re(r"[\x00-\x1F]"));
+static CTL: LazyLock<Regex> = LazyLock::new(|| re(r"[\x00-\x1F\x7F-\x9F]"));
 static DIM_PAIR: LazyLock<Regex> = LazyLock::new(|| re("\u{1}([^\u{1}\u{2}]*)\u{2}"));
 static HOVER_PAIR: LazyLock<Regex> = LazyLock::new(|| re("\u{4}([^\u{4}\u{5}]*)\u{5}"));
 
@@ -64,7 +64,8 @@ pub(crate) fn re(pattern: &str) -> Regex {
     Regex::new(pattern).expect("pattern literals compile")
 }
 
-/// Strips every C0 control from a data field, so a field can never carry a marker.
+/// Strips every control character (C0, DEL, C1) from a data field, so a field can never carry a
+/// marker or move the cursor.
 pub fn strip_ctl(s: &str) -> String {
     CTL.replace_all(s, "").into_owned()
 }
@@ -245,6 +246,13 @@ pub fn new_bar(percent: i64, width: usize, g: &Glyphs, style: BarStyle) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_ctl_drops_every_control_c0_del_and_c1() {
+        // U+009B is a one-character CSI on terminals that take 8-bit controls.
+        assert_eq!(strip_ctl("a\u{0}b\u{1b}[2Jc\u{7f}d\u{9b}2Je\u{85}f"), "ab[2Jcd2Jef");
+        assert_eq!(strip_ctl("plain   text ünï"), "plain   text ünï", "spaces and letters stay");
+    }
 
     #[test]
     fn dim_markers_resolve_or_vanish() {

@@ -8,6 +8,7 @@ use super::run::Runner;
 use super::{Kind, Plugins, Verb};
 use crate::config::is_rooted;
 use crate::projects::{Project, project_key};
+use crate::theme;
 
 pub const VERB: Verb = Verb {
     name: "projects",
@@ -28,7 +29,7 @@ pub struct Entry {
 }
 
 fn clean(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).take(MAX_TEXT).collect()
+    theme::strip_ctl(s).chars().take(MAX_TEXT).collect()
 }
 
 fn entry(plugin: &str, v: &Value) -> Option<Entry> {

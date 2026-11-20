@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::run::Runner;
 use super::{Kind, Plugins, Verb};
+use crate::theme;
 
 pub const VERB: Verb = Verb {
     name: "preLaunch",
@@ -74,7 +75,7 @@ fn check(v: &Value) -> Result<Answer, String> {
     match o.get("cancel") {
         None | Some(Value::Null | Value::Bool(false)) => {}
         Some(Value::String(r)) if !r.trim().is_empty() => {
-            let r: String = r.chars().filter(|c| !c.is_control()).take(MAX_REASON).collect();
+            let r: String = theme::strip_ctl(r).chars().take(MAX_REASON).collect();
             return Ok(Answer::Cancel(r));
         }
         Some(Value::Bool(true)) => return Ok(Answer::Cancel(String::new())),

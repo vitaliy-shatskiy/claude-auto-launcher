@@ -8,6 +8,7 @@ use super::run::Runner;
 use super::{Kind, Plugins, Verb};
 use crate::sessions::listing::Session;
 use crate::sessions::valid_session_id;
+use crate::theme;
 
 pub const VERB: Verb = Verb {
     name: "sessions",
@@ -20,12 +21,8 @@ const MAX_TITLE: usize = 200;
 
 fn session(plugin: &str, project: &str, v: &Value) -> Option<Session> {
     let id = v.get("id").and_then(Value::as_str).filter(|id| valid_session_id(id))?;
-    let title: String = v
-        .get("title")
-        .and_then(Value::as_str)
-        .unwrap_or(id)
+    let title: String = theme::strip_ctl(v.get("title").and_then(Value::as_str).unwrap_or(id))
         .chars()
-        .filter(|c| !c.is_control())
         .take(MAX_TITLE)
         .collect();
     Some(Session {

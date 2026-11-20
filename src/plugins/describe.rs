@@ -5,6 +5,7 @@
 use serde_json::Value;
 
 use super::{Kind, VERBS, Verb};
+use crate::theme;
 
 pub const VERB: Verb = Verb {
     name: "describe",
@@ -59,7 +60,7 @@ impl Description {
 
 /// Printable, bounded text: control characters dropped (they would move the cursor on screen).
 fn text(v: Option<&Value>) -> Option<String> {
-    let s: String = v?.as_str()?.chars().filter(|c| !c.is_control()).collect();
+    let s = theme::strip_ctl(v?.as_str()?);
     let s = s.trim();
     (!s.is_empty() && s.chars().count() <= MAX_TEXT).then(|| s.to_owned())
 }

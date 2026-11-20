@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use super::run::Runner;
 use super::{Kind, Plugins, Verb, warning};
 use crate::input::{KeyPress, is_hotkey};
+use crate::theme;
 
 pub const VERB: Verb = Verb {
     name: "action",
@@ -38,7 +39,7 @@ pub fn run(plugins: &Plugins, plugin: usize, key: char, context: &Value, runner:
             format!(
                 "{}: {}",
                 l.spec.name,
-                m.chars().filter(|c| !c.is_control()).take(MAX_MESSAGE).collect::<String>()
+                theme::strip_ctl(m).chars().take(MAX_MESSAGE).collect::<String>()
             )
         }),
         Err(e) => Some(warning(&l.spec, &VERB, &e)),
