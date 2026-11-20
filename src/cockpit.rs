@@ -14,14 +14,14 @@ pub const SESSIONS_LEFT_WIDTH: usize = 62;
 pub const TWO_COLUMNS: usize = 120;
 
 /// The accent (#d77757 as its nearest 256 colour; the truecolor pass makes it exact).
-pub const ACCENT: &str = "\x1b[38;5;173m";
+pub const ACCENT: &str = theme::COCKPIT_ACCENT;
 /// An unfocused panel's border (#3a3a3a) and the faint second line of an empty state.
-pub const FAINT: &str = "\x1b[38;5;237m";
+pub const FAINT: &str = theme::COCKPIT_FAINT;
 /// A panel's interior (#141414) and the focused panel's (#1b1b1b).
 pub const TINT: &str = "\x1b[48;5;233m";
 pub const TINT_FOCUSED: &str = "\x1b[48;5;234m";
 /// Strong text (#f2f2f2): a selected row's label, a version.
-pub const STRONG: &str = "\x1b[38;5;255m";
+pub const STRONG: &str = theme::COCKPIT_STRONG;
 
 /// Whether a panel is the one w/s moves in: accent border and bold title, the lighter tint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,8 @@ pub struct Panel<'a> {
     pub width: usize,
     pub height: usize,
     pub painter: BodyPainter<'a>,
+    /// The line drawn as the selected row: the fill across the interior, bold.
+    pub selected: Option<usize>,
 }
 
 impl std::fmt::Debug for Panel<'_> {
@@ -54,6 +56,23 @@ impl std::fmt::Debug for Panel<'_> {
             .field("width", &self.width)
             .field("height", &self.height)
             .finish_non_exhaustive()
+    }
+}
+
+impl Panel<'_> {
+    /// An unfocused panel with no painter, no right text and no selected row.
+    pub fn plain(title: &str, lines: Vec<String>, width: usize, height: usize) -> Self {
+        Panel {
+            title: title.to_owned(),
+            page: String::new(),
+            right: String::new(),
+            focus: Focus::Plain,
+            lines,
+            width,
+            height,
+            painter: &no_paint,
+            selected: None,
+        }
     }
 }
 
@@ -129,7 +148,15 @@ pub fn render(p: &Panel<'_>, style: Style) -> Vec<String> {
     let side = edge(&g.v.to_string());
     for i in 0..p.height - 2 {
         let raw = p.lines.get(i).map_or("", String::as_str);
-        let body = format_body_line(raw, inner, style, p.painter);
+        let banded = p.selected == Some(i) && c;
+        let raw = if banded {
+            let pad = " ".repeat(inner.saturating_sub(display_width(raw)));
+            format!("{}{raw}{pad}{}", theme::SELECT_OPEN, theme::SELECT_CLOSE)
+        } else {
+            raw.to_owned()
+        };
+        let body = theme::add_tone_color(&format_body_line(&raw, inner, style, p.painter), c);
+        let body = theme::add_select_band_color(&body, c);
         let pad = " ".repeat(inner.saturating_sub(display_width(&theme::remove_ansi_color(&body))));
         let interior = if c {
             format!(

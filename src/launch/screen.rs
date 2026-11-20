@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::frame::{LaunchFrameInput, launch_frame};
+use super::frame::{LaunchFrameInput, RecentProject, RunningSession, launch_frame};
 use super::{
     CONFIG_ROWS, LaunchState, OptionText, Roster, RowName, availability_snap, is_hidden_row_value, step_launch_value, visible_row_values,
 };
@@ -38,6 +38,9 @@ pub struct LaunchView {
     /// Account -> its resolved defaults.
     pub labels_by_account: BTreeMap<String, DefaultLabels>,
     pub style: Style,
+    /// Newest first: the recent panel and keys 1-5.
+    pub recent: Vec<RecentProject>,
+    pub running: Vec<RunningSession>,
 }
 
 /// The launch screen over one state.
@@ -257,6 +260,8 @@ impl Screen for LaunchScreen<'_> {
             restored: None,
             notice: notice.as_deref(),
             warnings: self.warnings,
+            recent: &self.view.recent,
+            running: &self.view.running,
             default_model_label: &self.view.default_model_label,
             default_advisor_label: &self.view.default_advisor_label,
             default_labels: self.labels(),
@@ -356,6 +361,8 @@ mod tests {
             default_model_label: "default".into(),
             default_advisor_label: "default".into(),
             labels_by_account: BTreeMap::new(),
+            recent: Vec::new(),
+            running: Vec::new(),
             style: Style { color: false, ascii: true },
         }
     }

@@ -435,6 +435,8 @@ fn every_clickable_region_hovers_and_never_selects() {
         default_model_label: "default".into(),
         default_advisor_label: "default".into(),
         labels_by_account: BTreeMap::new(),
+        recent: Vec::new(),
+        running: Vec::new(),
         style: color,
     };
     let prefs = crate::prefs::Prefs::default();

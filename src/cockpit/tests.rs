@@ -10,6 +10,7 @@ fn panel(focus: Focus, lines: &[&str]) -> Panel<'static> {
         width: 30,
         height: 4,
         painter: &no_paint,
+        selected: None,
     }
 }
 

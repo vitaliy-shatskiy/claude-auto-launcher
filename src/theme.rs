@@ -71,13 +71,43 @@ pub const SELECT_BG: &str = "\x1b[48;5;236m";
 pub const TONE_CODE: char = '\u{15}';
 const CODE_FG: &str = "\x1b[38;5;180m";
 
-const TONES: [(char, &str); 5] = [
+/// Cockpit tones: the faint second line of an empty state, the accent (#d77757), strong text,
+/// a bold warning and a bold error (a limit at 70 % and at 90 %).
+pub const TONE_FAINT: char = '\u{16}';
+pub const TONE_ACCENT: char = '\u{18}';
+pub const TONE_STRONG: char = '\u{19}';
+pub const TONE_WARN: char = '\u{1a}';
+pub const TONE_ERROR: char = '\u{1c}';
+/// The cockpit's accent, faint and strong colours as their nearest 256 colours (`to_truecolor`
+/// makes them exact).
+pub const COCKPIT_ACCENT: &str = "\x1b[38;5;173m";
+pub const COCKPIT_FAINT: &str = "\x1b[38;5;237m";
+pub const COCKPIT_STRONG: &str = "\x1b[38;5;255m";
+const STRONG_BOLD: &str = "\x1b[1m\x1b[38;5;255m";
+const WARN_BOLD: &str = "\x1b[1m\x1b[93m";
+const ERROR_BOLD: &str = "\x1b[1m\x1b[31m";
+
+const TONES: [(char, &str); 10] = [
     (TONE_BOLD, BOLD),
     (TONE_USER, BRIGHT_CYAN),
     (TONE_CLAUDE, ACCENT),
     (TONE_LIVE, GREEN),
     (TONE_CODE, CODE_FG),
+    (TONE_FAINT, COCKPIT_FAINT),
+    (TONE_ACCENT, COCKPIT_ACCENT),
+    (TONE_STRONG, STRONG_BOLD),
+    (TONE_WARN, WARN_BOLD),
+    (TONE_ERROR, ERROR_BOLD),
 ];
+
+/// `text` between `tone` and the shared close.
+pub fn tone(tone: char, text: &str) -> String {
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!("{tone}{text}{TONE_CLOSE}")
+    }
+}
 
 /// Tone markers to their colour..Reset with colour on, to nothing with it off. An open marker
 /// whose close a truncation cut off is closed at the end of the line.
