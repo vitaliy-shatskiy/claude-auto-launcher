@@ -1,0 +1,30 @@
+# cargo deny check: advisories, bans, licences and sources of every dependency (CONTRIBUTING.md).
+[graph]
+all-features = true                # check every feature's dependencies
+
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true        # without it, `wildcards = "deny"` fails on internal path deps
+deny = [
+  { crate = "openssl", use-instead = "rustls" },
+  { crate = "openssl-sys", use-instead = "rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = []                     # each git dependency named here with its reason
+
+[licenses]
+confidence-threshold = 0.95
+# Only the licences the tree carries today: a new one is a decision, not a silent pass.
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib"]
+
+[licenses.private]
+ignore = true                      # unpublished packages (`publish = false`) need no licence expression

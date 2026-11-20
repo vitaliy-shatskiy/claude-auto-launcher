@@ -19,6 +19,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - `examples/plugin_git_branch.rs`, an example plugin: `preLaunch` sets `CLAUDE_AUTO_GIT_BRANCH`
   to the launch directory's branch (read from `.git/HEAD`, no git process), launch-screen key `g`
   shows the branch and the number of `git status --porcelain` entries (git runs windowless).
+- `deny.toml`: `cargo deny check` (advisories, bans, licences, sources) passes on the dependency
+  tree.
 
 ## [0.9.0] — 2026-11-20
 
