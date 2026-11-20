@@ -7,7 +7,7 @@ use regex::Regex;
 use super::{LaunchState, OptionText, Roster, RowName, is_hidden_row_value, visible_row_values};
 use crate::frame::{
     self, CellSpan, Footer, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RadioSpec, RowHit, RowMap, Style, TWO_PANE_WIDTH,
-    measure_cell_spans, new_hint_footer, new_radio_row,
+    measure_cell_spans, new_hint_footer, new_radio_row, with_switch_hint,
 };
 use crate::layout::{display_width, new_box};
 use crate::theme::{self, BarStyle, Glyphs, new_bar};
@@ -52,6 +52,9 @@ fn limit_items(l: &LimitRecord) -> Vec<(String, i64, String)> {
 }
 
 const WIDE_BAR: usize = 8;
+/// From `GROW_AT_INNER` cells (a 155-column terminal) the wide bars double, at most this wide.
+const GROWN_BAR: usize = 16;
+const GROW_AT_INNER: usize = 150;
 /// The narrow tier's bar widths, widest first.
 const NARROW_BARS: [usize; 3] = [8, 6, 4];
 /// The row labels' column: the narrow usage row moves here before it gives up its bars.
@@ -83,7 +86,8 @@ pub fn limit_lines(l: &LimitRecord, indent: usize, inner: usize, wide: bool, g: 
     };
     let age = (!l.age_text.is_empty()).then_some(l.age_text.as_str());
     let tries: Vec<(usize, usize)> = if wide {
-        vec![(indent, WIDE_BAR)]
+        let grown = if inner >= GROW_AT_INNER { GROWN_BAR } else { WIDE_BAR };
+        vec![(indent, grown), (indent, WIDE_BAR)]
     } else {
         [indent, LABEL_COLUMN]
             .iter()
@@ -150,7 +154,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     }
     let g = theme::glyphs(inp.style.ascii);
     let fw = frame::frame_width(inp.width);
-    let box_width = fw.min(100);
+    let box_width = fw;
     let inner = box_width - 4;
     let wide = inp.width >= TWO_PANE_WIDTH;
     let label_width = if wide {
@@ -248,6 +252,10 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
             );
             cells = Vec::new();
         }
+        // Only the cursor row: a hint on every row would crowd the page.
+        if state.row == i {
+            line = with_switch_hint(line, &g, inner);
+        }
         hits.push((i, row.name.as_str(), body.len(), cells));
         body.push(line);
         if row.name == RowName::Account
@@ -279,16 +287,19 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     lines.push(String::new());
     lines.extend(body);
     lines.push(String::new());
-    lines.push(format!("  {}", std::iter::repeat_n(g.h, box_width - 4).collect::<String>()));
+    let mut tail = vec![format!("  {}", std::iter::repeat_n(g.h, box_width - 4).collect::<String>())];
     if !restored.is_empty() {
         let when = if restored_age == "just now" {
             "just now".to_owned()
         } else {
             format!("{restored_age} ago")
         };
-        lines.push(format!("  * restored ({when}), ctrl+r resets"));
+        tail.push(format!("  * restored ({when}), ctrl+r resets"));
     }
     let footer = launch_footer(&g, fw, inp.style.color);
+    // The rule and the status close the page together with the footer.
+    frame::pad_to_bottom(&mut lines, inp.height, tail.len() + footer.lines.len());
+    lines.extend(tail);
     let light = FooterLight {
         hover: frame::footer_hover(&footer, state.hover),
         selected: Vec::new(),

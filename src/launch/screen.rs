@@ -595,3 +595,6 @@ mod tests {
 
 #[cfg(test)]
 mod update_tests;
+
+#[cfg(test)]
+mod page_tests;

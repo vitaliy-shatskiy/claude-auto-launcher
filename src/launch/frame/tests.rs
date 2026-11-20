@@ -3,6 +3,8 @@
 use super::*;
 use crate::launch::tests::four;
 
+mod page;
+
 const NOW_LABELS: [(&str, &str); 4] = [
     ("Model", "Opus 5.5[1M]"),
     ("Effort", "high"),
@@ -47,6 +49,7 @@ fn golden(name: &str) -> String {
 struct Case<'a> {
     state: &'a LaunchState,
     width: usize,
+    height: usize,
     limits: &'a Limits,
     version: &'a VersionInfo,
     labels: &'a DefaultLabels,
@@ -58,7 +61,7 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
     let inp = LaunchFrameInput {
         state: c.state,
         width: c.width,
-        height: 30,
+        height: c.height,
         limits: c.limits,
         version: c.version,
         restored: None,
@@ -70,7 +73,13 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
     launch_frame(r, &inp).lines.join("\n")
 }
 
+/// Compares with the golden; `CLAUDE_AUTO_BLESS` set rewrites it instead (review the diff).
 fn assert_golden(name: &str, actual: &str) {
+    if std::env::var_os("CLAUDE_AUTO_BLESS").is_some() {
+        let path = format!("{}/tests/fixtures/wide-frames/{name}.txt", env!("CARGO_MANIFEST_DIR"));
+        std::fs::write(path, actual).unwrap();
+        return;
+    }
     let expected = golden(name);
     let first_diff = expected.lines().zip(actual.lines()).position(|(e, a)| e != a);
     assert_eq!(expected, actual, "{name}: first difference at line {first_diff:?}");
@@ -117,6 +126,7 @@ fn wide_frames_match_the_powershell_goldens() {
     let base = Case {
         state: &fresh,
         width: 100,
+        height: 30,
         limits: &none,
         version: &no_version,
         labels: &no_labels,
@@ -176,7 +186,7 @@ fn narrow_tier_draws_compact_rows_and_one_limit_line() {
     let inp = LaunchFrameInput {
         state: &s,
         width: 50,
-        height: 30,
+        height: MIN_HEIGHT,
         limits: &limits,
         version: &v,
         restored: None,
@@ -280,11 +290,13 @@ fn narrow_and_wide_frames_match_their_goldens() {
         let lines = frame_at(r, &r.new_state(), &none, width).lines;
         assert_golden(name, &lines.join("\n"));
     }
-    assert_eq!(
-        frame_at(&plain, &s, &none, 100).lines.join("\n"),
-        golden("launch-100x30"),
-        "100 columns: nothing collapses"
-    );
+    if std::env::var_os("CLAUDE_AUTO_BLESS").is_none() {
+        assert_eq!(
+            frame_at(&plain, &s, &none, 100).lines.join("\n"),
+            golden("launch-100x30"),
+            "100 columns: nothing collapses"
+        );
+    }
 }
 
 #[test]

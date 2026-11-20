@@ -362,7 +362,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
 
     let radio = action_radio(v.action, v.hover_value, inner, &g);
     let action_index = body.len();
-    body.push(radio.text.clone());
+    body.push(frame::with_switch_hint(radio.text.clone(), &g, inner));
 
     let lines = new_box(&body, fw, &title(v, &g), &g, v.style.ascii);
     let first_row_y = lines.len() - body.len() - 1;

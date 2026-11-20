@@ -152,3 +152,41 @@ fn too_small_keeps_size_line_first() {
     let f = too_small_frame(40, 2, true);
     assert_eq!(f, ["  need 50x16, have 40x2", "  terminal too small"]);
 }
+
+#[test]
+fn area_is_the_terminal_below_the_cap() {
+    let a = Area::of((160, 40));
+    assert_eq!((a.left, a.width, a.height), (0, 160, 40));
+    assert_eq!(a.place(vec!["x".into()]), ["x"]);
+}
+
+#[test]
+fn area_at_the_cap_is_the_cap() {
+    let a = Area::of((MAX_AREA_WIDTH, MAX_AREA_HEIGHT));
+    assert_eq!((a.left, a.width, a.height), (0, 240, 80));
+}
+
+#[test]
+fn area_above_the_cap_is_centred_and_anchored_at_the_top() {
+    let a = Area::of((400, 150));
+    assert_eq!((a.left, a.width, a.height), (80, 240, 80));
+    assert_eq!(Area::of((241, 81)).left, 0, "an odd spare column goes to the right");
+    let placed = a.place(vec!["ab".into()]);
+    assert_eq!(placed, [format!("{}ab", " ".repeat(80))]);
+}
+
+#[test]
+fn switch_hint_names_keys_and_arrows_and_only_where_it_fits() {
+    let g = glyphs(true);
+    assert_eq!(crate::theme::add_dim_span_color(&switch_hint(&g), false), "< a/d <-/-> >");
+    assert_eq!(
+        crate::theme::add_dim_span_color(&switch_hint(&glyphs(false)), false),
+        "\u{2039} a/d \u{2190}/\u{2192} \u{203A}"
+    );
+    let line = "row".to_owned();
+    assert_eq!(
+        crate::theme::add_dim_span_color(&with_switch_hint(line.clone(), &g, 18), false),
+        "row  < a/d <-/-> >"
+    );
+    assert_eq!(with_switch_hint(line, &g, 17), "row", "one cell short: no hint");
+}
