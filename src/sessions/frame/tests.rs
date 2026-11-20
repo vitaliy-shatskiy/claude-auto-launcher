@@ -9,7 +9,9 @@ fn golden_sessions() -> Vec<Session> {
             session_id: format!("g{i}"),
             project: format!("project-{i}"),
             worktree: if i == 3 { "feature".into() } else { String::new() },
-            title: format!("question {i}"),
+            title: format!("session title {i}"),
+            first_prompt: format!("first question {i} about the start of it all"),
+            message_count: 10 * i,
             last_user: format!("snippet {i} about the thing that was asked"),
             last_assistant: "reply words ".repeat(usize::try_from(4 * i).unwrap()),
             modified_ms: GOLDEN_NOW - 7 * i * 60_000,
@@ -48,6 +50,11 @@ fn golden(name: &str) -> String {
 }
 
 fn assert_golden(name: &str, actual: &str) {
+    if std::env::var_os("CLAUDE_AUTO_BLESS").is_some() {
+        let path = format!("{}/tests/fixtures/wide-frames/{name}.txt", env!("CARGO_MANIFEST_DIR"));
+        std::fs::write(path, actual).unwrap();
+        return;
+    }
     let expected = golden(name);
     let first = expected.lines().zip(actual.lines()).position(|(e, a)| e != a);
     assert_eq!(expected, actual, "{name}: first difference at line {first:?}");
@@ -55,7 +62,12 @@ fn assert_golden(name: &str, actual: &str) {
 
 #[test]
 fn golden_clock_is_the_fixture_time() {
-    assert_eq!(local_stamp(GOLDEN_NOW, 0), "16 Sep 12:00");
+    assert_eq!(local_stamp(GOLDEN_NOW, 0), "16.09 12:00");
+    assert_eq!(
+        local_stamp(GOLDEN_NOW + 13 * 3_600_000, 120),
+        "17.09 03:00",
+        "the local offset crosses midnight"
+    );
 }
 
 #[test]
@@ -76,6 +88,72 @@ fn wide_frames_match_the_powershell_goldens() {
     assert_golden(
         "picker-120x30-project-color",
         &picker_frame(&colour, &mut Memo::default()).lines.join("\n"),
+    );
+}
+
+#[test]
+fn a_big_terminal_frame_fills_it_and_matches_its_golden() {
+    let owned = golden_sessions();
+    let s: Vec<&Session> = owned.iter().collect();
+    let all = PickerView {
+        scope: PickerScope::All,
+        ..view(&s, 0, 200, 60)
+    };
+    let f = picker_frame(&all, &mut Memo::default());
+    assert_golden("picker-200x60-all", &f.lines.join("\n"));
+    assert_eq!(f.lines.len(), 59, "AC27: every row but the headroom one");
+    assert_eq!(crate::layout::display_width(&f.lines[0]), 199, "and every column but the last");
+}
+
+#[test]
+fn the_box_fills_the_terminal_whatever_the_session_count() {
+    let owned = golden_sessions();
+    let one: Vec<&Session> = owned.iter().take(1).collect();
+    let none: Vec<&Session> = Vec::new();
+    for (w, h) in [(100, 30), (200, 60), (80, 40)] {
+        for s in [&one, &none] {
+            let f = picker_frame(&view(s, 0, w, h), &mut Memo::default());
+            assert_eq!(f.lines.len(), h - 1, "{w}x{h} with {} sessions", s.len());
+        }
+    }
+}
+
+#[test]
+fn the_preview_card_reads_title_meta_rule_first_last_reply() {
+    let owned = golden_sessions();
+    let s: Vec<&Session> = owned.iter().collect();
+    let f = picker_frame(&view(&s, 1, 120, 30), &mut Memo::default());
+    let right: Vec<String> = f
+        .lines
+        .iter()
+        .skip(1)
+        .map(|l| l.rsplit('│').nth(1).unwrap_or("").trim().to_owned())
+        .collect();
+    assert_eq!(right[0], "session title 2");
+    assert_eq!(right[1], "16.09 11:46 · 20 msgs · 4 KB · project-2");
+    assert!(right[2].chars().all(|c| c == '─'), "a rule: {:?}", right[2]);
+    assert!(right[3].starts_with("first › first question 2"), "{:?}", right[3]);
+    assert!(right.iter().any(|l| l.starts_with("last  › snippet 2")), "{right:#?}");
+    assert!(right.iter().any(|l| l.starts_with("reply › reply words")), "{right:#?}");
+}
+
+#[test]
+fn sizes_read_in_kb_then_mb_and_the_list_pane_stops_growing() {
+    assert_eq!(card::size_text(2048), "2 KB");
+    assert_eq!(card::size_text(1_697_792), "1.6 MB", "the owner's 1,658 KB session");
+    assert_eq!(pane_widths(99, true).0, 39, "40 % at 100 columns");
+    assert_eq!(pane_widths(249, true).0, MAX_LIST_WIDTH, "capped on a 250-column terminal");
+    assert_eq!(
+        list_capacity(
+            200,
+            60,
+            PickerScope::All,
+            Style {
+                color: false,
+                ascii: false
+            }
+        ),
+        56
     );
 }
 
@@ -177,7 +255,7 @@ fn narrow_layout_preview_shrinks_below_thirty_rows() {
     assert!(tall.lines.iter().any(|l| l.contains("──────────")), "a rule under the preview head");
     assert!(tall.lines.iter().all(|l| crate::layout::display_width(l) <= 79));
     assert!(short.lines.len() <= 24 && tall.lines.len() <= 30);
-    assert!(short.lines.iter().any(|l| l.contains("3 msgs")));
+    assert!(short.lines.iter().any(|l| l.contains("10 msgs")), "{:#?}", short.lines);
     let map = tall.map.list.unwrap();
     assert_eq!((map.first_row_y, map.start), (1, 0));
 }
@@ -222,7 +300,7 @@ fn relative_age_and_counts() {
     assert_eq!(relative_age(now - 5 * 60_000, now), "5 min");
     assert_eq!(relative_age(now - 3 * 3_600_000, now), "3 h");
     assert_eq!(relative_age(now - 2 * 86_400_000, now), "2 d");
-    assert_eq!(n0(1234.5), "1,235");
+    assert_eq!(text::n0(1234.5), "1,235");
     let capped = Session {
         prompt_count: 3,
         prompt_count_capped: true,

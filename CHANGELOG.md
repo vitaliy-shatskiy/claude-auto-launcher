@@ -33,6 +33,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   collapsed them all).
 - The session picker's summary cache is `claude-auto-sessions.json` again; the first cache write
   removes the old `claude-auto-rs-sessions.json` beside it (that exact file, nothing else).
+- A session is titled by its `/rename` name, else Claude Code's newest AI title, else its first
+  prompt. The message count counts every user and assistant message of the whole transcript (an
+  assistant message written over several lines once), not only typed prompts.
+- Session picker: a row is the session's title and age (the project only outside one project's
+  view); the preview is a card - title, `DD.MM HH:MM · N msgs · size`, a rule, then `first ›`,
+  `last ›` and `reply ›`. The picker and the project screen fill the whole terminal and redraw on
+  resize; a tall picker loads more pages while idle. The list pane stays 40 % wide, at most 72
+  columns. Pinned projects carry a dim `↑` before the name.
+
+### Fixed
+
+- With `sharing` off, the session picker lists the other accounts' sessions although the
+  launching account has no `projects` folder yet.
 
 ## [0.8.2] — 2026-11-11
 

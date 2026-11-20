@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::frame::{Clock, Memo, PickerScope, PickerView, matches, picker_frame, resumable};
+use super::frame::{Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
 use super::listing::Session;
 use crate::frame::{Frame, Style};
 use crate::input::{KeyPress, vk};
@@ -60,6 +60,8 @@ pub struct PickerScreen<'a> {
     started: [bool; 3],
     fetch: Option<Fetch<'a>>,
     fill_rows: usize,
+    /// The rows the last frame had room for: idle polls load pages until they are filled.
+    want: usize,
     pool: Vec<usize>,
     resumable_count: usize,
     items: Vec<usize>,
@@ -118,6 +120,7 @@ impl<'a> PickerScreen<'a> {
             started: [false; 3],
             fetch,
             fill_rows,
+            want: 0,
             pool: Vec::new(),
             resumable_count: 0,
             items: Vec::new(),
@@ -307,7 +310,18 @@ impl Screen for PickerScreen<'_> {
         };
         let f = picker_frame(&v, &mut memo);
         self.memo = memo;
+        self.want = list_capacity(size.0, size.1, self.scope, self.style);
         f
+    }
+
+    /// AC27: a tall terminal lists more than the first page. One page per idle poll, so the
+    /// first frame never waits for the pages a big window wants.
+    fn idle(&mut self) -> bool {
+        if self.fetch.is_none() || self.bucket().exhausted || self.resumable_count >= self.want {
+            return false;
+        }
+        self.expand();
+        true
     }
 
     fn before(&mut self) {

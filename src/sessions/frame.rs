@@ -2,6 +2,7 @@
 //! column below with the preview underneath, and the frame memo that repaints only the lines a
 //! hover change touched.
 
+mod card;
 mod memo;
 mod text;
 
@@ -13,11 +14,11 @@ use crate::frame::{
 };
 use crate::layout::{join_panes, limit_line, new_box, viewport};
 use crate::list::{ListRow, new_list_row, row_band_length};
-use crate::theme::{self, Glyphs, glyphs, strip_ctl};
+use crate::theme::{self, Glyphs, glyphs};
 
+use card::Preview;
 pub use memo::Memo;
 use memo::{Band, memo_key, painter};
-use text::n0;
 pub use text::{exchange, exchange_lines, local_stamp, relative_age};
 
 /// The clock a frame is drawn against: now, and the local offset from UTC.
@@ -107,7 +108,7 @@ fn session_row(it: &Session, row: usize, c: &RowCtx<'_>) -> String {
         format!("[{}] {place}", it.account).trim_end().clone_into(&mut place);
     }
     let age = relative_age(it.modified_ms, c.clock.now_ms);
-    let what = [&it.last_user, &it.title]
+    let what = [&it.title, &it.last_user]
         .into_iter()
         .find(|t| !t.is_empty())
         .cloned()
@@ -149,7 +150,7 @@ fn picker_footer(scope: PickerScope, g: &Glyphs, width: usize, plain: bool) -> F
 }
 
 fn picker_title(v: &PickerView<'_>, shown: usize, hidden: usize, headless: usize, h: char) -> String {
-    let mut parts = vec![format!("resume {h} {shown} sessions")];
+    let mut parts = vec!["resume".to_owned()];
     if v.scope == PickerScope::Project {
         parts.push(if v.project_name.is_empty() {
             "this project".to_owned()
@@ -157,6 +158,7 @@ fn picker_title(v: &PickerView<'_>, shown: usize, hidden: usize, headless: usize
             v.project_name.to_owned()
         });
     }
+    parts.push(format!("{shown} sessions"));
     if hidden > 0 {
         parts.push(format!("{hidden} empty hidden"));
     }
@@ -167,62 +169,6 @@ fn picker_title(v: &PickerView<'_>, shown: usize, hidden: usize, headless: usize
         parts.push(format!("filter: {}", clean_text(v.filter)));
     }
     parts.join(&format!(" {h} "))
-}
-
-/// The selected session's preview: the detail pane (wide) or the block under the list (narrow).
-struct Preview<'a> {
-    s: &'a Session,
-    g: &'a Glyphs,
-    ascii: bool,
-    offset: i32,
-}
-
-impl Preview<'_> {
-    fn place(&self) -> String {
-        let mut place = strip_ctl(&self.s.project);
-        if !self.s.worktree.is_empty() {
-            place = format!("{place}  {} {}", self.g.worktree, strip_ctl(&self.s.worktree));
-        }
-        if !self.s.account.is_empty() {
-            place = format!("[{}] {place}", strip_ctl(&self.s.account));
-        }
-        place
-    }
-
-    fn exchange(&self, width: usize, max: usize, indent: &str) -> Vec<String> {
-        exchange_lines(&exchange(self.s), width, max, self.g, self.ascii)
-            .into_iter()
-            .map(|l| format!("{indent}{l}"))
-            .collect()
-    }
-
-    fn detail(&self, right: usize, body_rows: usize) -> Vec<String> {
-        let h = self.g.h;
-        let stamp = local_stamp(self.s.modified_ms, self.offset);
-        #[expect(clippy::cast_precision_loss, reason = "a file size in KB")]
-        let kb = n0(self.s.size_bytes as f64 / 1024.0);
-        let mut detail = vec![
-            format!(" {}", limit_line(&self.place(), right.saturating_sub(2), self.ascii)),
-            format!(" {stamp}  {h}  {} msgs  {h}  {kb} KB", prompt_count_text(self.s)),
-            format!(" {}", h.to_string().repeat(right.saturating_sub(2))),
-        ];
-        let room = body_rows.saturating_sub(detail.len()).max(2);
-        detail.extend(self.exchange(right.saturating_sub(2), room, " "));
-        detail
-    }
-
-    fn below(&self, fw: usize, preview_rows: usize) -> Vec<String> {
-        let h = self.g.h;
-        let stamp = local_stamp(self.s.modified_ms, self.offset);
-        let head = format!("{}  {h}  {} msgs  {h}  {stamp}", self.place(), prompt_count_text(self.s));
-        let mut out = vec![format!("  {}", limit_line(&head, fw.saturating_sub(4), self.ascii))];
-        if preview_rows > 2 {
-            out.push(format!("  {}", h.to_string().repeat(fw.saturating_sub(6))));
-        }
-        let budget = preview_rows.saturating_sub(out.len()).max(1);
-        out.extend(self.exchange(fw.saturating_sub(4), budget, "  "));
-        out
-    }
 }
 
 struct Built {
@@ -299,7 +245,35 @@ fn empty_message(filter: &str, hidden: usize, headless: usize) -> String {
     }
 }
 
-/// (list pane, detail pane) widths: 40 % for the list at >= 100 columns, else the whole frame.
+/// The widest list pane: past it a wide terminal's room goes to the preview, where text wraps.
+const MAX_LIST_WIDTH: usize = 72;
+
+/// The box's inner rows at this height: the terminal less the border, the footer and the
+/// headroom row.
+fn body_rows(height: usize, footer: &Footer) -> usize {
+    height.saturating_sub(3 + footer.lines.len()).max(3)
+}
+
+/// (preview rows, list rows): the wide layout lists in every body row; the narrow one keeps a
+/// preview of 6 rows (2 below 30) under the list.
+fn split_rows(wide: bool, height: usize, body_rows: usize) -> (usize, usize) {
+    if wide {
+        (0, body_rows)
+    } else {
+        let p = if height < SHORT_PICKER_HEIGHT { 2 } else { 6 };
+        (p, body_rows.saturating_sub(p).max(1))
+    }
+}
+
+/// How many sessions a frame of this size lists: the picker loads pages until they fill it.
+pub fn list_capacity(width: usize, height: usize, scope: PickerScope, style: Style) -> usize {
+    let g = glyphs(style.ascii);
+    let footer = picker_footer(scope, &g, frame_width(width), !style.color);
+    split_rows(width >= TWO_PANE_WIDTH, height, body_rows(height, &footer)).1
+}
+
+/// (list pane, detail pane) widths: 40 % for the list at >= 100 columns (at most
+/// `MAX_LIST_WIDTH`), else the whole frame.
 #[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -309,14 +283,13 @@ fn empty_message(filter: &str, hidden: usize, headless: usize) -> String {
 fn pane_widths(fw: usize, wide: bool) -> (usize, usize) {
     let inner = fw.saturating_sub(2);
     let left = if wide {
-        28.max((inner as f64 * 0.4).round_ties_even() as usize)
+        28.max((inner as f64 * 0.4).round_ties_even() as usize).min(MAX_LIST_WIDTH)
     } else {
         inner
     };
     (left, inner.saturating_sub(left + 1))
 }
 
-#[expect(clippy::many_single_char_names, reason = "the builder's names follow Get-PickerFrame")]
 fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let ascii = v.style.ascii;
     let resumable_rows: Vec<&Session> = v.sessions.iter().copied().filter(|s| resumable(s)).collect();
@@ -327,10 +300,12 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let h = g.h;
     let title = picker_title(v, items.len(), hidden, headless, h);
     let footer = picker_footer(v.scope, g, fw, !v.style.color);
+    let body_rows = body_rows(v.height, &footer);
     if items.is_empty() {
-        let msg = empty_message(v.filter, hidden, headless);
+        let mut body = vec![String::new(), empty_message(v.filter, hidden, headless)];
+        body.resize(body_rows, String::new());
         return Built {
-            lines: new_box(&[String::new(), msg, String::new()], fw, &title, g, ascii),
+            lines: new_box(&body, fw, &title, g, ascii),
             footer,
             rows: Vec::new(),
             map: RowMap {
@@ -339,7 +314,6 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
             },
         };
     }
-    let body_rows = v.height.saturating_sub(3 + footer.lines.len()).max(3);
     let wide = v.width >= TWO_PANE_WIDTH;
     let (left_width, right_width) = pane_widths(fw, wide);
     let ctx = RowCtx {
@@ -354,12 +328,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let s = items.get(index).copied().unwrap_or(items[0]);
     let mut list = Vec::new();
     let mut bands = Vec::new();
-    let (preview_rows, list_rows) = if wide {
-        (0, body_rows)
-    } else {
-        let p = if v.height < SHORT_PICKER_HEIGHT { 2 } else { 6 };
-        (p, body_rows.saturating_sub(p).max(1))
-    };
+    let (preview_rows, list_rows) = split_rows(wide, v.height, body_rows);
     let (start, visible) = viewport(items.len(), index, list_rows);
     for (i, it) in items.iter().enumerate().skip(start).take(visible) {
         let row = session_row(it, i, &ctx);
@@ -372,12 +341,23 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
         ascii,
         offset: v.clock.offset_minutes,
     };
+    // AC27: the box always fills the terminal; the panes pad to the full body height.
+    list.resize(list_rows, String::new());
     let body = if wide {
-        let detail = pv.detail(right_width, body_rows);
+        let detail: Vec<String> = pv
+            .card(right_width.saturating_sub(2), body_rows, v.scope)
+            .into_iter()
+            .map(|l| format!(" {l}"))
+            .collect();
         join_panes(&list, &detail, left_width, right_width, g, ascii)
     } else {
         let mut body = list;
-        body.extend(pv.below(fw, preview_rows));
+        body.extend(
+            pv.card(fw.saturating_sub(6), preview_rows, v.scope)
+                .into_iter()
+                .map(|l| format!("  {l}")),
+        );
+        body.resize(body_rows, String::new());
         body
     };
     let lines = new_box(&body, fw, &title, g, ascii);

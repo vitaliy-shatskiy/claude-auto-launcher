@@ -113,6 +113,103 @@ fn scoped_picker_fills_pages_and_tab_widens_to_the_account() {
     );
 }
 
+/// A terminal resized by its script: `Resize` moves to the next size before it is delivered.
+struct SizedTerm {
+    inner: PreviewTerm,
+    sizes: VecDeque<(usize, usize)>,
+    size: (usize, usize),
+    events: VecDeque<crate::input::Event>,
+}
+
+impl Term for SizedTerm {
+    fn size(&mut self) -> (usize, usize) {
+        self.size
+    }
+    fn paint(&mut self, lines: &[String]) {
+        self.inner.paint(lines);
+    }
+    fn wait(&mut self, _s: (usize, usize)) -> Result<crate::input::Event, crate::ui::UiStop> {
+        let ev = self.events.pop_front().ok_or(crate::ui::UiStop::KeysExhausted)?;
+        if matches!(ev, crate::input::Event::Resize) {
+            self.size = self.sizes.pop_front().unwrap_or(self.size);
+        }
+        Ok(ev)
+    }
+    fn window_top(&mut self) -> i32 {
+        0
+    }
+    fn input_pending(&mut self) -> bool {
+        false
+    }
+    fn record_time(&self) -> Option<u64> {
+        None
+    }
+    fn last_activation(&mut self) -> &mut Option<crate::ui::Activation> {
+        self.inner.last_activation()
+    }
+    fn drain(&mut self) {}
+    fn logger(&self) -> &crate::log::Logger {
+        self.inner.logger()
+    }
+    fn read_line(&mut self, _prompt: &str) -> String {
+        String::new()
+    }
+}
+
+fn listed(frame: &[String]) -> usize {
+    // A list row names its project (`x`) before the title; the preview card does not.
+    frame.iter().filter(|l| l.contains("x  title s")).count()
+}
+
+#[test]
+fn a_resize_redraws_at_the_new_size() {
+    let first: Vec<Session> = (0..80).map(|i| row(&format!("s{i}"), "x", 1)).collect();
+    let mut s = PickerScreen::new(first, None, 0, &[], "", style(), clock());
+    let mut term = SizedTerm {
+        inner: PreviewTerm::new((100, 30), VecDeque::new(), true),
+        sizes: [(200, 60)].into(),
+        size: (100, 30),
+        events: [
+            crate::input::Event::Resize,
+            crate::input::Event::Key(crate::input::scripted_key("Escape").unwrap()),
+        ]
+        .into(),
+    };
+    assert_eq!(run(&mut s, &mut term), Ok(None));
+    let frames = term.inner.frames.unwrap();
+    let (small, big) = (&frames[0], &frames[frames.len() - 1]);
+    assert_eq!((small.len(), big.len()), (29, 59), "each frame fills its terminal");
+    assert!(big.iter().all(|l| crate::layout::display_width(l) <= 199));
+    assert_eq!(crate::layout::display_width(&big[0]), 199);
+    assert!(
+        listed(big) > listed(small),
+        "more rows listed: {} vs {}",
+        listed(big),
+        listed(small)
+    );
+}
+
+#[test]
+fn idle_polls_load_pages_until_a_tall_terminal_is_filled() {
+    let all: Vec<Session> = (0..80).map(|i| row(&format!("s{i}"), "x", 1)).collect();
+    let mut calls = 0;
+    let mut f = |have: usize, _s: &[String]| {
+        calls += 1;
+        all.iter().skip(have).take(10).cloned().collect::<Vec<Session>>()
+    };
+    let first = f(0, &[]);
+    let mut s = PickerScreen::new(first, Some(&mut f), 10, &[], "", style(), clock());
+    let idle = std::iter::repeat_n(crate::input::Event::Idle, 8);
+    let esc = crate::input::Event::Key(crate::input::scripted_key("Escape").unwrap());
+    let mut term = crate::ui::script_term::ScriptTerm::new((100, 60), idle.chain([esc]));
+    assert_eq!(run(&mut s, &mut term), Ok(None));
+    drop(s);
+    let frames = term.inner.frames.unwrap();
+    assert_eq!(listed(&frames[0]), 10, "the first frame waits for one page only");
+    assert!(listed(&frames[frames.len() - 1]) >= 55, "then idle polls fill the window");
+    assert!(calls <= 8, "and stop once it is full: {calls} pages");
+}
+
 #[test]
 fn a_click_selects_and_a_second_click_opens() {
     let first = vec![row("a", "x", 1), row("b", "x", 1)];

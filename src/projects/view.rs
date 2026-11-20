@@ -116,6 +116,8 @@ pub(crate) struct ProjectView<'a> {
     pub marked: &'a [String],
     /// Project keys drawn dimmed and marked missing: the pins whose folder is gone.
     pub dimmed: &'a [String],
+    /// Project keys of the pinned projects: a dim pin mark before the name (D10).
+    pub pinned: &'a [String],
     pub index: usize,
     pub filter: &'a str,
     pub typing: bool,
@@ -265,12 +267,34 @@ fn dim_after_mark(row: &str, mark: usize) -> String {
     out
 }
 
+/// The visible character at `at` (control characters are markers and skipped) dimmed: the pin
+/// mark, laid out before the markers like every other row piece.
+fn dim_char_at(row: &str, at: usize) -> String {
+    let mut out = String::new();
+    let mut seen = 0;
+    for c in row.chars() {
+        let shown = !c.is_control();
+        if shown && seen == at {
+            out.push(theme::DIM_OPEN);
+            out.push(c);
+            out.push(theme::DIM_CLOSE);
+        } else {
+            out.push(c);
+        }
+        if shown {
+            seen += 1;
+        }
+    }
+    out
+}
+
 /// One list row's text: project, cwd, or the free-path row.
 fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &ProjectView<'_>, g: &Glyphs) -> String {
     let ascii = v.style.ascii;
     let key = project_key(&r.path);
     let marked = r.kind == RowKind::Project && v.marked.contains(&key);
     let missing = r.kind == RowKind::Project && v.dimmed.contains(&key);
+    let pinned = r.kind == RowKind::Project && v.pinned.contains(&key);
     let named = |n: &str| {
         let n = if marked {
             format!("{n} (hidden)")
@@ -279,7 +303,8 @@ fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &Pr
         } else {
             n.to_owned()
         };
-        if r.worktree { format!("{} {n}", g.worktree) } else { n }
+        let n = if r.worktree { format!("{} {n}", g.worktree) } else { n };
+        if pinned { format!("{} {n}", g.up) } else { n }
     };
     let age = r.last_activity_ms.map(|t| relative_age(t, v.now_ms)).unwrap_or_default();
     match r.kind {
@@ -318,7 +343,13 @@ fn row_text(r: &Row, mark: &str, hovered: bool, inner: usize, wide: bool, v: &Pr
                     ..base
                 })
             };
-            let row = if missing { dim_after_mark(&row, mark.chars().count()) } else { row };
+            let row = if missing {
+                dim_after_mark(&row, mark.chars().count())
+            } else if pinned {
+                dim_char_at(&row, mark.chars().count())
+            } else {
+                row
+            };
             // The mark and the age are never matched: only name and path are.
             let shown: String = row.chars().filter(|c| !c.is_control()).collect();
             let to = if age.is_empty() { None } else { shown.rfind(&age) }
@@ -393,7 +424,8 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let detail = usize::from(!wide);
     let body_rows = v.height.saturating_sub(6 + detail + footer.lines.len()).max(3);
     let index = v.index.min(rows.len().saturating_sub(1));
-    let list_lines = viewport(rows.len(), index, body_rows).1 + 2;
+    // AC27: the list takes every body row, so the box fills a tall terminal.
+    let list_lines = body_rows + 2;
     let (start, visible) = project_viewport(&rows, index, list_lines);
     let inner = fw.saturating_sub(2);
     let w = Window {

@@ -8,6 +8,7 @@ pub mod frame;
 pub mod holder;
 pub mod listing;
 pub mod picker;
+mod scan;
 pub mod transcript;
 mod win;
 
@@ -322,6 +323,16 @@ mod tests {
         let t = got.transfer.unwrap();
         assert_eq!(t.from_account, "other");
         assert!(t.source.starts_with(base.join("other")));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_launching_account_without_a_projects_folder_still_lists_the_others() {
+        let (base, others) = two_stores("noown");
+        std::fs::remove_dir_all(base.join("own").join("projects")).unwrap();
+        let (got, frame) = pick(&base, &others);
+        assert_eq!(got.session_id, "theirs", "AC29: the other account's session is offered");
+        assert!(frame.contains("1 sessions"), "{frame}");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

@@ -27,7 +27,10 @@ fn p_pins_a_project_on_top_saves_it_and_the_cursor_follows() {
     assert!(on_disk(&config, "remote") == Value::Bool(false), "other keys kept");
     let (beta, alpha) = (line_of(last, "beta").unwrap(), line_of(last, "alpha").unwrap());
     assert!(beta < alpha, "the older beta is drawn on top: {last:#?}");
-    assert!(last[beta].contains("> beta"), "the cursor follows the pinned row: {last:#?}");
+    assert!(
+        last[beta].contains("> ^ beta"),
+        "the cursor follows the pinned row, drawn with its pin mark: {last:#?}"
+    );
 
     let restarted = run_with_config(&f, &config, &["s", "p", "Escape"]);
     assert!(

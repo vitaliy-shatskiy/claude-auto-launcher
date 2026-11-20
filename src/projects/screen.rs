@@ -65,6 +65,8 @@ pub(crate) struct ProjectScreen<'a> {
     marked: Vec<String>,
     /// Keys of the pins whose folder is gone, drawn dimmed (AC5).
     dimmed: Vec<String>,
+    /// Keys of the pinned projects, drawn with a pin mark (D10).
+    pin_keys: Vec<String>,
     /// Folder checks of the pins the registry does not list, once per key per run.
     absent: BTreeMap<String, bool>,
     /// The project a `p` moved: the cursor follows it on the next frame.
@@ -108,6 +110,7 @@ impl<'a> ProjectScreen<'a> {
             view: projects.to_vec(),
             marked: Vec::new(),
             dimmed: Vec::new(),
+            pin_keys: Vec::new(),
             absent: BTreeMap::new(),
             follow: None,
             cwd: cwd.to_owned(),
@@ -185,6 +188,7 @@ impl Screen for ProjectScreen<'_> {
             projects: &self.view,
             marked: &self.marked,
             dimmed: &self.dimmed,
+            pinned: &self.pin_keys,
             index: usize::try_from(self.cursor.index).unwrap_or(0),
             filter: &self.filter,
             typing: self.cursor.typing,
