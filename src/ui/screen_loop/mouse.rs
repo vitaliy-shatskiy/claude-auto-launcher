@@ -39,7 +39,9 @@ pub(super) fn mouse<S: Screen>(
             Hit::ListRow(r) => (*r, String::new()),
             Hit::Cell { row, value, .. } => (i32::try_from(*row).unwrap_or(-1), value.clone()),
             Hit::Action { value } => (-1, value.clone().unwrap_or_default()),
-            Hit::None | Hit::Footer { .. } | Hit::LaunchRow { .. } => (-1, String::new()),
+            // A row outside its value cells paints its label or name.
+            Hit::LaunchRow { row, .. } => (i32::try_from(*row).unwrap_or(-1), String::new()),
+            Hit::None | Hit::Footer { .. } => (-1, String::new()),
         };
         let c = screen.cursor();
         let changed = btn != c.hover || row != c.hover_row || val != c.hover_value;

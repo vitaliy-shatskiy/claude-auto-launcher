@@ -1,0 +1,24 @@
+╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✻ claude-auto · maintenance                                                                                                   │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ Claude Code    2.1.230 · newest · 3 builds · 0.8 GB
+   [u] update
+   [r] update anyway (rename)                                                                        while claude.exe is in use
+   [p] delete old builds
+
+ Checks
+   [d] doctor
+   [m] MCP servers
+
+ Launcher
+   [l] launch rows
+
+ Custom
+   [i] full reindex
+
+ Warnings       ⚠ config: unknown key "colour"
+                  fix it in C:\Users\sample\.claude\claude-auto.json
+
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  w/s move  ┊  [enter] run  ┊  [esc] back

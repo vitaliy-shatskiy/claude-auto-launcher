@@ -5,6 +5,8 @@ use crate::layout::{display_width, limit_line, new_titled_box};
 use crate::theme::{self, Glyphs};
 
 /// 50 columns: a phone over RDP. 16 rows: the worst launch frame at 50 columns plus one.
+/// yagni: the compact launch page at 50x16 with a three-line footer fills all 16 rows (no headroom);
+/// raise this to 17 when that one-row scroll is seen.
 pub const MIN_WIDTH: usize = 50;
 pub const MIN_HEIGHT: usize = 16;
 pub const TWO_PANE_WIDTH: usize = 100;
@@ -63,6 +65,45 @@ pub fn page(mut body: Vec<String>, size: (usize, usize), footer_lines: usize, ti
         body.resize(rows, String::new());
     }
     new_titled_box(&body, frame_width(size.0), title, right, &g, style.ascii)
+}
+
+/// Rows above the body on a header page: the box's three and the blank row under it.
+pub const BODY_TOP: usize = 4;
+
+/// The compact page (launch, maintenance, rows editor): a rounded header box across the frame
+/// width with `title` at its left and the first of `rights` that fits at its right, a blank row,
+/// the body, a blank row and a dim rule. The footer follows; nothing pads down to the bottom.
+pub fn header_page(body: Vec<String>, width: usize, title: &str, rights: &[String], style: Style) -> Vec<String> {
+    let g = theme::glyphs(style.ascii);
+    let fw = frame_width(width);
+    // The box's inner columns less one space each side.
+    let text_w = fw.saturating_sub(4);
+    let right = rights
+        .iter()
+        .find(|r| display_width(title) + 2 + display_width(r) <= text_w)
+        .map_or("", String::as_str);
+    let pad = text_w.saturating_sub(display_width(title) + display_width(right));
+    let mut lines = new_titled_box(&[format!(" {title}{}{right}", " ".repeat(pad))], fw, "", "", &g, style.ascii);
+    lines.push(String::new());
+    lines.extend(body);
+    lines.push(String::new());
+    let rule: String = std::iter::repeat_n(g.h, text_w).collect();
+    lines.push(format!("  {}{rule}{}", theme::DIM_OPEN, theme::DIM_CLOSE));
+    lines
+}
+
+/// The column a header page's right-aligned row text ends at: under the header's right text.
+pub fn right_edge(width: usize) -> usize {
+    frame_width(width).saturating_sub(2)
+}
+
+/// `left`, then `right` ending at `edge`; with no room for both, `right` is left out.
+pub fn align_right(left: &str, right: &str, edge: usize) -> String {
+    let used = display_width(left) + display_width(right);
+    if right.is_empty() || used + 2 > edge {
+        return left.to_owned();
+    }
+    format!("{left}{}{right}", " ".repeat(edge - used))
 }
 
 /// The left padding of every page's text inside the frame: the cursor column and a space.

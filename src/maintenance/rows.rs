@@ -183,14 +183,20 @@ impl Screen for RowsEditor {
             let glyph = if *on { g.on } else { g.off };
             let lead = format!(" {mark} {glyph} {name:<12}");
             let mut cells = Vec::new();
+            // The pointer on the row outside its value paints the name: hover never selects.
+            let name = if i32::try_from(i).is_ok_and(|ii| ii == self.cursor.hover_row) && self.cursor.hover_value.is_empty() {
+                format!("{}{}", add_hover_span(&name), " ".repeat(12usize.saturating_sub(name.len())))
+            } else {
+                format!("{name:<12}")
+            };
             body.push(if self.inert(*row) {
-                format!(" {mark} {DIM_OPEN}{glyph} {name:<12}off in config (remote: false){DIM_CLOSE}")
+                format!(" {mark} {DIM_OPEN}{glyph} {name}off in config (remote: false){DIM_CLOSE}")
             } else if *on {
-                format!("{lead}shown")
+                format!(" {mark} {glyph} {name}shown")
             } else {
                 let value = format!("hidden -> {}", self.value_label(*row));
-                // 1 = the box's left border; the cell never reaches past the right one.
-                let start = 1 + display_width(&lead);
+                // The cell never reaches past the frame's last column.
+                let start = display_width(&lead);
                 let end = (start + display_width(&value)).min(box_w.saturating_sub(1)).saturating_sub(1);
                 cells.push(CellSpan {
                     start: i32::try_from(start).unwrap_or(i32::MAX),
@@ -199,13 +205,12 @@ impl Screen for RowsEditor {
                 });
                 let hovered = i32::try_from(i).is_ok_and(|ii| ii == self.cursor.hover_row) && self.cursor.hover_value == VALUE_CELL;
                 let value = if hovered { add_hover_span(&value) } else { value };
-                format!(" {mark} {DIM_OPEN}{glyph} {name:<12}{value}{DIM_CLOSE}")
+                format!(" {mark} {DIM_OPEN}{glyph} {name}{value}{DIM_CLOSE}")
             });
             hits.push(RowHit {
                 index: i,
                 name: row.as_str().into(),
-                // 1 = the box's top border.
-                y: i32::try_from(1 + i).unwrap_or(0),
+                y: i32::try_from(crate::frame::BODY_TOP + i).unwrap_or(0),
                 cells,
             });
         }
@@ -240,12 +245,17 @@ impl Screen for RowsEditor {
             hover: footer_hover(&footer, self.cursor.hover),
             selected: Vec::new(),
         };
-        let lines = crate::frame::page(body, (width, height), footer.lines.len(), "launch rows", "", self.style);
+        let title = format!("{} claude-auto {} launch rows", g.sparkle, g.dot);
+        let lines = crate::frame::header_page(body, width, &title, &[], self.style);
         let mut map = RowMap {
             rows: hits,
             ..RowMap::default()
         };
-        let painter = |l: &str, e: bool| crate::list::add_picker_color(l, e, &g);
+        let sparkle = format!("{}{}{}", crate::theme::ACCENT, g.sparkle, crate::theme::RESET);
+        let painter = |l: &str, e: bool| {
+            let l = crate::list::add_picker_color(l, e, &g);
+            if e { l.replace(g.sparkle, &sparkle) } else { l }
+        };
         let lines = complete_frame(&lines, &footer, fw, self.style, &painter, &light, &mut map);
         Frame { lines, map }
     }

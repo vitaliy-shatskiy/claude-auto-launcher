@@ -244,11 +244,15 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
 
 - Every screen fills the whole terminal from its top-left corner, at any size, and redraws on
   resize. A size report of 0 or over 10000 cells on a side is taken as 80x25 on that side.
-- Every screen is one page: a frame from the top row down to the footer, the title on its top
-  border (`─ <screen> ─ <facts> ─`), the text three cells in from the frame (the cursor column and
-  a space), the key footer under it. On the launch screen the title is `✻ claude-auto ─ <version>`
-  and the account's limits sit at the top border's right end (`5h 4% · 7d 96% · fable 24% · 5 h
-  ago`, coloured by level, the age dim); a narrow terminal drops the limits before anything else.
+- The launch screen, maintenance and the rows editor are as tall as their content: a rounded
+  header box across the width (`✻ claude-auto`, `✻ claude-auto · maintenance`), a blank row, the
+  rows, a blank row, a dim rule and the key footer; nothing fills the rest of the terminal. On the
+  launch screen the box's right end holds the Claude Code version and the account's limits
+  (`v2.1.330   5h 4% · 7d 96% · fable 24% · 5 h ago`, coloured by level, the age dim); a narrow
+  terminal drops the limits first, then the version. The project screen, the session picker and
+  the path navigator keep their full-terminal page frame.
+- The pointer paints whatever it is over (a row label, a value, an action row, a footer key) and
+  never selects it; a click or a key moves the selection.
 - Warnings (an unknown config key, a plugin that failed to describe) are listed on the maintenance
   screen, and the launch footer badges `u maintenance ⚠ 2` in yellow. A start without screens
   prints them as before.
@@ -264,13 +268,15 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
 
 ### Maintenance
 
-The left column lists the actions, one row each: key and name; the selected row adds a short hint
-where the name needs one. The right column is a grid of facts: the installed Claude Code and
-whether it is the newest, the builds on disk and their size, claude-auto's version and
-self-update, the warnings with where to fix them, and the last action. A long action shows its
-step within a second (what the command last printed, the seconds so far), then `done` or
-`failed: <reason>` with its report below; `m` ends with `N of M connected` and one line per
-server. `p` asks for a second press. Below 100 columns the facts follow the list.
+One column of groups: Claude Code (its version and whether it is the newest, the builds on disk
+and their size), Checks, claude-auto (its version and self-update; `update`, `roll back` when
+offered), Launcher, Custom (configured actions), Warnings (with where to fix them). A group's
+facts sit on its title line, dim, the status word coloured; a group with no action is left out,
+Warnings always shows. Each action row is its key and name; a right-aligned column, ending under
+the header's right edge, holds the selected row's short hint or the action's live state: its step
+within a second (what the command last printed, the seconds so far), then the first line of its
+report in green or `failed: <reason>` in red; `m` ends with `N of M connected`. `p` asks for a
+second press.
 
 ### Project screen
 

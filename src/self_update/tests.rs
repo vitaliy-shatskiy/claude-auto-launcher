@@ -196,15 +196,14 @@ fn maintenance_offers_update_then_roll_back_and_both_work() {
         run(&l, NOW, &stub, &RealFiles, &Mutex::new(false)),
         Some(Notice::Available(Version([99, 0, 0])))
     );
-    assert_eq!(l.entries(), vec![(UPDATE_KEY, "update claude-auto to 99.0.0".to_owned())]);
+    assert_eq!(l.entries(), vec![(UPDATE_KEY, "update to 99.0.0".to_owned())]);
     assert_eq!(
         l.act_with(UPDATE_KEY, &stub, &RealFiles).as_deref(),
         Some("updated to 99.0.0 - takes effect next start")
     );
-    let current = Version::current().unwrap();
     assert_eq!(
         l.entries(),
-        vec![(ROLLBACK_KEY, format!("roll back to {current}"))],
+        vec![(ROLLBACK_KEY, "roll back".to_owned())],
         "no second update offered"
     );
     assert_eq!(
@@ -212,7 +211,7 @@ fn maintenance_offers_update_then_roll_back_and_both_work() {
         Some("rolled back - takes effect next start")
     );
     assert_eq!(std::fs::read(&l.exe).unwrap(), b"current build");
-    assert_eq!(l.entries().last(), Some(&(ROLLBACK_KEY, "roll back to 99.0.0".to_owned())));
+    assert_eq!(l.entries().last(), Some(&(ROLLBACK_KEY, "roll back".to_owned())));
     assert_eq!(l.act_with('x', &NoNet, &RealFiles), None, "not a key of this module");
 }
 
@@ -232,7 +231,7 @@ fn a_roll_back_is_not_undone_by_the_next_auto_start() {
     assert_eq!(std::fs::read(&l.exe).unwrap(), b"current build", "the rolled-away build stays out");
     assert_eq!(
         l.entries().first(),
-        Some(&(UPDATE_KEY, "update claude-auto to 99.0.0".to_owned())),
+        Some(&(UPDATE_KEY, "update to 99.0.0".to_owned())),
         "the update key still offers it"
     );
     let newer = Stub::new(&[

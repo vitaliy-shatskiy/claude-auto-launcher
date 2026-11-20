@@ -36,22 +36,23 @@ fn page(r: &Roster, state: &LaunchState, size: (usize, usize)) -> (Frame, Vec<St
 }
 
 #[test]
-fn a_160x40_page_spans_the_width_with_the_footer_on_the_last_row() {
+fn a_160x40_page_spans_the_width_and_ends_at_its_footer() {
     let r = four();
     let (f, lines) = page(&r, &real_state(&r), (160, 40));
     assert_golden("launch-160x40", &lines.join("\n"));
-    assert_eq!(lines.len(), 39, "every row but the headroom one");
+    assert!(lines.len() < 20, "content height, nothing pads to the bottom: {}", lines.len());
     assert_eq!(display_width(&lines[0]), 159, "the header box spans the frame width");
-    assert!(lines[38].contains("[esc] quit"), "{:?}", lines[38]);
-    assert_eq!(f.map.footer_y, Some(38), "the footer's clicks follow it");
+    let last = lines.len() - 1;
+    assert!(lines[last].contains("[esc] quit"), "{:?}", lines[last]);
+    assert_eq!(f.map.footer_y, Some(i32::try_from(last).unwrap()), "the footer's clicks follow it");
 }
 
 #[test]
-fn a_400x150_terminal_gets_a_400x150_page_from_the_top_left() {
+fn a_400x150_terminal_gets_a_full_width_page_from_the_top_left() {
     let r = four();
     let (_, lines) = page(&r, &real_state(&r), (400, 150));
     assert_golden("launch-400x150", &lines.join("\n"));
-    assert_eq!(lines.len(), 149, "every row but the headroom one");
+    assert!(lines.len() < 20, "content height on a huge terminal too");
     assert_eq!(display_width(&lines[0]), 399, "the header box spans the terminal from column 0");
     assert!(lines.iter().all(|l| display_width(l) <= 399), "the last column stays free");
 }
