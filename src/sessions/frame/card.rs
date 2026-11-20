@@ -3,6 +3,7 @@
 
 use super::super::listing::Session;
 use super::PickerScope;
+use super::plain::plain;
 use super::text::{local_stamp, n0};
 use crate::layout::{limit_line, split_text_lines};
 use crate::theme::{self, Glyphs, strip_ctl};
@@ -54,7 +55,7 @@ impl Preview<'_> {
         let head = format!("{label} {} ", self.g.r_angle);
         let indent = head.chars().count();
         let text = if text.is_empty() { "-" } else { text };
-        split_text_lines(&strip_ctl(text), width.saturating_sub(indent).max(1), rows, self.ascii)
+        split_text_lines(&strip_ctl(&plain(text)), width.saturating_sub(indent).max(1), rows, self.ascii)
             .into_iter()
             .enumerate()
             .map(|(i, l)| {

@@ -49,6 +49,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   `last ›` and `reply ›`. The picker and the project screen fill the whole terminal and redraw on
   resize; a tall picker loads more pages while idle. The list pane stays 40 % wide, at most 72
   columns. Pinned projects carry a dim `↑` before the name.
+- The preview card's `first ›`, `last ›` and `reply ›` show markdown as plain text: bold, emphasis,
+  code and fence marks, `##` headings, a leading list marker and link targets are dropped; `2*3`,
+  `a_b_c`, `*.rs` and paths stay as written. Titles are shown as they are.
 
 ### Fixed
 

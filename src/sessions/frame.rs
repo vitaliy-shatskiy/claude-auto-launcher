@@ -4,6 +4,7 @@
 
 mod card;
 mod memo;
+mod plain;
 mod text;
 
 use super::listing::Session;

@@ -92,6 +92,20 @@ fn wide_frames_match_the_powershell_goldens() {
 }
 
 #[test]
+fn the_card_shows_markdown_as_plain_text_and_keeps_the_title() {
+    let mut owned = golden_sessions();
+    owned[1].title = "**raw** title".into();
+    owned[1].first_prompt = "1. fix `card.rs` per [spec](https://x.y/z)".into();
+    owned[1].last_user = "### Plan - **Закрито:** CS-1561".into();
+    owned[1].last_assistant = "- **Done:** the `plain` helper strips *em* and __bold__ markers, keeps a_b_c, *.rs and 2*3 \
+         ```rust fn main() {} ``` then wraps the line at the full width of the card"
+        .into();
+    let s: Vec<&Session> = owned.iter().collect();
+    let frame = picker_frame(&view(&s, 1, 100, 30), &mut Memo::default()).lines.join("\n");
+    assert_golden("picker-100x30-markdown", &frame);
+}
+
+#[test]
 fn a_big_terminal_frame_fills_it_and_matches_its_golden() {
     let owned = golden_sessions();
     let s: Vec<&Session> = owned.iter().collect();
