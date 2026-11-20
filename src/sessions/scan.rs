@@ -74,7 +74,7 @@ const HEAD: usize = 1024;
 const CHUNK: usize = 1 << 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     User,
     Assistant,
     CustomTitle,
@@ -83,7 +83,7 @@ enum Kind {
 }
 
 /// The line's record kind, from the first structural type mark that qualifies.
-fn kind_of(line: &[u8]) -> Option<Kind> {
+pub(crate) fn kind_of(line: &[u8]) -> Option<Kind> {
     let lead = line.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
     let at_start = line.get(lead) == Some(&b'{') && lead + 1 < line.len();
     // `find_iter`, not captures: the match text alone names the kind, and a capture search costs

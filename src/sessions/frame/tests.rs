@@ -1,4 +1,6 @@
 use super::*;
+use crate::sessions::chat::ChatMessage;
+use crate::sessions::listing::Speaker;
 
 /// 2026-09-16 12:00 local at offset 0.
 const GOLDEN_NOW: i64 = 1_789_560_000_000;
@@ -41,7 +43,42 @@ fn view<'a>(s: &'a [&'a Session], index: usize, w: usize, h: usize) -> PickerVie
         project_name: "",
         hover: -1,
         hover_row: -1,
+        chat: ChatView::Messages(golden_chat()),
     }
+}
+
+fn msg(speaker: Speaker, text: &str, minute: i64) -> ChatMessage {
+    ChatMessage {
+        speaker,
+        text: text.into(),
+        at_ms: Some(GOLDEN_NOW - (60 - minute) * 60_000),
+    }
+}
+
+/// An exchange of the shapes the pane meets: short, wrapped, long, and a long newest reply.
+fn golden_chat() -> &'static [ChatMessage] {
+    static CHAT: std::sync::LazyLock<Vec<ChatMessage>> = std::sync::LazyLock::new(|| {
+        vec![
+            msg(Speaker::User, "first question about the start of it all", 1),
+            msg(Speaker::Assistant, &"an older reply that is long enough to be cut ".repeat(12), 2),
+            msg(Speaker::User, "make the picker preview a chat", 10),
+            msg(
+                Speaker::Assistant,
+                "Plan: read the transcript tail on a worker thread, then render it.",
+                11,
+            ),
+            msg(Speaker::User, "ok, do it", 12),
+            msg(
+                Speaker::Assistant,
+                &format!(
+                    "Done. {} The last line of the newest reply.",
+                    "Every step is in the log. ".repeat(20)
+                ),
+                40,
+            ),
+        ]
+    });
+    &CHAT
 }
 
 fn golden(name: &str) -> String {
@@ -92,17 +129,83 @@ fn wide_frames_match_the_powershell_goldens() {
 }
 
 #[test]
-fn the_card_shows_markdown_as_plain_text_and_keeps_the_title() {
+fn chat_frames_match_their_goldens_in_colour_and_ascii() {
     let mut owned = golden_sessions();
-    owned[1].title = "**raw** title".into();
-    owned[1].first_prompt = "1. fix `card.rs` per [spec](https://x.y/z)".into();
-    owned[1].last_user = "### Plan - **Закрито:** CS-1561".into();
-    owned[1].last_assistant = "- **Done:** the `plain` helper strips *em* and __bold__ markers, keeps a_b_c, *.rs and 2*3 \
-         ```rust fn main() {} ``` then wraps the line at the full width of the card"
-        .into();
+    owned[0].modified_ms = GOLDEN_NOW - 20_000;
     let s: Vec<&Session> = owned.iter().collect();
-    let frame = picker_frame(&view(&s, 1, 100, 30), &mut Memo::default()).lines.join("\n");
-    assert_golden("picker-100x30-markdown", &frame);
+    let ascii = PickerView {
+        style: Style { color: false, ascii: true },
+        ..view(&s, 1, 120, 30)
+    };
+    assert_golden(
+        "picker-120x30-chat-ascii",
+        &picker_frame(&ascii, &mut Memo::default()).lines.join("\n"),
+    );
+    let colour = PickerView {
+        scope: PickerScope::All,
+        hover_row: 3,
+        style: Style { color: true, ascii: false },
+        ..view(&s, 1, 200, 60)
+    };
+    assert_golden(
+        "picker-200x60-chat-color",
+        &picker_frame(&colour, &mut Memo::default()).lines.join("\n"),
+    );
+    let loading = PickerView {
+        chat: ChatView::Loading,
+        ..view(&s, 1, 120, 30)
+    };
+    let f = picker_frame(&loading, &mut Memo::default());
+    assert!(f.lines.iter().any(|l| l.contains("│ loading…")), "{:#?}", f.lines);
+}
+
+/// The right pane's text of a frame, right-trimmed only (the side a line sits on matters).
+fn right_pane(f: &Frame) -> Vec<String> {
+    f.lines
+        .iter()
+        .skip(1)
+        .map(|l| l.rsplit('│').nth(1).unwrap_or("").trim_end().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_chat_fills_from_the_bottom_user_right_claude_left_newest_shown_from_its_end() {
+    let owned = golden_sessions();
+    let s: Vec<&Session> = owned.iter().collect();
+    let f = picker_frame(&view(&s, 1, 120, 30), &mut Memo::default());
+    let right = right_pane(&f);
+    assert_eq!(right[0].trim(), "session title 2");
+    assert_eq!(right[1].trim(), "16.09 11:46 · 20 msgs · 4 KB · project-2");
+    assert!(right[2].trim().chars().all(|c| c == '─'), "a rule: {:?}", right[2]);
+    let chat: Vec<&String> = right
+        .iter()
+        .skip(3)
+        .take_while(|l| !l.starts_with('─') && !l.contains("╰"))
+        .collect();
+    let last = chat.iter().rev().find(|l| !l.trim().is_empty()).unwrap();
+    assert!(last.ends_with("the newest reply."), "the newest ends at the bottom: {chat:#?}");
+    assert!(chat.iter().any(|l| l.contains(" claude · 16.09 11:40")), "{chat:#?}");
+    let you = chat.iter().find(|l| l.trim_start().starts_with("you ·")).unwrap();
+    let width = crate::layout::display_width(you);
+    assert!(you.starts_with("    "), "the owner's label sits right: {you:?}");
+    let prompt = chat.iter().find(|l| l.trim() == "ok, do it").unwrap();
+    assert_eq!(crate::layout::display_width(prompt), width, "and his text ends at the same edge");
+    assert!(!chat.iter().any(|l| l.contains("first question")), "the first prompt does not fit");
+    // A newest reply taller than the pane shows its end, cut at the top with `…`.
+    let mut long = golden_chat().to_vec();
+    long.push(msg(Speaker::Assistant, &format!("START {} END", "word ".repeat(600)), 50));
+    let f = picker_frame(
+        &PickerView {
+            chat: ChatView::Messages(&long),
+            ..view(&s, 1, 120, 30)
+        },
+        &mut Memo::default(),
+    );
+    let right = right_pane(&f);
+    assert!(right[3].starts_with(" claude · 16.09 11:50"), "{right:#?}");
+    assert!(right[4].starts_with(" …"), "{right:#?}");
+    assert!(right.iter().any(|l| l.ends_with("END")), "{right:#?}");
+    assert!(!right.iter().any(|l| l.contains("START")), "{right:#?}");
 }
 
 #[test]
@@ -132,23 +235,45 @@ fn the_box_fills_the_terminal_whatever_the_session_count() {
     }
 }
 
+/// AC5: what a cursor move costs on the console at 250x68 (a 240x68 area, five columns in).
 #[test]
-fn the_preview_card_reads_title_meta_rule_first_last_reply() {
-    let owned = golden_sessions();
-    let s: Vec<&Session> = owned.iter().collect();
-    let f = picker_frame(&view(&s, 1, 120, 30), &mut Memo::default());
-    let right: Vec<String> = f
-        .lines
-        .iter()
-        .skip(1)
-        .map(|l| l.rsplit('│').nth(1).unwrap_or("").trim().to_owned())
+fn a_cursor_move_writes_a_fraction_of_a_full_frame() {
+    let owned: Vec<Session> = (0..69i64)
+        .map(|i| Session {
+            session_id: format!("s{i}"),
+            project: format!("project-{i}"),
+            title: format!("session title {i} with some words"),
+            modified_ms: GOLDEN_NOW - i * 3_600_000,
+            prompt_count: 3,
+            message_count: 40,
+            size_bytes: 4_000_000,
+            ..Session::default()
+        })
         .collect();
-    assert_eq!(right[0], "session title 2");
-    assert_eq!(right[1], "16.09 11:46 · 20 msgs · 4 KB · project-2");
-    assert!(right[2].chars().all(|c| c == '─'), "a rule: {:?}", right[2]);
-    assert!(right[3].starts_with("first › first question 2"), "{:?}", right[3]);
-    assert!(right.iter().any(|l| l.starts_with("last  › snippet 2")), "{right:#?}");
-    assert!(right.iter().any(|l| l.starts_with("reply › reply words")), "{right:#?}");
+    let s: Vec<&Session> = owned.iter().collect();
+    let area = crate::frame::Area::of((250, 68));
+    let base = PickerView {
+        scope: PickerScope::All,
+        style: Style { color: true, ascii: false },
+        ..view(&s, 0, area.width, area.height)
+    };
+    let frame = |v: &PickerView<'_>| area.place(picker_frame(v, &mut Memo::default()).lines);
+    let a = frame(&base);
+    let hovered = frame(&PickerView {
+        hover_row: 1,
+        ..base.clone()
+    });
+    let moved = frame(&PickerView {
+        index: 1,
+        chat: ChatView::Loading,
+        ..base.clone()
+    });
+    let full = crate::ui::frame_bytes(&a).len();
+    let hover = crate::ui::frame_diff_bytes(&a, &hovered).len();
+    let key = crate::ui::frame_diff_bytes(&a, &moved).len();
+    eprintln!("bytes at 250x68: full frame {full}, hover move {hover}, key move {key}");
+    assert!(hover * 10 < full, "a hover move rewrites two rows: {hover} of {full}");
+    assert!(key < full, "a key move rewrites the rows and the pane: {key} of {full}");
 }
 
 #[test]
@@ -182,7 +307,7 @@ fn memo_repaint_equals_a_rebuild() {
         };
         let mut memo = Memo::default();
         picker_frame(&base, &mut memo);
-        for (hr, hv) in [(2, -1), (0, 2), (-1, -1), (4, 0)] {
+        for (hr, hv) in [(2, -1), (1, -1), (0, 2), (-1, -1), (4, 0)] {
             let v = PickerView {
                 hover_row: hr,
                 hover: hv,
@@ -248,6 +373,7 @@ fn a_band_that_does_not_fit_rebuilds() {
         unpainted: vec!["ab".into()],
         painted: vec!["ab".into()],
         hover_row: -1,
+        selected: -1,
         rows: vec![(0, Band { y: 0, start: 1, len: 5 })],
         ..Memo::default()
     };
@@ -257,7 +383,7 @@ fn a_band_that_does_not_fit_rebuilds() {
         hover_row: 0,
         ..view(&s, 0, 100, 30)
     };
-    assert!(memo.hit(7, &v, glyphs(false)).is_none());
+    assert!(memo.hit(7, &v).is_none());
 }
 
 #[test]

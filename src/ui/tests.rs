@@ -32,6 +32,28 @@ fn frame_write_homes_erases_each_line_and_below() {
 }
 
 #[test]
+fn a_repaint_writes_only_the_changed_lines_and_erases_a_shorter_tail() {
+    let a: Vec<String> = ["x", "y", "z"].map(String::from).to_vec();
+    assert_eq!(frame_diff_bytes(&a, &a), "", "nothing changed, nothing written");
+    let b: Vec<String> = ["x", "Y", "z"].map(String::from).to_vec();
+    assert_eq!(frame_diff_bytes(&a, &b), "\x1b[2;1HY\x1b[K");
+    let c: Vec<String> = ["x"].map(String::from).to_vec();
+    assert_eq!(frame_diff_bytes(&a, &c), "\x1b[2;1H\x1b[J");
+}
+
+#[test]
+fn the_first_paint_a_resize_and_an_invalidate_rewrite_everything() {
+    let a: Vec<String> = ["x", "y"].map(String::from).to_vec();
+    let b: Vec<String> = ["x", "Y"].map(String::from).to_vec();
+    let mut shown = Shown::default();
+    assert_eq!(shown.update((80, 24), &a), frame_bytes(&a), "first paint");
+    assert_eq!(shown.update((80, 24), &b), "\x1b[2;1HY\x1b[K", "a repaint at the same size");
+    assert_eq!(shown.update((90, 24), &b), frame_bytes(&b), "a resize");
+    shown.invalidate();
+    assert_eq!(shown.update((90, 24), &b), frame_bytes(&b), "after an invalidate");
+}
+
+#[test]
 fn a_full_height_frame_feeds_no_line_on_the_bottom_row() {
     // A line feed on the bottom row scrolls the buffer: the top row is lost on every paint.
     let rows: Vec<String> = (0..24).map(|i| format!("row {i}")).collect();

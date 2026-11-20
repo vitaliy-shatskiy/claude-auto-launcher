@@ -3,6 +3,7 @@
 //! `sessions/`: `transcript` (records), `listing` (summaries, snapshot, cache), `frame` (the
 //! picker frame and memo), `picker` (the screen), `holder` (another live claude on a session).
 
+pub mod chat;
 pub mod cross_account;
 pub mod frame;
 pub mod holder;
@@ -149,6 +150,12 @@ pub fn run_picker_with(
     let slugs: Vec<String> = req.project_slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
     let first = fetch(0, &slugs);
     let mut screen = PickerScreen::new(first, Some(&mut fetch), PAGE_SIZE, &slugs, req.project_name, req.style, clock_now());
+    // Preview never polls idle (scripted keys only), so a background load would never land:
+    // it shows the summary's recent messages instead.
+    if !req.preview {
+        let loader: chat::pane::Loader = std::sync::Arc::new(chat::load_chat);
+        screen = screen.with_chat(chat::pane::ChatPane::new(loader, tm.clone()));
+    }
     tm.end(load);
     let picked = crate::ui::screen_loop::run(&mut screen, term)?;
     Ok(picked.map(|p| PickedSession {

@@ -89,6 +89,7 @@ fn rec(name: &str, parent: Option<&str>, ms: f64, start_ms: f64) -> TimingRecord
         start_ms,
         aborted: false,
         exit: None,
+        fields: Vec::new(),
     }
 }
 

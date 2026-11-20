@@ -58,6 +58,9 @@ impl Logger {
             if let Some(code) = r.exit {
                 data.insert("exit".into(), code.into());
             }
+            for (k, v) in r.fields {
+                data.insert(k, v.into());
+            }
             self.write("timing", data);
         }
     }
@@ -286,5 +289,34 @@ mod tests {
         assert_eq!(recs[0]["name"], "hooks:two.ps1");
         assert_eq!(recs[0]["exit"], 2);
         assert!(recs[1].get("exit").is_none(), "a span without an exit code logs none");
+    }
+
+    #[test]
+    fn a_span_logs_its_measured_fields() {
+        // Given: a frame-write span carrying its byte count and a worker's chat load its bytes read.
+        let dir = std::env::temp_dir().join(format!("claude-auto-rs-log-fields-{}", new_run_id()));
+        let t0 = std::time::Instant::now();
+        let l = Logger {
+            root: dir.clone(),
+            run_id: "abc".into(),
+            enabled: true,
+            timings: crate::timing::Timings::on(t0),
+        };
+        let w = l.timings.begin(&["picker.frame.write"]);
+        l.timings.set_field(w, "bytes", 1234);
+        l.timings.end(w);
+        let c = l.timings.add(&["picker.chat.load"], None, t0, t0, None);
+        l.timings.set_field(c, "bytes", 1_048_576);
+        // When: the timings are logged.
+        l.write_timings();
+        let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        // Then: each record names its span and carries its field.
+        let recs: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(recs[0]["name"], "picker.frame.write");
+        assert_eq!(recs[0]["bytes"], 1234);
+        assert_eq!(recs[1]["name"], "picker.chat.load");
+        assert_eq!(recs[1]["bytes"], 1_048_576);
     }
 }

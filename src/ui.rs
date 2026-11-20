@@ -35,6 +35,54 @@ pub fn frame_bytes(lines: &[String]) -> String {
     s
 }
 
+/// Only the lines that differ from `prev`, each addressed by its row, then erase below when the
+/// frame got shorter. Empty when nothing changed: a hover or cursor move costs its own lines, not
+/// the whole screen (at 250x68 a full colour frame is tens of KB per event).
+pub fn frame_diff_bytes(prev: &[String], next: &[String]) -> String {
+    let mut s = String::new();
+    for (i, l) in next.iter().enumerate() {
+        if prev.get(i) != Some(l) {
+            s.push_str("\x1b[");
+            s.push_str(&(i + 1).to_string());
+            s.push_str(";1H");
+            s.push_str(l);
+            s.push_str("\x1b[K");
+        }
+    }
+    if next.len() < prev.len() {
+        s.push_str("\x1b[");
+        s.push_str(&(next.len() + 1).to_string());
+        s.push_str(";1H\x1b[J");
+    }
+    s
+}
+
+/// What the terminal shows, so the next paint writes only what changed. A size change or an
+/// `invalidate` makes the next paint a full one.
+#[derive(Debug, Default)]
+pub struct Shown {
+    lines: Vec<String>,
+    size: (usize, usize),
+}
+
+impl Shown {
+    pub fn invalidate(&mut self) {
+        self.lines.clear();
+    }
+
+    /// The bytes that take the screen from what it shows to `lines` at `size`; records `lines`.
+    pub fn update(&mut self, size: (usize, usize), lines: &[String]) -> String {
+        let bytes = if self.lines.is_empty() || size != self.size {
+            frame_bytes(lines)
+        } else {
+            frame_diff_bytes(&self.lines, lines)
+        };
+        lines.clone_into(&mut self.lines);
+        self.size = size;
+        bytes
+    }
+}
+
 /// The last row activation, carried across screens (P14): a gesture's twin record reaches the
 /// next screen, which must not read it as a press of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +171,13 @@ pub trait Term {
     /// `Read-ClaudeFreePath`: hands the console back for one cooked line typed after `prompt`
     /// at the bottom row, then re-arms it. Preview answers an empty line.
     fn read_line(&mut self, prompt: &str) -> String;
+    /// The screen may no longer show the last frame (a new screen, a child, a typed line): the
+    /// next paint rewrites every line.
+    fn invalidate(&mut self) {}
+    /// Bytes the last paint wrote to the terminal; 0 where nothing is written.
+    fn painted_bytes(&self) -> usize {
+        0
+    }
 }
 
 /// The real console: CONOUT$ for size, the armed CONIN$ for events.
@@ -136,6 +191,10 @@ pub struct ConsoleTerm {
     vt_restore: Option<(Handle, u32)>,
     /// A second CONIN$ handle onto the same queue, for peeking without consuming.
     peek: Option<Handle>,
+    /// The lines on screen and the size they were written at: the next paint writes only the
+    /// lines that differ. Empty = rewrite everything.
+    shown: Shown,
+    last_bytes: usize,
 }
 
 const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
@@ -160,6 +219,8 @@ impl ConsoleTerm {
             logger,
             vt_restore,
             peek: Handle::open_console("CONIN$"),
+            shown: Shown::default(),
+            last_bytes: 0,
         }
     }
 
@@ -192,7 +253,12 @@ impl Term for ConsoleTerm {
 
     fn paint(&mut self, lines: &[String]) {
         if self.alt {
-            out::raw(&frame_bytes(lines));
+            let size = self.size();
+            let bytes = self.shown.update(size, lines);
+            if !bytes.is_empty() {
+                out::raw(&bytes);
+            }
+            self.last_bytes = bytes.len();
         } else {
             for l in lines {
                 out::line(l, out::Fg::Plain);
@@ -260,9 +326,18 @@ impl Term for ConsoleTerm {
     }
 
     fn drain(&mut self) {
+        self.shown.invalidate();
         if let Some(i) = self.input.as_ref() {
             i.flush();
         }
+    }
+
+    fn invalidate(&mut self) {
+        self.shown.invalidate();
+    }
+
+    fn painted_bytes(&self) -> usize {
+        self.last_bytes
     }
 
     fn logger(&self) -> &Logger {
@@ -275,6 +350,7 @@ impl Term for ConsoleTerm {
             i.close();
         }
         let (_, h) = self.size();
+        self.shown.invalidate();
         out::raw(&format!("\x1b[?25h\x1b[{h};1H\x1b[K{prompt}"));
         let mut line = String::new();
         if std::io::stdin().read_line(&mut line).is_err() {

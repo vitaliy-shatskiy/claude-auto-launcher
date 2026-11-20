@@ -244,14 +244,31 @@ fn run_loop<S: Screen>(
     };
     let mut size = term.size();
     let mut left = 0;
+    // A new screen never trusts what the terminal shows: its first paint writes every line.
+    term.invalidate();
+    let mut deferred = 0;
+    // Only motion and keys coalesce: a click keeps its frame, which the twin guard waits on.
+    let mut may_defer = false;
     loop {
         screen.before();
-        if need_draw {
+        // Input coalescing: while more input already waits, the frame waits for it, so a burst of
+        // motion or key repeats costs one frame. The cap keeps a stream that never pauses (psmux
+        // motion) from starving the screen.
+        if need_draw && may_defer && map.is_some() && deferred < MAX_DEFERRED && term.input_pending() {
+            deferred += 1;
+        } else if need_draw {
+            deferred = 0;
             size = term.size();
             let area = Area::of(size);
             left = i32::try_from(area.left).unwrap_or(0);
+            let build = tm.begin(&[&format!("{}.frame.build", screen.name())]);
             let f = screen.draw(view::body_size(tm, area.size()));
-            term.paint(&area.place(view::with_footer(tm, f.lines, screen.name(), area.size())));
+            let lines = area.place(view::with_footer(tm, f.lines, screen.name(), area.size()));
+            tm.end(build);
+            let write = tm.begin(&[&format!("{}.frame.write", screen.name())]);
+            term.paint(&lines);
+            tm.set_field(write, "bytes", u64::try_from(term.painted_bytes()).unwrap_or(u64::MAX));
+            tm.end(write);
             map = Some(f.map);
             if let Some(p) = first_paint.take() {
                 tm.end(p);
@@ -259,8 +276,8 @@ fn run_loop<S: Screen>(
             if let Some(k) = key_span.take() {
                 tm.end_key(k);
             }
+            need_draw = false;
         }
-        need_draw = true;
         // The twin test runs at the ready point, not at read time: a press already waiting once a
         // fresh activation's handler and frame are done is its twin, however slow they were.
         // Only a press arms or keeps the mark: psmux motion would keep it alive forever.
@@ -271,24 +288,33 @@ fn run_loop<S: Screen>(
             }
         }
         g.settle = false;
-        // An idle poll goes back to waiting unless the screen has something new to draw.
+        // An idle poll goes back to waiting unless a deferred frame is due or the screen has
+        // something new to draw. Background work never runs while input waits: a key comes first.
         let ev = loop {
             match term.wait(size)? {
-                Event::Idle if !screen.idle() => {}
+                Event::Idle if need_draw => break Event::Idle,
+                Event::Idle if term.input_pending() || !screen.idle() => {}
                 e => break e,
             }
         };
+        may_defer = matches!(&ev, Event::Key(_)) || matches!(&ev, Event::Mouse(m) if m.is_move);
         let key = match ev {
-            Event::Resize | Event::Idle => continue,
+            Event::Resize | Event::Idle => {
+                need_draw = true;
+                continue;
+            }
             Event::Key(k) if tm.is_on() && k.is(vk::F12) => {
                 view::show_timings(term, tm)?;
+                term.invalidate();
+                need_draw = true;
                 continue;
             }
             Event::Key(k) => {
                 // A key is a gesture of its own and disarms every twin guard.
                 g.disarm();
                 *term.last_activation() = None;
-                if tm.is_on() {
+                // Coalesced keys share one frame: the first key's span measures to it.
+                if tm.is_on() && key_span.is_none() {
                     *key_span = Some(tm.begin(&["key", screen.name()]));
                 }
                 k
@@ -296,18 +322,29 @@ fn run_loop<S: Screen>(
             // The row map counts from the area's first column.
             Event::Mouse(m) => match mouse(screen, term, &MouseEvent { x: m.x - left, ..m }, map.as_ref(), &mut g) {
                 MouseStep::Redraw(d) => {
-                    need_draw = d;
+                    // A frame an earlier event deferred stays due.
+                    need_draw |= d;
                     continue;
                 }
                 MouseStep::End(r) => return Ok(finish(term, screen, entered, r)),
                 MouseStep::Key(k) => k,
             },
         };
-        if let Flow::Done(r) = handle_key(screen, term, &key) {
+        need_draw = true;
+        // Closed after the fact: a nested screen the key opens is not a child of it.
+        let handled = tm.is_on().then(Instant::now);
+        let flow = handle_key(screen, term, &key);
+        if let Some(t0) = handled {
+            tm.add(&[&format!("{}.key", screen.name())], None, t0, Instant::now(), None);
+        }
+        if let Flow::Done(r) = flow {
             return Ok(finish(term, screen, entered, r));
         }
     }
 }
+
+/// How many events in a row may defer a frame because more input waits.
+const MAX_DEFERRED: u32 = 32;
 
 fn mouse<S: Screen>(screen: &mut S, term: &mut dyn Term, m: &MouseEvent, map: Option<&RowMap>, g: &mut Guards) -> MouseStep<S::Output> {
     let top = term.window_top();
@@ -341,8 +378,8 @@ fn mouse<S: Screen>(screen: &mut S, term: &mut dyn Term, m: &MouseEvent, map: Op
         c.hover = btn;
         c.hover_row = row;
         c.hover_value = val;
-        // Last move wins: a queued event will draw the frame this one would have.
-        return MouseStep::Redraw(changed && !term.input_pending());
+        // Last move wins: the loop holds the frame while more input waits.
+        return MouseStep::Redraw(changed);
     }
     if !m.left {
         return MouseStep::Redraw(true);

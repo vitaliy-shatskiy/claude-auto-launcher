@@ -53,6 +53,75 @@ pub const DIM_CLOSE: char = '\u{2}';
 pub const HOVER_OPEN: char = '\u{4}';
 pub const HOVER_CLOSE: char = '\u{5}';
 
+/// Tone-span markers (zero cells, resolved after layout by `add_tone_color`): an open marker per
+/// tone, one shared close. Bold, the owner's text (cyan family), Claude's label (the accent), live.
+pub const TONE_BOLD: char = '\u{f}';
+pub const TONE_USER: char = '\u{e}';
+pub const TONE_CLAUDE: char = '\u{10}';
+pub const TONE_LIVE: char = '\u{11}';
+pub const TONE_CLOSE: char = '\u{12}';
+/// Selected-row band markers: a fill plus bold that survives every inner Reset, like the hover
+/// band, and stronger than it (`SELECT_BG` is lighter than `BUTTON_BG` on a dark terminal).
+pub const SELECT_OPEN: char = '\u{13}';
+pub const SELECT_CLOSE: char = '\u{14}';
+/// The selected row's fill (256-colour grey 240): the only colour this theme had none for.
+pub const SELECT_BG: &str = "\x1b[48;5;240m";
+
+const TONES: [(char, &str); 4] = [
+    (TONE_BOLD, BOLD),
+    (TONE_USER, BRIGHT_CYAN),
+    (TONE_CLAUDE, ACCENT),
+    (TONE_LIVE, GREEN),
+];
+
+/// Tone markers to their colour..Reset with colour on, to nothing with it off. An open marker
+/// whose close a truncation cut off is closed at the end of the line.
+pub fn add_tone_color(line: &str, enabled: bool) -> String {
+    if !line.contains(|c| TONES.iter().any(|(m, _)| *m == c)) && !line.contains(TONE_CLOSE) {
+        return line.to_owned();
+    }
+    let mut out = String::with_capacity(line.len() + 16);
+    let mut open = false;
+    for c in line.chars() {
+        if let Some((_, sgr)) = TONES.iter().find(|(m, _)| *m == c) {
+            if enabled {
+                out.push_str(sgr);
+            }
+            open = true;
+        } else if c == TONE_CLOSE {
+            if enabled && open {
+                out.push_str(RESET);
+            }
+            open = false;
+        } else {
+            out.push(c);
+        }
+    }
+    if enabled && open {
+        out.push_str(RESET);
+    }
+    out
+}
+
+/// The selected-row band: fill and bold over the marked span, re-opened after every inner Reset.
+pub fn add_select_band_color(line: &str, enabled: bool) -> String {
+    let (Some(a), b) = (line.find(SELECT_OPEN), line.find(SELECT_CLOSE)) else {
+        return line.replace(SELECT_CLOSE, "");
+    };
+    if !enabled {
+        return line.replace([SELECT_OPEN, SELECT_CLOSE], "");
+    }
+    let end = b.filter(|b| *b > a).unwrap_or(line.len());
+    let band = format!("{SELECT_BG}{BOLD}");
+    let inner = line.get(a + SELECT_OPEN.len_utf8()..end).unwrap_or_default();
+    let rest = line.get(end..).unwrap_or_default().trim_start_matches(SELECT_CLOSE);
+    format!(
+        "{}{band}{}{RESET}{rest}",
+        line.get(..a).unwrap_or_default(),
+        inner.replace(RESET, &format!("{RESET}{band}"))
+    )
+}
+
 static ANSI_COLOR: LazyLock<Regex> = LazyLock::new(|| re(r"\x1b\[[0-9;]*m"));
 static CTL: LazyLock<Regex> = LazyLock::new(|| re(r"[\x00-\x1F\x7F-\x9F]"));
 static DIM_PAIR: LazyLock<Regex> = LazyLock::new(|| re("\u{1}([^\u{1}\u{2}]*)\u{2}"));
@@ -271,6 +340,21 @@ mod tests {
             format!("{BUTTON_BG}ab{RESET}")
         );
         assert_eq!(add_hover_span_color(&l, false), format!("xa{RESET}by"));
+    }
+
+    #[test]
+    fn tone_markers_resolve_close_a_cut_span_or_vanish() {
+        let l = format!("{TONE_USER}hi{TONE_CLOSE} {TONE_CLAUDE}cl");
+        assert_eq!(add_tone_color(&l, true), format!("{BRIGHT_CYAN}hi{RESET} {ACCENT}cl{RESET}"));
+        assert_eq!(add_tone_color(&l, false), "hi cl");
+    }
+
+    #[test]
+    fn the_select_band_survives_inner_resets() {
+        let l = format!("|{SELECT_OPEN}a{DIM}b{RESET}c{SELECT_CLOSE}|");
+        let band = format!("{SELECT_BG}{BOLD}");
+        assert_eq!(add_select_band_color(&l, true), format!("|{band}a{DIM}b{RESET}{band}c{RESET}|"));
+        assert_eq!(add_select_band_color(&l, false), format!("|a{DIM}b{RESET}c|"));
     }
 
     #[test]
