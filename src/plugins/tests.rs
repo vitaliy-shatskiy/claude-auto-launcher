@@ -1,12 +1,12 @@
-//! The protocol through a fake runner (rows, preLaunch, actions, sources, the run gate) and
-//! through real `.cmd` plugins (crash, hang, bad JSON, an unlisted file).
+//! The protocol through a fake runner: rows, preLaunch, actions, sources, the run gate. Real
+//! processes (crash, hang, bad JSON, an unlisted file) are in `tests/it/plugins.rs`.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde_json::json;
 
-use super::run::{Failure, Process};
+use super::run::Failure;
 use super::*;
 use crate::input::KeyPress;
 use crate::launch::tests::four;
@@ -330,7 +330,7 @@ fn without_may_run_no_plugin_is_called() {
     assert_eq!(fake.calls.lock().unwrap().len(), 0, "preview and --launcher-options start nothing");
 }
 
-// --- real processes ---
+// --- temp directories ---
 
 fn dir(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("cars-plugins-{name}-{}", std::process::id()));
@@ -339,70 +339,4 @@ fn dir(name: &str) -> PathBuf {
     }
     std::fs::create_dir_all(&d).unwrap();
     d
-}
-
-fn cmd(d: &Path, name: &str, body: &str) -> PluginSpec {
-    let p = d.join(format!("{name}.cmd"));
-    std::fs::write(&p, format!("@echo off\r\n{body}\r\n")).unwrap();
-    PluginSpec {
-        name: name.into(),
-        path: p.to_string_lossy().into_owned(),
-        args: Vec::new(),
-        timeout_ms: Some(5_000),
-    }
-}
-
-#[test]
-fn a_crash_bad_json_and_a_good_answer_through_real_processes() {
-    let d = dir("crash");
-    let crash = cmd(&d, "crash", "exit /b 3");
-    let bad = cmd(&d, "bad", "echo {not json");
-    let good = cmd(&d, "good", r#"echo {"protocol":1}"#);
-    assert!(matches!(Process.call(&crash, &describe::VERB, &json!({})), Err(Failure::Exit(3))));
-    assert!(matches!(Process.call(&bad, &describe::VERB, &json!({})), Err(Failure::BadJson(_))));
-    let (p, w) = load(&[crash, bad, good], None, &Process, true);
-    assert_eq!(
-        p.list.iter().map(|l| l.spec.name.as_str()).collect::<Vec<_>>(),
-        ["good"],
-        "the rest goes on"
-    );
-    assert_eq!(w.len(), 2, "{w:?}");
-    assert!(w.first().is_some_and(|l| l.starts_with("plugin crash describe: exit 3")), "{w:?}");
-    std::fs::remove_dir_all(&d).unwrap();
-}
-
-#[test]
-fn a_hang_past_its_timeout_is_killed_with_its_tree() {
-    let d = dir("hang");
-    let mut hang = cmd(&d, "hang", "ping -n 30 127.0.0.1");
-    hang.timeout_ms = Some(300);
-    let Err(Failure::Timeout { ms, pid }) = Process.call(&hang, &describe::VERB, &json!({})) else {
-        panic!("a timeout");
-    };
-    assert_eq!(ms, 300);
-    // conhost.exe is the console host Windows starts beside a console child, outside the job; it
-    // exits on its own once its client is gone (seen in the full suite).
-    let left: Vec<_> = crate::sys::process_table()
-        .into_iter()
-        .filter(|r| (r.pid == pid || r.parent == pid) && !r.name.eq_ignore_ascii_case("conhost.exe"))
-        .collect();
-    assert_eq!(left.len(), 0, "the plugin and its ping are gone: {left:?}");
-    std::fs::remove_dir_all(&d).unwrap();
-}
-
-#[test]
-fn a_file_not_listed_never_runs() {
-    let d = dir("unlisted");
-    let marker = d.join("ran.txt");
-    cmd(&d, "evil", &format!("echo x > \"{}\"\r\necho {{\"protocol\":1}}", marker.display()));
-    let listed = cmd(&d, "listed", r#"echo {"protocol":1}"#);
-    let (p, _) = load(&[listed], None, &Process, true);
-    assert_eq!(p.list.len(), 1);
-    assert!(!marker.exists(), "a file beside a listed one is never started");
-    let missing = spec("cmd", &d.join("cmd.exe").to_string_lossy());
-    assert!(
-        matches!(Process.call(&missing, &describe::VERB, &json!({})), Err(Failure::Missing)),
-        "a missing listed file is never looked up on PATH"
-    );
-    std::fs::remove_dir_all(&d).unwrap();
 }

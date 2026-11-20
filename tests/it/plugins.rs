@@ -1,9 +1,15 @@
 //! Plugins through the built binary: a `.cmd` plugin listed in config describes a row, its value
 //! reaches `preLaunch`, claude starts with the env and args it returns, `postLaunch` hears the exit
-//! code, and a `cancel` stops the launch.
+//! code, and a `cancel` stops the launch. Then the runner itself on real `.cmd` plugins: a crash,
+//! bad JSON, a hang killed with its tree, a file not listed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use claude_auto::config::PluginSpec;
+use claude_auto::plugins::run::{Failure, Process, Runner as _};
+use claude_auto::plugins::{self, describe};
+use serde_json::json;
 
 use super::{launcher, scratch, text};
 
@@ -125,5 +131,88 @@ fn a_bad_plugin_row_value_is_still_refused_once_the_plugins_are_described() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("pluginRows"), "says which field");
     assert!(d.join("described").exists(), "the row's plugin was described first");
     assert!(!d.join("claude-started").exists(), "claude never started");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+// --- the runner on real processes: crash, bad JSON, a hang, an unlisted file ---
+
+/// `<name>.cmd` in `d` running `body`, listed with a 5 s timeout.
+fn cmd(d: &Path, name: &str, body: &str) -> PluginSpec {
+    let p = d.join(format!("{name}.cmd"));
+    std::fs::write(&p, format!("@echo off\r\n{body}\r\n")).unwrap();
+    PluginSpec {
+        name: name.into(),
+        path: p.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        timeout_ms: Some(5_000),
+    }
+}
+
+/// Names of the processes still alive among `pid` and its children. conhost.exe is the console
+/// host Windows starts beside a console child, outside the job; it exits on its own once its
+/// client is gone (seen in the full suite).
+fn tree_left(pid: u32) -> String {
+    let query = format!(
+        "Get-CimInstance Win32_Process -Filter \"(ProcessId={pid} or ParentProcessId={pid}) and Name<>'conhost.exe'\" | ForEach-Object Name"
+    );
+    let o = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &query])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "the process query ran");
+    String::from_utf8_lossy(&o.stdout).trim().to_owned()
+}
+
+#[test]
+fn a_crash_bad_json_and_a_good_answer_through_real_processes() {
+    let d = scratch("plugin-crash");
+    let crash = cmd(&d, "crash", "exit /b 3");
+    let bad = cmd(&d, "bad", "echo {not json");
+    let good = cmd(&d, "good", r#"echo {"protocol":1}"#);
+    assert!(matches!(Process.call(&crash, &describe::VERB, &json!({})), Err(Failure::Exit(3))));
+    assert!(matches!(Process.call(&bad, &describe::VERB, &json!({})), Err(Failure::BadJson(_))));
+    let (p, w) = plugins::load(&[crash, bad, good], None, &Process, true);
+    assert_eq!(
+        p.list.iter().map(|l| l.spec.name.as_str()).collect::<Vec<_>>(),
+        ["good"],
+        "the rest goes on"
+    );
+    assert_eq!(w.len(), 2, "{w:?}");
+    assert!(w.first().is_some_and(|l| l.starts_with("plugin crash describe: exit 3")), "{w:?}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_hang_past_its_timeout_is_killed_with_its_tree() {
+    let d = scratch("plugin-hang");
+    let mut hang = cmd(&d, "hang", "ping -n 30 127.0.0.1");
+    hang.timeout_ms = Some(300);
+    let Err(Failure::Timeout { ms, pid }) = Process.call(&hang, &describe::VERB, &json!({})) else {
+        panic!("a timeout");
+    };
+    assert_eq!(ms, 300);
+    assert_eq!(tree_left(pid), "", "the plugin and its ping are gone");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_file_not_listed_never_runs() {
+    let d = scratch("plugin-unlisted");
+    let marker = d.join("ran.txt");
+    cmd(&d, "evil", &format!("echo x > \"{}\"\r\necho {{\"protocol\":1}}", marker.display()));
+    let listed = cmd(&d, "listed", r#"echo {"protocol":1}"#);
+    let (p, _) = plugins::load(&[listed], None, &Process, true);
+    assert_eq!(p.list.len(), 1);
+    assert!(!marker.exists(), "a file beside a listed one is never started");
+    let missing = PluginSpec {
+        name: "cmd".into(),
+        path: d.join("cmd.exe").to_string_lossy().into_owned(),
+        args: Vec::new(),
+        timeout_ms: None,
+    };
+    assert!(
+        matches!(Process.call(&missing, &describe::VERB, &json!({})), Err(Failure::Missing)),
+        "a missing listed file is never looked up on PATH"
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
