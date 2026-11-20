@@ -1,6 +1,6 @@
 use super::*;
 use crate::frame::{CellSpan, FooterSpan, ListMap};
-use crate::ui::PreviewTerm;
+use crate::ui::{Activation, PreviewTerm};
 
 /// A list of `n` rows; Enter and an activation return the index.
 struct List {
