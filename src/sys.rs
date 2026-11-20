@@ -1,6 +1,6 @@
 //! Every Win32 call the launcher makes, behind safe wrappers: console input and modes, the
 //! window size, the code page, Ctrl+C, the prefs mutex, a file's hard-link count, SHA-256, local
-//! time, the process table and the TCP listener table.
+//! time, the process table, the TCP listener table and the job object that kills a process tree.
 #![expect(unsafe_code, reason = "the one FFI module: Win32 console, mutex, hash and process calls")]
 
 use std::ffi::c_void;
@@ -18,6 +18,10 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
 use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
@@ -300,6 +304,42 @@ pub(crate) fn process_table() -> Vec<ProcessRow> {
         ok = unsafe { Process32NextW(snap.0, &raw mut e) } != 0;
     }
     out
+}
+
+/// A job object that holds a child and everything it starts: `terminate` (or the drop) kills the
+/// whole tree, so a timed-out plugin leaves no grandchild behind.
+#[derive(Debug)]
+pub(crate) struct Job(Handle);
+
+impl Job {
+    /// A fresh job whose last handle closing kills every process in it.
+    pub(crate) fn new() -> Option<Self> {
+        // SAFETY: null attributes and name are accepted; the handle is checked below.
+        let h = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+        if h.is_null() {
+            return None;
+        }
+        let job = Self(Handle(h));
+        // SAFETY: plain data.
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).unwrap_or(0);
+        // SAFETY: a valid job handle and a pointer to a live struct of the stated size.
+        let ok = unsafe { SetInformationJobObject((job.0).0, JobObjectExtendedLimitInformation, (&raw const info).cast(), size) };
+        (ok != 0).then_some(job)
+    }
+
+    /// Puts `process` (a raw process handle the caller keeps open) into the job.
+    pub(crate) fn assign(&self, process: *mut c_void) -> bool {
+        // SAFETY: a valid job handle; `process` is an open process handle owned by the caller.
+        unsafe { AssignProcessToJobObject((self.0).0, process) != 0 }
+    }
+
+    /// Kills every process in the job.
+    pub(crate) fn terminate(&self) {
+        // SAFETY: a valid job handle.
+        unsafe { TerminateJobObject((self.0).0, 1) };
+    }
 }
 
 /// Opaque pointer type re-exported for the console module's record decoding.

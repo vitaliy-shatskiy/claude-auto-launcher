@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 mod headless;
+mod plugins;
 
 const EXE: &str = env!("CARGO_BIN_EXE_claude-auto");
 

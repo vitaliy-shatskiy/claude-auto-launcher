@@ -1,6 +1,7 @@
 //! Launcher configuration (`Config.ps1`): `~/.claude/claude-auto.json` or `CLAUDE_AUTO_CONFIG`.
 //! Every validation failure falls back to that key's default and adds a warning; nothing fails.
 
+mod plugins;
 mod roster;
 
 use std::collections::BTreeMap;
@@ -9,13 +10,14 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::launch::{CONFIG_ROWS, MODEL_FAMILY_KEYS, Roster, RowName};
+pub use plugins::{PluginSpec, parse_plugins};
 use roster::default_account;
 pub use roster::{Account, parse_roster};
 
 /// Distinct on purpose: two accounts sharing a colour is the confusion a tint exists to prevent.
 pub const ALLOWED_TINTS: [&str; 6] = ["Green", "Magenta", "Cyan", "Blue", "Yellow", "Red"];
 const ALLOWED_RIDER_MODES: [&str; 3] = ["auto", "on", "off"];
-const KNOWN_KEYS: [&str; 17] = [
+const KNOWN_KEYS: [&str; 18] = [
     "accounts",
     "sharing",
     "remote",
@@ -33,6 +35,7 @@ const KNOWN_KEYS: [&str; 17] = [
     "hideHeadlessProjects",
     "projectScreen",
     "mouse",
+    "plugins",
 ];
 /// The maintenance screen's own keys: five built-ins and `l`, the launch-rows editor.
 const RESERVED_ACTION_KEYS: [&str; 6] = ["u", "r", "d", "m", "p", "l"];
@@ -188,6 +191,8 @@ pub struct Config {
     /// Top-level entries run at the same time; the paths inside one entry run in order.
     pub launch_hooks: Vec<Vec<String>>,
     pub maintenance_actions: Vec<MaintenanceAction>,
+    /// `plugins`: the only plugin processes that ever run.
+    pub plugins: Vec<PluginSpec>,
     pub warnings: Vec<String>,
     pub path: String,
 }
@@ -213,6 +218,7 @@ impl Config {
             vsec_path: String::new(),
             launch_hooks: Vec::new(),
             maintenance_actions: Vec::new(),
+            plugins: Vec::new(),
             warnings: Vec::new(),
             path: path.to_owned(),
         }
@@ -518,6 +524,11 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
     if let Some(v) = present("maintenanceActions") {
         let (actions, w) = parse_actions(v, ctx);
         cfg.maintenance_actions = actions;
+        cfg.warnings.extend(w);
+    }
+    if let Some(v) = present("plugins") {
+        let (plugins, w) = parse_plugins(v, ctx);
+        cfg.plugins = plugins;
         cfg.warnings.extend(w);
     }
     parse_screen_keys(obj, ctx, &mut cfg);

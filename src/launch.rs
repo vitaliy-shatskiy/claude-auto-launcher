@@ -30,6 +30,8 @@ pub enum RowName {
     Advisor,
     Permission,
     Mode,
+    /// A plugin's row: the index over every plugin row in config order (`plugins::Plugins`).
+    Plugin(u16),
 }
 
 impl RowName {
@@ -43,6 +45,7 @@ impl RowName {
             Self::Advisor => "Advisor",
             Self::Permission => "Permission",
             Self::Mode => "Mode",
+            Self::Plugin(_) => "Plugin",
         }
     }
 
@@ -92,17 +95,17 @@ pub const PROFILE_FIELDS: [RowName; 5] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowDef {
     pub name: RowName,
-    pub label: &'static str,
+    pub label: String,
     pub values: Vec<String>,
     pub labels: BTreeMap<String, String>,
     pub args: BTreeMap<String, String>,
 }
 
 impl RowDef {
-    fn plain(name: RowName, label: &'static str, values: &[&str]) -> Self {
+    fn plain(name: RowName, label: &str, values: &[&str]) -> Self {
         Self {
             name,
-            label,
+            label: label.to_owned(),
             values: values.iter().map(|v| (*v).to_owned()).collect(),
             labels: BTreeMap::new(),
             args: BTreeMap::new(),
@@ -174,6 +177,9 @@ pub struct Roster {
     pins: BTreeMap<RowName, String>,
     tints: BTreeMap<String, String>,
     default_account: String,
+    /// Each plugin row's default and API key, by its index.
+    plugin_defaults: BTreeMap<u16, String>,
+    plugin_keys: BTreeMap<u16, String>,
 }
 
 impl Roster {
@@ -202,6 +208,8 @@ impl Roster {
             pins: BTreeMap::new(),
             tints,
             default_account,
+            plugin_defaults: BTreeMap::new(),
+            plugin_keys: BTreeMap::new(),
         }
     }
 
@@ -234,6 +242,11 @@ impl Roster {
         values.clone_into(&mut self.pins);
     }
 
+    /// A plugin row's `<plugin>.<row>` key and default.
+    pub fn plugin_row(&self, index: u16) -> Option<(&str, &str)> {
+        Some((self.plugin_keys.get(&index)?.as_str(), self.plugin_defaults.get(&index)?.as_str()))
+    }
+
     pub fn default_account(&self) -> &str {
         &self.default_account
     }
@@ -250,6 +263,7 @@ impl Roster {
         let mut all = std::mem::take(&mut self.rows);
         all.append(&mut self.spare);
         let action = all.iter().position(|r| r.name == RowName::Action).map(|i| all.remove(i));
+        let (plugin_rows, mut all): (Vec<RowDef>, Vec<RowDef>) = all.into_iter().partition(|r| matches!(r.name, RowName::Plugin(_)));
         self.rows = order
             .iter()
             .filter_map(|name| all.iter().position(|r| r.name == *name).map(|i| all.remove(i)))
@@ -258,6 +272,25 @@ impl Roster {
         if let Some(a) = action {
             self.rows.insert(self.action_slot(), a);
         }
+        // `rows` names only built-in rows: a plugin's rows stay, after them.
+        self.rows.extend(plugin_rows);
+    }
+
+    /// A plugin row after every other row; its name is the next `RowName::Plugin` index.
+    /// `key` (`<plugin>.<row>`) names it to a client of the headless API.
+    pub fn add_plugin_row(&mut self, key: &str, label: &str, values: &[String], default: &str) -> Option<RowName> {
+        let index = u16::try_from(self.plugin_defaults.len()).ok()?;
+        let name = RowName::Plugin(index);
+        self.plugin_defaults.insert(index, default.to_owned());
+        self.plugin_keys.insert(index, key.to_owned());
+        self.rows.push(RowDef {
+            name,
+            label: label.to_owned(),
+            values: values.to_vec(),
+            labels: BTreeMap::new(),
+            args: BTreeMap::new(),
+        });
+        Some(name)
     }
 
     fn action_slot(&self) -> usize {
@@ -313,6 +346,9 @@ impl Roster {
     /// pins a value on a row the screen does not show.
     pub fn new_state(&self) -> LaunchState {
         let mut s = LaunchState::fresh(&self.default_account);
+        for (i, v) in &self.plugin_defaults {
+            s.set(RowName::Plugin(*i), v);
+        }
         for (name, v) in &self.pins {
             let def = (*name != RowName::Account && self.row(*name).is_none())
                 .then(|| self.def(*name))
@@ -369,6 +405,8 @@ pub struct LaunchState {
     /// The context `projects::update_start_selection` re-applies the start rule with on a tab
     /// switch (`$script:LaunchStartContext`); `None` until the start selection ran.
     pub start: Option<StartContext>,
+    /// Plugin row values by row index; never remembered.
+    pub plugin_rows: BTreeMap<u16, String>,
 }
 
 impl LaunchState {
@@ -393,6 +431,7 @@ impl LaunchState {
             project_slug: String::new(),
             project_slugs: Vec::new(),
             start: None,
+            plugin_rows: BTreeMap::new(),
         }
     }
 
@@ -406,11 +445,16 @@ impl LaunchState {
             RowName::Advisor => &self.advisor,
             RowName::Permission => &self.permission,
             RowName::Mode => &self.mode,
+            RowName::Plugin(i) => self.plugin_rows.get(&i).map_or("", String::as_str),
         }
     }
 
     pub fn set(&mut self, row: RowName, value: &str) {
         let slot = match row {
+            RowName::Plugin(i) => {
+                self.plugin_rows.insert(i, value.to_owned());
+                return;
+            }
             RowName::Account => &mut self.account,
             RowName::Remote => &mut self.remote,
             RowName::Action => &mut self.action,

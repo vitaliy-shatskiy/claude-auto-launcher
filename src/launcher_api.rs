@@ -33,6 +33,9 @@ pub struct RunRequest {
     pub resume_id: Option<String>,
     #[serde(default)]
     pub fork: bool,
+    /// Plugin rows by `<plugin>.<row>` (`pluginRows` of `--launcher-options`); unset = its default.
+    #[serde(default)]
+    pub plugin_rows: BTreeMap<String, String>,
 }
 
 impl RunRequest {
@@ -43,7 +46,7 @@ impl RunRequest {
             RowName::Advisor => self.advisor.as_deref(),
             RowName::Permission => self.permission.as_deref(),
             RowName::Mode => self.mode.as_deref(),
-            RowName::Account | RowName::Remote | RowName::Action => None,
+            RowName::Account | RowName::Remote | RowName::Action | RowName::Plugin(_) => None,
         }
     }
 }
@@ -76,7 +79,35 @@ fn client_rows(roster: &Roster) -> impl Iterator<Item = &RowDef> {
     roster
         .rows
         .iter()
-        .filter(|r| !matches!(r.name, RowName::Account | RowName::Remote | RowName::Action))
+        .filter(|r| !matches!(r.name, RowName::Account | RowName::Remote | RowName::Action | RowName::Plugin(_)))
+}
+
+/// The plugin rows with their `<plugin>.<row>` keys and defaults.
+fn plugin_rows(roster: &Roster) -> impl Iterator<Item = (&RowDef, &str, &str)> {
+    roster.rows.iter().filter_map(|r| match r.name {
+        RowName::Plugin(i) => roster.plugin_row(i).map(|(key, default)| (r, key, default)),
+        _ => None,
+    })
+}
+
+/// `pluginRows`: each value must be one the row declares; an unknown key is refused.
+fn resolve_plugin_rows(req: &RunRequest, roster: &Roster, state: &mut LaunchState) -> Result<(), String> {
+    for (key, value) in &req.plugin_rows {
+        let (row, _, _) = plugin_rows(roster)
+            .find(|(_, k, _)| k == key)
+            .ok_or_else(|| format!("pluginRows: '{key}' is not a plugin row"))?;
+        let canon = row
+            .canonical(value)
+            .ok_or_else(|| format!("pluginRows: '{key}' = '{value}' is not one of {}", row.values.join(", ")))?;
+        state.set(row.name, canon);
+    }
+    Ok(())
+}
+
+fn plugin_rows_json(roster: &Roster) -> Vec<Value> {
+    plugin_rows(roster)
+        .map(|(r, key, default)| json!({ "name": key, "label": r.label, "values": r.values, "default": default }))
+        .collect()
 }
 
 fn field(name: RowName) -> &'static str {
@@ -89,6 +120,7 @@ fn field(name: RowName) -> &'static str {
         RowName::Advisor => "advisor",
         RowName::Permission => "permission",
         RowName::Mode => "mode",
+        RowName::Plugin(_) => "plugin",
     }
 }
 
@@ -156,6 +188,7 @@ pub fn resolve_run(req: &RunRequest, roster: &Roster, limits: &Limits, prefs_fil
     if !Path::new(&req.project).is_dir() {
         return Err(format!("project: no such directory '{}'", req.project));
     }
+    resolve_plugin_rows(req, roster, &mut state)?;
     req.project.clone_into(&mut state.project);
     Ok(state)
 }
@@ -249,6 +282,7 @@ pub fn options_json(
         "version": version,
         "actions": action_names(),
         "rows": rows,
+        "pluginRows": plugin_rows_json(roster),
         "accounts": listed,
     })
 }

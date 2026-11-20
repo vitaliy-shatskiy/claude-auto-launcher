@@ -21,7 +21,7 @@ use crate::timing::Timings;
 use crate::types::{LabelDefaults, VersionInfo};
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{ConsoleTerm, PreviewTerm, Term, UiStop, parse_preview_keys, parse_preview_size};
-use crate::{env, maintenance, projects, sessions, sys, theme};
+use crate::{env, maintenance, plugins, projects, sessions, sys, theme};
 
 use super::{Run, UiEnd, UiOutcome, now_ms, var};
 
@@ -131,6 +131,9 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
     let mut chosen_how: Option<String>;
     let mut rows_store = ConfigRows { run };
+    // Plugin messages and warnings met on the screens, printed once the console is back.
+    let plugin_lines: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let mut plugin_projects: Option<Vec<plugins::projects::Entry>> = None;
 
     let outcome = loop {
         let mut hook = |k: &KeyPress, t: &mut dyn Term| -> bool {
@@ -142,6 +145,16 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
                 });
                 return true;
             }
+            if let Some((p, key)) = plugins::action::find(&run.plugins, "launch", k) {
+                if !run.preview {
+                    status(t, false, "running plugin action...")();
+                    let context = serde_json::json!({ "screen": "launch", "cwd": run.ctx.cwd.to_string_lossy() });
+                    plugin_lines
+                        .borrow_mut()
+                        .extend(plugins::action::run(&run.plugins, p, key, &context, &plugins::run::Process));
+                }
+                return true;
+            }
             false
         };
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
@@ -151,11 +164,23 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             break UiEnd::Cancelled;
         };
         state = next;
-        let project_list = registry(
+        let registry_list = registry(
             &mut prefetch,
             &run.logger,
             status(term.as_mut(), run.preview, "loading projects..."),
         );
+        let extra = plugin_projects.get_or_insert_with(|| {
+            let mut w = Vec::new();
+            let found = if run.preview {
+                Vec::new()
+            } else {
+                plugins::projects::collect(&run.plugins, &plugins::run::Process, &mut w)
+            };
+            plugin_lines.borrow_mut().extend(w);
+            found
+        });
+        let merged_projects = plugins::projects::merge(registry_list, extra);
+        let project_list: &[projects::Project] = &merged_projects;
         // Deferred from before the launch screen: the rule reads only the cwd and the project the
         // final tab remembers, so applying it once here equals applying it on every tab switch.
         if state.start.is_none() {
@@ -241,7 +266,18 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             style,
             preview: run.preview,
         };
-        if let Some(picked) = sessions::run_picker(term.as_mut(), &req)? {
+        let project = state.project.clone();
+        let plugin_sessions = |slugs: &[String]| {
+            if run.preview {
+                return Vec::new();
+            }
+            let mut w = Vec::new();
+            let scope = if slugs.is_empty() { "" } else { project.as_str() };
+            let found = plugins::sessions::collect(&run.plugins, scope, &plugins::run::Process, &mut w);
+            plugin_lines.borrow_mut().extend(w);
+            found
+        };
+        if let Some(picked) = sessions::run_picker_with(term.as_mut(), &req, &plugin_sessions)? {
             let holder = if picked.fork {
                 None
             } else {
@@ -290,6 +326,9 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     }
     drop(prefetch);
     drop(term);
+    for l in plugin_lines.borrow().iter() {
+        out::line(&format!("  {l}"), crate::out::Fg::DarkYellow);
+    }
     report_update(&watch, &run.logger);
     if let Some(c) = cache
         && c.exists()

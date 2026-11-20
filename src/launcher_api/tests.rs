@@ -43,6 +43,7 @@ fn request() -> RunRequest {
         mode: Some("safe".into()),
         resume_id: None,
         fork: false,
+        plugin_rows: BTreeMap::new(),
     }
 }
 

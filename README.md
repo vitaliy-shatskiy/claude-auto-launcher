@@ -393,6 +393,7 @@ two-account starting point.
 | `hideHeadlessProjects` | bool | `true` | a project with no interactive session (only `sdk-*` transcripts) is hidden even when it is a git root. `false` keeps a headless git root listed |
 | `projectScreen` | `always`\|`onDemand` | `always` | `onDemand`: Enter on the launch screen starts in the launch directory, and an `action` row (`new`, `project`, `continue`, `resume`, `worktree`, never remembered) picks what it does; `project` opens the project screen for that launch, Esc returns |
 | `mouse` | bool | `true` | `false` arms no mouse input. `CLAUDE_AUTO_NO_MOUSE=1` turns it off whatever this says |
+| `plugins[]` | `{name, path, args, timeoutMs}` | `[]` | the only plugin processes that ever run, see [Plugins](#plugins). `name`: 1-32 letters, digits, `-`, `_`, unique ignoring case. `path`: absolute, never looked up on PATH. `timeoutMs`: 1-120000, overrides every verb's default. A bad entry is skipped with a warning |
 
 #### Accounts
 
@@ -422,6 +423,53 @@ that is not absolute, or not exactly one canonical root.
 | `remote` | `on`, `off` (author setup only) |
 
 </details>
+
+### Plugins
+
+A plugin is a program you list in config `plugins`; nothing in a folder runs by itself, and a
+listed path that is missing is skipped, never looked up elsewhere. The launcher starts it as
+`<path> <args...> <verb>`, windowless, writes one JSON line to its stdin and reads one JSON value
+from its stdout. A crash (non-zero exit), a timeout or bad JSON prints one warning and skips that
+plugin's part; the launch goes on. A timed-out plugin is killed with every process it started.
+Only an explicit `cancel` from `preLaunch` stops a launch. Preview and `--launcher-options` start
+no plugin: they use the cached `describe` answers only.
+
+```json
+"plugins": [{ "name": "sample", "path": "~/tools/plugin_sample.exe", "args": [], "timeoutMs": 3000 }]
+```
+
+Protocol 1:
+
+| verb | stdin | stdout | timeout |
+|---|---|---|---|
+| `describe` | `{}` | `{protocol: 1, rows: [{name, label, values, default}], actions: [{key, label, screen}], hooks: ["preLaunch", "postLaunch"], sources: ["projects", "sessions"]}` | 2 s |
+| `preLaunch` | `{choice}` | `{env?: {NAME: value}, args?: [...], cancel?: "reason"}` | 10 s |
+| `postLaunch` | `{choice, exitCode}` | any object (ignored) | 10 s |
+| `action` | `{key, context: {screen, cwd}}` | `{message?}` (printed after the screens) | 10 s |
+| `projects` | `{}` | `[{path, name?, lastUsed?}]` | 2 s |
+| `sessions` | `{project}` (`""` = every project) | `[{id, title?, updated?}]` | 2 s |
+
+- `describe` is cached in `claude-auto-plugins.json` beside the config, per path, and asked again
+  when the file's size or write time or the entry's `args` change.
+- `rows`: up to 8 per plugin, after the built-in rows on the launch screen; `default` must be one
+  of `values` (no default = the first). A row's value is never remembered.
+  `--launcher-options` lists them under `pluginRows` as `<plugin>.<row>`; `--launcher-run` takes
+  `"pluginRows": {"<plugin>.<row>": "<value>"}`, each value checked against the row.
+- `choice`: `account`, `project`, `action`, `model`, `effort`, `advisor`, `permission`, `mode`,
+  `resumeId` and `rows` - the plugin's own rows only.
+- `preLaunch`: `env` names may not hold `=` or a control character, values and `args` no NUL (at
+  most 64 variables of 8 KiB, 32 arguments of 4 KiB); one bad entry refuses the plugin's whole
+  answer with a warning. Plugins run at once; their variables and arguments apply in config order.
+- `actions`: one letter or digit; protocol 1 has the `launch` screen, whose own keys `u w a s d`
+  are refused with a warning, as is a key an earlier plugin took.
+- `projects` entries join the project screen as `name [plugin]`; a directory the launcher already
+  knows keeps its own row. `sessions` entries join the resume picker tagged `[plugin]` and resume
+  with `claude --resume <id>` (an id is letters, digits, `-`, `_`, not starting with `-`).
+- `hooks` and sources run only when the screens or the launch need them, not in preview.
+
+[`examples/plugin_sample.rs`](examples/plugin_sample.rs) is a complete plugin: a `ticket` row whose
+value reaches claude as `SAMPLE_TICKET`, a `j` action, empty sources. `cargo build --example
+plugin_sample`, then list `target/debug/examples/plugin_sample.exe` by its full path.
 
 ### Secrets
 
