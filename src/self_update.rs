@@ -169,6 +169,8 @@ impl Local {
                         let was = s.installed.or_else(Version::current);
                         s.installed = s.previous;
                         s.previous = was;
+                        // A roll back from a newer build holds it out of `auto`; rolling forward lifts it.
+                        s.rolled_back_from = was.filter(|w| s.installed.is_none_or(|i| *w > i));
                         s.write(&self.state);
                         "rolled back - takes effect next start".to_owned()
                     }
@@ -218,6 +220,7 @@ fn update(local: &Local, release: &Release, net: &dyn Net, files: &dyn Files, cl
     let mut s = State::read(&local.state);
     s.previous = Version::current();
     s.installed = Some(release.version);
+    s.rolled_back_from = None;
     s.write(&local.state);
     Ok(())
 }
@@ -248,12 +251,14 @@ fn run(local: &Local, now_ms: i64, net: &dyn Net, files: &dyn Files, closed: &Mu
         Mode::Auto => true,
     };
     let r = check::newer(check::latest(&local.state, &local.repo, now_ms, net), Version::current())?;
-    let installed = State::read(&local.state).installed;
-    if installed == Some(r.version) {
+    let state = State::read(&local.state);
+    if state.installed == Some(r.version) {
         // Already swapped in by an earlier start's background update; it waits for this restart.
         return Some(Notice::Updated(r.version));
     }
-    if !auto {
+    // The user rolled this build back: only the update key installs it again.
+    let held = state.rolled_back_from.is_some_and(|v| r.version <= v);
+    if !auto || held {
         return Some(Notice::Available(r.version));
     }
     Some(match update(local, &r, net, files, closed) {

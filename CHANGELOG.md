@@ -111,6 +111,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - The preview card's `last ›` showed the first prompt when a long turn's tool lines pushed the
   last prompt out of the tail read; the transcript scan now keeps Claude Code's `last-prompt`
   record and the card falls back to it (a prompt found in the tail still wins).
+- Self-update `auto` installed a build again on the next start after `b` rolled it back; a
+  rolled-back build now comes back only through `c`, and a newer release updates as before.
 
 ## [0.8.2] — 2026-11-11
 

@@ -217,6 +217,39 @@ fn maintenance_offers_update_then_roll_back_and_both_work() {
 }
 
 #[test]
+fn a_roll_back_is_not_undone_by_the_next_auto_start() {
+    let t = tmp("rolledback");
+    let l = local(&t.0, Mode::Auto);
+    let stub = full_stub(&t.0);
+    let v99 = Version([99, 0, 0]);
+    assert_eq!(run(&l, NOW, &stub, &RealFiles, &Mutex::new(false)), Some(Notice::Updated(v99)));
+    assert_eq!(
+        l.act_with(ROLLBACK_KEY, &NoNet, &RealFiles).as_deref(),
+        Some("rolled back - takes effect next start")
+    );
+    let an_hour_later = run(&l, NOW + 3_600_000, &stub, &RealFiles, &Mutex::new(false));
+    assert_eq!(an_hour_later, Some(Notice::Available(v99)), "offered, never installed again");
+    assert_eq!(std::fs::read(&l.exe).unwrap(), b"current build", "the rolled-away build stays out");
+    assert_eq!(
+        l.entries().first(),
+        Some(&(UPDATE_KEY, "update claude-auto to 99.0.0".to_owned())),
+        "the update key still offers it"
+    );
+    let newer = Stub::new(&[
+        (API, Ok(release_json("v100.0.0"))),
+        (SHA_URL, Ok(sha_file(&t.0, b"newer build"))),
+        (EXE_URL, Ok(b"newer build".to_vec())),
+    ]);
+    let two_days_later = NOW + 2 * 86_400_000;
+    assert_eq!(
+        run(&l, two_days_later, &newer, &RealFiles, &Mutex::new(false)),
+        Some(Notice::Updated(Version([100, 0, 0]))),
+        "a newer release installs again"
+    );
+    assert_eq!(State::read(&l.state).rolled_back_from, None, "and clears the hold");
+}
+
+#[test]
 fn config_values_parse_strictly() {
     assert_eq!(Mode::parse(" Auto "), Some(Mode::Auto));
     assert_eq!(Mode::parse("daily"), None);

@@ -67,6 +67,8 @@ pub(crate) struct State {
     pub(crate) latest: Option<Release>,
     pub(crate) installed: Option<Version>,
     pub(crate) previous: Option<Version>,
+    /// The build the user rolled back from: `auto` never installs it again, only a newer one.
+    pub(crate) rolled_back_from: Option<Version>,
 }
 
 impl State {
