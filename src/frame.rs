@@ -10,12 +10,13 @@ pub const MIN_HEIGHT: usize = 16;
 pub const TWO_PANE_WIDTH: usize = 100;
 pub const SHORT_PICKER_HEIGHT: usize = 30;
 
-/// The largest drawing area: past it a huge terminal gets a capped page, not stretched rows.
-pub const MAX_AREA_WIDTH: usize = 240;
-pub const MAX_AREA_HEIGHT: usize = 80;
+/// A reported side past this is a broken size report, not a terminal.
+pub const MAX_REPORTED_CELLS: usize = 10_000;
+/// What a broken side falls back to: the console's own default when its size read fails.
+const FALLBACK_SIZE: (usize, usize) = (80, 25);
 
-/// Where every screen draws: the terminal size capped at `MAX_AREA_*`, anchored at the
-/// top-left cell, so terminal and frame columns are the same numbers.
+/// Where every screen draws: the whole terminal from its top-left cell, so terminal and frame
+/// columns are the same numbers. A side of 0 or past `MAX_REPORTED_CELLS` takes `FALLBACK_SIZE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Area {
     pub width: usize,
@@ -24,9 +25,10 @@ pub struct Area {
 
 impl Area {
     pub fn of(size: (usize, usize)) -> Self {
+        let side = |n: usize, fallback: usize| if (1..=MAX_REPORTED_CELLS).contains(&n) { n } else { fallback };
         Self {
-            width: size.0.min(MAX_AREA_WIDTH),
-            height: size.1.min(MAX_AREA_HEIGHT),
+            width: side(size.0, FALLBACK_SIZE.0),
+            height: side(size.1, FALLBACK_SIZE.1),
         }
     }
 

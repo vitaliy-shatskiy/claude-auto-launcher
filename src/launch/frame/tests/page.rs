@@ -46,13 +46,13 @@ fn a_160x40_page_spans_the_width_with_the_footer_on_the_last_row() {
 }
 
 #[test]
-fn a_400x150_terminal_draws_a_240x80_page_at_the_top_left() {
+fn a_400x150_terminal_gets_a_400x150_page_from_the_top_left() {
     let r = four();
     let (_, lines) = page(&r, &real_state(&r), (400, 150));
     assert_golden("launch-400x150", &lines.join("\n"));
-    assert_eq!(lines.len(), 79);
-    assert_eq!(display_width(&lines[0]), 239, "the header box starts at column 0");
-    assert!(lines.iter().all(|l| display_width(l) <= 239), "nothing past the area");
+    assert_eq!(lines.len(), 149, "every row but the headroom one");
+    assert_eq!(display_width(&lines[0]), 399, "the header box spans the terminal from column 0");
+    assert!(lines.iter().all(|l| display_width(l) <= 399), "the last column stays free");
 }
 
 #[test]

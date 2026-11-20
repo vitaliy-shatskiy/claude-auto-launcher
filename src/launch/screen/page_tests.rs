@@ -146,8 +146,8 @@ fn at_160x40_a_click_selects_the_drawn_cell_and_the_footer_acts_only_where_drawn
 
 #[test]
 fn on_a_huge_terminal_clicks_count_from_the_top_left_page() {
-    let f = frame_at((240, 80));
+    let f = frame_at((400, 150));
     let (mx, my) = cell(&f, "Effort", "max");
     let mut t = term((400, 150), vec![click(mx, my), key(vk::ENTER)]);
-    assert_eq!(drive(&mut t, (240, 80)).0.unwrap().effort, "max", "the page starts at column 0");
+    assert_eq!(drive(&mut t, (400, 150)).0.unwrap().effort, "max", "the page starts at column 0");
 }

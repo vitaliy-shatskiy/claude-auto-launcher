@@ -153,14 +153,14 @@ fn golden_project_200x60_fills_the_terminal() {
 }
 
 #[test]
-fn golden_project_400x150_draws_a_240x80_page_at_the_top_left() {
+fn golden_project_400x150_fills_the_terminal_from_the_top_left() {
     let ps = golden_projects();
     let area = frame::Area::of((400, 150));
     let lines = project_frame(&view(&ps, 1, r"C:\Users\sample\here", area.width, area.height)).lines;
     assert_golden("project-400x150", &lines.join("\n"));
-    assert_eq!(lines.len(), 79);
+    assert_eq!(lines.len(), 149);
     assert!(lines[0].starts_with('\u{256D}'), "the box starts at column 0: {}", lines[0]);
-    assert!(lines.iter().all(|l| display_width(l) <= 239));
+    assert_eq!(display_width(&lines[0]), 399);
 }
 
 #[test]

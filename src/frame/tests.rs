@@ -154,14 +154,21 @@ fn too_small_keeps_size_line_first() {
 }
 
 #[test]
-fn area_is_the_terminal_below_the_cap() {
+fn area_is_the_terminal() {
     assert_eq!(Area::of((160, 40)).size(), (160, 40));
 }
 
 #[test]
-fn area_at_and_above_the_cap_is_the_cap() {
-    assert_eq!(Area::of((MAX_AREA_WIDTH, MAX_AREA_HEIGHT)).size(), (240, 80));
-    assert_eq!(Area::of((400, 150)).size(), (240, 80));
+fn area_fills_a_huge_terminal() {
+    assert_eq!(Area::of((400, 150)).size(), (400, 150));
+    assert_eq!(Area::of((10_000, 10_000)).size(), (10_000, 10_000));
+}
+
+#[test]
+fn a_broken_size_report_falls_back_per_axis() {
+    assert_eq!(Area::of((0, 40)).size(), (80, 40), "zero width");
+    assert_eq!(Area::of((160, 0)).size(), (160, 25), "zero height");
+    assert_eq!(Area::of((10_001, 50_000)).size(), (80, 25), "absurd both ways");
 }
 
 #[test]

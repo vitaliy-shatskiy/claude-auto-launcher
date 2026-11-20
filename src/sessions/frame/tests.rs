@@ -235,7 +235,7 @@ fn the_box_fills_the_terminal_whatever_the_session_count() {
     }
 }
 
-/// AC5: what a cursor move costs on the console at 250x68 (a 240x68 area, five columns in).
+/// AC5: what a cursor move costs on the console at 250x68.
 #[test]
 fn a_cursor_move_writes_a_fraction_of_a_full_frame() {
     let owned: Vec<Session> = (0..69i64)
