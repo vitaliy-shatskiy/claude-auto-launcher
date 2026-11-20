@@ -250,6 +250,17 @@ fn a_roll_back_is_not_undone_by_the_next_auto_start() {
 }
 
 #[test]
+fn a_preview_forces_self_update_off() {
+    let t = tmp("preview");
+    let preview = Local::from_env(Mode::Auto, &Repo::default(), &t.0, true);
+    assert_eq!(preview.mode, Mode::Off);
+    if std::env::var("CLAUDE_AUTO_NO_SELF_UPDATE").as_deref() != Ok("1") {
+        let launch = Local::from_env(Mode::Auto, &Repo::default(), &t.0, false);
+        assert_eq!(launch.mode, Mode::Auto, "only the preview turned it off");
+    }
+}
+
+#[test]
 fn config_values_parse_strictly() {
     assert_eq!(Mode::parse(" Auto "), Some(Mode::Auto));
     assert_eq!(Mode::parse("daily"), None);
