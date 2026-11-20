@@ -52,7 +52,7 @@ fn text(screen: &mut PickerScreen<'_>) -> String {
 fn clock() -> Clock {
     Clock {
         now_ms: 1_789_560_000_000,
-        offset_minutes: 0,
+        zone: crate::sessions::frame::Zone(|_| 0),
     }
 }
 
