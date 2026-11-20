@@ -155,24 +155,13 @@ fn too_small_keeps_size_line_first() {
 
 #[test]
 fn area_is_the_terminal_below_the_cap() {
-    let a = Area::of((160, 40));
-    assert_eq!((a.left, a.width, a.height), (0, 160, 40));
-    assert_eq!(a.place(vec!["x".into()]), ["x"]);
+    assert_eq!(Area::of((160, 40)).size(), (160, 40));
 }
 
 #[test]
-fn area_at_the_cap_is_the_cap() {
-    let a = Area::of((MAX_AREA_WIDTH, MAX_AREA_HEIGHT));
-    assert_eq!((a.left, a.width, a.height), (0, 240, 80));
-}
-
-#[test]
-fn area_above_the_cap_is_centred_and_anchored_at_the_top() {
-    let a = Area::of((400, 150));
-    assert_eq!((a.left, a.width, a.height), (80, 240, 80));
-    assert_eq!(Area::of((241, 81)).left, 0, "an odd spare column goes to the right");
-    let placed = a.place(vec!["ab".into()]);
-    assert_eq!(placed, [format!("{}ab", " ".repeat(80))]);
+fn area_at_and_above_the_cap_is_the_cap() {
+    assert_eq!(Area::of((MAX_AREA_WIDTH, MAX_AREA_HEIGHT)).size(), (240, 80));
+    assert_eq!(Area::of((400, 150)).size(), (240, 80));
 }
 
 #[test]

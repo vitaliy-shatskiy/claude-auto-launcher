@@ -282,7 +282,7 @@ impl<'a> MaintScreen<'a> {
         self.status = text;
         let area = crate::frame::Area::of(term.size());
         let f = maintenance_frame(&self.info, area.size(), &self.status, self.style, &self.keys, self.cursor.hover);
-        term.paint(&area.place(f.lines));
+        term.paint(&f.lines);
     }
 
     fn arm(&mut self, key: char, now: Option<u64>, text: String) {

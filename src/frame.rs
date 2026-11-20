@@ -10,40 +10,28 @@ pub const MIN_HEIGHT: usize = 16;
 pub const TWO_PANE_WIDTH: usize = 100;
 pub const SHORT_PICKER_HEIGHT: usize = 30;
 
-/// The largest drawing area: past it a huge terminal gets a centred page, not stretched rows.
+/// The largest drawing area: past it a huge terminal gets a capped page, not stretched rows.
 pub const MAX_AREA_WIDTH: usize = 240;
 pub const MAX_AREA_HEIGHT: usize = 80;
 
-/// Where every screen draws: the terminal size capped at `MAX_AREA_*`, centred horizontally
-/// (`left` blank columns before it) and anchored at the top.
+/// Where every screen draws: the terminal size capped at `MAX_AREA_*`, anchored at the
+/// top-left cell, so terminal and frame columns are the same numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Area {
-    pub left: usize,
     pub width: usize,
     pub height: usize,
 }
 
 impl Area {
     pub fn of(size: (usize, usize)) -> Self {
-        let width = size.0.min(MAX_AREA_WIDTH);
         Self {
-            left: (size.0 - width) / 2,
-            width,
+            width: size.0.min(MAX_AREA_WIDTH),
             height: size.1.min(MAX_AREA_HEIGHT),
         }
     }
 
     pub fn size(self) -> (usize, usize) {
         (self.width, self.height)
-    }
-
-    /// The frame's lines moved right to the area's first column.
-    pub fn place(self, lines: Vec<String>) -> Vec<String> {
-        if self.left == 0 {
-            return lines;
-        }
-        let pad = " ".repeat(self.left);
-        lines.into_iter().map(|l| format!("{pad}{l}")).collect()
     }
 }
 

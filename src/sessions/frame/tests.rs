@@ -257,7 +257,7 @@ fn a_cursor_move_writes_a_fraction_of_a_full_frame() {
         style: Style { color: true, ascii: false },
         ..view(&s, 0, area.width, area.height)
     };
-    let frame = |v: &PickerView<'_>| area.place(picker_frame(v, &mut Memo::default()).lines);
+    let frame = |v: &PickerView<'_>| picker_frame(v, &mut Memo::default()).lines;
     let a = frame(&base);
     let hovered = frame(&PickerView {
         hover_row: 1,

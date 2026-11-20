@@ -30,8 +30,8 @@ fn page(r: &Roster, state: &LaunchState, size: (usize, usize)) -> (Frame, Vec<St
         },
     };
     let f = launch_frame(r, &inp);
-    let placed = area.place(f.lines.clone());
-    (f, placed)
+    let lines = f.lines.clone();
+    (f, lines)
 }
 
 #[test]
@@ -46,14 +46,13 @@ fn a_160x40_page_spans_the_width_with_the_footer_on_the_last_row() {
 }
 
 #[test]
-fn a_400x150_terminal_draws_a_centred_240x80_page() {
+fn a_400x150_terminal_draws_a_240x80_page_at_the_top_left() {
     let r = four();
     let (_, lines) = page(&r, &real_state(&r), (400, 150));
     assert_golden("launch-400x150", &lines.join("\n"));
     assert_eq!(lines.len(), 79);
-    let pad = " ".repeat(80);
-    assert!(lines.iter().all(|l| l.is_empty() || l.starts_with(&pad)), "centred");
-    assert!(lines.iter().all(|l| display_width(l) <= 80 + 239), "nothing past the area");
+    assert_eq!(display_width(&lines[0]), 239, "the header box starts at column 0");
+    assert!(lines.iter().all(|l| display_width(l) <= 239), "nothing past the area");
 }
 
 #[test]
