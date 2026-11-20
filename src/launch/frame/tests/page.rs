@@ -20,6 +20,7 @@ fn page(r: &Roster, state: &LaunchState, size: (usize, usize)) -> (Frame, Vec<St
         limits: &limits,
         version: &version,
         restored: None,
+        notice: None,
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,

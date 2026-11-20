@@ -27,6 +27,8 @@ pub struct LaunchFrameInput<'a> {
     pub default_advisor_label: &'a str,
     pub default_labels: &'a DefaultLabels,
     pub style: Style,
+    /// The self-update line, drawn dim under the restored status.
+    pub notice: Option<&'a str>,
 }
 
 /// One limit as label, percent and an age of its own, in drawing order: five hour, seven day,
@@ -296,6 +298,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         };
         tail.push(format!("  * restored ({when}), ctrl+r resets"));
     }
+    tail.extend(inp.notice.map(|n| format!("  {}{n}{}", theme::DIM_OPEN, theme::DIM_CLOSE)));
     let footer = launch_footer(&g, fw, inp.style.color);
     // The rule and the status close the page together with the footer.
     frame::pad_to_bottom(&mut lines, inp.height, tail.len() + footer.lines.len());

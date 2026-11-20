@@ -153,13 +153,35 @@ other two; `--no-default-features` alone builds without all four. A config key o
 
 A second account: pick its tab, start a session, type `/login` once in it.
 
-To update, replace the file. A running launcher holds it: rename the old one first
+To update, see [Updating](#updating). By hand: replace the file. A running launcher holds it: rename the old one first
 (`claude-auto.exe` → `claude-auto.old.exe`), copy the new one in, delete the old one later. From
 0.5.0 or older (`install.ps1` put the clone folder on the user PATH): remove the clone from PATH, or
 leave it and copy `claude-auto.exe` into it. Config, prefs and caches carry over. With no config file the launcher runs one `work` account on `~/.claude`.
 
 The launch screen is tested against Claude Code `2.1.316`. A much older or newer CLI may accept
 different flags.
+
+## Updating
+
+The launcher checks its own GitHub releases once a day, on a background thread that never holds up
+the launch screen. The answer is cached in `~/.claude/claude-auto-self-update.json`. When the
+check is offline, rate-limited or gets a malformed answer, nothing is shown and it tries again the
+next day. Only a plain `major.minor.patch` release newer than the running one is offered: never a
+pre-release, never a downgrade.
+
+- `selfUpdate: "notify"` (the default): the launch screen shows `claude-auto <new> available · u → update`.
+  Maintenance then has `c` update claude-auto to `<new>`.
+- `selfUpdate: "auto"`: the same download runs in the background, and the launch screen says
+  `claude-auto updated to <new> - takes effect next start`.
+- `selfUpdate: "off"` or `CLAUDE_AUTO_NO_SELF_UPDATE=1`: no check and no network.
+
+An update downloads `claude-auto.exe` and `claude-auto.exe.sha256` of that release over https
+only, and checks the hash before it touches anything. On a mismatch the download is deleted and the
+installed exe stays as it was. The running exe is renamed to `claude-auto.exe.old`
+and the new one takes its name. If that move fails, the old one is put back. The running launcher
+carries on; the new version starts next time. Maintenance `b` rolls back to the `.old` build, which
+then keeps the current one as `.old`. An exe under a `target\` build directory never replaces itself.
+A fork sets `updateRepo: "owner/name"` to update from its own releases.
 
 ## Usage
 
@@ -203,7 +225,7 @@ Each counts only as the first argument:
 | **Project filter** (`/`) | type words · `↑`/`↓` move while typing · `←`/`→` the action · `enter` runs the highlighted row (`no project matches` on the current directory when nothing matches) · `esc` clears |
 | **Path navigator** (`enter a path...`) | type a path · `↑`/`↓` move · `enter` or `→` enters the folder (on `use this folder`: picks it) · `←` up one folder · `backspace` on an empty segment goes up · `ctrl+backspace` drops a segment · `tab` completes, a second `tab` cycles · `esc` back to the list |
 | **Session picker** | `enter` open · `f` fork · `tab` this project or every project · `/` filter · `esc` back |
-| **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · `l` launch rows editor · one key per `maintenanceActions` entry · `esc` back |
+| **Maintenance** | `u` update · `r` rename swap · `d` doctor · `m` mcp list · `p` prune · `l` launch rows editor · `c` update claude-auto, `b` roll back (when offered, see [Updating](#updating)) · one key per `maintenanceActions` entry · `esc` back |
 | **Rows editor** (`l`) | `w`/`s` row · `ctrl+w`/`ctrl+s` or `alt+↑`/`alt+↓` move it · `ctrl+x` or `space` hide/show (not `account`) · `a`/`d` or `←`/`→` the value a hidden row launches with · `enter` save to `rows` and `hiddenValues` · `esc` cancel |
 | **Mouse** | hover highlights · a click selects a row, a second click on that row runs it · click a footer button to press its key · wheel scrolls |
 
@@ -321,6 +343,7 @@ exit 1 ran out of keys before a launch or a quit.
 | `CLAUDE_AUTO_PREFS` | path to the remembered-choices file, instead of `~/.claude/claude-auto-prefs.json` |
 | `CLAUDE_AUTO_NO_MOUSE=1` | never arms mouse input |
 | `CLAUDE_AUTO_NO_UPDATE=1` | skips the release-channel check and the update it would run before the launch screen |
+| `CLAUDE_AUTO_NO_SELF_UPDATE=1` | skips the launcher's own release check, as `selfUpdate: "off"` does |
 | `CLAUDE_AUTO_INPUT_TRACE=1` | logs every raw input record to `~/.claude/claude-auto-logs/input-<date>-<pid>.log` |
 | `CLAUDE_AUTO_ASCII=1` | forces ASCII box drawing (otherwise auto-detected from the console code page) |
 | `CLAUDE_AUTO_PREVIEW=1` | drives the whole UI and prints the `claude` command it would run, without running it |
@@ -390,7 +413,7 @@ two-account starting point.
 | `secretsRoot` | path | `~/.claude-secrets` | must be absolute. See [Secrets](#secrets) |
 | `vsecPath` | path | `""` | author setup only, see [Optional author setup](#optional-author-setup) |
 | `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice with the chosen project as the working directory, each best-effort. Must be absolute. Entries run at the same time; an entry that is an array of paths runs them in order (`["a.ps1", ["b.ps1", "c.ps1"]]`) |
-| `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p l` (`l` is the launch rows editor). `script` is required and must be absolute. An entry failing either check is skipped with a warning |
+| `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p l c b` (`l` is the launch rows editor, `c` and `b` the self-update keys). `script` is required and must be absolute. An entry failing either check is skipped with a warning |
 | `rows[]` | row names | every row | the launch rows in drawing order: `account`, `remote`, `model`, `effort`, `advisor`, `permission`, `mode`. An unlisted row is hidden and launches with its `hiddenValues` entry, else its default (`mode` = normal), never a remembered choice. `account` is always shown, first when unlisted. `remote` keeps its place here while the `remote` key is off and shows once it is on. Duplicates: the first wins; unknown names are named in one warning. Edit it on the maintenance screen with `l` (`ctrl+w`/`ctrl+s` move, `ctrl+x` hide, `a`/`d` hidden value, `enter` save); the launch screen shows it on return |
 | `hiddenValues` | object | none | row name -> the value that row launches with while hidden, e.g. `{"effort": "high", "model": "fable"}`: the same claude arguments as picking it on a shown row. Values: [the table below](#row-values); `account` takes none. Saving in the rows editor keeps only hidden rows' entries: a shown row's entry and a bad entry are removed. A hidden row never takes a remembered value, not even from another account tab this run. An unknown row or value warns and is skipped. A model the account lacks falls back as a remembered one does: to `default` |
 | `modelOrder[]` | family names | `["haiku","sonnet","opus","fable"]` | the model row after `default`, in this order. An unlisted family is hidden. Unknown names warn |
@@ -400,6 +423,8 @@ two-account starting point.
 | `projectScreen` | `always`\|`onDemand` | `always` | `onDemand`: Enter on the launch screen starts in the launch directory, and an `action` row (`new`, `project`, `continue`, `resume`, `worktree`, never remembered) picks what it does; `project` opens the project screen for that launch, Esc returns |
 | `mouse` | bool | `true` | `false` arms no mouse input. `CLAUDE_AUTO_NO_MOUSE=1` turns it off whatever this says |
 | `plugins[]` | `{name, path, args, timeoutMs}` | `[]` | the only plugin processes that ever run, see [Plugins](#plugins). `name`: 1-32 letters, digits, `-`, `_`, unique ignoring case. `path`: absolute, never looked up on PATH. `timeoutMs`: 1-120000, overrides every verb's default. A bad entry is skipped with a warning |
+| `selfUpdate` | `notify`\|`auto`\|`off` | `notify` | the launcher's own update, see [Updating](#updating) |
+| `updateRepo` | `owner/name` | `vitaliy-shatskiy/claude-auto-launcher` | the GitHub repo whose releases the launcher updates from |
 
 #### Accounts
 

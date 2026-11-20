@@ -22,6 +22,7 @@ pub mod prefs;
 pub mod projects;
 #[cfg(feature = "remote")]
 pub mod remote;
+pub mod self_update;
 pub mod sessions;
 pub(crate) mod sys;
 pub mod theme;

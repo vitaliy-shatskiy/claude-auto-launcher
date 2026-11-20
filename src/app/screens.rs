@@ -61,6 +61,11 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
     } else {
         maintenance::UpdateWatch::off(version.clone())
     });
+    // The launcher's own release check: a thread, never in the way of the first frame.
+    let launcher = RefCell::new(crate::self_update::Watch::start(
+        crate::self_update::Local::from_env(run.cfg.self_update, &run.cfg.update_repo, &run.ctx.home, run.preview),
+        now_ms(),
+    ));
     let accounts = tm.begin(&["accounts"]);
     let rate_dir = var("CLAUDE_AUTO_RATE_LIMITS_DIR").map_or_else(|| run.ctx.home.join(".claude").join("rate-limits"), PathBuf::from);
     let defaults = label_defaults(&canonical_root, &account_dirs);
@@ -148,7 +153,8 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
         };
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
             .with_rows(&mut rows_store)
-            .with_update(&update);
+            .with_update(&update)
+            .with_self_update(&launcher);
         let Some(next) = crate::ui::screen_loop::run(&mut screen, term.as_mut())? else {
             break UiEnd::Cancelled;
         };

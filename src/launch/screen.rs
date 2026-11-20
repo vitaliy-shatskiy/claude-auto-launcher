@@ -55,6 +55,8 @@ pub struct LaunchScreen<'a> {
     disk: RowsConfig,
     /// The update check running behind the screen: its answer redraws the header and model row.
     update: Option<&'a RefCell<UpdateWatch>>,
+    /// The launcher's own update check: its line shows above the footer.
+    launcher: Option<&'a RefCell<crate::self_update::Watch>>,
 }
 
 impl std::fmt::Debug for LaunchScreen<'_> {
@@ -110,6 +112,7 @@ impl<'a> LaunchScreen<'a> {
             store: None,
             disk: RowsConfig::default(),
             update: None,
+            launcher: None,
         }
     }
 
@@ -127,6 +130,13 @@ impl<'a> LaunchScreen<'a> {
         self.update = Some(update);
         self.take_update();
         self.apply_update();
+        self
+    }
+
+    /// The launcher's own update check behind the screen.
+    #[must_use]
+    pub(crate) fn with_self_update(mut self, watch: &'a RefCell<crate::self_update::Watch>) -> Self {
+        self.launcher = Some(watch);
         self
     }
 
@@ -227,6 +237,7 @@ impl Screen for LaunchScreen<'_> {
     }
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
+        let notice = self.launcher.and_then(|w| w.borrow().line(self.view.style.ascii));
         let inp = LaunchFrameInput {
             state: &self.state,
             width: size.0,
@@ -234,6 +245,7 @@ impl Screen for LaunchScreen<'_> {
             limits: &self.view.limits,
             version: &self.view.version,
             restored: None,
+            notice: notice.as_deref(),
             default_model_label: &self.view.default_model_label,
             default_advisor_label: &self.view.default_advisor_label,
             default_labels: self.labels(),
@@ -265,7 +277,7 @@ impl Screen for LaunchScreen<'_> {
     }
 
     fn idle(&mut self) -> bool {
-        self.take_update()
+        self.take_update() | self.launcher.is_some_and(|w| w.borrow_mut().news())
     }
 
     /// A click on a row selects it; on an option cell it walks to that value through the same

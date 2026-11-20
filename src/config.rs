@@ -42,6 +42,8 @@ const KNOWN_KEYS: &[&str] = &[
     #[cfg(feature = "mouse")]
     "mouse",
     "plugins",
+    "selfUpdate",
+    "updateRepo",
 ];
 /// An optional module's config key. It reaches the unknown-key check only in a build without that
 /// module, and then says so instead of calling the key unrecognized.
@@ -75,7 +77,8 @@ const MODULE_KEYS: [ModuleKey; 4] = [
     },
 ];
 /// The maintenance screen's own keys: five built-ins and `l`, the launch-rows editor.
-const RESERVED_ACTION_KEYS: [&str; 6] = ["u", "r", "d", "m", "p", "l"];
+/// `c` and `b` are the self-update keys (`self_update::UPDATE_KEY`, `ROLLBACK_KEY`).
+const RESERVED_ACTION_KEYS: [&str; 8] = ["u", "r", "d", "m", "p", "l", "c", "b"];
 
 /// Where `~` and relative paths resolve: the home directory and the launch directory.
 #[derive(Debug, Clone)]
@@ -231,6 +234,10 @@ pub struct Config {
     pub maintenance_actions: Vec<MaintenanceAction>,
     /// `plugins`: the only plugin processes that ever run.
     pub plugins: Vec<PluginSpec>,
+    /// `selfUpdate`: notify (default), auto or off.
+    pub self_update: crate::self_update::Mode,
+    /// `updateRepo`: the GitHub `owner/name` releases come from.
+    pub update_repo: crate::self_update::Repo,
     pub warnings: Vec<String>,
     pub path: String,
 }
@@ -262,6 +269,8 @@ impl Config {
             launch_hooks: Vec::new(),
             maintenance_actions: Vec::new(),
             plugins: Vec::new(),
+            self_update: crate::self_update::Mode::Notify,
+            update_repo: crate::self_update::Repo::default(),
             warnings: Vec::new(),
             path: path.to_owned(),
         }
@@ -307,6 +316,30 @@ fn near_key(key: &str) -> Option<&'static str> {
         let kn = known.to_ascii_lowercase();
         kn.starts_with(&k) || k.starts_with(&kn)
     })
+}
+
+/// `selfUpdate` and `updateRepo`: a bad value warns and keeps the default.
+fn parse_self_update_keys(obj: &serde_json::Map<String, Value>, cfg: &mut Config) {
+    let present = |k: &str| obj.get(k).filter(|v| !v.is_null());
+    if let Some(v) = present("selfUpdate") {
+        let raw = ps_str(v);
+        match crate::self_update::Mode::parse(&raw) {
+            Some(m) => cfg.self_update = m,
+            None => cfg
+                .warnings
+                .push(format!("selfUpdate '{raw}' is not notify/auto/off; using notify")),
+        }
+    }
+    if let Some(v) = present("updateRepo") {
+        let raw = ps_str(v);
+        match crate::self_update::Repo::parse(&raw) {
+            Some(r) => cfg.update_repo = r,
+            None => cfg.warnings.push(format!(
+                "updateRepo '{raw}' is not a GitHub owner/name; using {}",
+                crate::self_update::DEFAULT_REPO
+            )),
+        }
+    }
 }
 
 /// `ConvertTo-MaintenanceActions`.
@@ -555,6 +588,7 @@ pub fn parse_config(text: &str, path: &str, ctx: &PathCtx) -> Config {
         cfg.warnings.extend(w);
     }
     parse_screen_keys(obj, ctx, &mut cfg);
+    parse_self_update_keys(obj, &mut cfg);
     #[cfg(feature = "sharing")]
     if cfg.sharing && cfg.accounts.len() < 2 {
         cfg.sharing = false;
