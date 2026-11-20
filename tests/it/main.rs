@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+mod headless;
+
 const EXE: &str = env!("CARGO_BIN_EXE_claude-auto");
 
 fn scratch(name: &str) -> PathBuf {
@@ -295,6 +297,57 @@ fn preview_on_demand_enter_launches_without_the_project_screen() {
         "the project action opens the project screen: {project}"
     );
     assert!(project.contains("--- preview: picker cancelled ---"), "{project}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// Two accounts with separate stores (`sharing` off): `beta` holds one session recorded in the
+/// launcher's working directory, `alpha` (the default) none.
+fn two_accounts(name: &str) -> PathBuf {
+    let d = scratch(name);
+    fake_claude(&d);
+    let config = serde_json::json!({
+        "accounts": [
+            { "key": "alpha", "root": "~/.claude", "label": "alpha", "tint": "Green" },
+            { "key": "beta", "root": "~/.claude-b", "label": "beta", "tint": "Magenta" }
+        ],
+        "sharing": false,
+        "remote": false,
+        "projectScreen": "onDemand",
+        "rows": ["model", "effort"]
+    });
+    std::fs::write(d.join("home").join("config.json"), config.to_string()).unwrap();
+    let slug_dir = d.join("home").join(".claude-b").join("projects").join("SLUG");
+    std::fs::create_dir_all(&slug_dir).unwrap();
+    let record = serde_json::json!({
+        "type": "user",
+        "cwd": d.to_string_lossy(),
+        "message": { "role": "user", "content": "the foreign prompt" }
+    });
+    std::fs::write(slug_dir.join("foreign-id.jsonl"), format!("{record}\n")).unwrap();
+    std::fs::create_dir_all(d.join("home").join(".claude").join("projects")).unwrap();
+    d
+}
+
+#[test]
+fn preview_resume_lists_another_accounts_session_and_copies_nothing() {
+    let d = two_accounts("transfer");
+    let o = launcher(&d)
+        .env("CLAUDE_AUTO_CONFIG", d.join("home").join("config.json"))
+        .env("CLAUDE_AUTO_PREVIEW", "1")
+        .env("CLAUDE_AUTO_PREVIEW_KEYS", "s,d,d,d,Enter,Enter")
+        .output()
+        .unwrap();
+    let out = text(&o);
+    assert!(out.contains("[beta]"), "the row names its account: {out}");
+    assert!(
+        out.contains("session transfer   : foreign-id from beta -> alpha (copied on a real launch)"),
+        "{out}"
+    );
+    assert!(out.contains("launch args        : --resume foreign-id"), "{out}");
+    assert!(
+        !d.join("home").join(".claude").join("projects").join("SLUG").exists(),
+        "preview copies nothing"
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 

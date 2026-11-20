@@ -11,12 +11,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   project unhides it and hiding a pinned one unpins it; in a `/` search a pin only breaks ties. A
   pinned folder that no longer exists stays in the config and is listed dimmed, marked `(missing)`.
   The footer's `p` button takes a third footer line at 78-80 columns.
+- With `sharing` off, the session picker lists every account's sessions and tags another
+  account's with its name; resuming one copies the transcript into the launching account first
+  (an older copy there kept as `.bak`, a newer one left alone, a failed copy stops the launch,
+  preview copies nothing). Ported from Reva1v's fork.
+- `--launcher-options` prints what the launch screen offers as one line of JSON, starting nothing
+  and writing nothing; `--launcher-run '<json>'` launches with those choices after checking them
+  against the rows (exit `2` before any side effect when they do not fit) and does not save them.
+  Ported from Reva1v's fork, with a JSON request instead of its flags.
 
 ### Changed
 
 - A launch screen narrower than 100 columns collapses only the rows that do not fit to
   `‹ value ›`; the rows that fit stay radio lists you can read and click (before, one row too wide
   collapsed them all).
+- The session picker's summary cache is `claude-auto-sessions.json` again; the first cache write
+  removes the old `claude-auto-rs-sessions.json` beside it (that exact file, nothing else).
 
 ## [0.8.2] — 2026-11-11
 

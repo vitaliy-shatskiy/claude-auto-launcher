@@ -50,6 +50,10 @@ pub struct Session {
     pub last_assistant: String,
     pub recent: Vec<Message>,
     pub headless: bool,
+    /// The other account whose store holds this session; empty for the launching one. Depends on
+    /// who launches, so it never enters the summary cache.
+    #[serde(skip)]
+    pub account: String,
 }
 
 const HEAD_LINES: usize = 400;
@@ -227,11 +231,23 @@ pub(crate) fn physical_dir(path: &Path) -> PathBuf {
     PathBuf::from(trimmed)
 }
 
-/// `Get-SessionsCachePath`, renamed so the Rust and the PowerShell launcher never prune each
-/// other's entries while both run (each keys rows by its own summary version).
+/// `Get-SessionsCachePath`. The PowerShell launcher that once owned this name is gone, so the Rust
+/// one took it back from `claude-auto-rs-sessions.json` (`LEGACY_CACHE_NAME`).
 pub fn cache_path(projects_root: &Path) -> PathBuf {
     let physical = physical_dir(projects_root);
-    physical.parent().unwrap_or(&physical).join("claude-auto-rs-sessions.json")
+    physical.parent().unwrap_or(&physical).join(CACHE_NAME)
+}
+
+const CACHE_NAME: &str = "claude-auto-sessions.json";
+const LEGACY_CACHE_NAME: &str = "claude-auto-rs-sessions.json";
+
+/// The cache under its pre-0.9 name beside `path`, removed once a write under the new name landed.
+/// Exactly that name: its stranded temps and look-alikes are not ours to judge.
+fn remove_legacy_cache(path: &Path) {
+    let old = path.with_file_name(LEGACY_CACHE_NAME);
+    if path.file_name().is_some_and(|n| n == CACHE_NAME) && old.is_file() && std::fs::remove_file(&old).is_err() {
+        // Held by another instance: the next write retries.
+    }
 }
 
 /// The summary logic's own content hash: a code change invalidates the cache, a touch does not.
@@ -313,6 +329,7 @@ impl SessionCache {
                 if let Some(st) = stamp(path) {
                     self.memo = Some((path.to_path_buf(), st, entries.clone()));
                 }
+                remove_legacy_cache(path);
                 return;
             }
             if i < 4 {

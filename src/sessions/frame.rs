@@ -102,6 +102,10 @@ fn session_row(it: &Session, row: usize, c: &RowCtx<'_>) -> String {
     if !it.worktree.is_empty() {
         place = format!("{} {}", c.g.worktree, it.worktree);
     }
+    // A session of another account names its owner first: resuming it copies the transcript.
+    if !it.account.is_empty() {
+        format!("[{}] {place}", it.account).trim_end().clone_into(&mut place);
+    }
     let age = relative_age(it.modified_ms, c.clock.now_ms);
     let what = [&it.last_user, &it.title]
         .into_iter()
@@ -178,6 +182,9 @@ impl Preview<'_> {
         let mut place = strip_ctl(&self.s.project);
         if !self.s.worktree.is_empty() {
             place = format!("{place}  {} {}", self.g.worktree, strip_ctl(&self.s.worktree));
+        }
+        if !self.s.account.is_empty() {
+            place = format!("[{}] {place}", strip_ctl(&self.s.account));
         }
         place
     }

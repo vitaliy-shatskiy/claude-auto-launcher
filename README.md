@@ -169,6 +169,19 @@ or the first shown one when it is hidden) with exactly those arguments. The laun
 command line; anywhere else they go to claude too. The launcher has no `--help` of its own:
 `claude-auto --help` and `--version` are claude's.
 
+Two screenless entries let another program (a phone bridge, a script) launch as the screen would.
+Each counts only as the first argument:
+
+- `claude-auto --launcher-options` prints one line of JSON: `rows` (each shown row with its values
+  and labels, without `account` and `remote`), `actions`, and per shown account its `limitPct`,
+  `hidden` values, `defaultLabels` and remembered `prefs`. It starts no process (the version is the
+  newest downloaded build), touches no network and writes nothing, not even a log.
+- `claude-auto --launcher-run '<json>'` takes `{"account", "project", "action", <every row
+  --launcher-options listed>, "resumeId"?, "fork"?}`, checks it against the rows as the screen would
+  offer them on that account, and launches. A request with a missing, extra or unoffered value,
+  a missing project folder, or `resume` without a `resumeId` exits `2` before anything is written,
+  logged or started. The choices last for that launch: the remembered rows are not saved.
+
 ### Keys
 
 <p align="center">
@@ -201,8 +214,12 @@ command line; anywhere else they go to claude too. The launcher has no `--help` 
   `[enter] go on` and `[esc] back` buttons.
 
 The project screen lists the current directory first, then known projects from `~/.claude/projects`
-only (a project only a secondary account ever ran in, with sharing off, is not listed; the session
-picker reads the chosen account's own `<root>\projects`, or the canonical one with sharing on).
+only (a project only a secondary account ever ran in, with sharing off, is not listed). With sharing
+on the session picker reads the canonical `<root>\projects`. With sharing off it lists every
+account's sessions, the chosen account's own and the others' tagged `[account]`. Resuming a tagged
+one first copies its transcript into the chosen account's store: a newer copy there is left alone,
+an older one is kept as `<id>.jsonl.<ms>.bak`, and a failed copy stops the launch. Preview copies
+nothing.
 Picking a row checks the folder without waiting on an offline network share; a file path is
 refused.
 
@@ -460,7 +477,7 @@ needed.
   binary's path, size and mtime.
 - `~/.claude/claude-auto-update.json` - the release channel's last answer (30 minutes, a failure 5).
 - `~/.claude/claude-auto-projects.json` - the project screen's registry cache.
-- `~/.claude/claude-auto-rs-sessions.json` - the session picker's summary cache.
+- `~/.claude/claude-auto-sessions.json` - the session picker's summary cache (0.9.0 renamed it from `claude-auto-rs-sessions.json` and removes the old file on its first write).
 - `%TEMP%\claude-mcp-rider-<pid>.json` - per-launch Rider MCP config, swept after a day.
 - `%TEMP%\claude-auto-projects-preview-<pid>.json` - the project cache of a preview run, swept after a day.
 - `%TEMP%\claude-rider-mcp-port.txt` - cached Rider MCP port, so most launches skip the port scan.

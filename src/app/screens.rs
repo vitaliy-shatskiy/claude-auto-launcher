@@ -232,8 +232,10 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let others = sessions::other_stores(&run.cfg, &state.account);
         let req = sessions::PickerRequest {
             sessions_root,
+            others: &others,
             project_slugs: &slugs,
             project_name: &name,
             style,
@@ -247,7 +249,7 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
                 sessions::session_holder(&held_dirs, &picked.session_id)
             };
             if confirm_held(term.as_mut(), holder.as_deref(), style)? {
-                break launch_end(
+                let mut end = launch_end(
                     state,
                     Some(picked.session_id),
                     picked.fork,
@@ -258,6 +260,10 @@ pub(super) fn run_ui(run: &Run, input_redirected: bool, output_redirected: bool)
                     preselect,
                     chosen_how,
                 );
+                if let UiEnd::Launch(o) = &mut end {
+                    o.transfer = picked.transfer;
+                }
+                break end;
             }
             if run.preview {
                 break UiEnd::PreviewHeldBack;
@@ -360,7 +366,7 @@ pub(super) fn open_maintenance(
 }
 
 /// The `default (X)` labels: the canonical root's model and advisor, every account's defaults.
-fn label_defaults(canonical_root: &str, accounts: &[(String, String)]) -> LabelDefaults {
+pub(super) fn label_defaults(canonical_root: &str, accounts: &[(String, String)]) -> LabelDefaults {
     let settings = |root: &str| Path::new(root).join("settings.json");
     LabelDefaults {
         model: env::default_model_label(&settings(canonical_root)),
@@ -472,6 +478,7 @@ fn launch_end(
     UiEnd::Launch(Box::new(UiOutcome {
         state,
         resume_id,
+        transfer: None,
         fork,
         view,
         roster,

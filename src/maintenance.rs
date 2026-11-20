@@ -143,6 +143,12 @@ pub fn read_version() -> VersionInfo {
     }
 }
 
+/// The newest downloaded build's name: what `claude --version` says on a native install, without
+/// starting a process (`--launcher-options` may not start one).
+pub fn newest_build() -> Option<String> {
+    install::newest_build_name(&Install::from_env(true).versions)
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
