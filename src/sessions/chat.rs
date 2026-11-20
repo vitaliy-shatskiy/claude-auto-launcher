@@ -89,17 +89,32 @@ pub fn read_chat(r: &mut (impl Read + Seek), len: u64, want: usize, cap: u64) ->
     }
 }
 
-/// The text kept for the pane: its head, or its tail for the newest message (shown from its end).
-/// Cut BEFORE the markdown pass: `plain` costs more than linear time on a long reply.
-pub(crate) fn bounded(text: &str, newest: bool) -> String {
+/// Which end of a long message the pane keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Keep {
+    /// An older message: shown from its start.
+    Head,
+    /// The newest message: shown from its end.
+    Tail,
+}
+
+impl Keep {
+    /// `Tail` for the newest message, `Head` for any other.
+    pub(crate) fn of(newest: bool) -> Self {
+        if newest { Self::Tail } else { Self::Head }
+    }
+}
+
+/// The text kept for the pane: `keep`'s end of it. Cut BEFORE the markdown pass: `plain` costs
+/// more than linear time on a long reply.
+pub(crate) fn bounded(text: &str, keep: Keep) -> String {
     let count = text.chars().count();
     if count <= MAX_CHARS {
         return text.to_owned();
     }
-    if newest {
-        text.chars().skip(count - MAX_CHARS).collect()
-    } else {
-        text.chars().take(MAX_CHARS).collect()
+    match keep {
+        Keep::Tail => text.chars().skip(count - MAX_CHARS).collect(),
+        Keep::Head => text.chars().take(MAX_CHARS).collect(),
     }
 }
 
@@ -131,7 +146,7 @@ fn take_message(line: &[u8], out: &mut Vec<(ChatMessage, Option<String>)>) {
         }
         Kind::CustomTitle | Kind::AiTitle | Kind::LastPrompt => return,
     };
-    let text = plain(&bounded(&clean_text(&collapse_fences(&raw)), out.is_empty()));
+    let text = plain(&bounded(&clean_text(&collapse_fences(&raw)), Keep::of(out.is_empty())));
     if text.is_empty() {
         return;
     }
@@ -142,7 +157,7 @@ fn take_message(line: &[u8], out: &mut Vec<(ChatMessage, Option<String>)>) {
         && id.is_some()
         && *newer_id == id
     {
-        newer.text = bounded(&format!("{text} {}", newer.text), newest);
+        newer.text = bounded(&format!("{text} {}", newer.text), Keep::of(newest));
         return;
     }
     let at_ms = field(&rec, "timestamp").and_then(|t| iso_ms(&ps_str(t)));

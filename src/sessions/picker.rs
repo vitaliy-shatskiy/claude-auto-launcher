@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use self::filter::scope_name;
 use super::chat::pane::{ChatKey, ChatPane, ChatState};
-use super::chat::{ChatMessage, bounded};
+use super::chat::{ChatMessage, Keep, bounded};
 use super::frame::{ChatView, Clock, Memo, PickerScope, PickerView, list_capacity, matches, picker_frame, resumable};
 use super::listing::Session;
 use crate::frame::{Frame, Style};
@@ -191,7 +191,7 @@ impl<'a> PickerScreen<'a> {
                     .enumerate()
                     .map(|(i, m)| ChatMessage {
                         speaker: m.speaker,
-                        text: super::frame::plain::plain(&bounded(&m.text, i == newest)),
+                        text: super::frame::plain::plain(&bounded(&m.text, Keep::of(i == newest))),
                         at_ms: None,
                     })
                     .collect()
