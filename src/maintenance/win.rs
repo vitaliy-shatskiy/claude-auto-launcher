@@ -9,9 +9,10 @@ use std::ptr;
 
 use super::release::{FetchFailed, winhttp_failure};
 use windows_sys::Win32::Networking::WinHttp::{
-    INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER,
-    WINHTTP_QUERY_STATUS_CODE, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReadData,
-    WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
+    INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_OPTION_REDIRECT_POLICY,
+    WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP, WINHTTP_OPTION_URL, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+    WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpQueryOption, WinHttpReadData,
+    WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts,
 };
 use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_HASH_HANDLE, BCRYPT_SHA256_ALG_HANDLE, BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash, BCryptHashData,
@@ -80,6 +81,26 @@ fn wide(s: &str) -> Vec<u16> {
 
 /// An HTTPS GET of `url` with `timeout_ms` on every phase; the body as text, or why it failed.
 pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, FetchFailed> {
+    https_bytes(url, timeout_ms, 64 * 1024).map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// The URL the request ended at, after any redirect; `None` when it cannot be read.
+fn final_url(req: *mut c_void) -> Option<String> {
+    let mut buf = vec![0u16; 4096];
+    let mut size = u32::try_from(buf.len() * 2).ok()?;
+    // SAFETY: a request handle after a received response and a u16 buffer of `size` bytes.
+    let ok = unsafe { WinHttpQueryOption(req, WINHTTP_OPTION_URL, buf.as_mut_ptr().cast(), &raw mut size) };
+    if ok == 0 {
+        return None;
+    }
+    let chars = usize::try_from(size).ok()? / 2;
+    buf.get(..chars)
+        .map(|s| String::from_utf16_lossy(s).trim_end_matches('\0').to_owned())
+}
+
+/// An HTTPS GET of `url`: the body as bytes, at most `limit` of them. A redirect is followed only to
+/// another https URL; the body of any other final scheme is refused.
+pub(crate) fn https_bytes(url: &str, timeout_ms: i32, limit: usize) -> Result<Vec<u8>, FetchFailed> {
     let rest = url
         .strip_prefix("https://")
         .ok_or_else(|| FetchFailed::Reason("only https URLs".into()))?;
@@ -93,6 +114,12 @@ pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, FetchFaile
     }
     // SAFETY: the session handle opened above.
     if unsafe { WinHttpSetTimeouts(session.0, timeout_ms, timeout_ms, timeout_ms, timeout_ms) } == 0 {
+        return Err(last());
+    }
+    // The default already, set explicitly: a release download never follows https to http.
+    let policy: u32 = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+    // SAFETY: the session handle and a u32 option value of 4 bytes.
+    if unsafe { WinHttpSetOption(session.0, WINHTTP_OPTION_REDIRECT_POLICY, (&raw const policy).cast(), 4) } == 0 {
         return Err(last());
     }
     let host_w = wide(host);
@@ -144,6 +171,9 @@ pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, FetchFaile
     if status != 200 {
         return Err(FetchFailed::Reason(format!("the release channel answered HTTP {status}")));
     }
+    if !final_url(req.0).is_some_and(|u| u.to_ascii_lowercase().starts_with("https://")) {
+        return Err(FetchFailed::Reason("the answer did not come over https".into()));
+    }
     let mut body = Vec::new();
     let mut chunk = vec![0u8; 8192];
     loop {
@@ -157,11 +187,11 @@ pub(crate) fn https_get(url: &str, timeout_ms: i32) -> Result<String, FetchFaile
             break;
         }
         body.extend_from_slice(chunk.get(..read as usize).unwrap_or_default());
-        if body.len() > 64 * 1024 {
+        if body.len() > limit {
             return Err(FetchFailed::Reason("the release channel answer is too large".into()));
         }
     }
-    Ok(String::from_utf8_lossy(&body).into_owned())
+    Ok(body)
 }
 
 #[cfg(test)]

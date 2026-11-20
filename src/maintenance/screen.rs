@@ -210,6 +210,27 @@ pub(crate) trait Ops {
     fn load_rows(&mut self) -> RowsConfig;
     /// Writes config `rows` and `hiddenValues`, every other key untouched.
     fn save_rows(&mut self, rows: &[RowName], hidden: &BTreeMap<RowName, String>) -> Result<(), String>;
+    /// The launcher's own update entries (key, label), shown as keys like the configured actions.
+    fn launcher_entries(&mut self) -> Vec<(char, String)> {
+        Vec::new()
+    }
+    /// Runs a launcher entry's key: the status line it leaves.
+    fn launcher_key(&mut self, _key: char) -> String {
+        String::new()
+    }
+}
+
+/// Launcher entries as footer keys; an empty script marks them, a configured action always has one.
+fn launcher_actions(entries: Vec<(char, String)>) -> Vec<MaintenanceAction> {
+    entries
+        .into_iter()
+        .map(|(key, label)| MaintenanceAction {
+            key: key.to_string(),
+            label,
+            script: String::new(),
+            confirm_twice: false,
+        })
+        .collect()
 }
 
 /// Opens the launch-rows editor. Lower case and matched exactly: a Shift + upper-case letter is
@@ -228,6 +249,8 @@ pub(crate) struct MaintScreen<'a> {
     /// of the status text: any press consumes it.
     pending: Option<char>,
     pending_at: Option<u64>,
+    /// The launcher's own update entries, then the configured actions: the footer's keys.
+    keys: Vec<MaintenanceAction>,
 }
 
 impl std::fmt::Debug for MaintScreen<'_> {
@@ -250,6 +273,7 @@ impl<'a> MaintScreen<'a> {
             status: String::new(),
             pending: None,
             pending_at: None,
+            keys: actions.to_vec(),
         }
     }
 
@@ -347,7 +371,9 @@ impl Screen for MaintScreen<'_> {
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
         self.info = self.ops.info();
-        maintenance_frame(&self.info, size, &self.status, self.style, self.actions, self.cursor.hover)
+        self.keys = launcher_actions(self.ops.launcher_entries());
+        self.keys.extend_from_slice(self.actions);
+        maintenance_frame(&self.info, size, &self.status, self.style, &self.keys, self.cursor.hover)
     }
 
     /// Every key passes here first: the confirm bookkeeping, then the built-in keys and the
@@ -368,6 +394,19 @@ impl Screen for MaintScreen<'_> {
         if let Some(c) = BUILT_IN.into_iter().find(|c| is_hotkey_exact(key, *c)) {
             let confirmed = was_pending == Some(c) && !too_fast;
             self.built_in(c, term, confirmed, now);
+            return true;
+        }
+        let launcher = self.keys.iter().filter(|a| a.script.is_empty());
+        if let Some((c, label)) = launcher.into_iter().find_map(|a| {
+            a.key
+                .chars()
+                .next()
+                .filter(|c| is_hotkey_exact(key, *c))
+                .map(|c| (c, a.label.clone()))
+        }) {
+            self.paint_running(term, format!("{label}..."));
+            self.status = self.ops.launcher_key(c);
+            term.drain();
             return true;
         }
         let actions = self.actions;

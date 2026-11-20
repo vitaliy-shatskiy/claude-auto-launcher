@@ -7,8 +7,9 @@ mod release;
 mod rows;
 mod screen;
 pub(crate) mod watch;
-mod win;
+pub(crate) mod win;
 
+pub(crate) use release::FetchFailed;
 pub(crate) use watch::{InstallGate, UpdateFound, UpdateWatch};
 
 use std::collections::BTreeMap;
@@ -61,6 +62,7 @@ struct RealOps {
     install: Install,
     preview: bool,
     config_path: String,
+    launcher: crate::self_update::Local,
 }
 
 impl Ops for RealOps {
@@ -116,6 +118,17 @@ impl Ops for RealOps {
             return Err(PREVIEW_NOTE.into());
         }
         crate::config::save_rows(&self.config_path, rows, hidden).map_err(|e| e.to_string())
+    }
+
+    fn launcher_entries(&mut self) -> Vec<(char, String)> {
+        self.launcher.entries()
+    }
+
+    fn launcher_key(&mut self, key: char) -> String {
+        if self.preview {
+            return PREVIEW_NOTE.into();
+        }
+        self.launcher.act(key).unwrap_or_default()
     }
 }
 
@@ -231,6 +244,7 @@ pub fn run_screen(term: &mut dyn Term, cfg: &Config, style: Style) -> Result<(),
         install: Install::from_env(preview),
         preview,
         config_path: cfg.path.clone(),
+        launcher: crate::self_update::Local::from_env(cfg.self_update, &cfg.update_repo, &PathCtx::from_env().home, preview),
     };
     let mut s = MaintScreen::new(&mut ops, &cfg.maintenance_actions, style);
     tm.end(load);

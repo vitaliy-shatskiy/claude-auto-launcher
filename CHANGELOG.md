@@ -8,6 +8,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Added
 
+- Self-update from the launcher's GitHub releases (config `selfUpdate`: `notify` by default, `auto`,
+  `off`; `updateRepo` for a fork; `CLAUDE_AUTO_NO_SELF_UPDATE=1`): a daily background check,
+  a dim line on the launch screen, maintenance `c` to update and `b` to roll back. The download is
+  https only and checked against the release's SHA-256 before the running exe is renamed to
+  `.old`; a failed step puts the old exe back. Keys `c` and `b` are now reserved for
+  `maintenanceActions`.
 - Pinned projects: `p` on the project screen pins the project under the cursor on top (config
   `pinnedProjects`, in pin order, whatever their recency), `p` again unpins it. Pinning a hidden
   project unhides it and hiding a pinned one unpins it; in a `/` search a pin only breaks ties. A
