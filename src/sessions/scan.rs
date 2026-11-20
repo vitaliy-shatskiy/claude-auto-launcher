@@ -116,10 +116,7 @@ fn classify(line: &[u8], st: &mut State) {
             st.last_assistant_id = None;
         }
         Kind::Assistant => {
-            let id = MESSAGE_ID
-                .captures(head)
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_bytes().to_vec());
+            let id = MESSAGE_ID.captures(head).and_then(|c| c.get(1)).map(|m| m.as_bytes().to_vec());
             if id.is_none() || id != st.last_assistant_id {
                 st.scan.messages += 1;
             }

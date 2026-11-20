@@ -1,9 +1,23 @@
 ╭─ resume ─ 5 sessions ───────────────────────────────────────────────────────────────────────────╮
-│ ❯ project-1  snippet 1 about t… 7 min │ project-1                                               │
-│   project-2  snippet 2 about … 14 min │ 16 Sep 11:53  ─  3 msgs  ─  2 KB                        │
-│   ⌂ feature  snippet 3 about … 21 min │ ─────────────────────────────────────────────────────── │
-│   project-4  snippet 4 about … 28 min │ you › snippet 1 about the thing that was asked          │
-│   project-5  snippet 5 about … 35 min │ claude › reply words reply words reply words reply      │
-│                                       │          words                                          │
+│ ❯ project-1  session title 1    7 min │ session title 1                                         │
+│   project-2  session title 2   14 min │ 16.09 11:53 · 10 msgs · 2 KB · project-1                │
+│   ⌂ feature  session title 3   21 min │ ─────────────────────────────────────────────────────── │
+│   project-4  session title 4   28 min │ first › first question 1 about the start of it all      │
+│   project-5  session title 5   35 min │ last  › snippet 1 about the thing that was asked        │
+│                                       │ reply › reply words reply words reply words reply words │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
+│                                       │                                                         │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
   w/s move  ┊  [/] filter  ┊  [enter] open  ┊  [f] fork  ┊  [esc] back

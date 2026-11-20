@@ -1,6 +1,7 @@
 use super::*;
 use crate::sessions::listing::summarize;
 use crate::sessions::transcript::MAX_BYTES;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
@@ -36,7 +37,8 @@ fn assistant(id: &str, block: &str) -> String {
 const TOOL_RESULT: &str = r#"{"parentUuid":"a","isSidechain":false,"promptId":"p1","type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]},"uuid":"u2"}"#;
 /// Nested records an attachment carries are not messages of this transcript.
 const ATTACHMENT: &str = r#"{"parentUuid":"a","isSidechain":false,"attachment":{"items":[{"type":"user","text":"x"},{"type":"assistant","text":"y"}]},"type":"attachment","uuid":"t1"}"#;
-const SIDE: &str = r#"{"parentUuid":"a","isSidechain":true,"message":{"model":"m","id":"side","content":[]},"type":"assistant","uuid":"s1"}"#;
+const SIDE: &str =
+    r#"{"parentUuid":"a","isSidechain":true,"message":{"model":"m","id":"side","content":[]},"type":"assistant","uuid":"s1"}"#;
 
 #[test]
 fn counts_every_user_and_assistant_message_of_the_fixture() {
@@ -74,10 +76,7 @@ fn long_file(n: usize, extra: &[(usize, String)]) -> String {
                 out.push('\n');
             }
         }
-        out.push_str(&format!(
-            r#"{{"type":"user","message":{{"role":"user","content":"prompt {i} {pad}"}}}}"#
-        ));
-        out.push('\n');
+        writeln!(out, r#"{{"type":"user","message":{{"role":"user","content":"prompt {i} {pad}"}}}}"#).unwrap();
     }
     out
 }

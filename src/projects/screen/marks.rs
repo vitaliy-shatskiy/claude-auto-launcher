@@ -53,6 +53,7 @@ impl ProjectScreen<'_> {
             Vec::new()
         };
         self.dimmed = self.gone_pins(&pins);
+        self.pin_keys = keys_of(&pins);
         self.view = listed
             .into_iter()
             .map(|p| Project {

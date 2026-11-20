@@ -36,6 +36,7 @@ fn view<'a>(ps: &'a [Project], index: usize, cwd: &'a str, w: usize, h: usize) -
         projects: ps,
         marked: &[],
         dimmed: &[],
+        pinned: &[],
         index,
         filter: "",
         typing: false,
@@ -63,6 +64,18 @@ fn golden(name: &str) -> String {
     std::fs::read_to_string(p).unwrap().replace("\r\n", "\n")
 }
 
+/// Compares with the golden; `CLAUDE_AUTO_BLESS` set rewrites it instead (review the diff).
+fn assert_golden(name: &str, actual: &str) {
+    if std::env::var_os("CLAUDE_AUTO_BLESS").is_some() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/wide-frames")
+            .join(format!("{name}.txt"));
+        std::fs::write(p, actual).unwrap();
+        return;
+    }
+    assert_eq!(actual, golden(name), "{name}");
+}
+
 fn text(f: &Frame) -> String {
     f.lines.join("\n")
 }
@@ -75,7 +88,7 @@ fn plain(f: &Frame) -> Vec<String> {
 fn golden_project_100x30() {
     let ps = golden_projects();
     let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", 100, 30));
-    assert_eq!(text(&f), golden("project-100x30"));
+    assert_golden("project-100x30", &text(&f));
 }
 
 #[test]
@@ -89,7 +102,16 @@ fn golden_project_120x30_hover_color() {
         style: Style { color: true, ascii: false },
         ..view(&ps, 2, r"C:\Users\sample\here", 120, 30)
     });
-    assert_eq!(text(&f), golden("project-120x30-hover-color"));
+    assert_golden("project-120x30-hover-color", &text(&f));
+}
+
+#[test]
+fn golden_project_200x60_fills_the_terminal() {
+    let ps = golden_projects();
+    let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", 200, 60));
+    assert_golden("project-200x60", &text(&f));
+    assert_eq!(f.lines.len(), 59, "AC27: every row but the headroom one");
+    assert_eq!(display_width(&f.lines[0]), 199);
 }
 
 fn many(n: usize, prefix: &str) -> Vec<Project> {

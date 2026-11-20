@@ -16,9 +16,9 @@ fn task9_separators_detail_line_and_dim_paths() {
     assert_eq!(ys.len(), 4);
     assert_eq!(l.row_count, 4);
     let ay = usize::try_from(f.map.action.unwrap().y).unwrap();
-    assert_eq!(ys[3], ay - 2);
+    assert!(ys[3] < ay - 2, "AC27: the list pads down to the action row at the bottom");
     assert!(body[ay - 1].contains(r"C:\Users\sample\here") && body[ay].contains("action"));
-    assert_eq!(f.lines.len(), 4 + 2 + 1 + 1 + 2 + f.map.footer_lines, "the line accounting");
+    assert_eq!(f.lines.len(), 23, "the box fills the 24-row terminal less its headroom row");
     let c = project_frame(&ProjectView {
         style: Style { color: true, ascii: false },
         ..view(&ps, 1, r"C:\x", 80, 24)
