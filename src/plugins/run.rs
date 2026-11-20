@@ -70,69 +70,76 @@ type Ended = Option<(Vec<u8>, i32)>;
 
 impl Runner for Process {
     fn call(&self, spec: &PluginSpec, verb: &Verb, input: &Value) -> Result<Value, Failure> {
-        let path = Path::new(&spec.path);
-        if !path.is_file() {
-            return Err(Failure::Missing);
+        call(spec, verb, input, KILL_GRACE)
+    }
+}
+
+/// One call on a real process; `kill_grace` is how long a tree killed on a timeout gets to close
+/// its pipe before the call returns anyway (`KILL_GRACE` for `Process`; a test passes a long one,
+/// so a call that skipped the kill would show as a late return).
+pub fn call(spec: &PluginSpec, verb: &Verb, input: &Value, kill_grace: Duration) -> Result<Value, Failure> {
+    let path = Path::new(&spec.path);
+    if !path.is_file() {
+        return Err(Failure::Missing);
+    }
+    let job = Job::new().ok_or_else(|| Failure::Start(std::io::Error::other("job object refused")))?;
+    let mut child = Command::new(path)
+        .args(&spec.args)
+        .arg(verb.name)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(Failure::Start)?;
+    let pid = child.id();
+    if !job.assign(child.as_raw_handle()) {
+        // No tree kill without the job: a plugin that cannot be stopped does not run.
+        if child.kill().is_err() {
+            // Already gone.
         }
-        let job = Job::new().ok_or_else(|| Failure::Start(std::io::Error::other("job object refused")))?;
-        let mut child = Command::new(path)
-            .args(&spec.args)
-            .arg(verb.name)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map_err(Failure::Start)?;
-        let pid = child.id();
-        if !job.assign(child.as_raw_handle()) {
-            // No tree kill without the job: a plugin that cannot be stopped does not run.
-            if child.kill().is_err() {
-                // Already gone.
-            }
-            return Err(Failure::Start(std::io::Error::other("could not join the job object")));
+        return Err(Failure::Start(std::io::Error::other("could not join the job object")));
+    }
+    let body = format!("{input}\n");
+    let stdin = child.stdin.take();
+    // Its own thread: a plugin that never reads stdin must not block the call.
+    std::thread::spawn(move || {
+        if let Some(mut s) = stdin
+            && s.write_all(body.as_bytes()).is_err()
+        {
+            // A plugin may exit without reading its input.
         }
-        let body = format!("{input}\n");
-        let stdin = child.stdin.take();
-        // Its own thread: a plugin that never reads stdin must not block the call.
-        std::thread::spawn(move || {
-            if let Some(mut s) = stdin
-                && s.write_all(body.as_bytes()).is_err()
-            {
-                // A plugin may exit without reading its input.
+    });
+    let stdout = child.stdout.take();
+    let (tx, rx) = mpsc::channel::<Ended>();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(out) = stdout
+            && out.take(MAX_OUTPUT + 1).read_to_end(&mut buf).is_err()
+        {
+            buf.clear();
+        }
+        let ended = (u64::try_from(buf.len()).unwrap_or(u64::MAX) <= MAX_OUTPUT)
+            .then(|| (buf, child.wait().ok().and_then(|s| s.code()).unwrap_or(1)));
+        if tx.send(ended).is_err() {
+            // The call already returned: a timeout.
+        }
+    });
+    let ms = timeout_of(spec, verb);
+    match rx.recv_timeout(Duration::from_millis(ms)) {
+        Ok(Some((out, 0))) => parse(&out),
+        Ok(Some((_, code))) => Err(Failure::Exit(code)),
+        Ok(None) => {
+            job.terminate();
+            Err(Failure::TooLarge)
+        }
+        Err(_) => {
+            job.terminate();
+            // The tree is gone once its stdout closes and the child is reaped.
+            if rx.recv_timeout(kill_grace).is_err() {
+                // Still closing: the job handle's drop kills what is left.
             }
-        });
-        let stdout = child.stdout.take();
-        let (tx, rx) = mpsc::channel::<Ended>();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(out) = stdout
-                && out.take(MAX_OUTPUT + 1).read_to_end(&mut buf).is_err()
-            {
-                buf.clear();
-            }
-            let ended = (u64::try_from(buf.len()).unwrap_or(u64::MAX) <= MAX_OUTPUT)
-                .then(|| (buf, child.wait().ok().and_then(|s| s.code()).unwrap_or(1)));
-            if tx.send(ended).is_err() {
-                // The call already returned: a timeout.
-            }
-        });
-        let ms = timeout_of(spec, verb);
-        match rx.recv_timeout(Duration::from_millis(ms)) {
-            Ok(Some((out, 0))) => parse(&out),
-            Ok(Some((_, code))) => Err(Failure::Exit(code)),
-            Ok(None) => {
-                job.terminate();
-                Err(Failure::TooLarge)
-            }
-            Err(_) => {
-                job.terminate();
-                // The tree is gone once its stdout closes and the child is reaped.
-                if rx.recv_timeout(KILL_GRACE).is_err() {
-                    // Still closing: the job handle's drop kills what is left.
-                }
-                Err(Failure::Timeout { ms, pid })
-            }
+            Err(Failure::Timeout { ms, pid })
         }
     }
 }

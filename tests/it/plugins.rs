@@ -5,9 +5,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use claude_auto::config::PluginSpec;
-use claude_auto::plugins::run::{Failure, Process, Runner as _};
+use claude_auto::plugins::run::{self, Failure, Process, Runner as _};
 use claude_auto::plugins::{self, describe};
 use serde_json::json;
 
@@ -214,5 +215,21 @@ fn a_file_not_listed_never_runs() {
         matches!(Process.call(&missing, &describe::VERB, &json!({})), Err(Failure::Missing)),
         "a missing listed file is never looked up on PATH"
     );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_timed_out_call_returns_once_its_tree_is_killed_not_when_the_hang_ends() {
+    let d = scratch("plugin-hang-return");
+    let mut hang = cmd(&d, "hang", "ping -n 30 127.0.0.1");
+    hang.timeout_ms = Some(300);
+    let started = Instant::now();
+    let answer = run::call(&hang, &describe::VERB, &json!({}), Duration::from_secs(120));
+    let took = started.elapsed();
+    assert!(matches!(answer, Err(Failure::Timeout { ms: 300, .. })), "{answer:?}");
+    // A wall-clock bound on purpose, kept far from both outcomes: without the kill the pipe stays
+    // open until ping ends (29 s at least) inside the 120 s grace; with it the call is back right
+    // after the 300 ms timeout. 15 s leaves room for a loaded machine and still fails the first.
+    assert!(took < Duration::from_secs(15), "returned after {took:?}: the tree was not killed");
     std::fs::remove_dir_all(&d).unwrap();
 }
