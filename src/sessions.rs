@@ -3,6 +3,7 @@
 //! `sessions/`: `transcript` (records), `listing` (summaries, snapshot, cache), `frame` (the
 //! picker frame and memo), `picker` (the screen), `holder` (another live claude on a session).
 
+pub mod cross_account;
 pub mod frame;
 pub mod holder;
 pub mod listing;
@@ -18,6 +19,7 @@ use crate::config::{Config, PathCtx};
 use crate::frame::Style;
 use crate::ui::{Term, UiStop};
 
+use self::cross_account::{OtherStore, Transfer, joined_snapshot, tag_sessions, transfer_of};
 use self::frame::Clock;
 use self::listing::{Scope, SessionCache, cache_path, session_files};
 use self::picker::PickerScreen;
@@ -30,12 +32,32 @@ const PAGE_SIZE: usize = 10;
 pub struct PickedSession {
     pub session_id: String,
     pub fork: bool,
+    /// Set when the session lives in another account's store.
+    pub transfer: Option<Transfer>,
+}
+
+/// Every other account's projects store, for the picker. With `sharing` on all accounts read one
+/// root, so there is nothing else to fold in and the picker stays as it was.
+pub fn other_stores(cfg: &Config, account: &str) -> Vec<OtherStore> {
+    if cfg.sharing {
+        return Vec::new();
+    }
+    cfg.accounts
+        .iter()
+        .filter(|a| !a.key.eq_ignore_ascii_case(account))
+        .map(|a| OtherStore {
+            account: a.key.clone(),
+            root: Path::new(&a.root).join("projects"),
+        })
+        .collect()
 }
 
 /// Everything the picker is opened with.
 #[derive(Debug, Clone)]
 pub struct PickerRequest<'a> {
     pub sessions_root: PathBuf,
+    /// The other accounts' stores folded into the list (`other_stores`).
+    pub others: &'a [OtherStore],
     /// Every slug of the chosen project; empty = the whole account.
     pub project_slugs: &'a [String],
     pub project_name: &'a str,
@@ -86,8 +108,12 @@ pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option
     let mut cache = SessionCache::new(req.preview);
     let mut snapshots: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut fetch = |have: usize, slugs: &[String]| {
-        let snap = snapshots.entry(slugs.join("|")).or_insert_with(|| session_files(&root, slugs));
-        cache.list(&root, Scope::Files(snap), have, PAGE_SIZE, &cache_file)
+        let snap = snapshots
+            .entry(slugs.join("|"))
+            .or_insert_with(|| joined_snapshot(session_files(&root, slugs), req.others, slugs));
+        let mut page = cache.list(&root, Scope::Files(snap), have, PAGE_SIZE, &cache_file);
+        tag_sessions(&mut page, req.others);
+        page
     };
     let slugs: Vec<String> = req.project_slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
     let first = fetch(0, &slugs);
@@ -95,6 +121,7 @@ pub fn run_picker(term: &mut dyn Term, req: &PickerRequest<'_>) -> Result<Option
     tm.end(load);
     let picked = crate::ui::screen_loop::run(&mut screen, term)?;
     Ok(picked.map(|p| PickedSession {
+        transfer: transfer_of(&p.session),
         session_id: p.session.session_id,
         fork: p.fork,
     }))
@@ -199,6 +226,7 @@ mod tests {
         std::fs::write(d.join("s1.jsonl"), "{\"type\":\"user\",\"message\":{\"content\":\"p\"}}\n").unwrap();
         let req = PickerRequest {
             sessions_root: base.join("projects"),
+            others: &[],
             project_slugs: &["C--src-p".to_owned()],
             project_name: "p",
             style: Style { color: false, ascii: true },
@@ -209,6 +237,83 @@ mod tests {
         let got = run_picker(&mut term, &req).unwrap().unwrap();
         assert_eq!(got.session_id, "s1");
         assert!(!base.join("claude-auto-sessions.json").exists(), "preview is side-effect-free");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn other_stores_are_every_other_account_only_while_sharing_is_off() {
+        let off = cfg(false);
+        let stores = other_stores(&off, "SECOND");
+        assert_eq!(
+            stores,
+            [OtherStore {
+                account: off.accounts[0].key.clone(),
+                root: Path::new(&off.accounts[0].root).join("projects"),
+            }],
+            "the launching account is not its own other store"
+        );
+        assert!(
+            other_stores(&cfg(true), "second").is_empty(),
+            "sharing on: one root, nothing to fold"
+        );
+    }
+
+    /// `own` holds one session of the launching account, `other` one of another account.
+    fn two_stores(tag: &str) -> (PathBuf, Vec<OtherStore>) {
+        let base = std::env::temp_dir().join(format!("cars-w1-cross-{tag}-{}", std::process::id()));
+        let line = "{\"type\":\"user\",\"message\":{\"content\":\"p\"}}\n";
+        for (store, id, age) in [("own", "mine", 100), ("other", "theirs", 10)] {
+            let d = base.join(store).join("projects").join("C--src-p");
+            std::fs::create_dir_all(&d).unwrap();
+            let f = d.join(format!("{id}.jsonl"));
+            std::fs::write(&f, line).unwrap();
+            let t = UNIX_EPOCH + std::time::Duration::from_secs(1_790_000_000 - age);
+            std::fs::File::options().write(true).open(&f).unwrap().set_modified(t).unwrap();
+        }
+        let others = vec![OtherStore {
+            account: "other".into(),
+            root: base.join("other").join("projects"),
+        }];
+        (base, others)
+    }
+
+    fn pick(base: &Path, others: &[OtherStore]) -> (PickedSession, String) {
+        let req = PickerRequest {
+            sessions_root: base.join("own").join("projects"),
+            others,
+            project_slugs: &["C--src-p".to_owned()],
+            project_name: "p",
+            style: Style { color: false, ascii: true },
+            preview: true,
+        };
+        let keys = crate::ui::parse_preview_keys("Enter").unwrap();
+        let mut term = crate::ui::PreviewTerm::new((100, 30), keys, true);
+        let got = run_picker(&mut term, &req).unwrap().unwrap();
+        let frame = term.frames.unwrap_or_default().concat().join("\n");
+        (got, frame)
+    }
+
+    #[test]
+    fn sharing_off_lists_another_accounts_session_by_name_and_transfers_its_pick() {
+        let (base, others) = two_stores("off");
+        let (got, frame) = pick(&base, &others);
+        assert_eq!(got.session_id, "theirs", "the newest row, from the other store");
+        assert!(frame.contains("[other]"), "the row names its account:\n{frame}");
+        assert!(frame.contains("2 sessions"), "both stores are listed:\n{frame}");
+        let t = got.transfer.unwrap();
+        assert_eq!(t.from_account, "other");
+        assert!(t.source.starts_with(base.join("other")));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn sharing_on_leaves_the_picker_as_it_was() {
+        let (base, _) = two_stores("on");
+        let (got, frame) = pick(&base, &[]);
+        assert_eq!(got.session_id, "mine");
+        assert_eq!(got.transfer, None);
+        assert!(!frame.contains("[other]"), "{frame}");
+        assert!(frame.contains("1 sessions"), "{frame}");
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

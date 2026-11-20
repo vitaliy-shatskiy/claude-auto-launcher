@@ -50,6 +50,10 @@ pub struct Session {
     pub last_assistant: String,
     pub recent: Vec<Message>,
     pub headless: bool,
+    /// The other account whose store holds this session; empty for the launching one. Depends on
+    /// who launches, so it never enters the summary cache.
+    #[serde(skip)]
+    pub account: String,
 }
 
 const HEAD_LINES: usize = 400;

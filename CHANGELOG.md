@@ -4,6 +4,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Added
+
+- With `sharing` off, the session picker lists every account's sessions and tags another
+  account's with its name; resuming one copies the transcript into the launching account first
+  (an older copy there kept as `.bak`, a newer one left alone, a failed copy stops the launch,
+  preview copies nothing). Ported from Reva1v's fork.
+
 ### Changed
 
 - The session picker's summary cache is `claude-auto-sessions.json` again; the first cache write

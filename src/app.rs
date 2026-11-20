@@ -52,6 +52,8 @@ enum UiEnd {
 struct UiOutcome {
     state: LaunchState,
     resume_id: Option<String>,
+    /// The picked session lives in another account's store: copied before claude starts.
+    transfer: Option<crate::sessions::cross_account::Transfer>,
     fork: bool,
     view: LaunchView,
     /// The rows as the launch screen left them (edited there this run).
@@ -295,6 +297,17 @@ fn launch(run: &Run) -> i32 {
     if let Err(e) = env::set_profile(&run.cfg, &choice, run.preview, &mut child) {
         out::line(&format!("  {e}"), Fg::Red);
         return 1;
+    }
+    // After the profile, before claude scans its store for the id.
+    if let Some(t) = ui.as_ref().and_then(|o| o.transfer.as_ref()) {
+        let target = crate::sessions::sessions_root(&run.cfg, &choice);
+        match crate::sessions::cross_account::transfer_before_launch(t, &target, &choice, run.preview) {
+            Ok(line) => out::line(&line, if run.preview { Fg::Plain } else { Fg::DarkGray }),
+            Err(e) => {
+                out::line(&e, Fg::Red);
+                return 1;
+            }
+        }
     }
     if let Some(o) = ui.as_ref().filter(|_| !run.preview)
         && !o.state.project.is_empty()

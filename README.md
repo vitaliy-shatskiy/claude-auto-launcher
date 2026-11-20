@@ -201,8 +201,12 @@ command line; anywhere else they go to claude too. The launcher has no `--help` 
   `[enter] go on` and `[esc] back` buttons.
 
 The project screen lists the current directory first, then known projects from `~/.claude/projects`
-only (a project only a secondary account ever ran in, with sharing off, is not listed; the session
-picker reads the chosen account's own `<root>\projects`, or the canonical one with sharing on).
+only (a project only a secondary account ever ran in, with sharing off, is not listed). With sharing
+on the session picker reads the canonical `<root>\projects`. With sharing off it lists every
+account's sessions, the chosen account's own and the others' tagged `[account]`. Resuming a tagged
+one first copies its transcript into the chosen account's store: a newer copy there is left alone,
+an older one is kept as `<id>.jsonl.<ms>.bak`, and a failed copy stops the launch. Preview copies
+nothing.
 Picking a row checks the folder without waiting on an offline network share; a file path is
 refused.
 
