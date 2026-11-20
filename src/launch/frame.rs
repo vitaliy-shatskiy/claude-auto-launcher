@@ -96,7 +96,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let limit = inp.limits.get(&state.account);
     let limits = limit.map_or_else(String::new, |l| limits_text(l, &g));
     // The limits go first when the box is too narrow, then the version.
-    let rights: Vec<String> = [format!("{version}   {limits}"), version.clone()]
+    let rights: Vec<String> = [format!("{version}   {limits}"), version]
         .into_iter()
         .map(|r| r.trim().to_owned())
         .filter(|r| !r.is_empty())

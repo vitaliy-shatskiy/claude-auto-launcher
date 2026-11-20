@@ -4,6 +4,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Changed
+
+- The launch screen, maintenance and the rows editor are back to content height under a rounded
+  header box (`✻ claude-auto`, the version and the limits at its right end); no empty page frame
+  fills the terminal.
+- Maintenance lists its actions in groups (Claude Code, Checks, claude-auto, Launcher, Custom,
+  Warnings) with each group's facts on its title line; hints and live states share one
+  right-aligned column. claude-auto's entries read `update to <version>` and `roll back`.
+- Hovering a row label, a value, an action row or a footer key paints it again on these screens,
+  without selecting it; one test walks every clickable region of each screen.
+
 ### Added
 
 - A JSON Schema for the config, `schema/claude-auto.schema.json` (draft 2020-12): every key the
