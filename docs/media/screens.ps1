@@ -31,19 +31,28 @@ $keyScripts = [ordered]@{
     'rows-editor' = 'u,l'
 }
 
-# The last frame a key script draws: the run one key short draws every frame before it.
+# The frame the last key of a script draws. A preview prints one frame per key, the first before
+# any key; a screen left inside another redraws the outer ones as the keys run out, so the frame is
+# picked by its index. A frame starts where a top border follows the footer lines of the one
+# before (footer lines start with spaces, panel lines never do).
 function Get-LastFrame([string]$Binary, [string]$KeyScript, [string]$Size) {
     $PSNativeCommandUseErrorActionPreference = $false
     $env:CLAUDE_AUTO_PREVIEW = '1'
     $env:CLAUDE_AUTO_PREVIEW_SIZE = $Size
-    $parts = @($KeyScript -split ',' | Where-Object { $_ -ne '' })
-    $skip = 0
-    if ($parts.Count -gt 0) {
-        $env:CLAUDE_AUTO_PREVIEW_KEYS = ($parts | Select-Object -SkipLast 1) -join ','
-        $skip = @(& $Binary 2>$null).Count
-    }
     $env:CLAUDE_AUTO_PREVIEW_KEYS = $KeyScript
-    @(& $Binary 2>$null) | Select-Object -Skip $skip
+    $want = @($KeyScript -split ',' | Where-Object { $_ -ne '' }).Count
+    $index = 0
+    $footerSeen = $false
+    foreach ($line in @(& $Binary 2>$null)) {
+        $plain = $line -replace '\x1b\[[0-9;?]*[A-Za-z]', ''
+        if ($footerSeen -and $plain -match '^[\u256D+]') {
+            $index++
+            $footerSeen = $false
+        }
+        if ($index -gt $want) { break }
+        if ($plain -match '^ ') { $footerSeen = $true }
+        if ($index -eq $want) { $line }
+    }
 }
 
 # A tape that prints the frame file in VHS's terminal and screenshots it. The window is a few
