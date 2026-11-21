@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::launch::tests::four;
+use crate::types::LimitRecord;
 
 mod page;
 
