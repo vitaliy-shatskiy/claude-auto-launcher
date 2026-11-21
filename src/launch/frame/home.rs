@@ -96,7 +96,12 @@ pub(super) fn home_frame(
         let body: Vec<String> = f.lines.into_iter().take(rows).collect();
         let running = Panel::plain(
             "running",
-            running_lines(inp.running, (rw - 2).min(cockpit::FACTS_WIDTH - 2), rows - STATUS_HEIGHT - 2, &g),
+            running_lines(
+                inp.running,
+                rw.saturating_sub(2).min(cockpit::FACTS_WIDTH - 2),
+                rows.saturating_sub(STATUS_HEIGHT + 2),
+                &g,
+            ),
             rw,
             rows - STATUS_HEIGHT,
         );
@@ -113,6 +118,15 @@ pub(super) fn home_frame(
         shift(&mut fm, dy);
         map.list = fm.list;
         map.action = fm.action;
+        map.side = fm.side;
+    } else if h.focus != HomeFocus::Launch {
+        // No room for the focused list under the launch panel: it takes the page, as on a narrow
+        // terminal, rather than keep the focus on a panel nobody sees.
+        let page = Home {
+            focus: h.focus,
+            left_width: fw,
+        };
+        return (h.draw)(page, inp.width, inp.height);
     }
     let light = FooterLight {
         hover: frame::footer_hover(footer, inp.state.hover),

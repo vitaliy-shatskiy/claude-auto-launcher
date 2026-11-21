@@ -73,7 +73,7 @@ pub(crate) fn captured_live(exe: &Path, args: &[&str], step: screen::Step<'_>) -
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("could not start {}: {e}", exe.display()))?;
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let pipes: [Option<Box<dyn std::io::Read + Send>>; 2] = [
         child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),

@@ -41,7 +41,7 @@ pub(super) fn mouse<S: Screen>(
             Hit::Action { value } => (-1, value.clone().unwrap_or_default()),
             // A row outside its value cells paints its label or name.
             Hit::LaunchRow { row, .. } => (i32::try_from(*row).unwrap_or(-1), String::new()),
-            Hit::None | Hit::Footer { .. } => (-1, String::new()),
+            Hit::None | Hit::Footer { .. } | Hit::SessionRow(_) => (-1, String::new()),
         };
         let c = screen.cursor();
         let changed = btn != c.hover || row != c.hover_row || val != c.hover_value;
@@ -79,7 +79,7 @@ pub(super) fn mouse<S: Screen>(
     // stands there, a launch-shaped row when its screen says it is still the selected one.
     let still = match &hit {
         Hit::ListRow(r) => *r == index,
-        Hit::LaunchRow { .. } => true,
+        Hit::LaunchRow { .. } | Hit::SessionRow(_) => true,
         Hit::None | Hit::Footer { .. } | Hit::Action { .. } | Hit::Cell { .. } => false,
     };
     if still && g.selected.as_ref() == Some(&hit) {
@@ -113,7 +113,7 @@ pub(super) fn mouse<S: Screen>(
     let flow = screen.click(&hit);
     g.selected = match &hit {
         Hit::ListRow(r) => (screen.cursor().index == *r).then(|| hit.clone()),
-        Hit::LaunchRow { .. } => Some(hit.clone()),
+        Hit::LaunchRow { .. } | Hit::SessionRow(_) => Some(hit.clone()),
         Hit::None | Hit::Footer { .. } | Hit::Action { .. } | Hit::Cell { .. } => None,
     };
     match flow {

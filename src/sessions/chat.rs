@@ -91,7 +91,7 @@ impl<R: Read + Seek> ChatStream<R> {
         self.newest_first
             .iter()
             .map(|(m, _)| {
-                let lines: usize = m.text.split('\n').map(|l| l.chars().count() / cols + 1).sum();
+                let lines: usize = m.text.split('\n').map(|l| crate::layout::display_width(l) / cols + 1).sum();
                 2 + lines.min(MESSAGE_ROWS)
             })
             .sum()

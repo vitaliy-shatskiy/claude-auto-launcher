@@ -193,6 +193,71 @@ fn the_filter_works_on_the_launch_page_list() {
     assert_eq!(out.unwrap().home_pick.unwrap().path, f.beta);
 }
 
+#[test]
+fn a_focused_list_on_a_short_wide_page_is_drawn_and_its_keys_never_panic() {
+    let f = fx();
+    let (out, frames) = drive_home(&f, (211, 20), "Tab,Escape,Escape");
+    assert!(
+        has(&frames[1], "* claude-auto - project"),
+        "the list is drawn, focused: {:#?}",
+        frames[1]
+    );
+    assert!(out.is_none());
+}
+
+/// Whether the frame showed the focused panel's selected row: the list's rows on the list, the
+/// cursor's session on the sessions panel, the launch rows on the launch panel.
+fn row_shown(frame: &Frame, tabs: usize) -> bool {
+    match tabs {
+        0 => !frame.map.rows.is_empty(),
+        1 => frame.map.list.as_ref().is_some_and(|l| l.row_count > 0),
+        _ => frame.map.side.as_ref().is_some_and(|s| !s.1.is_empty()),
+    }
+}
+
+/// Every size a terminal can report, every focus: no panic (debug arithmetic included), the
+/// focused panel drawn whenever the terminal is not too small, and Enter on the list or the
+/// sessions acts only on a row the frame showed.
+#[test]
+fn at_every_size_the_focused_panel_is_drawn_or_enter_does_nothing() {
+    let f = fx();
+    for size in crate::ui::screen_loop::hover_walk::every_size() {
+        for tabs in 0..3 {
+            focused_at(&f, size, tabs);
+        }
+    }
+}
+
+/// One size and focus of the sweep above (`tabs` Tab presses from the launch rows).
+fn focused_at(f: &Fx, (w, h): (usize, usize), tabs: usize) {
+    let c = clock;
+    let v = view(false);
+    let p = crate::prefs::Prefs::default();
+    let source = || Some(list(f, v.style, &c));
+    let mut roster = crate::launch::tests::four();
+    let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+    let st = roster.new_state();
+    let mut s = LaunchScreen::new(&mut roster, st, &v, &p, 0, &mut hook).with_home(&source);
+    if tabs > 0 {
+        let _ = s.tab();
+        // On alpha, whose two sessions the sessions panel lists.
+        s.cursor().index = 1;
+        s.before();
+    }
+    if tabs > 1 {
+        let _ = s.tab();
+    }
+    let frame = s.draw((w, h));
+    let shown = row_shown(&frame, tabs);
+    if w >= crate::frame::MIN_WIDTH && h >= crate::frame::MIN_HEIGHT {
+        assert!(shown, "{w}x{h} focus {tabs}: the focused panel is not drawn {:#?}", frame.lines);
+    }
+    if tabs > 0 && !shown {
+        let acted = matches!(s.enter(), Some(Flow::Done(Some(_))));
+        assert!(!acted, "{w}x{h} focus {tabs}: Enter acted on a row the frame did not show");
+    }
+}
+
 thread_local! {
     /// How often the walk's launch hook opened maintenance.
     static OPENED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -201,47 +266,52 @@ thread_local! {
 /// The click, stray-click and hint walks over the workspace on each focus.
 #[test]
 fn the_workspace_passes_the_click_and_hint_walks() {
+    // One fixture tree, view and hiding for every screen of the walk.
     let f = fx();
     let c = clock;
     let color = Style { color: true, ascii: false };
+    let v = view(true);
+    let p = crate::prefs::Prefs::default();
+    let save = |_: &str, _: HideChange| -> Result<(), String> {
+        OPENED.with(|o| o.set(o.get() + 1));
+        Ok(())
+    };
+    let hiding = Hiding {
+        paths: RefCell::new(Vec::new()),
+        pinned: RefCell::new(Vec::new()),
+        save: &save,
+    };
+    let source = || Some(list(&f, color, &c).with_hiding(Some(&hiding)));
     for size in [(120, 30), (211, 52), (280, 72)] {
         for tabs in 0..3 {
             let mut make = || {
+                // A walk step's hide or pin never carries into the next screen.
+                hiding.paths.borrow_mut().clear();
+                hiding.pinned.borrow_mut().clear();
+                // A screen holds its rows and its key hook by `&mut`: each screen gets its own
+                // (the hook captures nothing, so its box allocates nothing).
                 let roster = Box::leak(Box::new(crate::launch::tests::four()));
-                let v: &'static LaunchView = Box::leak(Box::new(view(true)));
-                let p: &'static crate::prefs::Prefs = Box::leak(Box::new(crate::prefs::Prefs::default()));
-                let hook: &'static mut crate::launch::screen::OnKey<'static> = Box::leak(Box::new(|k: &KeyPress, _: &mut dyn Term| {
+                let hook: &mut crate::launch::screen::OnKey<'_> = Box::leak(Box::new(|k: &KeyPress, _: &mut dyn Term| {
                     let hit = crate::input::is_hotkey(k, 'u');
                     OPENED.with(|o| o.set(o.get() + usize::from(hit)));
                     hit
                 }));
-                let fx: &'static Fx = Box::leak(Box::new(fx()));
-                let cl: &'static dyn Fn() -> i64 = &clock;
-                let save: &'static dyn Fn(&str, HideChange) -> Result<(), String> = &|_: &str, _: HideChange| {
-                    OPENED.with(|o| o.set(o.get() + 1));
-                    Ok(())
-                };
-                let hiding: &'static Hiding<'static> = Box::leak(Box::new(Hiding {
-                    paths: RefCell::new(Vec::new()),
-                    pinned: RefCell::new(Vec::new()),
-                    save,
-                }));
-                let source: &'static dyn Fn() -> Option<ProjectScreen<'static>> =
-                    Box::leak(Box::new(move || Some(list(fx, color, cl).with_hiding(Some(hiding)))));
                 let st = roster.new_state();
-                let mut s = LaunchScreen::new(roster, st, v, p, 0, hook).with_home(source);
+                let mut s = LaunchScreen::new(roster, st, &v, &p, 0, hook).with_home(&source);
                 let _ = s.draw(size);
                 for _ in 0..tabs {
                     let _ = s.tab();
                 }
                 s
             };
-            let mut s = make();
-            assert_no_stray_click_acts(&mut s, size);
-            let mut s = make();
-            assert_first_click_never_acts(&mut s, size);
+            // The click walks try every cell: 280x72 lays out as 211x52 does, at twice the cells.
+            if size.0 < 280 {
+                let mut s = make();
+                assert_no_stray_click_acts(&mut s, size);
+                let mut s = make();
+                assert_first_click_never_acts(&mut s, size);
+            }
             assert_every_hint_is_alive(&mut make, size, &|| OPENED.with(std::cell::Cell::get));
         }
     }
-    let _ = (&f, c);
 }

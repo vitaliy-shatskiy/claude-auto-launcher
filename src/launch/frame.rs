@@ -1,9 +1,5 @@
 //! The launch screen's frame: the cockpit panels around the launch rows. Pure.
 
-use std::sync::LazyLock;
-
-use regex::Regex;
-
 use super::{LaunchState, OptionText, Roster, RowName, is_hidden_row_value, visible_row_values};
 use crate::cockpit::{self, Focus, Panel};
 use crate::frame::{
@@ -13,7 +9,7 @@ use crate::frame::{
 use crate::layout::{self, display_width};
 use crate::projects::view::{Home, HomeFocus};
 use crate::theme::{self, Glyphs};
-use crate::types::{DefaultLabels, LimitRecord, Limits, VersionInfo};
+use crate::types::{DefaultLabels, Limits, VersionInfo};
 
 /// Everything the launch frame draws from.
 #[derive(Debug, Clone, Copy)]
@@ -53,139 +49,8 @@ pub struct RunningSession {
     pub age: String,
 }
 
-/// The limit lines of the selected account: one per limit, label dim, percentage bold, coloured
-/// and right-aligned 2 cells from the border; `None` without a record.
-fn limit_lines(l: Option<&LimitRecord>, inner: usize, one_line: bool) -> (Vec<String>, String) {
-    let Some(l) = l.filter(|l| l.five_hour.is_some() || l.seven_day.is_some() || l.model.is_some()) else {
-        return (
-            vec![
-                format!("  {}", cockpit::dim("no data yet")),
-                format!("  {}", theme::tone(theme::TONE_FAINT, "fills in after the first session")),
-            ],
-            String::new(),
-        );
-    };
-    let label = l
-        .model_label
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map_or_else(|| "model".to_owned(), str::to_lowercase);
-    let label = l.model_age.as_deref().map_or(label.clone(), |a| format!("{label} ({a})"));
-    let items = [("5h".to_owned(), l.five_hour), ("7d".to_owned(), l.seven_day), (label, l.model)];
-    let tone_of = |p: i64| {
-        if p >= 90 {
-            theme::TONE_ERROR
-        } else if p >= 70 {
-            theme::TONE_WARN
-        } else {
-            theme::TONE_STRONG
-        }
-    };
-    let shown = items.iter().filter_map(|(k, p)| p.map(|p| (k, p)));
-    if one_line {
-        let text: Vec<String> = shown
-            .map(|(k, p)| format!("{} {}", cockpit::dim(k), theme::tone(tone_of(p), &format!("{p}%"))))
-            .collect();
-        let age = cockpit::dim(&format!("data {}", l.age_text));
-        return (
-            vec![cockpit::spread(&format!("  {}", text.join("  ")), &age, inner.saturating_sub(2))],
-            String::new(),
-        );
-    }
-    // Values follow a label column (the longest label and two cells), as the selected panel's facts.
-    let shown: Vec<(&String, i64)> = shown.collect();
-    let label_w = shown
-        .iter()
-        .map(|(k, _)| display_width(k))
-        .max()
-        .unwrap_or(0)
-        .min(inner.saturating_sub(10));
-    let lines = shown
-        .iter()
-        .map(|(k, p)| {
-            let label = layout::limit_line(k, label_w, false);
-            let pad = " ".repeat(label_w.saturating_sub(display_width(&label)) + 2);
-            format!("  {}{pad}{}", cockpit::dim(&label), theme::tone(tone_of(*p), &format!("{p:>3}%")))
-        })
-        .collect();
-    let age = if l.age_text.is_empty() {
-        String::new()
-    } else {
-        format!("  {}", cockpit::dim(&format!("data {}", l.age_text)))
-    };
-    (lines, age)
-}
-
-/// The panel's lines with `last` pinned to its last interior row.
-fn pin_last(mut lines: Vec<String>, last: String, height: usize) -> Vec<String> {
-    if last.is_empty() {
-        return lines;
-    }
-    lines.resize(height.saturating_sub(3).max(lines.len()), String::new());
-    lines.push(last);
-    lines
-}
-
-/// The projects panel while the registry is still being read.
-fn loading_lines(ascii: bool) -> Vec<String> {
-    vec![format!(
-        "  {}",
-        cockpit::dim(&format!("loading projects{}", layout::ellipsis(ascii)))
-    )]
-}
-
-fn running_lines(running: &[RunningSession], inner: usize, rows: usize, g: &Glyphs) -> Vec<String> {
-    if running.is_empty() {
-        return vec![format!("  {}", cockpit::dim("nothing running"))];
-    }
-    let mut out = Vec::new();
-    for r in running.iter().take(rows / 2) {
-        let name = layout::limit_line(&r.name, inner.saturating_sub(8 + display_width(&r.age)), g.on == '*');
-        let left = format!("  {} {name}", theme::tone(theme::TONE_LIVE, &g.on.to_string()));
-        out.push(cockpit::spread(&left, &cockpit::dim(&r.age), inner.saturating_sub(2)));
-        out.push(format!(
-            "    {}",
-            theme::tone(
-                theme::TONE_FAINT,
-                &layout::limit_line(&r.project, inner.saturating_sub(6), g.on == '*')
-            )
-        ));
-    }
-    out
-}
-
-/// Claude Code's state: the version (and the newest when it differs), the warnings count.
-fn claude_code_lines(version: &VersionInfo, warnings: usize, mcp: &str, g: &Glyphs) -> Vec<String> {
-    let installed = version.installed.as_deref().filter(|s| !s.is_empty());
-    let newest = version.newest.as_deref().filter(|s| !s.is_empty());
-    let first = match (installed, newest) {
-        (Some(i), Some(n)) if n != i => format!(
-            "  {}  {}",
-            theme::tone(theme::TONE_STRONG, i),
-            cockpit::dim(&format!("{} {n}", g.up))
-        ),
-        (Some(i), Some(_)) => format!("  {}  {}", theme::tone(theme::TONE_STRONG, i), cockpit::dim("newest")),
-        (Some(i), None) => format!("  {}", theme::tone(theme::TONE_STRONG, i)),
-        (None, _) => format!("  {}", cockpit::dim("not found")),
-    };
-    let mut out = vec![first];
-    let mcp = (!mcp.is_empty()).then(|| format!("{} {}", cockpit::dim("MCP"), layout::limit_line(mcp, 30, g.on == '*')));
-    if warnings > 0 {
-        let s = if warnings == 1 { "" } else { "s" };
-        let warn = format!(
-            "{} {warnings} warning{s} {} u",
-            theme::tone(theme::TONE_WARN, &g.warn.to_string()),
-            g.dot
-        );
-        out.push(match mcp {
-            Some(m) => format!("  {m}   {warn}"),
-            None => format!("  {warn}"),
-        });
-    } else if let Some(m) = mcp {
-        out.push(format!("  {m}"));
-    }
-    out
-}
+mod panels;
+use panels::{claude_code_lines, limit_lines, loading_lines, pin_last, running_lines};
 
 /// The launch rows: one line each, their click cells measured from the line's first cell.
 fn option_rows(
@@ -583,102 +448,8 @@ fn account_strip(
     (line, spans)
 }
 
-static SGR_ROW_LABEL: LazyLock<Regex> = LazyLock::new(|| theme::re(r"^.{3}account[\*\s]"));
-static COMPACT_PREFIX: LazyLock<Regex> = LazyLock::new(|| theme::re("^.{3}[a-z]+\\*? +(?:[^\\s\\[\\]]+ )*\u{4}?$"));
-static BRACKET: LazyLock<Regex> = LazyLock::new(|| theme::re(r"\[([^\[\]]+)\]"));
-static PERCENT: LazyLock<Regex> = LazyLock::new(|| theme::re(r"(\d+)%"));
-static ROW_WORDS: LazyLock<Regex> = LazyLock::new(|| theme::re(r"\b(account|action|model|effort|advisor|permission|remote|mode)\b"));
-static AGE: LazyLock<Regex> = LazyLock::new(|| theme::re(r"(\d+ (?:min|h|d) ago|just now)"));
-
-/// The selected cell's bracket `[...]` with at most one nested pair, starting at `open`
-/// (a char index of `[`); returns the exclusive end char index.
-fn selected_bracket_end(chars: &[char], open: usize) -> Option<usize> {
-    let mut i = open + 1;
-    loop {
-        match chars.get(i)? {
-            ']' => return Some(i + 1),
-            '[' => {
-                let mut j = i + 1;
-                loop {
-                    match chars.get(j)? {
-                        ']' => break,
-                        '[' => return None,
-                        _ => j += 1,
-                    }
-                }
-                i = j + 1;
-            }
-            _ => i += 1,
-        }
-    }
-}
-
-fn is_selected_anchor(chars: &[char], open: usize, on: char) -> bool {
-    if open >= 2 && chars.get(open - 2) == Some(&on) && chars.get(open - 1) == Some(&' ') {
-        return true;
-    }
-    let prefix: String = chars.get(..open).map_or_else(String::new, |c| c.iter().collect());
-    let not_account = prefix.chars().skip(3).collect::<String>();
-    COMPACT_PREFIX.is_match(&prefix) && !not_account.starts_with("account")
-}
-
-/// Painted AFTER layout; the selected cell first (anchored on the On glyph or
-/// the compact row's label), then the account tab, percentages, row words, cursor, sparkle, ages.
-pub fn add_launch_color(line: &str, enabled: bool, g: &Glyphs, roster: &Roster) -> String {
-    if !enabled || line.is_empty() {
-        return line.to_owned();
-    }
-    let is_account_row = SGR_ROW_LABEL.is_match(line);
-    let chars: Vec<char> = line.chars().collect();
-    let mut out = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars.get(i) == Some(&'[')
-            && is_selected_anchor(&chars, i, g.on)
-            && let Some(end) = selected_bracket_end(&chars, i)
-        {
-            let whole: String = chars.get(i..end).map_or_else(String::new, |c| c.iter().collect());
-            let value: String = chars.get(i + 1..end - 1).map_or_else(String::new, |c| c.iter().collect());
-            let tint = if ["off", "stop server", "safe"].iter().any(|v| v.eq_ignore_ascii_case(&value)) {
-                theme::YELLOW
-            } else {
-                roster.tint(&value)
-            };
-            out.push_str(theme::BOLD);
-            out.push_str(tint);
-            out.push_str(&whole);
-            out.push_str(theme::RESET);
-            i = end;
-            continue;
-        }
-        if let Some(c) = chars.get(i) {
-            out.push(*c);
-        }
-        i += 1;
-    }
-    if is_account_row {
-        out = BRACKET
-            .replace_all(&out, |c: &regex::Captures<'_>| {
-                let whole = c.get(0).map_or("", |m| m.as_str());
-                let value = c.get(1).map_or("", |m| m.as_str()).split(' ').next().unwrap_or_default();
-                format!("{}{}{whole}{}", theme::BOLD, roster.tint(value), theme::RESET)
-            })
-            .into_owned();
-    }
-    out = PERCENT
-        .replace_all(&out, |c: &regex::Captures<'_>| {
-            let p = c.get(1).map_or(0, |m| m.as_str().parse::<i64>().unwrap_or(i64::MAX));
-            format!("{}{}{}", theme::percent_color(p), c.get(0).map_or("", |m| m.as_str()), theme::RESET)
-        })
-        .into_owned();
-    out = ROW_WORDS
-        .replace_all(&out, format!("{}${{1}}{}", theme::DIM, theme::RESET).as_str())
-        .into_owned();
-    out = out.replace(g.cursor, &format!("{}{}{}{}", theme::BOLD, cockpit::ACCENT, g.cursor, theme::RESET));
-    out = out.replace(g.sparkle, &format!("{}{}{}", theme::ACCENT, g.sparkle, theme::RESET));
-    AGE.replace_all(&out, format!("{}${{1}}{}", theme::DIM, theme::RESET).as_str())
-        .into_owned()
-}
+mod color;
+use color::add_launch_color;
 
 mod home;
 pub(crate) use home::HomePanel;

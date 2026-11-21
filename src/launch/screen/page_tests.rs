@@ -155,3 +155,29 @@ fn on_a_huge_terminal_clicks_count_from_the_top_left_page() {
     let mut t = term((400, 150), vec![click(mx, my), key(vk::ENTER)]);
     assert_eq!(drive(&mut t, (400, 150)).0.unwrap().effort, "max", "the page starts at column 0");
 }
+
+#[test]
+fn an_idle_poll_takes_a_new_running_list_and_redraws_it() {
+    // Given: a launch page whose running panel is empty, a read that lands one session.
+    let mut r = four();
+    let v = view();
+    let p = Prefs::default();
+    let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+    let st = r.new_state();
+    let landed = std::cell::Cell::new(false);
+    let source = || {
+        (!landed.replace(true)).then(|| {
+            vec![crate::launch::frame::RunningSession {
+                name: "busy-session".into(),
+                project: "alpha".into(),
+                age: "1 min".into(),
+            }]
+        })
+    };
+    let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook).with_running(&source);
+    assert!(!s.draw((160, 40)).lines.join("\n").contains("busy-session"));
+    // When the screen idles, then it redraws with the session; the next poll has no news.
+    assert!(s.idle());
+    assert!(s.draw((160, 40)).lines.join("\n").contains("busy-session"));
+    assert!(!s.idle());
+}

@@ -200,7 +200,8 @@ fn a_first_click_only_selects_and_a_stray_click_does_nothing_on_the_project_scre
     let f = fx();
     let c = clock;
     let color = Style { color: true, ascii: false };
-    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+    // The walks try every cell: 280x72 lays out as 211x52 does, at twice the cells.
+    for size in [(80, 24), (120, 30), (211, 52)] {
         let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", color, &c);
         assert_no_stray_click_acts(&mut s, size);
         assert_first_click_never_acts(&mut s, size);
@@ -236,3 +237,18 @@ mod keys;
 mod mouse;
 mod nav;
 mod pins;
+
+/// Every size a terminal can report: the list and the navigator draw without a panic.
+#[test]
+fn the_project_screen_draws_at_every_size() {
+    let f = fx();
+    let c = clock;
+    let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: true, ascii: false }, &c);
+    for size in crate::ui::screen_loop::hover_walk::every_size() {
+        let _ = s.draw(size);
+    }
+    s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
+    for size in crate::ui::screen_loop::hover_walk::every_size() {
+        let _ = s.draw(size);
+    }
+}

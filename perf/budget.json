@@ -13,29 +13,29 @@
   },
   "paths": {
     "startup": {
-      "counts": { "read_bytes": 430760, "read_ops": 71 },
+      "counts": { "read_bytes": 431656, "read_ops": 71 },
       "wallMsRef": { "median": 99.176, "p80": 101.726 }
     },
     "project_screen": {
-      "counts": { "read_bytes": 436487, "read_ops": 72 },
+      "counts": { "read_bytes": 431656, "read_ops": 71 },
       "wallMsRef": { "median": 104.916, "p80": 110.532 }
     },
     "picker_open_cold": {
-      "counts": { "read_bytes": 128299274, "read_ops": 367, "write_bytes": 22015 },
+      "counts": { "read_bytes": 128305098, "read_ops": 367, "write_bytes": 23415 },
       "wallMsRef": { "median": 64.623, "p80": 65.931 }
     },
     "picker_open_warm": {
-      "counts": { "read_bytes": 53075, "read_ops": 9, "write_bytes": 22015 },
+      "counts": { "read_bytes": 54923, "read_ops": 9, "write_bytes": 23415 },
       "wallMsRef": { "median": 4.137, "p80": 5.007 }
     },
     "picker_ui_open_cold": {
-      "counts": { "read_bytes": 2968224, "read_ops": 239 }
+      "counts": { "read_bytes": 2971808, "read_ops": 239 }
     },
     "picker_worker_scan_cold": {
-      "counts": { "read_bytes": 128268214, "read_ops": 360, "write_bytes": 22015 }
+      "counts": { "read_bytes": 128273590, "read_ops": 360, "write_bytes": 23415 }
     },
     "picker_cursor": {
-      "counts": { "frame_bytes": 20955, "full_frame_bytes": 25571 },
+      "counts": { "frame_bytes": 20974, "full_frame_bytes": 25421 },
       "wallMsRef": { "median": 0.005, "p80": 0.006 }
     },
     "chat_load": {
@@ -45,7 +45,7 @@
       "counts": { "read_bytes": 0 }
     },
     "chat_prefetch_open": {
-      "counts": { "chat_bytes_read": 2165930, "read_bytes": 2165930 }
+      "counts": { "chat_bytes_read": 2166154, "read_bytes": 2166154 }
     }
   }
 }

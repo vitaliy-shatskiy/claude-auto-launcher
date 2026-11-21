@@ -179,3 +179,31 @@ fn both_workers_end_when_the_picker_closes() {
         h.join().unwrap();
     }
 }
+
+#[test]
+fn scrolling_fifty_sessions_keeps_at_most_sixteen_streams_open_the_viewed_one_among_them() {
+    // Given: 50 transcripts, each longer than the chunk that fills the pane, and one short one.
+    let t = tmp("lru");
+    let keys: Vec<ChatKey> = (0..50)
+        .map(|i| {
+            let f = t.0.join(format!("s{i}.jsonl"));
+            std::fs::write(&f, transcript(100, 2000)).unwrap();
+            key_of(&f)
+        })
+        .collect();
+    let short = t.0.join("short.jsonl");
+    std::fs::write(&short, transcript(2, 0)).unwrap();
+    let mut p = ChatPane::new(Timings::default());
+    // When: the cursor rests on each in turn, the short one first.
+    p.view(&key_of(&short), PANE);
+    settle(&mut p);
+    assert_eq!(p.open_streams(), 0, "a stream read to the file's start is closed");
+    for k in &keys {
+        p.view(k, PANE);
+        settle(&mut p);
+    }
+    // Then: the oldest streams were closed, the viewed one is still open, its chat still shown.
+    assert_eq!(p.open_streams(), MAX_OPEN);
+    assert!(p.is_open(keys.last().unwrap()));
+    assert!(matches!(p.view(&keys[0], PANE), ChatState::Ready(m) if !m.is_empty()));
+}

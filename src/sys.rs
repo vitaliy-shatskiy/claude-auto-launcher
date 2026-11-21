@@ -1,6 +1,7 @@
 //! Every Win32 call the launcher makes, behind safe wrappers: console input and modes, the
 //! window size, the code page, Ctrl+C, the prefs mutex, a file's hard-link count, SHA-256, local
-//! time, the process table, the TCP listener table and the job object that kills a process tree.
+//! time, the process table, the TCP listener table, the job object that kills a process tree and a
+//! background thread's priority.
 #![expect(unsafe_code, reason = "the one FFI module: Win32 console, mutex, hash and process calls")]
 
 use std::ffi::c_void;
@@ -421,3 +422,13 @@ pub(crate) use ip_tables::Listener;
 pub(crate) use ip_tables::{Family, tcp_listeners};
 #[cfg(feature = "remote")]
 pub(crate) use ip_tables::{IpTable, sized_table, u32_at};
+
+/// The calling thread at below-normal priority (the chat prefetch: it must never compete with
+/// the UI or with the user's other work). A failure leaves it at normal.
+pub(crate) fn lower_this_thread() {
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+    // SAFETY: no input; the pseudo handle of the calling thread needs no close.
+    let me = unsafe { GetCurrentThread() };
+    // SAFETY: `me` is a valid thread handle for the duration of the call.
+    let _lowered = unsafe { SetThreadPriority(me, THREAD_PRIORITY_BELOW_NORMAL) };
+}

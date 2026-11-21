@@ -4,7 +4,7 @@
 //! same order.
 
 use super::LaunchScreen;
-use crate::frame::{Frame, SESSION_ROW};
+use crate::frame::Frame;
 use crate::input::{KeyPress, vk};
 use crate::launch::LaunchState;
 use crate::launch::frame::HomePanel;
@@ -128,8 +128,7 @@ impl<'a> LaunchScreen<'a> {
 
     /// The second click on the session a click selected resumes it.
     pub(super) fn session_activate(&mut self, hit: &Hit) -> Option<Flow<LaunchState>> {
-        let Hit::LaunchRow { row, .. } = hit else { return None };
-        let i = row.checked_sub(SESSION_ROW)?;
+        let Hit::SessionRow(i) = *hit else { return None };
         let selected =
             matches!(self.home_focus(), Some(HomeFocus::Sessions(_))) && usize::try_from(self.session_cursor.index).ok() == Some(i);
         selected.then(|| self.resume(false))
@@ -167,9 +166,9 @@ impl<'a> LaunchScreen<'a> {
                 let f = self.home.as_mut().map(|h| h.click(hit))?;
                 Some(self.list_flow(f))
             }
-            Hit::LaunchRow { row, .. } if *row >= SESSION_ROW => {
+            Hit::SessionRow(i) => {
                 self.focus_on(HomeFocus::Sessions(0));
-                self.session_cursor.index = i32::try_from(row - SESSION_ROW).unwrap_or(0);
+                self.session_cursor.index = i32::try_from(*i).unwrap_or(0);
                 Some(Flow::Continue)
             }
             Hit::LaunchRow { .. } | Hit::Cell { .. } => {
@@ -216,8 +215,29 @@ impl<'a> LaunchScreen<'a> {
         };
         let f = self.frame_with(size, Some(HomePanel { focus, draw: &paint }));
         self.home = Some(cell.into_inner());
+        self.seen = Seen {
+            list: f.map.list.as_ref().is_some_and(|l| l.row_count > 0),
+            sessions: f.map.side.as_ref().map_or(0, |s| s.1.len()),
+        };
         f
     }
+
+    /// Whether the last frame showed the focused panel's selected row: Enter and the panel's keys
+    /// act only on a row the owner saw (a short or tiny terminal draws no list).
+    pub(super) fn row_seen(&self) -> bool {
+        match self.home_focus() {
+            None | Some(HomeFocus::Launch) => true,
+            Some(HomeFocus::Projects) => self.seen.list,
+            Some(HomeFocus::Sessions(_)) => usize::try_from(self.session_cursor.index).is_ok_and(|i| i < self.seen.sessions),
+        }
+    }
+}
+
+/// What the last frame showed of the workspace: the list's rows, how many sessions.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Seen {
+    list: bool,
+    sessions: usize,
 }
 /// Two focuses are the same panel (the sessions cursor aside).
 fn same(a: HomeFocus, b: HomeFocus) -> bool {
