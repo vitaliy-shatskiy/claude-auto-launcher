@@ -13,10 +13,14 @@ use crate::frame::{Frame, Style};
 use crate::input::{KeyPress, vk};
 use crate::maintenance::{UpdateFound, UpdateWatch};
 use crate::prefs::{self, Prefs};
+use crate::projects::screen::ProjectScreen;
+use crate::projects::view::HomeFocus;
 use crate::types::{DefaultLabels, Limits, VersionInfo};
 use crate::ui::screen_loop::{Cursor, Flow, Screen};
 use crate::ui::{Hit, Term};
 use std::cell::RefCell;
+
+mod home;
 
 /// The keys that continue a recent project, first to fifth.
 const RECENT_KEYS: [char; 5] = ['1', '2', '3', '4', '5'];
@@ -70,6 +74,14 @@ pub struct LaunchScreen<'a> {
     recent: Option<&'a RecentSource<'a>>,
     /// The recent project a click selected: the next click on it continues it.
     recent_pick: Option<usize>,
+    /// The project list under the launch panel on a wide page, once loaded.
+    home: Option<ProjectScreen<'a>>,
+    home_source: Option<&'a home::HomeSource<'a>>,
+    focus: HomeFocus,
+    /// The sessions panel's cursor.
+    session_cursor: Cursor,
+    /// The width last drawn at: the workspace needs two columns.
+    width: usize,
 }
 
 /// The recent projects once known; `None` while the registry is still being read.
@@ -145,6 +157,11 @@ impl<'a> LaunchScreen<'a> {
             warnings: 0,
             recent: None,
             recent_pick: None,
+            home: None,
+            home_source: None,
+            focus: HomeFocus::Launch,
+            session_cursor: Cursor::at(0),
+            width: 0,
         }
     }
 
@@ -280,10 +297,15 @@ impl Screen for LaunchScreen<'_> {
     }
 
     fn cursor(&mut self) -> &mut Cursor {
-        &mut self.cursor
+        self.focused_cursor()
     }
 
     fn before(&mut self) {
+        if let Some(h) = self.home.as_mut() {
+            h.before();
+        }
+        let n = i32::try_from(self.session_count()).unwrap_or(0);
+        self.session_cursor.index = self.session_cursor.index.min(n - 1).max(0);
         self.state.row = usize::try_from(self.cursor.index).unwrap_or(0);
         self.state.hover = self.cursor.hover;
         self.state.hover_row = self.cursor.hover_row;
@@ -293,6 +315,172 @@ impl Screen for LaunchScreen<'_> {
     }
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
+        self.width = size.0;
+        if self.home_focus().is_some() {
+            return self.home_draw(size);
+        }
+        self.frame_with(size, None)
+    }
+
+    fn rows(&self) -> Option<i32> {
+        let n = match (self.home_focus(), self.home.as_ref()) {
+            (Some(HomeFocus::Projects), Some(h)) => return h.rows(),
+            (Some(HomeFocus::Sessions(_)), _) => self.session_count(),
+            _ => self.roster.rows.len(),
+        };
+        Some(i32::try_from(n).unwrap_or(0))
+    }
+
+    fn up(&mut self) -> bool {
+        self.home_focus() == Some(HomeFocus::Projects) && self.home.as_mut().is_some_and(Screen::up)
+    }
+
+    fn down(&mut self) -> bool {
+        self.home_focus() == Some(HomeFocus::Projects) && self.home.as_mut().is_some_and(Screen::down)
+    }
+
+    fn wheel(&mut self, delta: i32) -> bool {
+        self.home_focus() == Some(HomeFocus::Projects) && self.home.as_mut().is_some_and(|h| h.wheel(delta))
+    }
+
+    fn tab(&mut self) -> Option<Flow<LaunchState>> {
+        let focus = self.home_focus()?;
+        if focus == HomeFocus::Projects
+            && let Some(f) = self.home.as_mut().filter(|h| h.busy()).and_then(Screen::tab)
+        {
+            return Some(self.list_flow(f));
+        }
+        self.cycle(false);
+        Some(Flow::Continue)
+    }
+
+    fn escape(&mut self) -> Option<Flow<LaunchState>> {
+        self.home_escape()
+    }
+
+    fn type_key(&mut self, key: &KeyPress) -> bool {
+        self.home_focus() == Some(HomeFocus::Projects) && self.home.as_mut().is_some_and(|h| h.type_key(key))
+    }
+
+    fn has_left_right(&self) -> bool {
+        true
+    }
+
+    fn left(&mut self) -> Flow<LaunchState> {
+        self.step(-1)
+    }
+
+    fn right(&mut self) -> Flow<LaunchState> {
+        self.step(1)
+    }
+
+    fn enter(&mut self) -> Option<Flow<LaunchState>> {
+        match (self.home_focus(), self.home.as_mut()) {
+            (Some(HomeFocus::Projects), Some(h)) => {
+                let f = h.enter()?;
+                Some(self.list_flow(f))
+            }
+            (Some(HomeFocus::Sessions(_)), _) => Some(self.resume(false)),
+            _ => Some(Flow::Done(Some(self.state.clone()))),
+        }
+    }
+
+    fn hotkeys(&self) -> &[char] {
+        match (self.home_focus(), self.home.as_ref()) {
+            (Some(HomeFocus::Projects), Some(h)) => h.hotkeys(),
+            (Some(HomeFocus::Sessions(_)), _) => &['f'],
+            (Some(_), _) => &[],
+            (None, _) => {
+                let n = self.view.recent.len().min(RECENT_KEYS.len());
+                RECENT_KEYS.get(..n).unwrap_or_default()
+            }
+        }
+    }
+
+    /// 1-5: that recent project's newest session with the choices on screen (`hotkeys` offers
+    /// only the keys the list has); on the workspace the focused panel's keys.
+    fn hotkey(&mut self, c: char) -> Flow<LaunchState> {
+        match (self.home_focus(), self.home.as_mut()) {
+            (Some(HomeFocus::Projects), Some(h)) => {
+                let f = h.hotkey(c);
+                return self.list_flow(f);
+            }
+            (Some(HomeFocus::Sessions(_)), _) => return if c == 'f' { self.resume(true) } else { Flow::Continue },
+            _ => {}
+        }
+        let Some(i) = RECENT_KEYS.iter().position(|k| *k == c) else {
+            return Flow::Continue;
+        };
+        let mut state = self.state.clone();
+        state.picked = Some(i);
+        Flow::Done(Some(state))
+    }
+
+    fn idle(&mut self) -> bool {
+        let list = self.home.as_mut().is_some_and(Screen::idle);
+        self.take_update() | self.take_recent() | self.take_home() | list | self.launcher.is_some_and(|w| w.borrow_mut().news())
+    }
+
+    /// A click on a row selects it; on an option cell it walks to that value through the same
+    /// stepper the arrows use; on a recent project's line it selects that project; on the
+    /// workspace's list it focuses the list and selects there. Nothing here starts a session.
+    fn click(&mut self, hit: &Hit) -> Flow<LaunchState> {
+        if let Some(f) = self.home_click(hit) {
+            return f;
+        }
+        self.launch_click(hit)
+    }
+
+    /// The second click on the recent project a click selected does what its key does; on the
+    /// list, what Enter does there.
+    fn activate(&mut self, hit: &Hit, term: &mut dyn Term) -> Option<Flow<LaunchState>> {
+        if let (Hit::ListRow(_), Some(HomeFocus::Projects)) = (hit, self.home_focus()) {
+            let f = self.home.as_mut()?.activate(hit, term)?;
+            return Some(self.list_flow(f));
+        }
+        let Hit::LaunchRow { row, .. } = hit else { return None };
+        let i = row.checked_sub(RECENT_ROW).filter(|i| self.recent_pick == Some(*i))?;
+        RECENT_KEYS.get(i).map(|c| self.hotkey(*c))
+    }
+
+    /// The workspace's keys first (Shift+Tab, the list's own), then the caller's hook (then a
+    /// `rows` maintenance `l` saved shows), then ctrl+r (matched on the virtual key, so any
+    /// layout works).
+    fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
+        if let Some(done) = self.home_key(key, term) {
+            return done;
+        }
+        if (self.on_key)(key, term) {
+            self.reload_rows();
+            return true;
+        }
+        if key.is_ctrl(vk::R) {
+            prefs::reset_tab(&mut self.state, self.roster);
+            self.cursor.index = i32::try_from(self.state.row).unwrap_or(0);
+            return true;
+        }
+        false
+    }
+}
+
+impl LaunchScreen<'_> {
+    /// Left or right: the list's action on the list, the launch row's value on the rows.
+    fn step(&mut self, delta: i64) -> Flow<LaunchState> {
+        match (self.home_focus(), self.home.as_mut()) {
+            (Some(HomeFocus::Projects), Some(h)) => {
+                let f = if delta < 0 { h.left() } else { h.right() };
+                self.list_flow(f)
+            }
+            (Some(HomeFocus::Sessions(_)), _) => Flow::Continue,
+            _ => {
+                self.walk(delta, 1);
+                Flow::Continue
+            }
+        }
+    }
+
+    /// The launch frame at `size`, with the workspace's list when `home` is given.
+    fn frame_with(&self, size: (usize, usize), home: Option<crate::launch::frame::HomePanel<'_>>) -> Frame {
         let notice = self.launcher.and_then(|w| w.borrow().line(self.view.style.ascii));
         let inp = LaunchFrameInput {
             state: &self.state,
@@ -306,6 +494,7 @@ impl Screen for LaunchScreen<'_> {
             recent: &self.view.recent,
             recent_loading: self.recent.is_some(),
             recent_selected: self.recent_pick,
+            home,
             running: &self.view.running,
             mcp: &self.view.mcp,
             default_model_label: &self.view.default_model_label,
@@ -316,52 +505,8 @@ impl Screen for LaunchScreen<'_> {
         launch_frame(self.roster, &inp)
     }
 
-    fn rows(&self) -> Option<i32> {
-        Some(i32::try_from(self.roster.rows.len()).unwrap_or(0))
-    }
-
-    fn has_left_right(&self) -> bool {
-        true
-    }
-
-    fn left(&mut self) -> Flow<LaunchState> {
-        self.walk(-1, 1);
-        Flow::Continue
-    }
-
-    fn right(&mut self) -> Flow<LaunchState> {
-        self.walk(1, 1);
-        Flow::Continue
-    }
-
-    fn enter(&mut self) -> Option<Flow<LaunchState>> {
-        Some(Flow::Done(Some(self.state.clone())))
-    }
-
-    fn hotkeys(&self) -> &[char] {
-        let n = self.view.recent.len().min(RECENT_KEYS.len());
-        RECENT_KEYS.get(..n).unwrap_or_default()
-    }
-
-    /// 1-5: that recent project's newest session with the choices on screen. `hotkeys` offers
-    /// only the keys the list has.
-    fn hotkey(&mut self, c: char) -> Flow<LaunchState> {
-        let Some(i) = RECENT_KEYS.iter().position(|k| *k == c) else {
-            return Flow::Continue;
-        };
-        let mut state = self.state.clone();
-        state.picked = Some(i);
-        Flow::Done(Some(state))
-    }
-
-    fn idle(&mut self) -> bool {
-        self.take_update() | self.take_recent() | self.launcher.is_some_and(|w| w.borrow_mut().news())
-    }
-
-    /// A click on a row selects it; on an option cell it walks to that value through the same
-    /// stepper the arrows use; on a recent project's line it selects that project. Nothing here
-    /// starts a session.
-    fn click(&mut self, hit: &Hit) -> Flow<LaunchState> {
+    /// A click on a launch row or a recent project's line.
+    fn launch_click(&mut self, hit: &Hit) -> Flow<LaunchState> {
         let (row, value) = match hit {
             Hit::LaunchRow { row, .. } if *row >= RECENT_ROW => {
                 self.recent_pick = Some(row - RECENT_ROW);
@@ -395,28 +540,6 @@ impl Screen for LaunchScreen<'_> {
         };
         self.walk(dir, steps);
         Flow::Continue
-    }
-
-    /// The second click on the recent project a click selected does what its key does.
-    fn activate(&mut self, hit: &Hit, _term: &mut dyn Term) -> Option<Flow<LaunchState>> {
-        let Hit::LaunchRow { row, .. } = hit else { return None };
-        let i = row.checked_sub(RECENT_ROW).filter(|i| self.recent_pick == Some(*i))?;
-        RECENT_KEYS.get(i).map(|c| self.hotkey(*c))
-    }
-
-    /// The caller's hook first (then a `rows` maintenance `l` saved shows), then ctrl+r (matched
-    /// on the virtual key, so any layout works).
-    fn on_key(&mut self, key: &KeyPress, term: &mut dyn Term) -> bool {
-        if (self.on_key)(key, term) {
-            self.reload_rows();
-            return true;
-        }
-        if key.is_ctrl(vk::R) {
-            prefs::reset_tab(&mut self.state, self.roster);
-            self.cursor.index = i32::try_from(self.state.row).unwrap_or(0);
-            return true;
-        }
-        false
     }
 }
 

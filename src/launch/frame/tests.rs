@@ -70,6 +70,7 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
         recent: &[],
         recent_loading: false,
         recent_selected: None,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: c.model_label,
@@ -202,6 +203,7 @@ fn narrow_tier_draws_compact_rows_inside_the_frame() {
         recent: &[],
         recent_loading: false,
         recent_selected: None,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: "default",
@@ -239,6 +241,7 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
         recent: &[],
         recent_loading: false,
         recent_selected: None,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: "default",
@@ -374,6 +377,7 @@ fn ctrl_r_reset_and_the_warning_badge_show_only_when_they_apply() {
         warnings: 2,
         restored: true,
         recent: false,
+        home: false,
     });
     assert!(
         both.contains("[u] maintenance \u{26a0} 2") && both.contains("ctrl+r reset"),
@@ -387,6 +391,7 @@ fn ctrl_r_reset_and_the_warning_badge_show_only_when_they_apply() {
             warnings: 2,
             restored: false,
             recent: false,
+            home: false,
         },
     );
     let line: String = colored
@@ -423,6 +428,7 @@ fn row_map_points_at_the_drawn_lines() {
         recent: &[],
         recent_loading: false,
         recent_selected: None,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: "default",
@@ -467,6 +473,7 @@ fn under_110_columns_the_footer_shortens_and_stays_one_line_ctrl_r_going_first()
         warnings: 2,
         restored: true,
         recent: true,
+        home: false,
     };
     let text = |w: usize| {
         let f = launch_footer(&g, w, false, &all);
@@ -534,6 +541,7 @@ fn too_small_terminal_gets_the_size_frame() {
         recent: &[],
         recent_loading: false,
         recent_selected: None,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: "default",

@@ -452,10 +452,8 @@ pub fn hit_at(map: Option<&RowMap>, x: i32, y: i32, window_top: i32) -> Hit {
             value: a.cells.iter().find(|c| x >= c.start && x <= c.end).map(|c| c.value.clone()),
         };
     }
-    if !map.rows.is_empty() {
-        let Some(row) = map.rows.iter().find(|r| r.y == row_y) else {
-            return Hit::None;
-        };
+    // A launch row on this line, else a list row (the launch page holds both).
+    if let Some(row) = map.rows.iter().find(|r| r.y == row_y) {
         return match row.cells.iter().find(|c| x >= c.start && x <= c.end) {
             Some(c) => Hit::Cell {
                 row: row.index,

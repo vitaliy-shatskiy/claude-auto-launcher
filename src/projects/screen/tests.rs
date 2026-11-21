@@ -228,6 +228,7 @@ fn the_context_follows_the_cursor() {
 }
 
 mod hide;
+mod home;
 mod keys;
 mod mouse;
 mod nav;

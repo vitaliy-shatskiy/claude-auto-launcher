@@ -55,6 +55,7 @@ fn view<'a>(ps: &'a [Project], index: usize, cwd: &'a str, w: usize, h: usize) -
         hover_row: -1,
         hover_value: "",
         detail: None,
+        home: None,
     }
 }
 
@@ -155,6 +156,7 @@ fn sample_detail(path: &str) -> Detail {
         title: title.into(),
         modified_ms: NOW - ago,
         live,
+        session_id: format!("id-{title}"),
     };
     Detail {
         key: project_key(path),

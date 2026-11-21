@@ -11,6 +11,7 @@ use crate::frame::{
     new_hint_footer, new_radio_row,
 };
 use crate::layout::{self, display_width};
+use crate::projects::view::HomeFocus;
 use crate::theme::{self, Glyphs};
 use crate::types::{DefaultLabels, LimitRecord, Limits, VersionInfo};
 
@@ -38,6 +39,8 @@ pub struct LaunchFrameInput<'a> {
     pub recent_loading: bool,
     /// The recent project a click selected: drawn as the selected row; a second click continues it.
     pub recent_selected: Option<usize>,
+    /// The wide page's projects panel under the launch panel; `None` = the recent panel.
+    pub(crate) home: Option<HomePanel<'a>>,
     pub running: &'a [RunningSession],
     /// The last maintenance MCP check (`2 of 2 · 3 h ago`), empty when unknown: never run here.
     pub mcp: &'a str,
@@ -362,25 +365,10 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let rows = option_rows(roster, inp, &restored, lw.saturating_sub(3), &g);
     let selected = rows.iter().position(|r| r.0 == state.row);
     let mut map = RowMap {
-        rows: rows
-            .iter()
-            .enumerate()
-            .map(|(y, (index, name, _, cells))| RowHit {
-                index: *index,
-                name: (*name).to_owned(),
-                y: i32::try_from(1 + y).unwrap_or(0),
-                cells: cells
-                    .iter()
-                    .map(|c| CellSpan {
-                        start: c.start + 1,
-                        end: c.end + 1,
-                        value: c.value.clone(),
-                    })
-                    .collect(),
-            })
-            .collect(),
+        rows: launch_hits(&rows),
         ..RowMap::default()
     };
+    let home = inp.home.filter(|_| wide);
     let mut launch_lines: Vec<String> = rows.into_iter().map(|r| r.2).collect();
     // The self-update notice closes the launch panel, dim, a blank row under the rows.
     if let Some(n) = inp.notice {
@@ -394,7 +382,8 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         &LaunchHints {
             warnings: inp.warnings,
             restored: !restored.is_empty(),
-            recent: !inp.recent.is_empty(),
+            recent: !inp.recent.is_empty() && home.is_none(),
+            home: home.is_some(),
         },
     );
     let painter = |l: &str, enabled: bool| add_launch_color(l, enabled, &g, roster);
@@ -406,11 +395,13 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let top_h = if wide { launch_need.max(lim_need) } else { launch_need };
     let right = versions(inp.version, &g, wide);
     let top_lw = if wide { launch_width(&launch_lines, &right, lw, &g) } else { lw };
+    // The identity goes with the focus: off the launch rows, the panel is plain `launch`.
+    let launch_focused = home.is_none_or(|h| h.focus == HomeFocus::Launch);
     let launch = Panel {
-        title: cockpit::identity(&g),
+        title: if launch_focused { cockpit::identity(&g) } else { "launch".into() },
         page: String::new(),
         right,
-        focus: Focus::Focused,
+        focus: if launch_focused { Focus::Focused } else { Focus::Plain },
         lines: launch_lines,
         width: top_lw,
         height: top_h,
@@ -418,6 +409,15 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         selected,
     };
     let lim_h = if wide { top_h } else { lim_need };
+    // The workspace's right column runs from the launch panel to the frame's edge on every focus.
+    let (rw, (lims, age)) = if home.is_some() {
+        (
+            fw - top_lw,
+            limit_lines(inp.limits.get(&state.account), (fw - top_lw).saturating_sub(2), false),
+        )
+    } else {
+        (rw, (lims, age))
+    };
     let limits = Panel {
         title: format!("limits {} {account}", g.dot),
         page: String::new(),
@@ -437,6 +437,9 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         l.extend(cockpit::render(&limits, inp.style));
         l
     };
+    if let Some(h) = home {
+        return home::home_frame(inp, h, lines, map, (top_lw, rw), &footer);
+    }
     let left_over = page_rows.saturating_sub(lines.len());
     map.rows.extend(recent_hits(inp, wide, left_over, lines.len()));
     lines.extend(bottom_panels(inp, wide, (top_lw, rw), left_over, &g));
@@ -447,6 +450,26 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     };
     let lines = frame::append_footer(lines, &footer, fw, inp.style, &light, &mut map);
     Frame { lines, map }
+}
+
+/// The launch rows' hits, their cells measured from the panel's first interior cell.
+fn launch_hits(rows: &[(usize, &'static str, String, Vec<CellSpan>)]) -> Vec<RowHit> {
+    rows.iter()
+        .enumerate()
+        .map(|(y, (index, name, _, cells))| RowHit {
+            index: *index,
+            name: (*name).to_owned(),
+            y: i32::try_from(1 + y).unwrap_or(0),
+            cells: cells
+                .iter()
+                .map(|c| CellSpan {
+                    start: c.start + 1,
+                    end: c.end + 1,
+                    value: c.value.clone(),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// The left column's width: what the launch rows and the title need, at most `most`; recent under
@@ -563,6 +586,9 @@ pub fn launch_footer(g: &Glyphs, width: usize, color: bool, extra: &LaunchHints)
     if extra.recent {
         hints.push(Hint::plain("1-5", if short { "go" } else { "resume" }).kept());
     }
+    if extra.home {
+        hints.push(Hint::key("tab", "projects", "Tab"));
+    }
     hints.push(Hint::ch("u", if short { "maint" } else { "maintenance" }, 'u').badged(badge));
     if extra.restored {
         hints.push(Hint::plain(if short { "^r" } else { "ctrl+r" }, "reset").kept());
@@ -588,6 +614,8 @@ pub struct LaunchHints {
     pub restored: bool,
     /// Recent projects are listed: `1-5 resume` is offered.
     pub recent: bool,
+    /// The projects panel is on the page: `tab projects` is offered.
+    pub home: bool,
 }
 
 #[expect(
@@ -739,6 +767,9 @@ pub fn add_launch_color(line: &str, enabled: bool, g: &Glyphs, roster: &Roster) 
     AGE.replace_all(&out, format!("{}${{1}}{}", theme::DIM, theme::RESET).as_str())
         .into_owned()
 }
+
+mod home;
+pub(crate) use home::HomePanel;
 
 #[cfg(test)]
 mod tests;

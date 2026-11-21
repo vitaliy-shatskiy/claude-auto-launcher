@@ -168,6 +168,33 @@ pub(super) fn run_ui(
     if !run.preview {
         view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
     }
+    // The wide launch page's projects panel, once the registry is in (plugin projects join on
+    // the project page only: listing them starts their processes).
+    let home_clock = now_ms;
+    let home_account = state.account.clone();
+    let home_source = || {
+        let mut p = prefetch.try_borrow_mut().ok()?;
+        let reg = p.poll()?.as_ref().ok()?;
+        let stores = projects::detail::Stores {
+            root: sessions::sessions_root(&run.cfg, &home_account),
+            live_dirs: held_dirs.clone(),
+        };
+        Some(projects::home_list(
+            &reg.projects,
+            &run.ctx.cwd,
+            style,
+            &hiding,
+            run.preview,
+            stores,
+            &home_clock,
+        ))
+    };
+    // A preview never idles: the registry is read before its first frame, so the projects panel
+    // (and the recent one) show in the printed frames.
+    if run.preview {
+        let mut p = prefetch.borrow_mut();
+        let _ = registry(&mut p, &run.logger, || {});
+    }
     let mut chosen_how: Option<String>;
     let mut rows_store = ConfigRows { run };
     // Plugin messages and warnings met on the screens, printed once the console is back.
@@ -191,8 +218,11 @@ pub(super) fn run_ui(
             launch_key(run, k, t, &plugin_lines)
         };
         state.picked = None;
+        // Per run of the screen: its borrows end with it (the source outlives the loop).
+        let home_here = || home_source();
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
             .with_recent(&recent_source)
+            .with_home(&home_here)
             .with_rows(&mut rows_store)
             .with_update(&update)
             .with_self_update(launcher)
@@ -220,7 +250,36 @@ pub(super) fn run_ui(
         let via_project = state.action == PROJECT_ACTION;
         let action_before = state.action.clone();
         let picked = apply_pick(&mut state, &recent);
-        if picked {
+        let home_session = state.home_session.take();
+        if let Some(chosen) = state.home_pick.take() {
+            // The wide launch page's projects or sessions panel picked: no project page.
+            state.project.clone_from(&chosen.path);
+            state.project_slug.clone_from(&chosen.slug);
+            state.project_slugs.clone_from(&chosen.slugs);
+            state.action.clone_from(&chosen.action);
+            chosen_how = Some(chosen.how);
+            if let Some((id, fork)) = home_session {
+                let holder = if fork { None } else { sessions::session_holder(&held_dirs, &id) };
+                if confirm_held(term.as_mut(), holder.as_deref(), style)? {
+                    break launch_end(
+                        state,
+                        Some(id),
+                        fork,
+                        view,
+                        roster,
+                        merged.restored,
+                        project_source,
+                        preselect,
+                        chosen_how,
+                    );
+                }
+                if run.preview {
+                    break UiEnd::PreviewHeldBack;
+                }
+                state.action.clone_from(&action_before);
+                continue;
+            }
+        } else if picked {
             chosen_how = Some("key".into());
         } else if opens_project_screen(run.cfg.project_screen, &state.action) {
             let Some(chosen) = projects::run_project_screen(

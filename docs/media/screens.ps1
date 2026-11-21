@@ -12,7 +12,7 @@
 # Exit: 0 every PNG written, 1 one failed, 2 did not run (no binary, no vhs, an error).
 [CmdletBinding()]
 param(
-    [string]$Screens = 'launch,project,picker-all,maintenance,navigator,rows-editor',
+    [string]$Screens = 'launch,home-projects,home-sessions,project,picker-all,maintenance,navigator,rows-editor',
     [string]$Sizes = '80x24,120x30,160x45,211x52,280x72,320x85,55x20',
     [string]$Exe
 )
@@ -23,7 +23,9 @@ Set-StrictMode -Version 3.0
 # Keys from the launch screen to each screen (the project list: the cwd row, then the demo projects
 # newest first, `enter a path...` four rows down). {drive} is the demo drive's letter.
 $keyScripts = [ordered]@{
-    'launch'      = ''
+    'launch'        = ''
+    'home-projects' = 'Tab,s'
+    'home-sessions' = 'Tab,s,Tab'
     'project'     = 'Enter,s'
     'picker-all'  = 'Enter,s,r,Tab'
     'maintenance' = 'u'

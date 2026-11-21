@@ -7,9 +7,9 @@ mod nav_view;
 mod navigator;
 mod paths;
 mod registry;
-mod screen;
+pub(crate) mod screen;
 mod select;
-mod view;
+pub(crate) mod view;
 mod win;
 
 use std::path::{Path, PathBuf};
@@ -236,6 +236,27 @@ pub fn run_project_screen(
             detail::DetailSource::worker(stores)
         }));
     crate::ui::screen_loop::run(&mut s, term)
+}
+
+/// The project list as the wide launch page's projects panel: the project screen's own state
+/// (filter, pins, hiding, the selected project's detail), opened on the current directory.
+pub(crate) fn home_list<'a>(
+    projects: &[Project],
+    cwd: &Path,
+    style: Style,
+    hiding: &'a Hiding<'a>,
+    preview: bool,
+    stores: detail::Stores,
+    clock: &'a dyn Fn() -> i64,
+) -> screen::ProjectScreen<'a> {
+    screen::ProjectScreen::new(projects, &cwd.to_string_lossy(), "new", style, clock)
+        .with_hiding(Some(hiding))
+        .with_preview(preview)
+        .with_details(Some(if preview {
+            detail::DetailSource::in_place(stores)
+        } else {
+            detail::DetailSource::worker(stores)
+        }))
 }
 
 /// The launch page's recent projects: the five newest that are not hidden, newest first, each with

@@ -410,6 +410,11 @@ pub struct LaunchState {
     /// The recent project a launch key 1-5 picked (0-based): its newest session continues with
     /// these choices and the project screen is skipped. Never remembered.
     pub picked: Option<usize>,
+    /// What the home's projects panel picked on a wide page: the project screen is skipped. Never
+    /// remembered.
+    pub home_pick: Option<crate::projects::ProjectChoice>,
+    /// The session the home's sessions panel resumed, and whether as a fork. Never remembered.
+    pub home_session: Option<(String, bool)>,
 }
 
 impl LaunchState {
@@ -436,6 +441,8 @@ impl LaunchState {
             start: None,
             plugin_rows: BTreeMap::new(),
             picked: None,
+            home_pick: None,
+            home_session: None,
         }
     }
 
