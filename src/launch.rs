@@ -407,6 +407,9 @@ pub struct LaunchState {
     pub start: Option<StartContext>,
     /// Plugin row values by row index; never remembered.
     pub plugin_rows: BTreeMap<u16, String>,
+    /// The recent project a launch key 1-5 picked (0-based): its newest session continues with
+    /// these choices and the project screen is skipped. Never remembered.
+    pub picked: Option<usize>,
 }
 
 impl LaunchState {
@@ -432,6 +435,7 @@ impl LaunchState {
             project_slugs: Vec::new(),
             start: None,
             plugin_rows: BTreeMap::new(),
+            picked: None,
         }
     }
 

@@ -46,6 +46,10 @@ fn pad_right(s: &str, width: usize) -> String {
 pub struct RecentProject {
     pub name: String,
     pub path: String,
+    /// The slug of its newest activity and every slug of the directory, as the project screen
+    /// hands them to the launch.
+    pub slug: String,
+    pub slugs: Vec<String>,
     /// `3 min`, `2 d`: how long ago its newest session ran.
     pub age: String,
     /// Its newest session's title; empty shows the path.
@@ -126,7 +130,7 @@ fn pin_last(mut lines: Vec<String>, last: String, height: usize) -> Vec<String> 
 
 /// Recent projects: key, name and age, the last session's title dim under it; one line each when
 /// `two_line` is off.
-fn recent_lines(recent: &[RecentProject], inner: usize, rows: usize, two_line: bool, ascii: bool) -> Vec<String> {
+fn recent_lines(recent: &[RecentProject], inner: usize, rows: usize, two_line: bool, ascii: bool, hover: Option<usize>) -> Vec<String> {
     if recent.is_empty() {
         return vec![
             format!("  {}", cockpit::dim("no recent projects yet")),
@@ -139,7 +143,13 @@ fn recent_lines(recent: &[RecentProject], inner: usize, rows: usize, two_line: b
         let age = cockpit::dim(&p.age);
         let room = inner.saturating_sub(5 + display_width(&p.age) + 4);
         let name = layout::limit_line(&p.name, room, ascii);
-        let name = if i == 0 { theme::tone(theme::TONE_STRONG, &name) } else { name };
+        let name = if hover == Some(i) {
+            theme::add_hover_span(&name)
+        } else if i == 0 {
+            theme::tone(theme::TONE_STRONG, &name)
+        } else {
+            name
+        };
         let left = format!("  {}  {name}", theme::tone(theme::TONE_ACCENT, &(i + 1).to_string()));
         out.push(cockpit::spread(&left, &age, inner.saturating_sub(2)));
         if two_line {
@@ -396,7 +406,9 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         l
     };
     let left_over = page_rows.saturating_sub(lines.len());
+    let top = lines.len();
     lines.extend(bottom_panels(inp, wide, (lw, rw), left_over, &g));
+    map.rows.extend(recent_hits(inp, wide, left_over, top));
     let light = FooterLight {
         hover: frame::footer_hover(&footer, state.hover),
         selected: Vec::new(),
@@ -405,23 +417,63 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     Frame { lines, map }
 }
 
+/// The row index a recent project's line has in the row map: `RECENT_ROW + i`, past every launch row.
+pub const RECENT_ROW: usize = 1000;
+
+/// The recent panel's lines in the row map, under the top panels' `top` rows.
+fn recent_hits(inp: &LaunchFrameInput<'_>, wide: bool, left_over: usize, top: usize) -> Vec<RowHit> {
+    let per = if wide { 2 } else { 1 };
+    (0..recent_shown(inp, wide, left_over))
+        .map(|i| RowHit {
+            index: RECENT_ROW + i,
+            name: "recent".to_owned(),
+            y: i32::try_from(top + 1 + i * per).unwrap_or(0),
+            cells: Vec::new(),
+        })
+        .collect()
+}
+
+/// How many recent projects the recent panel lists: one per row stacked, one per two rows beside.
+fn recent_shown(inp: &LaunchFrameInput<'_>, wide: bool, left_over: usize) -> usize {
+    let rows = if wide {
+        bottom_height(inp, left_over).saturating_sub(2) / 2
+    } else if left_over >= 3 {
+        left_over - 2
+    } else {
+        0
+    };
+    inp.recent.len().min(rows).min(5)
+}
+
+/// The bottom row's height beside: to the footer with items, the empty-state lines without.
+fn bottom_height(inp: &LaunchFrameInput<'_>, left_over: usize) -> usize {
+    if inp.recent.is_empty() && inp.running.is_empty() {
+        3 + STATUS_HEIGHT
+    } else {
+        left_over.max(3 + STATUS_HEIGHT)
+    }
+}
+
+/// The Claude Code panel: its two lines and the borders.
+const STATUS_HEIGHT: usize = 4;
+
 /// Recent projects, running sessions and Claude Code's state under the top panels: they stretch to
 /// the footer when a list has items and shrink to their empty-state lines when both are empty.
 /// Stacked, only the recent panel shows, and only when `left_over` rows hold it.
 fn bottom_panels(inp: &LaunchFrameInput<'_>, wide: bool, (lw, rw): (usize, usize), left_over: usize, g: &Glyphs) -> Vec<String> {
     let style = inp.style;
+    let hover = usize::try_from(inp.state.hover_row).ok().and_then(|r| r.checked_sub(RECENT_ROW));
     if !wide {
         if left_over < 3 {
             return Vec::new();
         }
         let rh = if inp.recent.is_empty() { 4.min(left_over) } else { left_over };
-        let lines = recent_lines(inp.recent, lw - 2, rh - 2, false, style.ascii);
+        let lines = recent_lines(inp.recent, lw - 2, rh - 2, false, style.ascii, hover);
         return cockpit::render(&Panel::plain("recent", lines, lw, rh), style);
     }
-    let status_h = 4;
-    let sparse = inp.recent.is_empty() && inp.running.is_empty();
-    let bh = if sparse { 3 + status_h } else { left_over.max(3 + status_h) };
-    let recent = Panel::plain("recent", recent_lines(inp.recent, lw - 2, bh - 2, true, style.ascii), lw, bh);
+    let status_h = STATUS_HEIGHT;
+    let bh = bottom_height(inp, left_over);
+    let recent = Panel::plain("recent", recent_lines(inp.recent, lw - 2, bh - 2, true, style.ascii, hover), lw, bh);
     let running = Panel::plain(
         "running",
         running_lines(inp.running, rw - 2, bh - status_h - 2, g),
