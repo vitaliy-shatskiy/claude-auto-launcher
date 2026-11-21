@@ -4,6 +4,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-11-21
+
+### Fixed
+
+- Maintenance page: the claude-auto `update` and `roll back` rows say what they do in the
+  details panel instead of `a configured action`, the text of a `maintenanceActions` entry.
+- Maintenance page: after an update or a roll back the versions panel names the build the swap
+  installed and that it takes effect next start, instead of `up to date`.
+
 ## [0.9.1] — 2026-11-21
 
 ### Fixed
@@ -717,7 +726,8 @@ First public release.
   decoded as text, for terminals that send them that way.
 - 15-check verification gate (`tests\checkpoint.ps1`).
 
-[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.1...v1.0.0
 [0.9.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.1...v0.8.2

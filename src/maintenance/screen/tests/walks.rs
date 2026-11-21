@@ -80,7 +80,7 @@ fn a_narrow_window_keeps_every_fact_and_moves_a_long_hint_under_its_row() {
         "the last run under the action that ran"
     );
     assert!(lines[at("Claude Code")].contains("2.1.230 \u{b7} newest \u{b7} 3 builds"));
-    assert!(lines[at("claude-auto  ")].contains("0.9.1 \u{b7} up to date"));
+    assert!(lines[at("claude-auto  ")].contains("1.0.0 \u{b7} up to date"));
     assert!(lines.iter().all(|l| display_width(l) <= 54));
 }
 

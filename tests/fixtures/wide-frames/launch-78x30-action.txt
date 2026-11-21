@@ -1,4 +1,4 @@
-╭─ ✻ claude-auto ─────────────────────────────────────────────────── 0.9.1 ─╮
+╭─ ✻ claude-auto ─────────────────────────────────────────────────── 1.0.0 ─╮
 │ ❯ account      [work] ┊ personal ┊ low                                    │
 │   remote       ● [on] ○ off ○ on+QR ○ stop server                         │
 │   action       ● [new] ○ project ○ continue ○ resume ○ worktree           │
