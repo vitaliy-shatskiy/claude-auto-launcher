@@ -150,9 +150,17 @@ pub(super) fn run_ui(
     let mut project_source = String::new();
     let mut preselect = String::new();
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
-    // The running panel: live records only (a dead or reused pid never counts); a preview reads
-    // them too, so the screenshot walk shows the panel the owner sees.
-    view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
+    // The running panel: live records only (a dead or reused pid never counts), read off the UI
+    // thread and again every two seconds. A preview never idles: it reads them before its first
+    // frame, so the screenshot walk shows the panel the owner sees.
+    let running_dirs = held_dirs.clone();
+    let running = RefCell::new(super::running::RunningWatch::start(move || {
+        sessions::holder::running_sessions(&running_dirs, now_ms())
+    }));
+    if run.preview {
+        view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
+    }
+    let running_here = || running.borrow_mut().poll();
     // The wide launch page's projects panel, once the registry is in (plugin projects join on
     // the project page only: listing them starts their processes).
     let home_clock = now_ms;
@@ -209,6 +217,7 @@ pub(super) fn run_ui(
             .with_rows(&mut rows_store)
             .with_update(&update)
             .with_self_update(launcher)
+            .with_running(&running_here)
             .with_warnings(run.warnings.len());
         let Some(next) = crate::ui::screen_loop::run(&mut screen, term.as_mut())? else {
             break UiEnd::Cancelled;

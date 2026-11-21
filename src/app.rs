@@ -5,6 +5,7 @@ mod headless;
 mod plugins;
 mod prompts;
 mod report;
+mod running;
 mod screens;
 mod waits;
 

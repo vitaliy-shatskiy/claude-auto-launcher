@@ -76,7 +76,11 @@ pub struct LaunchScreen<'a> {
     width: usize,
     /// What the last frame showed of the workspace's panels.
     seen: home::Seen,
+    running_source: Option<&'a RunningSource<'a>>,
 }
+
+/// The running panel's reads off the UI thread: a fresh list when one landed.
+pub(crate) type RunningSource<'a> = dyn Fn() -> Option<Vec<crate::launch::frame::RunningSession>> + 'a;
 
 impl std::fmt::Debug for LaunchScreen<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -139,6 +143,7 @@ impl<'a> LaunchScreen<'a> {
             session_cursor: Cursor::at(0),
             width: 0,
             seen: home::Seen::default(),
+            running_source: None,
         }
     }
 
@@ -171,6 +176,23 @@ impl<'a> LaunchScreen<'a> {
     pub(crate) fn with_self_update(mut self, watch: &'a RefCell<crate::self_update::Watch>) -> Self {
         self.launcher = Some(watch);
         self
+    }
+
+    /// Where the running panel's fresh reads come from: `idle` asks, `None` = no news.
+    #[must_use]
+    pub(crate) fn with_running(mut self, source: &'a RunningSource<'a>) -> Self {
+        self.running_source = Some(source);
+        self
+    }
+
+    /// A fresh read of the running sessions; `true` when the panel changed.
+    fn take_running(&mut self) -> bool {
+        let Some(now) = self.running_source.and_then(|s| s()) else {
+            return false;
+        };
+        let changed = now != self.view.running;
+        self.view.running = now;
+        changed
     }
 
     /// Applies the check's answer once it is in; `true` when the screen must redraw. Only the
@@ -373,7 +395,7 @@ impl Screen for LaunchScreen<'_> {
 
     fn idle(&mut self) -> bool {
         let list = self.home.as_mut().is_some_and(Screen::idle);
-        self.take_update() | self.take_home() | list | self.launcher.is_some_and(|w| w.borrow_mut().news())
+        self.take_update() | self.take_home() | self.take_running() | list | self.launcher.is_some_and(|w| w.borrow_mut().news())
     }
 
     /// A click on a row selects it; on an option cell it walks to that value through the same
