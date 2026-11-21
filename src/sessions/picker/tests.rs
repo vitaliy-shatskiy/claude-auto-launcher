@@ -260,7 +260,7 @@ fn the_first_frame_fetches_no_page_past_the_opening_one() {
     let mut s = PickerScreen::new(first, Some(&mut f), 10, &[], "Desktop", style(), clock());
     // When: the picker opens and Escape is the first event after its first frame.
     let esc = crate::input::Event::Key(crate::input::scripted_key("Escape").unwrap());
-    let mut term = crate::ui::script_term::ScriptTerm::new((130, 40), [esc].into_iter());
+    let mut term = crate::ui::script_term::ScriptTerm::new((130, 40), [esc]);
     assert_eq!(run(&mut s, &mut term), Ok(None));
     drop(s);
     // Then: the frame came from the opening page alone; the rest is for idle polls.
