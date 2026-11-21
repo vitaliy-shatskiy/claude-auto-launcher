@@ -249,6 +249,13 @@ fn a_grandchild_holding_the_pipe_never_holds_the_screen() {
 }
 
 #[test]
+fn a_program_that_cannot_start_is_named_in_the_error() {
+    let mut step = |_: &str| {};
+    let err = crate::maintenance::captured_live(Path::new("claude-auto-no-such-program.exe"), &[], &mut step).unwrap_err();
+    assert!(err.contains("claude-auto-no-such-program.exe"), "{err}");
+}
+
+#[test]
 fn both_page_layouts_keep_the_frame_at_50_columns() {
     let long: Vec<String> = (1..=40).map(|i| format!("status line {i} with some words in it")).collect();
     for h in [24, 30] {

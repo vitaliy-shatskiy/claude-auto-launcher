@@ -162,3 +162,17 @@ fn iso_stamps_parse_to_utc_ms() {
     assert_eq!(iso_ms("2026-09-16T12:00:00.000Z"), Some(1_789_560_000_000));
     assert_eq!(iso_ms("garbage"), None);
 }
+
+#[test]
+fn rows_count_wide_characters_as_two_cells() {
+    // Given: a prompt of 16 CJK characters, 32 cells.
+    let line = format!(
+        "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{}\"}},\"uuid\":\"1\"}}\n",
+        "漢".repeat(16)
+    );
+    let len = u64::try_from(line.len()).unwrap();
+    let mut s = ChatStream::new(Cursor::new(line.into_bytes()), len, MAX_READ);
+    while s.step() {}
+    // When the pane is 8 cells wide, then the text wraps to 32 / 8 + 1 lines under its label and gap.
+    assert_eq!(s.rows(8), 2 + 5);
+}

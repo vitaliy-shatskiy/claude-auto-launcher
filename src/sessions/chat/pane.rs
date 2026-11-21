@@ -172,7 +172,7 @@ fn demand_loop(jobs: &Receiver<Job>, done: &Sender<Reply>, streams: &Streams) {
 
 /// The prefetch worker: one chunk per job, at below-normal priority.
 fn prefetch_loop(jobs: &Receiver<Job>, done: &Sender<Reply>, streams: &Streams) {
-    crate::sessions::win::lower_this_thread();
+    crate::sys::lower_this_thread();
     while let Ok(job) = jobs.recv() {
         let Some(mut s) = take(streams, &job.key) else {
             if done.send(reply(&job.key, None, job.fill, 0, true)).is_err() {
