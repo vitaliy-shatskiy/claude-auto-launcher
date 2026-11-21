@@ -8,12 +8,13 @@ use regex::Regex;
 use super::Project;
 use super::paths::project_key;
 use super::select::{Row, RowKind, filter_words, project_count, project_rows};
+use crate::cockpit::{self, Focus, Panel};
 use crate::frame::{
     self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioRow, RadioSpec, RowMap, Style,
     TWO_PANE_WIDTH, new_hint_footer, new_radio_row,
 };
 use crate::launch::{LAUNCH_MODES, launch_mode, step_option};
-use crate::layout::{display_width, limit_line, limit_path, new_box, viewport};
+use crate::layout::{display_width, limit_line, limit_path, viewport};
 use crate::list::{Columns, ListRow, add_picker_color, new_list_row};
 use crate::theme::{self, Glyphs, glyphs};
 
@@ -175,23 +176,24 @@ fn footer_hints(v: &ProjectView<'_>) -> Vec<Hint> {
 
 fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
     let (known, hidden) = project_count(v.projects, v.filter, v.cwd);
-    let mut t = format!("project {} {known} known", g.h);
-    if hidden > 0 {
-        t = format!("{t} {} {hidden} hidden", g.h);
+    let d = g.dot;
+    let filter =
+        (!v.filter.is_empty() || v.typing).then(|| format!(" {d} filter: {}{}", clean_text(v.filter), if v.typing { "_" } else { "" }));
+    // A rejected pick says so once, in place of the counts: they would push it out of the border.
+    if !v.notice.is_empty() {
+        return format!("project{} {d} {}", filter.unwrap_or_default(), clean_text(v.notice));
     }
-    if !v.marked.is_empty() {
-        t = format!("{t} {} {} hidden listed", g.h, v.marked.len());
-    }
-    if !v.filter.is_empty() || v.typing {
-        t = format!("{t} {} filter: {}", g.h, clean_text(v.filter));
-        if v.typing {
-            t.push('_');
+    let mut t = format!("project {d} {known} known");
+    let worktrees = v.projects.iter().filter(|p| p.worktree.is_some()).count();
+    for (n, what) in [(v.pinned.len(), "pinned"), (hidden, "hidden"), (worktrees, "worktrees")] {
+        if n > 0 {
+            t = format!("{t} {d} {what} {n}");
         }
     }
-    if !v.notice.is_empty() {
-        t = format!("{t} {} {}", g.h, clean_text(v.notice));
+    if !v.marked.is_empty() {
+        t = format!("{t} {d} {} hidden listed", v.marked.len());
     }
-    t
+    t + &filter.unwrap_or_default()
 }
 
 /// A project or cwd row's label: the name with its pin, worktree and hidden or missing marks.
@@ -342,48 +344,74 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let fw = frame::frame_width(v.width);
     let rows = project_rows(v.projects, v.filter, v.cwd);
     let footer = new_hint_footer(&footer_hints(v), &g, fw, !v.style.color);
-    let wide = v.width >= TWO_PANE_WIDTH;
-    let detail = usize::from(!wide);
-    let body_rows = v.height.saturating_sub(6 + detail + footer.lines.len()).max(3);
+    let wide = v.width >= cockpit::TWO_COLUMNS;
+    let columns = v.width >= TWO_PANE_WIDTH;
+    let lw = if wide { cockpit::LEFT_WIDTH } else { fw };
+    let page_rows = v.height.saturating_sub(1 + footer.lines.len()).max(8);
     let index = v.index.min(rows.len().saturating_sub(1));
-    // AC27: the list takes every body row, so the box fills a tall terminal.
-    let list_lines = body_rows + 2;
+    // AC27: the list takes every row of its panel, so the panel fills a tall terminal. Stacked, the
+    // path of the cursor's row and the action field close the panel.
+    let list_lines = page_rows.saturating_sub(if wide { 2 } else { 4 }).max(3);
     let (start, visible) = project_viewport(&rows, index, list_lines);
-    let inner = fw.saturating_sub(2);
+    // Two cells free before the right border.
+    let inner = lw.saturating_sub(4);
     let shown = rows.get(start..start + visible).unwrap_or_default();
     let w = Window {
         index,
         start,
         visible,
         inner,
-        cols: wide.then(|| list_columns(shown, inner, v, &g)),
+        cols: columns.then(|| list_columns(shown, inner, v, &g)),
     };
     let (mut body, row_ys) = list_body(&rows, &w, v, &g);
-    while body.len() < list_lines {
-        body.push(String::new());
-    }
+    let selected = row_ys.get(index.saturating_sub(start)).copied();
+    let painter = |l: &str, enabled: bool| add_match_color(&add_picker_color(l, enabled, &g), enabled);
+    let radio_inner = if wide { fw - lw - 2 } else { inner };
+    let radio = action_radio(v.action, v.hover_value, radio_inner, &g, !wide);
+    let mut action = None;
     if !wide {
+        body.resize(list_lines, String::new());
         let path = theme::strip_ctl(rows.get(index).map_or("", |r| r.path.as_str()));
         body.push(if path.is_empty() {
             String::new()
         } else {
-            let line = format!(
-                "   {}{}{}",
-                theme::DIM_OPEN,
-                limit_path(&path, inner.saturating_sub(4), v.style.ascii),
-                theme::DIM_CLOSE
-            );
+            let line = format!("   {}", cockpit::dim(&limit_path(&path, inner.saturating_sub(4), v.style.ascii)));
             mark_matches(&line, &filter_words(v.filter), 3, usize::MAX)
         });
+        action = Some(action_hit(&radio, i32::try_from(1 + body.len()).unwrap_or(0), 0));
+        body.push(radio.text.clone());
     }
-
-    let radio = action_radio(v.action, v.hover_value, inner, &g);
-    let action_index = body.len();
-    body.push(radio.text.clone());
-
-    let lines = new_box(&body, fw, &title(v, &g), &g, v.style.ascii);
-    let first_row_y = lines.len() - body.len() - 1;
-    let y = |n: usize| i32::try_from(first_row_y + n).unwrap_or(i32::MAX);
+    let list = Panel {
+        title: cockpit::identity(&g),
+        page: title(v, &g),
+        right: String::new(),
+        focus: Focus::Focused,
+        lines: body,
+        width: lw,
+        height: page_rows,
+        painter: &painter,
+        selected,
+    };
+    let mut lines = cockpit::render(&list, v.style);
+    if wide {
+        let rw = fw - lw;
+        let sel = rows.get(index);
+        let detail_h = 6;
+        let mut detail = Panel::plain(
+            &format!("selected {} {}", g.dot, sel.map_or(String::new(), |r| clean_text(&r.name))),
+            selected_lines(sel, v, rw - 2),
+            rw,
+            detail_h,
+        );
+        detail.painter = &painter;
+        let mut right = cockpit::render(&detail, v.style);
+        let mut act = Panel::plain("action", vec![radio.text.clone()], rw, page_rows - detail_h);
+        act.painter = &painter;
+        right.extend(cockpit::render(&act, v.style));
+        action = Some(action_hit(&radio, i32::try_from(detail_h + 1).unwrap_or(0), lw));
+        lines = cockpit::beside(lines, lw, &right);
+    }
+    let y = |n: usize| i32::try_from(1 + n).unwrap_or(i32::MAX);
     let mut map = RowMap {
         list: Some(ListMap {
             first_row_y: y(0),
@@ -391,30 +419,47 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
             start: i32::try_from(start).unwrap_or(0),
             row_ys: row_ys.iter().map(|r| y(*r)).collect(),
         }),
-        action: Some(action_hit(&radio, y(action_index))),
+        action,
         ..RowMap::default()
     };
     let light = FooterLight {
         hover: frame::footer_hover(&footer, v.hover),
         selected: action_light(v.action),
     };
-    let painter = |l: &str, enabled: bool| add_match_color(&add_picker_color(l, enabled, &g), enabled);
-    let lines = frame::complete_frame(&lines, &footer, fw, v.style, &painter, &light, &mut map);
+    let lines = frame::append_footer(lines, &footer, fw, v.style, &light, &mut map);
     Frame { lines, map }
 }
 
-/// The action field as a radio row inside a box of `inner` cells.
-pub(crate) fn action_radio(action: &str, hover: &str, inner: usize, g: &Glyphs) -> RadioRow {
+/// The cursor's project beside the list: its path, how long ago it ran, its worktree.
+fn selected_lines(r: Option<&Row>, v: &ProjectView<'_>, inner: usize) -> Vec<String> {
+    let Some(r) = r else { return Vec::new() };
+    let mut out = vec![format!(
+        "  {}",
+        cockpit::dim(&limit_path(&theme::strip_ctl(&r.path), inner.saturating_sub(4), v.style.ascii))
+    )];
+    let age = age_text(r, v);
+    if !age.is_empty() {
+        out.push(format!("  {}  {age}", cockpit::dim("last session")));
+    }
+    if r.worktree {
+        out.push(format!("  {}", cockpit::dim("a worktree")));
+    }
+    out
+}
+
+/// The action field as a radio row inside a box of `inner` cells; unlabelled in its own panel,
+/// whose title names it.
+pub(crate) fn action_radio(action: &str, hover: &str, inner: usize, g: &Glyphs, labelled: bool) -> RadioRow {
     let values = project_actions();
     let current = step_project_action(action, 0);
     new_radio_row(
         &RadioSpec {
-            prefix: "   ",
-            label: "action",
+            prefix: if labelled { "   " } else { "  " },
+            label: if labelled { "action" } else { "" },
             values: &values,
             current: &current,
             texts: &values,
-            label_width: 8,
+            label_width: if labelled { 8 } else { 0 },
             max_width: inner,
             hover,
             compact: false,
@@ -423,16 +468,17 @@ pub(crate) fn action_radio(action: &str, hover: &str, inner: usize, g: &Glyphs) 
     )
 }
 
-/// The radio row's click cells at frame line `y` (one column right of the box border).
-pub(crate) fn action_hit(radio: &RadioRow, y: i32) -> ActionHit {
+/// The radio row's click cells at frame line `y`, inside a panel whose left border is column `x0`.
+pub(crate) fn action_hit(radio: &RadioRow, y: i32, x0: usize) -> ActionHit {
+    let x0 = i32::try_from(x0).unwrap_or(0);
     ActionHit {
         y,
         cells: radio
             .cells
             .iter()
             .map(|c| CellSpan {
-                start: c.start + 1,
-                end: c.end + 1,
+                start: c.start + 1 + x0,
+                end: c.end + 1 + x0,
                 value: c.value.clone(),
             })
             .collect(),

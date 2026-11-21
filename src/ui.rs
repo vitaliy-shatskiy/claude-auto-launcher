@@ -439,7 +439,12 @@ pub fn hit_at(map: Option<&RowMap>, x: i32, y: i32, window_top: i32) -> Hit {
         return Hit::Footer { span, index };
     }
     let row_y = y - window_top;
-    if let Some(a) = map.action.as_ref().filter(|a| a.y == row_y) {
+    // Only from the action field's first cell on: beside a list, the same row is a list row.
+    if let Some(a) = map
+        .action
+        .as_ref()
+        .filter(|a| a.y == row_y && a.cells.first().is_some_and(|c| x >= c.start))
+    {
         return Hit::Action {
             value: a.cells.iter().find(|c| x >= c.start && x <= c.end).map(|c| c.value.clone()),
         };

@@ -109,7 +109,8 @@ pub fn render(p: &Panel<'_>, style: Style) -> Vec<String> {
     let focused = p.focus == Focus::Focused;
     let border = if focused { ACCENT } else { FAINT };
     let tint = if focused { TINT_FOCUSED } else { TINT };
-    let c = style.color;
+    // ASCII mode is a plain terminal: the body keeps its colours, the frame and the tints go.
+    let c = style.color && !style.ascii;
     let edge = |s: &str| paint(s, border, c);
 
     let mut title = p.title.clone();
@@ -148,15 +149,15 @@ pub fn render(p: &Panel<'_>, style: Style) -> Vec<String> {
     let side = edge(&g.v.to_string());
     for i in 0..p.height - 2 {
         let raw = p.lines.get(i).map_or("", String::as_str);
-        let banded = p.selected == Some(i) && c;
+        let banded = p.selected == Some(i) && style.color;
         let raw = if banded {
             let pad = " ".repeat(inner.saturating_sub(display_width(raw)));
             format!("{}{raw}{pad}{}", theme::SELECT_OPEN, theme::SELECT_CLOSE)
         } else {
             raw.to_owned()
         };
-        let body = theme::add_tone_color(&format_body_line(&raw, inner, style, p.painter), c);
-        let body = theme::add_select_band_color(&body, c);
+        let body = theme::add_tone_color(&format_body_line(&raw, inner, style, p.painter), style.color);
+        let body = theme::add_select_band_color(&body, style.color);
         let pad = " ".repeat(inner.saturating_sub(display_width(&theme::remove_ansi_color(&body))));
         let interior = if c {
             format!(

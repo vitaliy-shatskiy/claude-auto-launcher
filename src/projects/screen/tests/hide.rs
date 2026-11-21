@@ -8,8 +8,8 @@ fn h_hides_and_unhides_in_show_hidden() {
     let config = f.tree.0.join("claude-auto.json");
     let config = config.to_str().unwrap();
     std::fs::write(config, r#"{"remote": false}"#).unwrap();
-    // The title line ("N known") carries the notice naming the project: only list rows count.
-    let listed = |frame: &[String]| frame.iter().any(|l| l.contains("alpha") && !l.contains("known"));
+    // The top border's title carries the notice naming the project: only list rows count.
+    let listed = |frame: &[String]| frame.iter().skip(1).any(|l| l.contains("alpha"));
 
     let first = run_with_config(&f, config, &["s", "h", "Escape"]);
     assert!(!listed(first.last().unwrap()), "h hides alpha at once");

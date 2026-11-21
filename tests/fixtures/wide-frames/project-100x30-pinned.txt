@@ -1,4 +1,4 @@
-╭─ project ─ 3 known ─────────────────────────────────────────────────────────────────────────────╮
+╭─ ✻ claude-auto ─ project · 3 known · pinned 1 ──────────────────────────────────────────────────╮
 │   current directory  C:\elsewhere                                                               │
 │                                                                                                 │
 │ ❯ ↑ p-2              C:\w\p2      2 min                                                         │
@@ -22,7 +22,7 @@
 │                                                                                                 │
 │                                                                                                 │
 │                                                                                                 │
-│                                                                                                 │
+│   C:\w\p2                                                                                       │
 │   action  ● [new] ○ continue ○ resume ○ worktree                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
   w/s move    ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree

@@ -181,10 +181,11 @@ fn patterns(r_angle: char) -> PickerPatterns {
 /// Built once per glyph set: the ASCII and the Unicode right angle.
 static PATTERNS: LazyLock<[PickerPatterns; 2]> = LazyLock::new(|| [patterns('>'), patterns('\u{203A}')]);
 
-/// The free-path row's bullet: one border, an optional hover marker, the 3-cell mark, the
-/// bullet, then its own label. Returns the bullet's char index.
+/// The free-path row's bullet: an optional border (a panel paints its interior alone), an
+/// optional hover marker, the 3-cell mark, the bullet, then its own label. Returns the bullet's
+/// char index.
 fn bullet_at(chars: &[char], g: &Glyphs) -> Option<usize> {
-    let mut i = 1;
+    let mut i = usize::from(chars.first() == Some(&g.v));
     if chars.get(i) == Some(&theme::HOVER_OPEN) {
         i += 1;
     }
@@ -214,7 +215,10 @@ pub fn add_picker_color(line: &str, enabled: bool, g: &Glyphs) -> String {
         let tail: String = chars.get(b + 1..).map_or_else(String::new, |c| c.iter().collect());
         out = format!("{head}{}{}{}{tail}", theme::MAGENTA, g.bullet, theme::RESET);
     }
-    out = out.replace(g.cursor, &format!("{}{}{}", theme::BRIGHT_YELLOW, g.cursor, theme::RESET));
+    out = out.replace(
+        g.cursor,
+        &format!("{}{}{}{}", theme::BOLD, theme::COCKPIT_ACCENT, g.cursor, theme::RESET),
+    );
     out = out.replace(g.worktree, &format!("{}{}{}", theme::YELLOW, g.worktree, theme::RESET));
     out = rx
         .age

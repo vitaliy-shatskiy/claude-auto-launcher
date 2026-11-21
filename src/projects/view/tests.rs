@@ -93,20 +93,21 @@ fn col(line: &str, needle: &str) -> usize {
 fn wide_rows_keep_name_path_and_age_in_compact_columns() {
     let ps = golden_projects();
     let lines = plain(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 200, 60)));
-    let row = |name: &str| lines.iter().find(|l| l.contains(name)).unwrap().clone();
-    let longest = r"C:\Users\sample\Desktop\Projects\gamma.worktrees\feature";
-    let path_col = col(&row("gamma"), longest);
+    // The list panel's own columns: the left 82 cells of each line.
+    let left = |l: &String| l.chars().take(crate::cockpit::LEFT_WIDTH).collect::<String>();
+    let row = |name: &str| left(lines.iter().find(|l| left(l).contains(&format!(" {name} "))).unwrap());
+    let path_col = col(&row("gamma"), r"C:\Users");
     assert_eq!(col(&row("alpha"), r"C:\Users"), path_col, "paths share one column");
     assert_eq!(col(&row("delta"), r"D:\src"), path_col);
-    assert_eq!(col(&row("current directory"), r"C:\Users"), path_col, "the cwd row too");
+    assert_eq!(col(&row("directory"), r"C:\Users"), path_col, "the cwd row too");
     assert_eq!(
         path_col,
         4 + display_width("current directory") + 2,
         "two cells after the longest name"
     );
     let age_end = |l: &str, age: &str| col(l, age) + display_width(age);
-    let end = path_col + display_width(longest) + 1 + display_width("4 min");
-    assert_eq!(age_end(&row("alpha"), "4 min"), end, "ages right-aligned after the longest path");
+    let end = crate::cockpit::LEFT_WIDTH - 3;
+    assert_eq!(age_end(&row("alpha"), "4 min"), end, "ages right-aligned 2 cells from the border");
     assert_eq!(age_end(&row("delta"), "23 d"), end);
 }
 
@@ -115,8 +116,8 @@ fn a_long_name_is_capped_at_forty_percent_and_the_path_cut_to_fit() {
     let mut ps = golden_projects();
     ps[0].name = "n".repeat(150);
     let lines = plain(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 120, 30)));
-    let alpha = lines.iter().find(|l| l.contains("nnn")).unwrap();
-    let inner = 120 - 1 - 2;
+    let alpha = lines.iter().skip(1).find(|l| l.contains("nnn")).unwrap();
+    let inner = crate::cockpit::LEFT_WIDTH - 4;
     assert_eq!(col(alpha, "C:"), 4 + inner * 2 / 5 + 2, "{alpha}");
     assert!(alpha.contains('\u{2026}'), "the name ends in an ellipsis: {alpha}");
     assert!(lines.iter().all(|l| display_width(l) <= 119));
@@ -465,6 +466,39 @@ fn title_shows_typing_and_notice() {
     });
     assert!(text(&n).contains("path not found"));
     assert!(!text(&project_frame(&view(&ps, 0, r"C:\cwd", 100, 24))).contains("path not found"));
+}
+
+#[test]
+fn beside_the_list_the_action_panel_and_the_list_row_on_its_line_each_get_their_own_clicks() {
+    use crate::ui::{Hit, hit_at};
+    let ps = many(12, "p");
+    let f = project_frame(&view(&ps, 0, r"C:\cwd", 130, 30));
+    let a = f.map.action.clone().unwrap();
+    let first = a.cells.first().unwrap();
+    assert!(
+        first.start > i32::try_from(crate::cockpit::LEFT_WIDTH).unwrap(),
+        "the field sits in the right column"
+    );
+    let l = f.map.list.clone().unwrap();
+    let at = l.row_ys.iter().position(|y| *y == a.y).expect("a list row shares the action line");
+    assert_eq!(hit_at(Some(&f.map), 10, a.y, 0), Hit::ListRow(l.start + i32::try_from(at).unwrap()));
+    assert_eq!(
+        hit_at(Some(&f.map), first.start, a.y, 0),
+        Hit::Action {
+            value: Some(first.value.clone())
+        }
+    );
+    let cell = |c: &CellSpan| {
+        f.lines[usize::try_from(a.y).unwrap()]
+            .chars()
+            .skip(usize::try_from(c.start).unwrap())
+            .take(c.value.len() + 4)
+            .collect::<String>()
+    };
+    assert!(
+        a.cells.iter().all(|c| cell(c).contains(&c.value)),
+        "the cells point at the drawn values"
+    );
 }
 
 mod pins;

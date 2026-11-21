@@ -1,4 +1,4 @@
-╭─ project ─ 4 known ─────────────────────────────────────────────────────────────────────────────╮
+╭─ ✻ claude-auto ─ project · 4 known · worktrees 1 ───────────────────────────────────────────────╮
 │   current directory  C:\Users\sample\here                                                       │
 │                                                                                                 │
 │ ❯ alpha              C:\Users\sample\Desktop\Projects\alpha                   4 min             │
@@ -22,7 +22,7 @@
 │                                                                                                 │
 │                                                                                                 │
 │                                                                                                 │
-│                                                                                                 │
+│   C:\Users\sample\Desktop\Projects\alpha                                                        │
 │   action  ● [new] ○ continue ○ resume ○ worktree                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
   w/s move    ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
