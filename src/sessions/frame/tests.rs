@@ -571,11 +571,13 @@ fn a_wide_pane_wraps_message_text_at_110_and_keeps_the_owners_at_the_right_edge(
 }
 
 #[test]
-fn below_200_columns_the_list_takes_at_least_half_and_wider_the_chat_keeps_its_full_panel() {
-    for fw in [120, 140, 160, 199] {
+fn the_list_takes_at_least_half_and_grows_with_no_jump() {
+    let mut last = sessions_width(119);
+    for fw in 120..=320 {
         let lw = sessions_width(fw);
         assert!(lw * 2 >= fw, "{fw}: the list gets {lw}, under half");
         assert!(fw - lw <= CHAT_PANEL, "{fw}: the chat never passes its 118");
+        assert!(lw - last <= 1, "{fw}: the list jumps from {last} to {lw}");
+        last = lw;
     }
-    assert_eq!(211 - sessions_width(211), CHAT_PANEL, "a wide terminal keeps the whole chat panel");
 }
