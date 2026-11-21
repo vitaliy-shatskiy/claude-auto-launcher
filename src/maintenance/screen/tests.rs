@@ -155,12 +155,15 @@ fn only_the_selected_row_shows_its_hint() {
     let f = draw(&p, (120, 30));
     assert_eq!(count(&f.lines, "while claude"), 1, "{:#?}", f.lines);
     assert_eq!(count(&f.lines, "keeps the 2 newest"), 0, "no column of descriptions");
-    let row = f.lines.iter().find(|l| l.contains("[r] update anyway")).unwrap();
-    let left: String = row.chars().take(crate::cockpit::MAINTENANCE_LEFT_WIDTH).collect();
+    let at = f.lines.iter().position(|l| l.contains("[r] update anyway")).unwrap();
+    let under: String = f.lines[at + 1].chars().take(crate::cockpit::MAINTENANCE_LEFT_WIDTH).collect();
     assert!(
-        left.ends_with("in use  \u{2502}") || left.ends_with("\u{2026}  \u{2502}"),
-        "the hint ends 2 cells from the border: {left:?}"
+        under.contains("       while claude.exe is in use "),
+        "a hint too long for its row sits whole under it: {under:?}"
     );
+    let f = draw(&p, (160, 30));
+    let p_row = f.lines.iter().find(|l| l.contains("[p] delete old builds")).unwrap();
+    assert!(!p_row.contains("keeps"), "{p_row}");
 }
 
 #[test]
@@ -419,6 +422,41 @@ fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
     assert_golden("maintenance-130x40-s1", &s1.join("\n"));
     assert_eq!(count(&s1, "warnings"), 0, "an empty warnings panel is not drawn");
     assert_eq!(count(&s1, "Custom"), 0, "an empty group is not drawn");
+}
+
+#[test]
+fn a_narrow_window_keeps_every_fact_and_moves_a_long_hint_under_its_row() {
+    let mut p = page_of(
+        info(true, None, None),
+        "Current version: 2.1.230\nClaude Code is up to date (2.1.230)",
+        &reindex(),
+    );
+    p.entries = entries(&[('b', "roll back claude-auto".into())], &reindex());
+    "update".clone_into(&mut p.last);
+    p.phase = Phase::Done;
+    "self-update notify, up to date".clone_into(&mut p.launcher);
+    p.selected = 1;
+    let lines: Vec<String> = draw(&p, (55, 20)).lines;
+    assert_golden("maintenance-55x20", &lines.join("\n"));
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}: {lines:#?}"))
+    };
+    assert_eq!(
+        at("while claude.exe is in use"),
+        at("[r] update anyway") + 1,
+        "the hint under its row, whole"
+    );
+    assert_eq!(
+        at("Current version: 2.1.230"),
+        at("[u] update") + 1,
+        "the last run under the action that ran"
+    );
+    assert!(lines[at("Claude Code")].contains("2.1.230 \u{b7} newest \u{b7} 3 builds"));
+    assert!(lines[at("claude-auto  ")].contains("0.9.0 \u{b7} up to date"));
+    assert!(lines.iter().all(|l| display_width(l) <= 54));
 }
 
 #[test]

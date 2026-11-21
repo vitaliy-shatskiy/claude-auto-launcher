@@ -1,0 +1,18 @@
+╭─ ✻ claude-auto ─ maintenance ────────────── 0.9.0 ─╮
+│  Claude Code  2.1.230 · newest · 3 builds          │
+│   [u] update                                       │
+│       Current version: 2.1.230                     │
+│   [r] update anyway (rename)                       │
+│       while claude.exe is in use                   │
+│   [p] delete old builds                            │
+│  Checks                                            │
+│   [d] doctor                                       │
+│   [m] MCP servers                                  │
+│  claude-auto  0.9.0 · up to date                   │
+│   [b] roll back claude-auto                        │
+│  Launcher                                          │
+│   [l] launch rows                                  │
+│  Custom                                            │
+│   [i] full reindex                                 │
+╰────────────────────────────────────────────────────╯
+  w/s move  ┊  [enter] run  ┊  [esc] back

@@ -1,6 +1,7 @@
 ╭─ ✻ claude-auto ─ maintenance ─────────────────────────────────────── 0.9.0 ─╮
 │  Claude Code  2.1.230 · newest · 3 builds · 0.8 GB                          │
-│   [u] update                                      Current version: 2.1.230  │
+│   [u] update                                                                │
+│       Current version: 2.1.230                                              │
 │   [r] update anyway (rename)                                                │
 │   [p] delete old builds                                                     │
 │                                                                             │
