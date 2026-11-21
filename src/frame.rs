@@ -244,7 +244,7 @@ pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) ->
         shown.retain(|h| h.clickable || h.keep);
     }
     // Then by priority, the last listed first within a priority.
-    for tier in 0..3 {
+    for tier in 0..4 {
         while width > 0 && shown.len() > 1 && one_line(&shown) > width {
             let Some(i) = shown.iter().rposition(|h| priority(h) == tier) else {
                 break;
@@ -284,11 +284,13 @@ pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) ->
 }
 
 /// The order a narrow footer drops hints in: a button first (0), then a kept plain hint (the
-/// move and switch keys, 1), enter, tab, the filter and esc last (2).
+/// move and switch keys, 1), tab, the filter and enter (2), esc last (3): the way back outlasts tab.
 fn priority(h: &Hint) -> u8 {
     if !h.clickable {
         1
-    } else if matches!(h.key.as_str(), "Enter" | "Tab" | "Escape") || h.ch == Some('/') {
+    } else if h.key == "Escape" {
+        3
+    } else if matches!(h.key.as_str(), "Enter" | "Tab") || h.ch == Some('/') {
         2
     } else {
         0
