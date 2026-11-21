@@ -1,9 +1,9 @@
 ╭─ ✻ claude-auto ─ resume · 5 sessions ─────────────────────────────────────────╮╭─ chat · project-1 ─────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ❯ project-1  session title 1                        7 min                     ││ session title 1                                                                                                    │
-│   project-2  session title 2                       14 min                     ││ 16.09 11:53 · 10 msgs · 2 KB · project-1                                                                           │
-│   ⌂ feature  session title 3                       21 min                     ││ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
-│   project-4  session title 4                       28 min                     ││                                                                                                  you · 16.09 11:01 │
-│   project-5  session title 5                       35 min                     ││                                                                         first question about the start of it all   │
+│ ❯ project-1  session title 1                                           7 min  ││ session title 1                                                                                                    │
+│   project-2  session title 2                                          14 min  ││ 16.09 11:53 · 10 msgs · 2 KB · project-1                                                                           │
+│   ⌂ feature  session title 3                                          21 min  ││ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│   project-4  session title 4                                          28 min  ││                                                                                                  you · 16.09 11:01 │
+│   project-5  session title 5                                          35 min  ││                                                                         first question about the start of it all   │
 │                                                                               ││                                                                                                                    │
 │                                                                               ││ claude · 16.09 11:02                                                                                               │
 │                                                                               ││   an older reply that is long enough to be cut an older reply that is long enough to be                            │

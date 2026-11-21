@@ -12,8 +12,10 @@ fn on_disk(config: &str, key: &str) -> Value {
 
 /// The list line naming `name` (the title, which carries the notice, never counts).
 fn line_of(frame: &[String], name: &str) -> Option<usize> {
-    // Row 0 is the panel's top border: its title may name the project in a notice.
-    frame.iter().skip(1).position(|l| l.contains(name)).map(|i| i + 1)
+    // Row 0 is the panel's top border: its title may name the project in a notice. Only the list
+    // panel counts: the selected panel beside it names the project too.
+    let list = |l: &String| l.split("||").next().unwrap_or_default().contains(name);
+    frame.iter().skip(1).position(list).map(|i| i + 1)
 }
 
 #[test]

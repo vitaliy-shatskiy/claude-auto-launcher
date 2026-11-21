@@ -22,9 +22,6 @@ fn page(r: &Roster, state: &LaunchState, size: (usize, usize)) -> (Frame, Vec<St
         restored: None,
         notice: None,
         warnings: 0,
-        recent: &[],
-        recent_loading: false,
-        recent_selected: None,
         home: None,
         running: &[],
         mcp: "",
@@ -42,21 +39,17 @@ fn page(r: &Roster, state: &LaunchState, size: (usize, usize)) -> (Frame, Vec<St
 }
 
 #[test]
-fn a_160x40_page_spans_the_width_and_ends_at_its_footer() {
+fn a_160x40_page_fills_the_terminal_and_ends_at_its_footer() {
     let r = four();
     let (f, lines) = page(&r, &real_state(&r), (160, 40));
     assert_golden("launch-160x40", &lines.join("\n"));
-    assert!(lines.len() < 20, "content height, nothing pads to the bottom: {}", lines.len());
-    let recent = lines.iter().find(|l| l.contains("recent")).unwrap();
-    assert_eq!(
-        display_width(recent),
-        display_width(&lines[0]),
-        "recent and the right column end where the top row does"
+    assert_eq!(lines.len(), 39, "the panels run to the footer (AC27)");
+    let footer = usize::try_from(f.map.footer_y.unwrap()).unwrap();
+    assert!(
+        lines.iter().take(footer).all(|l| display_width(l) == 159),
+        "every panel row spans the width: {lines:#?}"
     );
-    assert!(display_width(&lines[0]) < 159, "the launch row is as wide as its content");
-    let last = lines.len() - 1;
-    assert!(lines[last].contains("[esc] quit"), "{:?}", lines[last]);
-    assert_eq!(f.map.footer_y, Some(i32::try_from(last).unwrap()), "the footer's clicks follow it");
+    assert!(lines[footer].contains("[esc] quit"), "{:?}", lines[footer]);
 }
 
 #[test]
@@ -64,32 +57,8 @@ fn a_400x150_terminal_gets_a_full_width_page_from_the_top_left() {
     let r = four();
     let (_, lines) = page(&r, &real_state(&r), (400, 150));
     assert_golden("launch-400x150", &lines.join("\n"));
-    assert!(lines.len() < 20, "content height on a huge terminal too");
-    let recent = lines.iter().find(|l| l.contains("recent")).unwrap();
-    assert_eq!(
-        display_width(recent),
-        display_width(&lines[0]),
-        "one grid: recent ends where the top row does"
-    );
     assert!(lines.iter().all(|l| display_width(l) <= 399), "the last column stays free");
-}
-
-fn sample_recent() -> Vec<RecentProject> {
-    [
-        ("aurora-web", "3 min", "claude-auto design variants"),
-        ("invoice-api", "4 h", "fix the invoice export paging"),
-        ("apk-diff", "1 d", ""),
-        ("channel-monitor", "2 d", "restart loop on the VM"),
-    ]
-    .iter()
-    .map(|(n, a, last)| RecentProject {
-        name: (*n).into(),
-        path: format!(r"C:\Users\sample\Desktop\Projects\{n}"),
-        age: (*a).into(),
-        last: (*last).into(),
-        ..RecentProject::default()
-    })
-    .collect()
+    assert!(lines[0].starts_with('\u{256D}'), "from the top-left corner");
 }
 
 fn sample_running() -> Vec<RunningSession> {
@@ -103,15 +72,8 @@ fn sample_running() -> Vec<RunningSession> {
         .collect()
 }
 
-/// The cockpit page with recent projects, running sessions and a newer Claude Code.
-fn full(
-    r: &Roster,
-    state: &LaunchState,
-    size: (usize, usize),
-    recent: &[RecentProject],
-    running: &[RunningSession],
-    limits: &Limits,
-) -> Vec<String> {
+/// The cockpit page with running sessions and a newer Claude Code.
+fn full(r: &Roster, state: &LaunchState, size: (usize, usize), running: &[RunningSession], limits: &Limits) -> Vec<String> {
     let version = VersionInfo {
         installed: Some("2.1.329".into()),
         newest: Some("2.1.330".into()),
@@ -126,9 +88,6 @@ fn full(
         restored: None,
         notice: None,
         warnings: 2,
-        recent,
-        recent_loading: false,
-        recent_selected: None,
         home: None,
         running,
         mcp: "2 of 2 \u{b7} 3 h ago",
@@ -146,11 +105,11 @@ fn full(
 #[test]
 fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
     let r = four();
-    let (recent, running) = (sample_recent(), sample_running());
-    let wide = full(&r, &real_state(&r), (130, 40), &recent, &running, &golden_limits());
+    let running = sample_running();
+    let wide = full(&r, &real_state(&r), (130, 40), &running, &golden_limits());
     assert_golden("launch-130x40", &wide.join("\n"));
-    assert_eq!(wide.len(), 39, "lists with items stretch the panels to the footer");
-    let big = full(&r, &real_state(&r), (280, 72), &recent, &running, &golden_limits());
+    assert_eq!(wide.len(), 39, "the panels stretch to the footer");
+    let big = full(&r, &real_state(&r), (280, 72), &running, &golden_limits());
     assert_golden("launch-280x72", &big.join("\n"));
     let corner = big[0].chars().position(|c| c == '\u{256E}').unwrap() + 1;
     let at = |needle: &str| {
@@ -159,23 +118,19 @@ fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
     };
     assert_eq!(at("\u{256D}\u{2500} running"), corner, "running sits under limits, one column edge");
     assert_eq!(at("\u{256D}\u{2500} limits"), corner);
-    assert!(big.iter().all(|l| display_width(l) <= corner + 46), "nothing past the grid");
-    assert!(corner < 100, "the launch panel ends at its rows, not at the far column: {corner}");
-    assert!(
-        big[0]
-            .chars()
-            .skip(corner)
-            .collect::<String>()
-            .starts_with("\u{256D}\u{2500} limits"),
-        "limits right beside it"
+    assert_eq!(
+        corner,
+        279 - crate::cockpit::FACTS_WIDTH,
+        "the facts column keeps its width, the left column takes the rest"
     );
+    assert!(big.iter().all(|l| display_width(l) <= 279), "nothing past the frame");
     assert_golden(
         "launch-80x24",
-        &full(&r, &real_state(&r), (80, 24), &recent, &running, &golden_limits()).join("\n"),
+        &full(&r, &real_state(&r), (80, 24), &running, &golden_limits()).join("\n"),
     );
-    let s1 = full(&r, &r.new_state(), (130, 40), &[], &[], &Limits::new());
+    let s1 = full(&r, &r.new_state(), (130, 40), &[], &Limits::new());
     assert_golden("launch-130x40-s1", &s1.join("\n"));
-    assert!(s1.len() < 25, "empty lists shrink the panels and the footer follows: {}", s1.len());
+    assert_eq!(s1.len(), 39, "empty lists keep the panels to the footer: {}", s1.len());
 }
 
 #[test]

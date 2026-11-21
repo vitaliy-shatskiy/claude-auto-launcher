@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::frame::{LaunchFrameInput, RECENT_ROW, RecentProject, RunningSession, launch_frame};
+use super::frame::{LaunchFrameInput, RunningSession, launch_frame};
 use super::{
     CONFIG_ROWS, LaunchState, OptionText, Roster, RowName, availability_snap, is_hidden_row_value, step_launch_value, visible_row_values,
 };
@@ -21,9 +21,6 @@ use crate::ui::{Hit, Term};
 use std::cell::RefCell;
 
 mod home;
-
-/// The keys that continue a recent project, first to fifth.
-const RECENT_KEYS: [char; 5] = ['1', '2', '3', '4', '5'];
 
 /// The caller's hook: `true` consumed the key (the loop redraws).
 pub type OnKey<'a> = dyn FnMut(&KeyPress, &mut dyn Term) -> bool + 'a;
@@ -45,8 +42,6 @@ pub struct LaunchView {
     /// Account -> its resolved defaults.
     pub labels_by_account: BTreeMap<String, DefaultLabels>,
     pub style: Style,
-    /// Newest first: the recent panel and keys 1-5.
-    pub recent: Vec<RecentProject>,
     pub running: Vec<RunningSession>,
     /// The last maintenance MCP check, `2 of 2 · 3 h ago`; empty when none is known.
     pub mcp: String,
@@ -71,9 +66,6 @@ pub struct LaunchScreen<'a> {
     launcher: Option<&'a RefCell<crate::self_update::Watch>>,
     /// Warnings maintenance shows: the footer's badge count.
     warnings: usize,
-    recent: Option<&'a RecentSource<'a>>,
-    /// The recent project a click selected: the next click on it continues it.
-    recent_pick: Option<usize>,
     /// The project list under the launch panel on a wide page, once loaded.
     home: Option<ProjectScreen<'a>>,
     home_source: Option<&'a home::HomeSource<'a>>,
@@ -82,22 +74,6 @@ pub struct LaunchScreen<'a> {
     session_cursor: Cursor,
     /// The width last drawn at: the workspace needs two columns.
     width: usize,
-}
-
-/// The recent projects once known; `None` while the registry is still being read.
-pub type RecentSource<'a> = dyn Fn() -> Option<Vec<RecentProject>> + 'a;
-
-/// A key 1-5 picked a recent project: the launch continues its newest session there. `false`
-/// with no pick or a pick past the list.
-pub(crate) fn apply_pick(state: &mut LaunchState, recent: &[RecentProject]) -> bool {
-    let Some(p) = state.picked.and_then(|i| recent.get(i)) else {
-        return false;
-    };
-    state.project.clone_from(&p.path);
-    state.project_slug.clone_from(&p.slug);
-    state.project_slugs.clone_from(&p.slugs);
-    "continue".clone_into(&mut state.action);
-    true
 }
 
 impl std::fmt::Debug for LaunchScreen<'_> {
@@ -155,8 +131,6 @@ impl<'a> LaunchScreen<'a> {
             update: None,
             launcher: None,
             warnings: 0,
-            recent: None,
-            recent_pick: None,
             home: None,
             home_source: None,
             focus: HomeFocus::Launch,
@@ -187,23 +161,6 @@ impl<'a> LaunchScreen<'a> {
     pub(crate) fn with_warnings(mut self, n: usize) -> Self {
         self.warnings = n;
         self
-    }
-
-    /// Where the recent projects come from once the registry is in: `idle` asks until it answers.
-    #[must_use]
-    pub(crate) fn with_recent(mut self, source: &'a RecentSource<'a>) -> Self {
-        self.recent = Some(source);
-        self.take_recent();
-        self
-    }
-
-    /// `true` when the recent projects just arrived.
-    fn take_recent(&mut self) -> bool {
-        let Some(list) = self.recent.and_then(|s| s()) else { return false };
-        // Answered: the source is done with, and the panel stops saying it is loading.
-        self.recent = None;
-        self.view.recent = list;
-        true
     }
 
     /// The launcher's own update check behind the screen.
@@ -388,37 +345,26 @@ impl Screen for LaunchScreen<'_> {
     fn hotkeys(&self) -> &[char] {
         match (self.home_focus(), self.home.as_ref()) {
             (Some(HomeFocus::Projects), Some(h)) => h.hotkeys(),
-            (Some(HomeFocus::Sessions(_)), _) => &['f'],
-            (Some(_), _) => &[],
-            (None, _) => {
-                let n = self.view.recent.len().min(RECENT_KEYS.len());
-                RECENT_KEYS.get(..n).unwrap_or_default()
-            }
+            (Some(HomeFocus::Sessions(_)), _) => &['f', 'v'],
+            (Some(HomeFocus::Projects | HomeFocus::Launch) | None, _) => &[],
         }
     }
 
-    /// 1-5: that recent project's newest session with the choices on screen (`hotkeys` offers
-    /// only the keys the list has); on the workspace the focused panel's keys.
+    /// The focused panel's keys on the workspace; the launch rows have none.
     fn hotkey(&mut self, c: char) -> Flow<LaunchState> {
         match (self.home_focus(), self.home.as_mut()) {
             (Some(HomeFocus::Projects), Some(h)) => {
                 let f = h.hotkey(c);
-                return self.list_flow(f);
+                self.list_flow(f)
             }
-            (Some(HomeFocus::Sessions(_)), _) => return if c == 'f' { self.resume(true) } else { Flow::Continue },
-            _ => {}
+            (Some(HomeFocus::Sessions(_)), _) => self.session_key(c),
+            _ => Flow::Continue,
         }
-        let Some(i) = RECENT_KEYS.iter().position(|k| *k == c) else {
-            return Flow::Continue;
-        };
-        let mut state = self.state.clone();
-        state.picked = Some(i);
-        Flow::Done(Some(state))
     }
 
     fn idle(&mut self) -> bool {
         let list = self.home.as_mut().is_some_and(Screen::idle);
-        self.take_update() | self.take_recent() | self.take_home() | list | self.launcher.is_some_and(|w| w.borrow_mut().news())
+        self.take_update() | self.take_home() | list | self.launcher.is_some_and(|w| w.borrow_mut().news())
     }
 
     /// A click on a row selects it; on an option cell it walks to that value through the same
@@ -431,16 +377,13 @@ impl Screen for LaunchScreen<'_> {
         self.launch_click(hit)
     }
 
-    /// The second click on the recent project a click selected does what its key does; on the
-    /// list, what Enter does there.
+    /// The second click on the list does what Enter does there; on a session, resumes it.
     fn activate(&mut self, hit: &Hit, term: &mut dyn Term) -> Option<Flow<LaunchState>> {
         if let (Hit::ListRow(_), Some(HomeFocus::Projects)) = (hit, self.home_focus()) {
             let f = self.home.as_mut()?.activate(hit, term)?;
             return Some(self.list_flow(f));
         }
-        let Hit::LaunchRow { row, .. } = hit else { return None };
-        let i = row.checked_sub(RECENT_ROW).filter(|i| self.recent_pick == Some(*i))?;
-        RECENT_KEYS.get(i).map(|c| self.hotkey(*c))
+        self.session_activate(hit)
     }
 
     /// The workspace's keys first (Shift+Tab, the list's own), then the caller's hook (then a
@@ -491,9 +434,6 @@ impl LaunchScreen<'_> {
             restored: None,
             notice: notice.as_deref(),
             warnings: self.warnings,
-            recent: &self.view.recent,
-            recent_loading: self.recent.is_some(),
-            recent_selected: self.recent_pick,
             home,
             running: &self.view.running,
             mcp: &self.view.mcp,
@@ -505,18 +445,13 @@ impl LaunchScreen<'_> {
         launch_frame(self.roster, &inp)
     }
 
-    /// A click on a launch row or a recent project's line.
+    /// A click on a launch row.
     fn launch_click(&mut self, hit: &Hit) -> Flow<LaunchState> {
         let (row, value) = match hit {
-            Hit::LaunchRow { row, .. } if *row >= RECENT_ROW => {
-                self.recent_pick = Some(row - RECENT_ROW);
-                return Flow::Continue;
-            }
             Hit::LaunchRow { row, .. } => (*row, None),
             Hit::Cell { row, value, .. } => (*row, Some(value.clone())),
             _ => return Flow::Continue,
         };
-        self.recent_pick = None;
         self.cursor.index = i32::try_from(row).unwrap_or(0);
         self.state.row = row;
         let Some(value) = value else { return Flow::Continue };
@@ -559,7 +494,6 @@ mod tests {
             default_model_label: "default".into(),
             default_advisor_label: "default".into(),
             labels_by_account: BTreeMap::new(),
-            recent: Vec::new(),
             running: Vec::new(),
             mcp: String::new(),
             style: Style { color: false, ascii: true },
@@ -575,99 +509,6 @@ mod tests {
         let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook);
         let mut t = PreviewTerm::new((100, 30), crate::ui::parse_preview_keys(keys).unwrap(), true);
         run(&mut s, &mut t).unwrap()
-    }
-
-    fn recent(names: &[&str]) -> Vec<RecentProject> {
-        names
-            .iter()
-            .map(|n| RecentProject {
-                name: (*n).into(),
-                path: format!(r"C:\w\{n}"),
-                slug: format!("C--w-{n}"),
-                slugs: vec![format!("C--w-{n}")],
-                age: "3 min".into(),
-                last: String::new(),
-            })
-            .collect()
-    }
-
-    /// Keys against a screen whose recent projects arrive from `source`.
-    fn drive_recent(keys: &str, source: &RecentSource<'_>) -> Option<LaunchState> {
-        let mut r = four();
-        let v = view();
-        let p = Prefs::default();
-        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
-        let st = r.new_state();
-        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook).with_recent(source);
-        let mut t = PreviewTerm::new((130, 40), crate::ui::parse_preview_keys(keys).unwrap(), true);
-        run(&mut s, &mut t).unwrap()
-    }
-
-    #[test]
-    fn key_2_continues_the_second_recent_project_with_the_choices_on_screen() {
-        let list = recent(&["alpha", "beta"]);
-        let source = || Some(list.clone());
-        let mut s = drive_recent("s,d,2", &source).unwrap();
-        assert_eq!(s.picked, Some(1));
-        assert_eq!(s.remote, "off", "the row changed on screen launches with it");
-        assert!(apply_pick(&mut s, &list));
-        assert_eq!(
-            (s.project.as_str(), s.project_slug.as_str(), s.action.as_str()),
-            (r"C:\w\beta", "C--w-beta", "continue")
-        );
-        assert_eq!(s.project_slugs, ["C--w-beta"]);
-    }
-
-    #[test]
-    fn a_key_past_the_recent_list_or_with_none_known_does_nothing() {
-        let list = recent(&["alpha"]);
-        let source = || Some(list.clone());
-        assert!(
-            drive_recent("3,Escape", &source).is_none(),
-            "3 of one project: no pick, Escape cancels"
-        );
-        let unknown = || None;
-        assert!(drive_recent("1,Escape", &unknown).is_none(), "the registry not in yet: no pick");
-        let mut s = r_state();
-        s.picked = Some(4);
-        assert!(!apply_pick(&mut s, &list), "a pick past the list applies nothing");
-        assert_eq!(s.action, "new");
-    }
-
-    #[test]
-    fn a_click_selects_a_recent_project_line_and_a_second_click_picks_it_like_its_key() {
-        let mut r = four();
-        let v = LaunchView {
-            recent: recent(&["alpha", "beta", "gamma"]),
-            ..view()
-        };
-        let p = Prefs::default();
-        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
-        let st = r.new_state();
-        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook);
-        let frame = s.draw((130, 40));
-        let third = frame.map.rows.iter().filter(|h| h.name == "recent").nth(2).unwrap();
-        assert!(
-            frame.lines[usize::try_from(third.y).unwrap()].contains("3  gamma"),
-            "{:#?}",
-            frame.lines
-        );
-        let press = Event::Mouse(MouseEvent {
-            x: 10,
-            y: third.y,
-            left: true,
-            buttons: 1,
-            ..MouseEvent::default()
-        });
-        let esc = Event::Key(KeyPress::named(vk::ESCAPE));
-        let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), [press, esc]);
-        assert!(run(&mut s, &mut t).unwrap().is_none(), "one click only selects");
-        assert!(
-            t.inner.frames.unwrap().last().unwrap().iter().any(|l| l.contains("> 3  gamma")),
-            "the selected line carries the cursor"
-        );
-        let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), [press, press]);
-        assert_eq!(run(&mut s, &mut t).unwrap().unwrap().picked, Some(2));
     }
 
     /// The frame a scripted run ends on (its last), in colour.
@@ -725,59 +566,6 @@ mod tests {
             typed.push(esc());
             assert_eq!(clicked, last_frame(typed), "{row} = {value}: the click and the keys draw one frame");
         }
-    }
-
-    #[test]
-    fn a_click_beside_a_recent_project_line_picks_nothing() {
-        let mut r = four();
-        let v = LaunchView {
-            recent: recent(&["alpha", "beta", "gamma"]),
-            ..view()
-        };
-        let p = Prefs::default();
-        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
-        let st = r.new_state();
-        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook);
-        let frame = s.draw((130, 40));
-        let first = frame.map.rows.iter().find(|h| h.name == "recent").unwrap();
-        // The running column beside the recent panel, then the frame's last column.
-        let at = |x: i32| {
-            Event::Mouse(MouseEvent {
-                x,
-                y: first.y,
-                left: true,
-                buttons: 1,
-                ..MouseEvent::default()
-            })
-        };
-        let esc = Event::Key(KeyPress::named(vk::ESCAPE));
-        let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), [at(110), at(110), at(129), at(129), esc]);
-        assert!(run(&mut s, &mut t).unwrap().is_none(), "no click off the line picks a project");
-    }
-
-    #[test]
-    fn the_recent_panel_says_loading_until_the_registry_answers() {
-        let mut r = four();
-        let v = view();
-        let p = Prefs::default();
-        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
-        let answer = std::cell::RefCell::new(None);
-        let source = || answer.borrow().clone();
-        let st = r.new_state();
-        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook).with_recent(&source);
-        let text = |s: &mut LaunchScreen<'_>| s.draw((130, 40)).lines.join("\n");
-        assert!(text(&mut s).contains("loading recent projects"));
-        assert!(!s.idle(), "no answer yet: nothing to redraw");
-        *answer.borrow_mut() = Some(Vec::new());
-        assert!(s.idle(), "the answer redraws");
-        assert!(
-            text(&mut s).contains("no recent projects yet"),
-            "an empty answer is the empty state"
-        );
-    }
-
-    fn r_state() -> LaunchState {
-        four().new_state()
     }
 
     #[test]

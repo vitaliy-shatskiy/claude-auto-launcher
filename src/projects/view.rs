@@ -11,8 +11,8 @@ use super::paths::project_key;
 use super::select::{Row, RowKind, filter_words, project_count, project_rows};
 use crate::cockpit::{self, Focus, Panel};
 use crate::frame::{
-    self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioRow, RadioSpec, RowMap, Style,
-    TWO_PANE_WIDTH, new_hint_footer, new_radio_row,
+    self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioRow, RadioSpec, RowHit, RowMap, SESSION_ROW,
+    Style, TWO_PANE_WIDTH, new_hint_footer, new_radio_row,
 };
 use crate::launch::{LAUNCH_MODES, launch_mode, step_option};
 use crate::layout::{display_width, limit_line, limit_path, viewport};
@@ -182,6 +182,7 @@ fn footer_hints(v: &ProjectView<'_>) -> Vec<Hint> {
             if listed {
                 h.push(Hint::key("enter", "resume", "Enter"));
                 h.push(Hint::ch("f", "fork", 'f'));
+                h.push(Hint::ch("v", "chat", 'v'));
             }
             h.push(Hint::key("tab", "launch", "Tab"));
             h.push(Hint::key("esc", "projects", "Escape"));
@@ -271,16 +272,15 @@ fn age_text(r: &Row, v: &ProjectView<'_>) -> String {
     r.last_activity_ms.map(|t| relative_age(t, v.now_ms)).unwrap_or_default()
 }
 
-/// The compact columns of the visible rows: the longest name (at most 40 % of the inner width),
-/// the longest path cut to what is left of `inner`, the widest age.
+/// The columns of the visible rows: the longest name (at most 40 % of the inner width), the path
+/// in what is left of `inner`, the widest age right-aligned at the panel's edge.
 fn list_columns(rows: &[Row], inner: usize, v: &ProjectView<'_>, g: &Glyphs) -> Columns {
     let listed = || rows.iter().filter(|r| r.kind != RowKind::Path);
     let widest = |w: &dyn Fn(&Row) -> usize| listed().map(w).max().unwrap_or(0);
     let label = widest(&|r| display_width(&theme::strip_ctl(&label_text(r, v, g)))).min(inner * 2 / 5);
     let age = widest(&|r| display_width(&age_text(r, v)));
     let room = inner.saturating_sub(3 + label + 2 + if age > 0 { 1 + age } else { 0 });
-    let tail = widest(&|r| display_width(&theme::strip_ctl(&r.path))).min(room);
-    Columns { label, tail, age }
+    Columns { label, tail: room, age }
 }
 
 /// One list row's text: project, cwd, or the free-path row. `cols`: the wide frame's columns.
@@ -403,13 +403,17 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let columns = v.width >= TWO_PANE_WIDTH || v.home.is_some();
     let page_rows = v.height.saturating_sub(1 + footer.lines.len()).max(8);
     let index = v.index.min(rows.len().saturating_sub(1));
+    if !wide && matches!(v.home.map(|h| h.focus), Some(HomeFocus::Sessions(_))) {
+        return sessions_page(v, rows.get(index), (fw, page_rows), &footer, &g);
+    }
     // AC27: the list takes every row of its panel, so the panel fills a tall terminal. The path of
     // the cursor's row (stacked; beside, the selected panel has it) and the action field close it.
     let list_lines = page_rows.saturating_sub(4).max(3);
     let (start, visible) = project_viewport(&rows, index, list_lines);
     let lw = match v.home {
         Some(h) if wide => h.left_width.min(fw),
-        _ if wide => list_width(rows.get(start..start + visible).unwrap_or_default(), fw, v, &g),
+        // The selected project's facts and sessions keep the facts column's width; the list the rest.
+        _ if wide => fw - cockpit::FACTS_WIDTH.min(fw / 2),
         _ => fw,
     };
     let list_focused = v.home.is_none_or(|h| h.focus == HomeFocus::Projects);
@@ -449,6 +453,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         selected,
     };
     let mut lines = cockpit::render(&list, v.style);
+    let mut side = None;
     if wide {
         let rw = fw - lw;
         let sel = rows.get(index);
@@ -461,6 +466,9 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         let listed = session_lines(sel, detail, v, rw - 2, sessions_h.saturating_sub(2), &g);
         right.extend(cockpit::render(&sessions_panel(listed, rw, sessions_h, v.home, &g), v.style));
         lines = cockpit::beside(lines, lw, &right);
+        if v.home.is_some() {
+            side = session_hits(detail, facts_h, sessions_h).map(|rows| (RowMap::panel_interior(lw, rw), rows));
+        }
     }
     let y = |n: usize| i32::try_from(1 + n).unwrap_or(i32::MAX);
     let mut map = RowMap {
@@ -472,6 +480,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         }),
         action,
         hit_x: RowMap::panel_interior(0, lw),
+        side: side.and_then(|(x, rows)| Some((x?, rows))),
         ..RowMap::default()
     };
     let light = FooterLight {
@@ -505,24 +514,6 @@ fn sessions_panel<'p>(lines: Vec<String>, width: usize, height: usize, home: Opt
     }
     p
 }
-
-/// The list panel beside the context: what its rows need (mark, name, the full path, age) and no
-/// more, at most 60 % of the frame; paths are cut only past that cap. Never narrower than the
-/// action field and the title need.
-fn list_width(shown: &[Row], fw: usize, v: &ProjectView<'_>, g: &Glyphs) -> usize {
-    let listed = || shown.iter().filter(|r| r.kind != RowKind::Path);
-    let label = listed()
-        .map(|r| display_width(&theme::strip_ctl(&label_text(r, v, g))))
-        .max()
-        .unwrap_or(0);
-    let path = listed().map(|r| display_width(&theme::strip_ctl(&r.path))).max().unwrap_or(0);
-    let age = listed().map(|r| display_width(&age_text(r, v))).max().unwrap_or(0);
-    let need = 4 + 3 + label + 2 + path + if age > 0 { 1 + age } else { 0 };
-    need.max(LIST_MIN_WIDTH).min(fw * 3 / 5)
-}
-
-/// The action field and the counts in the title need this much.
-const LIST_MIN_WIDTH: usize = 64;
 
 /// The label column of the selected panel's facts.
 const FACT_LABEL: usize = 10;
@@ -562,6 +553,40 @@ fn selected_lines(r: Option<&Row>, d: Option<&Detail>, v: &ProjectView<'_>, inne
         out.push(fact("last", &format!("{}  {title}", cockpit::dim(&age))));
     }
     out
+}
+
+/// The narrow page's sessions: the selected project's sessions panel alone, `fw` by `page_rows`.
+fn sessions_page(v: &ProjectView<'_>, sel: Option<&Row>, (fw, page_rows): (usize, usize), footer: &frame::Footer, g: &Glyphs) -> Frame {
+    let detail = v.detail.filter(|d| sel.is_some_and(|r| d.key == project_key(&r.path)));
+    let listed = session_lines(sel, detail, v, fw - 2, page_rows.saturating_sub(2), g);
+    let lines = cockpit::render(&sessions_panel(listed, fw, page_rows, v.home, g), v.style);
+    let mut map = RowMap {
+        hit_x: RowMap::panel_interior(0, fw),
+        side: session_hits(detail, 0, page_rows).and_then(|rows| Some((RowMap::panel_interior(0, fw)?, rows))),
+        ..RowMap::default()
+    };
+    let light = FooterLight {
+        hover: frame::footer_hover(footer, v.hover),
+        selected: Vec::new(),
+    };
+    let lines = frame::append_footer(lines, footer, fw, v.style, &light, &mut map);
+    Frame { lines, map }
+}
+
+/// The sessions panel's lines in the row map (`SESSION_ROW + i`) under the `facts_h` rows of the
+/// selected panel; `None` without a listed session.
+fn session_hits(d: Option<&Detail>, facts_h: usize, sessions_h: usize) -> Option<Vec<RowHit>> {
+    let n = d?.sessions.len().min(sessions_h.saturating_sub(2));
+    (n > 0).then(|| {
+        (0..n)
+            .map(|i| RowHit {
+                index: SESSION_ROW + i,
+                name: "session".to_owned(),
+                y: i32::try_from(facts_h + 1 + i).unwrap_or(0),
+                cells: Vec::new(),
+            })
+            .collect()
+    })
 }
 
 /// The selected project's newest sessions, as many as `rows` hold: title, age, a green dot on a

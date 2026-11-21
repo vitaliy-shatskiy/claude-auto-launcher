@@ -1,5 +1,5 @@
-//! The wide launch page as a workspace over this screen: focus moves, Enter per panel, the
-//! narrow page that keeps the recent panel, and the shared click and hint walks.
+//! The launch page as a workspace over this screen: focus moves, Enter per panel, session
+//! clicks, the narrow pages, and the shared click and hint walks.
 
 use super::*;
 use crate::input::vk;
@@ -17,10 +17,6 @@ fn view(color: bool) -> LaunchView {
         default_model_label: "default".into(),
         default_advisor_label: "default".into(),
         labels_by_account: std::collections::BTreeMap::new(),
-        recent: vec![crate::launch::frame::RecentProject {
-            name: "alpha".into(),
-            ..Default::default()
-        }],
         running: Vec::new(),
         mcp: String::new(),
         style: Style { color, ascii: !color },
@@ -136,12 +132,57 @@ fn enter_on_the_sessions_resumes_that_session_and_f_forks_it() {
 }
 
 #[test]
-fn under_two_columns_the_page_keeps_the_recent_panel_and_enter_goes_on_to_the_project_page() {
+fn a_click_on_a_session_selects_it_and_a_second_click_resumes_it() {
     let f = fx();
-    let (out, frames) = drive_home(&f, (100, 30), "Tab,Enter");
-    assert!(has(&frames[0], "recent") && !has(&frames[0], "projects"), "{:#?}", frames[0]);
-    let out = out.unwrap();
-    assert!(out.home_pick.is_none(), "Enter is the launch rows' next: the project page follows");
+    let c = clock;
+    let mut roster = crate::launch::tests::four();
+    let v = view(false);
+    let p = crate::prefs::Prefs::default();
+    let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+    let source = || Some(list(&f, v.style, &c));
+    let st = roster.new_state();
+    let mut s = LaunchScreen::new(&mut roster, st, &v, &p, 0, &mut hook).with_home(&source);
+    // Given the list focused on alpha, its two sessions beside it
+    let size = (160, 40);
+    let _ = s.draw(size);
+    let _ = s.tab();
+    s.cursor().index = 1;
+    s.before();
+    let frame = s.draw(size);
+    let ((x0, _), rows) = frame.map.side.expect("the sessions panel maps its rows");
+    let second = rows.get(1).unwrap();
+    // When the second session is clicked twice
+    let (first_ended, out) = crate::ui::screen_loop::hover_walk::click_twice(&mut s, size, (x0 + 2, second.y));
+    // Then the first click only selected it, the second resumed it.
+    assert!(!first_ended, "a first click never acts");
+    let out = out.expect("the second click resumes");
+    assert_eq!(out.home_session, Some(("s2".to_owned(), false)));
+}
+
+#[test]
+fn under_two_columns_the_panels_are_pages_in_the_same_order() {
+    let f = fx();
+    let (out, frames) = drive_home(&f, (100, 30), "Tab,s,Tab,Enter");
+    // The launch page: the launch rows and the limits, no recent panel and no 1-5 keys.
+    assert!(has(&frames[0], "* claude-auto") && !has(&frames[0], "recent"), "{:#?}", frames[0]);
+    assert!(!has(&frames[0], "1-5"), "{:#?}", frames[0]);
+    // Tab: the projects page alone.
+    assert!(
+        has(&frames[1], "* claude-auto - project") && !has(&frames[1], "limits"),
+        "{:#?}",
+        frames[1]
+    );
+    // Down onto alpha, Tab: the sessions page alone, its first session selected.
+    assert!(
+        has(&frames[3], "* claude-auto - sessions") && has(&frames[3], "title s1") && !has(&frames[3], "limits"),
+        "{:#?}",
+        frames[3]
+    );
+    // Every page fills the terminal to the footer row.
+    for fr in &frames {
+        assert_eq!(fr.len(), 29, "{fr:#?}");
+    }
+    assert_eq!(out.unwrap().home_session, Some(("s1".to_owned(), false)));
 }
 
 #[test]

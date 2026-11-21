@@ -305,6 +305,7 @@ fn a_plugin_session_joins_the_picker_and_resumes_without_a_transfer() {
         style: crate::frame::Style { color: false, ascii: true },
         live_dirs: &[],
         preview: true,
+        select: None,
     };
     let fake = Fake::with(&[
         ("describe", ticket()),

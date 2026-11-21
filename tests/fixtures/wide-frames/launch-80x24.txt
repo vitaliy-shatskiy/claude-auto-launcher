@@ -1,7 +1,7 @@
 ╭─ ✻ claude-auto ───────────────────── 0.9.0 · Claude Code 2.1.329 ↑ 2.1.330 ─╮
 │ ❯ account      [work 41%] ┊ personal 17% ┊ low 43%                          │
 │   remote       ● [on] ○ off ○ on+QR ○ stop server                           │
-│   model*       ‹ Opus 5.5[1M] ›                                             │
+│   model*       ● [Opus 5.5[1M]]  +4                                         │
 │   effort*      ○ default ○ low ○ medium ○ high ● [xhigh] ○ max ○ ultracode  │
 │   advisor*     ○ default ● [fable] ○ opus ○ off                             │
 │   permission*  ○ default ○ plan ○ auto ○ acceptEdits ● [bypass]             │
@@ -9,15 +9,15 @@
 ╰─────────────────────────────────────────────────────────────────────────────╯
 ╭─ limits · work ─────────────────────────────────────────────────────────────╮
 │  5h 41%  7d 63%  fable 15%                                 data 12 min ago  │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
 ╰─────────────────────────────────────────────────────────────────────────────╯
-╭─ recent ────────────────────────────────────────────────────────────────────╮
-│  1  aurora-web                                                    3 min  │
-│  2  invoice-api                                                        4 h  │
-│  3  apk-diff                                                           1 d  │
-│  4  channel-monitor                                                    2 d  │
-│                                                                             │
-│                                                                             │
-│                                                                             │
-│                                                                             │
-╰─────────────────────────────────────────────────────────────────────────────╯
-  a/d switch  ┊  [enter] next  ┊  1-5 go  ┊  [u] maint ⚠ 2  ┊  [esc] quit
+  w/s row  ┊  a/d switch  ┊  [enter] next  ┊  [u] maint ⚠ 2  ┊  [esc] quit

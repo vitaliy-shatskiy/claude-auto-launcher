@@ -46,6 +46,9 @@ fn regions(f: &Frame) -> Vec<(i32, i32, String)> {
     if let Some(l) = &f.map.list {
         out.extend(l.row_ys.iter().map(|y| (6, *y, format!("list row at {y}"))));
     }
+    if let Some(((a, _), rows)) = &f.map.side {
+        out.extend(rows.iter().map(|r| (a + 2, r.y, format!("side row at {}", r.y))));
+    }
     let top = f.map.footer_y.unwrap_or(0);
     out.extend(f.map.footer.iter().map(|s| {
         (
@@ -160,7 +163,13 @@ fn stray_points(f: &Frame, width: usize) -> Vec<(i32, i32, String)> {
         out.push((w - 1, yi, format!("the last column of line {y}")));
         let chars: Vec<char> = crate::theme::remove_ansi_color(line).chars().collect();
         // The left panel's right border, then the right panel's left border.
-        if let Some(p) = chars.windows(2).position(|c| "│╮╯".contains(c[0]) && "│╭╰".contains(c[1])) {
+        // The right column's own rows (the workspace's sessions) are targets, not strays.
+        let side = f.map.side.as_ref().is_some_and(|(_, rows)| rows.iter().any(|r| r.y == yi));
+        if let Some(p) = chars
+            .windows(2)
+            .position(|c| "│╮╯".contains(c[0]) && "│╭╰".contains(c[1]))
+            .filter(|_| !side)
+        {
             out.push((i32::try_from(p + 4).unwrap_or(0), yi, format!("the right column of line {y}")));
         }
     }
@@ -199,4 +208,22 @@ pub(crate) fn assert_first_click_never_acts<S: Screen>(screen: &mut S, size: (us
         screen.before();
     }
     *screen.cursor() = Cursor::at(index);
+}
+
+/// Clicks `at` twice with one set of guards, as a user does; whether the first click ended the
+/// screen, and what the second click ended it with (`None`: it did not, or with nothing).
+pub(crate) fn click_twice<S: Screen>(screen: &mut S, size: (usize, usize), at: (i32, i32)) -> (bool, Option<S::Output>) {
+    let mut term = PreviewTerm::new(size, VecDeque::new(), false);
+    let mut g = Guards::default();
+    let mut ends = Vec::new();
+    for _ in 0..2 {
+        screen.before();
+        let map = screen.draw(size).map;
+        ends.push(match mouse(screen, &mut term, &press(at.0, at.1), Some(&map), &mut g) {
+            MouseStep::End(res) => Some(res),
+            _ => None,
+        });
+    }
+    let second = ends.pop().flatten().flatten();
+    (ends.pop().flatten().is_some(), second)
 }

@@ -68,7 +68,7 @@ fn pinned_rows_carry_a_dim_pin_mark_before_the_name() {
 #[test]
 fn the_footer_offers_p_pin() {
     let ps = many(1, "p");
-    let f = project_frame(&view(&ps, 0, r"C:\elsewhere", 100, 30));
+    let f = project_frame(&view(&ps, 0, r"C:\elsewhere", 160, 30));
     assert!(f.map.footer.iter().any(|s| s.ch == Some('p')), "a p button");
     assert!(plain(&f).iter().any(|l| l.contains("pin")), "named pin");
 }

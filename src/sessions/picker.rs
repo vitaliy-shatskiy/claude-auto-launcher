@@ -94,6 +94,8 @@ pub struct PickerScreen<'a> {
     live_scan: Option<LiveScan<'a>>,
     live: HashSet<String>,
     live_polls: u32,
+    /// The session the cursor goes to once its page is in (`with_selected`).
+    select: Option<String>,
 }
 
 impl std::fmt::Debug for PickerScreen<'_> {
@@ -159,10 +161,18 @@ impl<'a> PickerScreen<'a> {
             live_scan: None,
             live: HashSet::new(),
             live_polls: 0,
+            select: None,
         };
         *s.bucket_mut() = open;
         s.started[slot(scope)] = true;
         s
+    }
+
+    /// The cursor starts on the session `id` (when listed).
+    #[must_use]
+    pub fn with_selected(mut self, id: &str) -> Self {
+        self.select = Some(id.to_owned());
+        self
     }
 
     /// The preview pane shows the chat `pane` loads.
@@ -453,6 +463,17 @@ impl Screen for PickerScreen<'_> {
         self.can_page = self.fetch.is_some() && !b.exhausted && (!items.is_empty() || resumable_rows.is_empty());
         self.resumable_count = resumable_rows.len();
         self.items = items;
+        // The session the picker was opened on, once its page is in; asked once.
+        if let Some(id) = self.select.take() {
+            let b = self.bucket();
+            if let Some(at) = self
+                .items
+                .iter()
+                .position(|&i| b.sessions.get(i).is_some_and(|s| s.session_id == id))
+            {
+                self.cursor.index = i32::try_from(at).unwrap_or(0);
+            }
+        }
         let n = i32::try_from(self.items.len()).unwrap_or(i32::MAX);
         if self.cursor.index >= n {
             self.cursor.index = (n - 1).max(0);

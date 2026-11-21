@@ -1,11 +1,10 @@
 //! The launch page as a workspace on a wide terminal: the launch rows, the project list and the
 //! selected project's sessions are panels, and Tab, Shift+Tab or a click moves the focus between
-//! them; the focused panel takes the keys. Under two columns the page keeps the recent panel and
-//! the project page follows on Enter.
+//! them; the focused panel takes the keys. Under two columns the same panels are pages, in the
+//! same order.
 
 use super::LaunchScreen;
-use crate::cockpit;
-use crate::frame::Frame;
+use crate::frame::{Frame, SESSION_ROW};
 use crate::input::{KeyPress, vk};
 use crate::launch::LaunchState;
 use crate::launch::frame::HomePanel;
@@ -37,9 +36,9 @@ impl<'a> LaunchScreen<'a> {
         true
     }
 
-    /// The focus, when the page is the workspace (the list is in and two columns fit).
+    /// The focus, once the list is in: panels on a wide page, pages on a narrow one.
     pub(super) fn home_focus(&self) -> Option<HomeFocus> {
-        (self.home.is_some() && self.width >= cockpit::TWO_COLUMNS).then_some(self.focus)
+        self.home.is_some().then_some(self.focus)
     }
 
     /// The cursor the loop moves: the focused panel's.
@@ -99,6 +98,43 @@ impl<'a> LaunchScreen<'a> {
         }
     }
 
+    /// A sessions-panel key: `f` forks the selected session, `v` opens it in the session picker
+    /// (its chat beside it).
+    pub(super) fn session_key(&mut self, c: char) -> Flow<LaunchState> {
+        match c {
+            'f' => self.resume(true),
+            'v' => self.preview_session(),
+            _ => Flow::Continue,
+        }
+    }
+
+    /// The selected session in its project's picker: the chat preview lives there.
+    fn preview_session(&mut self) -> Flow<LaunchState> {
+        let i = usize::try_from(self.session_cursor.index).unwrap_or(0);
+        let Some(h) = self.home.as_mut() else { return Flow::Continue };
+        let Some(id) = h.sessions().get(i).map(|s| s.session_id.clone()) else {
+            return Flow::Continue;
+        };
+        match h.resume_here("enter") {
+            Some(c) => {
+                let mut st = self.state.clone();
+                st.home_pick = Some(c);
+                st.home_preview = Some(id);
+                Flow::Done(Some(st))
+            }
+            None => Flow::Continue,
+        }
+    }
+
+    /// The second click on the session a click selected resumes it.
+    pub(super) fn session_activate(&mut self, hit: &Hit) -> Option<Flow<LaunchState>> {
+        let Hit::LaunchRow { row, .. } = hit else { return None };
+        let i = row.checked_sub(SESSION_ROW)?;
+        let selected =
+            matches!(self.home_focus(), Some(HomeFocus::Sessions(_))) && usize::try_from(self.session_cursor.index).ok() == Some(i);
+        selected.then(|| self.resume(false))
+    }
+
     pub(super) fn session_count(&self) -> usize {
         self.home.as_ref().map_or(0, |h| h.sessions().len())
     }
@@ -130,6 +166,11 @@ impl<'a> LaunchScreen<'a> {
                 self.focus = HomeFocus::Projects;
                 let f = self.home.as_mut().map(|h| h.click(hit))?;
                 Some(self.list_flow(f))
+            }
+            Hit::LaunchRow { row, .. } if *row >= SESSION_ROW => {
+                self.focus_on(HomeFocus::Sessions(0));
+                self.session_cursor.index = i32::try_from(row - SESSION_ROW).unwrap_or(0);
+                Some(Flow::Continue)
             }
             Hit::LaunchRow { .. } | Hit::Cell { .. } => {
                 self.focus = HomeFocus::Launch;

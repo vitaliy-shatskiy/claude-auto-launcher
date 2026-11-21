@@ -213,9 +213,9 @@ pub struct Footer {
 }
 
 /// One list drives what is printed, where it can be clicked and which key a
-/// click means. All hints on one line when they fit `width` (0 = never wrap); else the plain
-/// (not clickable) hints drop, except the kept ones, and what is left goes on one line or into an
-/// aligned grid with the most columns that fit. A hint is never split.
+/// click means. All hints on one line when they fit `width` (0 = never drop); else the plain
+/// (not clickable) hints drop, except the kept ones, then the buttons by priority until the rest
+/// fits. The footer is always one row: a hint is never split or wrapped.
 pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) -> Footer {
     let sep = format!("  {}  ", g.hint_sep);
     let token_of = |h: &Hint| {
@@ -239,38 +239,28 @@ pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) ->
     };
     let one_line =
         |hs: &[&Hint]| 2 + hs.iter().map(|h| display_width(&piece_of(h))).sum::<usize>() + display_width(&sep) * hs.len().saturating_sub(1);
-    let all: Vec<&Hint> = hints.iter().collect();
-    let buttons: Vec<&Hint> = hints.iter().filter(|h| h.clickable || h.keep).collect();
-    let (shown, columns) = if width == 0 || one_line(&all) <= width || buttons.is_empty() {
-        (all, hints.len().max(1))
-    } else if one_line(&buttons) <= width {
-        let n = buttons.len();
-        (buttons, n)
-    } else {
-        let fits = |k: usize| 2 + column_widths(&buttons, k, &piece_of).iter().sum::<usize>() + display_width(&sep) * (k - 1) <= width;
-        let most = (1..buttons.len()).rev().find(|k| fits(*k)).unwrap_or(1);
-        // As few rows as the widest grid needs, filled evenly: 3 + 3 rather than 5 + 1.
-        let even = buttons.len().div_ceil(buttons.len().div_ceil(most));
-        let k = if fits(even) { even } else { most };
-        (buttons, k)
-    };
-    let col_w = if shown.len() > columns {
-        column_widths(&shown, columns, &piece_of)
-    } else {
-        Vec::new()
-    };
+    let mut shown: Vec<&Hint> = hints.iter().collect();
+    if width > 0 && one_line(&shown) > width && shown.iter().any(|h| h.clickable || h.keep) {
+        shown.retain(|h| h.clickable || h.keep);
+    }
+    // Then by priority, the last listed first within a priority.
+    for tier in 0..3 {
+        while width > 0 && shown.len() > 1 && one_line(&shown) > width {
+            let Some(i) = shown.iter().rposition(|h| priority(h) == tier) else {
+                break;
+            };
+            shown.remove(i);
+        }
+    }
     let mut lines = Vec::new();
-    for (r, chunk) in shown.chunks(columns).enumerate() {
+    {
+        let r = 0;
         let mut text = String::from("  ");
         let mut spans = Vec::new();
-        let mut prev_w = 0;
-        for (c, h) in chunk.iter().enumerate() {
+        for (c, h) in shown.iter().enumerate() {
             if c > 0 {
-                let pad = col_w.get(c - 1).map_or(0, |w| w.saturating_sub(prev_w));
-                text.push_str(&" ".repeat(pad));
                 text.push_str(&sep);
             }
-            prev_w = display_width(&piece_of(h));
             let token = token_of(h);
             let start = text.chars().count();
             let token_end = start + token.chars().count() - 1;
@@ -293,15 +283,16 @@ pub fn new_hint_footer(hints: &[Hint], g: &Glyphs, width: usize, plain: bool) ->
     Footer { lines }
 }
 
-/// The width of each grid column when `hints` fill rows of `k`, row-major.
-fn column_widths(hints: &[&Hint], k: usize, piece_of: &dyn Fn(&Hint) -> String) -> Vec<usize> {
-    let mut w = vec![0; k];
-    for (i, h) in hints.iter().enumerate() {
-        if let Some(slot) = w.get_mut(i % k) {
-            *slot = (*slot).max(display_width(&piece_of(h)));
-        }
+/// The order a narrow footer drops hints in: a button first (0), then a kept plain hint (the
+/// move and switch keys, 1), enter, tab, the filter and esc last (2).
+fn priority(h: &Hint) -> u8 {
+    if !h.clickable {
+        1
+    } else if matches!(h.key.as_str(), "Enter" | "Tab" | "Escape") || h.ch == Some('/') {
+        2
+    } else {
+        0
     }
-    w
 }
 
 /// Which footer button is lit: by (key, char), so a wrapped footer stays correct.
@@ -566,7 +557,13 @@ pub struct RowMap {
     /// panel holding them. A click outside (a border, the column beside, past the frame) is no
     /// hit; `None` leaves the whole line clickable.
     pub hit_x: Option<(i32, i32)>,
+    /// A second panel's rows (the workspace's sessions beside the list): hit only inside `.0`.
+    pub side: Option<((i32, i32), Vec<RowHit>)>,
 }
+
+/// The row index a workspace session line has in the row map: `SESSION_ROW + i`, past every
+/// launch row.
+pub const SESSION_ROW: usize = 1000;
 
 impl RowMap {
     /// The interior of a panel `width` cells wide whose left border is at column `left`.

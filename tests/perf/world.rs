@@ -295,6 +295,7 @@ pub(crate) fn picker_cursor(w: &World) -> io::Result<Measured> {
         style: Style { color: true, ascii: false },
         live_dirs: &[],
         preview: true,
+        select: None,
     };
     let keys = parse_preview_keys("DownArrow").map_err(io::Error::other)?;
     let mut term = PreviewTerm::new(SIZE, keys, true);

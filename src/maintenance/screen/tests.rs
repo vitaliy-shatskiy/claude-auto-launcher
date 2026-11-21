@@ -513,12 +513,6 @@ fn every_clickable_region_hovers_and_never_selects() {
         default_model_label: "default".into(),
         default_advisor_label: "default".into(),
         labels_by_account: BTreeMap::new(),
-        recent: vec![crate::launch::frame::RecentProject {
-            name: "alpha".into(),
-            path: r"C:\w\alpha".into(),
-            age: "3 min".into(),
-            ..Default::default()
-        }],
         running: Vec::new(),
         mcp: String::new(),
         style: color,
@@ -537,15 +531,6 @@ fn launch_view(color: Style) -> crate::launch::screen::LaunchView {
         default_model_label: "default".into(),
         default_advisor_label: "default".into(),
         labels_by_account: BTreeMap::new(),
-        recent: ["alpha", "beta"]
-            .iter()
-            .map(|n| crate::launch::frame::RecentProject {
-                name: (*n).into(),
-                path: format!(r"C:\w\{n}"),
-                age: "3 min".into(),
-                ..Default::default()
-            })
-            .collect(),
         running: Vec::new(),
         mcp: String::new(),
         style: color,

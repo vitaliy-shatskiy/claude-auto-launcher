@@ -15,7 +15,7 @@ use crate::frame::{
     BodyPainter, Footer, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RowMap, SHORT_PICKER_HEIGHT, Style, append_footer,
     footer_hover, frame_width, new_hint_footer, too_small_frame,
 };
-use crate::layout::{display_width, limit_line, viewport};
+use crate::layout::{limit_line, viewport};
 use crate::list::{ListRow, new_list_row, row_band_length};
 use crate::theme::{self, Glyphs, glyphs};
 
@@ -407,21 +407,6 @@ fn sessions_width(fw: usize) -> usize {
     fw.saturating_sub(CHAT_PANEL).max(cockpit::SESSIONS_LEFT_WIDTH)
 }
 
-/// The width a list row is laid out in: what the rows need (mark, project, title, age), at most
-/// the panel's interior, so on a wide list an age stays beside its title.
-fn row_layout_width(inner: usize, items: &[&Session]) -> usize {
-    let need = items
-        .iter()
-        .map(|s| display_width(&s.project) + 2 + display_width(&clean_text(&s.title)))
-        .max()
-        .unwrap_or(0)
-        + 3
-        + 2
-        + 7
-        + 2;
-    need.max(cockpit::SESSIONS_LEFT_WIDTH - 3).min(inner)
-}
-
 fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let ascii = v.style.ascii;
     let resumable_rows: Vec<&Session> = v.sessions.iter().copied().filter(|s| resumable(s)).collect();
@@ -435,13 +420,8 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let paint = painter();
     let wide = v.width >= cockpit::TWO_COLUMNS && !items.is_empty();
     let lw = if wide { sessions_width(fw) } else { fw };
-    // Ages end 2 cells before the border (a row keeps one trailing space); beside the chat a row is
-    // laid out in what the rows need, so an age stays beside its title on a wide list.
-    let row_width = if wide {
-        row_layout_width(lw.saturating_sub(3), &items)
-    } else {
-        lw.saturating_sub(3)
-    };
+    // Ages end 2 cells before the border (a row keeps one trailing space); titles take the width.
+    let row_width = lw.saturating_sub(3);
     if items.is_empty() {
         return empty_built(
             empty_message(v.filter, hidden, headless),

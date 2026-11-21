@@ -407,14 +407,13 @@ pub struct LaunchState {
     pub start: Option<StartContext>,
     /// Plugin row values by row index; never remembered.
     pub plugin_rows: BTreeMap<u16, String>,
-    /// The recent project a launch key 1-5 picked (0-based): its newest session continues with
-    /// these choices and the project screen is skipped. Never remembered.
-    pub picked: Option<usize>,
     /// What the home's projects panel picked on a wide page: the project screen is skipped. Never
     /// remembered.
     pub home_pick: Option<crate::projects::ProjectChoice>,
     /// The session the home's sessions panel resumed, and whether as a fork. Never remembered.
     pub home_session: Option<(String, bool)>,
+    /// The session the sessions panel's `v` opens in its project's picker. Never remembered.
+    pub home_preview: Option<String>,
 }
 
 impl LaunchState {
@@ -440,9 +439,9 @@ impl LaunchState {
             project_slugs: Vec::new(),
             start: None,
             plugin_rows: BTreeMap::new(),
-            picked: None,
             home_pick: None,
             home_session: None,
+            home_preview: None,
         }
     }
 

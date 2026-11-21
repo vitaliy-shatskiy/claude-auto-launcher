@@ -34,7 +34,7 @@ fn shift(map: &mut RowMap, dy: i32) {
     if let Some(a) = map.action.as_mut() {
         a.y += dy;
     }
-    for r in &mut map.rows {
+    for r in map.rows.iter_mut().chain(map.side.iter_mut().flat_map(|s| s.1.iter_mut())) {
         r.y += dy;
     }
     if let Some(y) = map.footer_y.as_mut() {
@@ -81,6 +81,7 @@ pub(super) fn home_frame(
         lines.extend(f.lines);
         map.list = f.map.list;
         map.action = f.map.action;
+        map.side = f.map.side;
         map.footer = f.map.footer;
         map.footer_y = f.map.footer_y;
         map.footer_lines = f.map.footer_lines;

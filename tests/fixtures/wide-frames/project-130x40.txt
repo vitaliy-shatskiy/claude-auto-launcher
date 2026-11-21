@@ -1,39 +1,39 @@
-╭─ ✻ claude-auto ─ project · 4 known · pinned 1 · worktrees 1 ──────────────╮╭─ selected · alpha ───────────────────────────────╮
-│   current directory  C:\Users\sample\here                                 ││  path      C:\Users\sample\Desktop\Proje…\alpha  │
-│                                                                           ││  sessions  loading…                              │
-│ ❯ alpha              C:\Users\sample\Desktop\Projects\alpha        4 min  │╰──────────────────────────────────────────────────╯
-│   ↑ beta-service     C:\Users\sample\Desktop\Project…\beta-service   8 h  │╭─ sessions ───────────────────────────────────────╮
-│   ⌂ gamma            C:\Users\sample\Desktop\Projects\gam…\feature   3 d  ││  loading…                                        │
-│   delta              D:\src\delta                                   23 d  ││                                                  │
-│                                                                           ││                                                  │
-│   + enter a path...                                                       ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│   action  ● [new] ○ continue ○ resume ○ worktree                          ││                                                  │
-╰───────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────╯
-  w/s move    ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
-  [/] filter  ┊  [p] pin         ┊  [h] hide     ┊  [v] hidden    ┊  [esc] back
+╭─ ✻ claude-auto ─ project · 4 known · pinned 1 · worktrees 1 ──────╮╭─ selected · alpha ───────────────────────────────────────╮
+│   current directory  C:\Users\sample\here                         ││  path      C:\Users\sample\Desktop\Projects\alpha        │
+│                                                                   ││  sessions  loading…                                      │
+│ ❯ alpha              C:\Users\sample\Desktop\Projec…\alpha 4 min  │╰──────────────────────────────────────────────────────────╯
+│   ↑ beta-service     C:\Users\sample\Desktop…\beta-service   8 h  │╭─ sessions ───────────────────────────────────────────────╮
+│   ⌂ gamma            C:\Users\sample\Desktop\Proj…\feature   3 d  ││  loading…                                                │
+│   delta              D:\src\delta                           23 d  ││                                                          │
+│                                                                   ││                                                          │
+│   + enter a path...                                               ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│                                                                   ││                                                          │
+│   action  ● [new] ○ continue ○ resume ○ worktree                  ││                                                          │
+╰───────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+  w/s move  ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree  ┊  [/] filter  ┊  [esc] back

@@ -79,6 +79,8 @@ pub struct PickerRequest<'a> {
     /// Every account's `sessions\` folder: a session a live process has open gets the green dot.
     pub live_dirs: &'a [PathBuf],
     pub preview: bool,
+    /// The session the cursor starts on (the workspace's chat preview); `None` = the newest.
+    pub select: Option<&'a str>,
 }
 
 /// The sessions root with its inputs explicit: sharing on = one root for every account (the
@@ -164,6 +166,9 @@ pub fn run_picker_with(
     let live = move || holder::live_ids(&dirs, &win::process_start);
     let mut screen =
         PickerScreen::new(first, Some(&mut fetch), PAGE_SIZE, &slugs, req.project_name, req.style, clock_now()).with_live(Box::new(live));
+    if let Some(id) = req.select {
+        screen = screen.with_selected(id);
+    }
     // Preview never polls idle (scripted keys only), so a background load would never land:
     // it shows the summary's recent messages instead.
     if !req.preview {
@@ -284,6 +289,7 @@ mod tests {
             style: Style { color: false, ascii: true },
             live_dirs: &[],
             preview: true,
+            select: None,
         };
         let keys = crate::ui::parse_preview_keys("Enter").unwrap();
         let mut term = crate::ui::PreviewTerm::new((100, 30), keys, true);
@@ -339,6 +345,7 @@ mod tests {
             style: Style { color: false, ascii: true },
             live_dirs: &[],
             preview: true,
+            select: None,
         };
         let keys = crate::ui::parse_preview_keys("Enter").unwrap();
         let mut term = crate::ui::PreviewTerm::new((100, 30), keys, true);
