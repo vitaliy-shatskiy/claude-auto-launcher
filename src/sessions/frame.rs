@@ -78,6 +78,8 @@ pub struct PickerView<'a> {
     pub sessions: &'a [&'a Session],
     pub index: usize,
     pub filter: &'a str,
+    /// The filter box is open: the title shows it with its cursor even while empty.
+    pub typing: bool,
     pub width: usize,
     pub height: usize,
     pub clock: Clock,
@@ -218,6 +220,10 @@ fn picker_footer(scope: PickerScope, g: &Glyphs, width: usize, plain: bool) -> F
 
 fn picker_title(v: &PickerView<'_>, shown: usize, hidden: usize, headless: usize, h: char) -> String {
     let mut parts = vec!["resume".to_owned()];
+    // The filter leads: a narrow sessions panel cuts the title's tail, never what is typed.
+    if !v.filter.is_empty() || v.typing {
+        parts.push(format!("filter: {}{}", clean_text(v.filter), if v.typing { "_" } else { "" }));
+    }
     if v.scope == PickerScope::Project {
         parts.push(if v.project_name.is_empty() {
             "this project".to_owned()
@@ -231,9 +237,6 @@ fn picker_title(v: &PickerView<'_>, shown: usize, hidden: usize, headless: usize
     }
     if headless > 0 {
         parts.push(format!("{headless} headless hidden"));
-    }
-    if !v.filter.is_empty() {
-        parts.push(format!("filter: {}", clean_text(v.filter)));
     }
     parts.join(&format!(" {h} "))
 }

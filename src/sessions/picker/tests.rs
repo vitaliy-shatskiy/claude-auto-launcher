@@ -291,6 +291,22 @@ fn keys_draw_their_frames_and_read_nothing_before_idle_polls() {
     assert_eq!(s.chat.as_ref().map(ChatPane::bytes_read), Some(0));
 }
 
+/// Every footer hint of the picker is alive at every size, in both scopes; the filter shows what
+/// is typed even beside the chat, under a long project name and its hidden counts.
+#[test]
+fn every_picker_hint_is_alive() {
+    use crate::ui::screen_loop::hover_walk::assert_every_hint_is_alive;
+    let color = Style { color: true, ascii: false };
+    let slugs = ["x".to_owned()];
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut make = || {
+            let first = vec![row("a", "x", 1), row("b", "x", 1), row("c", "x", 0), row("d", "x", 0)];
+            PickerScreen::new(first, None, 0, &slugs, "claude-auto-launcher", color, clock())
+        };
+        assert_every_hint_is_alive(&mut make, size, &|| 0);
+    }
+}
+
 /// The click rule over the picker at every size: one click only selects, a click on no target
 /// (a border, the chat column, past the frame) changes nothing.
 #[test]

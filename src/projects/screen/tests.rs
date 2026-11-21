@@ -165,6 +165,30 @@ fn every_clickable_region_of_the_project_screen_hovers_and_never_selects() {
     assert_every_region_hovers(&mut s, (130, 40));
 }
 
+/// Every footer hint of the project list is alive at every size; the filter shows what is typed
+/// beside a title full of counts.
+#[test]
+fn every_project_hint_is_alive() {
+    use crate::ui::screen_loop::hover_walk::assert_every_hint_is_alive;
+    let f = fx();
+    let c = clock;
+    let saves = std::cell::Cell::new(0);
+    let save = |_: &str, _: HideChange| -> Result<(), String> {
+        saves.set(saves.get() + 1);
+        Ok(())
+    };
+    let hiding = Hiding {
+        paths: RefCell::new(vec![f.beta.clone()]),
+        pinned: RefCell::new(vec![f.alpha.clone()]),
+        save: &save,
+    };
+    let color = Style { color: true, ascii: false };
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut make = || ProjectScreen::new(&f.projects, &f.cwd, "new", color, &c).with_hiding(Some(&hiding));
+        assert_every_hint_is_alive(&mut make, size, &|| saves.get());
+    }
+}
+
 /// The click rule over the project list and the navigator at every size: one click only
 /// selects, a click on no target (a border, the context column, past the frame) changes nothing.
 #[test]

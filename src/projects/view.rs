@@ -186,7 +186,8 @@ fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
     if !v.notice.is_empty() {
         return format!("project{} {d} {}", filter.unwrap_or_default(), clean_text(v.notice));
     }
-    let mut t = format!("project {d} {known} known");
+    // The filter leads: a narrow list panel cuts the title's tail, never what is typed.
+    let mut t = format!("project{} {d} {known} known", filter.unwrap_or_default());
     let worktrees = v.projects.iter().filter(|p| p.worktree.is_some()).count();
     for (n, what) in [(v.pinned.len(), "pinned"), (hidden, "hidden"), (worktrees, "worktrees")] {
         if n > 0 {
@@ -196,7 +197,7 @@ fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
     if !v.marked.is_empty() {
         t = format!("{t} {d} {} hidden listed", v.marked.len());
     }
-    t + &filter.unwrap_or_default()
+    t
 }
 
 /// A project or cwd row's label: the name with its pin, worktree and hidden or missing marks.

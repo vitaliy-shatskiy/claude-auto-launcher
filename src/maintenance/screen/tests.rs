@@ -552,6 +552,52 @@ fn launch_view(color: Style) -> crate::launch::screen::LaunchView {
     }
 }
 
+/// Every footer hint of maintenance, the rows editor and the launch screen is alive at every size.
+#[test]
+fn every_compact_screen_hint_is_alive() {
+    use crate::ui::screen_loop::hover_walk::assert_every_hint_is_alive;
+    let color = Style { color: true, ascii: false };
+    let actions = reindex();
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut make = || {
+            let ops = Box::leak(Box::new(FakeOps {
+                log: Rc::new(RefCell::new(Log::default())),
+                exit_code: 0,
+            }));
+            MaintScreen::new(ops, &actions, color)
+        };
+        assert_every_hint_is_alive(&mut make, size, &|| 0);
+        let mut make = || {
+            let mut r = RowsEditor::new(
+                &RowsConfig {
+                    rows: Some(vec![RowName::Account, RowName::Effort, RowName::Mode]),
+                    ..RowsConfig::default()
+                },
+                color,
+            );
+            *r.cursor() = Cursor::at(1);
+            r
+        };
+        assert_every_hint_is_alive(&mut make, size, &|| 0);
+        let opened: &'static std::cell::Cell<usize> = Box::leak(Box::new(std::cell::Cell::new(0)));
+        let view: &'static _ = Box::leak(Box::new(launch_view(color)));
+        let prefs: &'static _ = Box::leak(Box::new(crate::prefs::Prefs::default()));
+        // A launch screen borrows its roster and hook mutably: each hint gets fresh ones (leaked,
+        // a test's few bytes).
+        let mut make = || {
+            let roster = Box::leak(Box::new(crate::launch::tests::four()));
+            let hook: &'static mut crate::launch::screen::OnKey<'static> = Box::leak(Box::new(|k: &KeyPress, _: &mut dyn Term| {
+                let hit = crate::input::is_hotkey(k, 'u');
+                opened.set(opened.get() + usize::from(hit));
+                hit
+            }));
+            let st = roster.new_state();
+            crate::launch::screen::LaunchScreen::new(roster, st, view, prefs, 0, hook)
+        };
+        assert_every_hint_is_alive(&mut make, size, &|| opened.get());
+    }
+}
+
 /// The click rule over every compact screen at every size: a first click only selects, a click
 /// on no target (a border, the column beside, past the frame) changes nothing.
 #[test]

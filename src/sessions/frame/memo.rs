@@ -44,6 +44,7 @@ pub(super) fn memo_key(v: &PickerView<'_>) -> u64 {
         v.style.ascii,
         v.index,
         v.filter,
+        v.typing,
         v.scope,
         v.project_name,
     )

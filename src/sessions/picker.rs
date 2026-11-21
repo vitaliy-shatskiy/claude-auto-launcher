@@ -378,6 +378,7 @@ impl Screen for PickerScreen<'_> {
             sessions: &pool,
             index: usize::try_from(self.cursor.index).unwrap_or(0),
             filter: &self.filter,
+            typing: self.cursor.typing,
             width: size.0,
             height: size.1,
             clock: self.clock,

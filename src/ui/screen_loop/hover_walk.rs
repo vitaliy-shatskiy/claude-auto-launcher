@@ -1,11 +1,11 @@
-//! Test-only: walks every clickable region of a screen's row map (row labels, value cells, footer
-//! buttons) through the loop's own mouse path and proves a hover paints and never selects.
+//! Test-only walks over a screen through the loop's own paths: a hover paints and never selects,
+//! a first click only selects, a click on no target does nothing, every footer hint is alive.
 
 use std::collections::VecDeque;
 
-use super::{Cursor, Guards, MouseStep, Screen, mouse};
+use super::{Cursor, Flow, Guards, MouseStep, Screen, mouse};
 use crate::frame::Frame;
-use crate::input::MouseEvent;
+use crate::input::{MouseEvent, synthetic_key};
 use crate::theme::{ACCENT_BG, BUTTON_BG};
 use crate::ui::PreviewTerm;
 
@@ -88,6 +88,54 @@ pub(crate) fn assert_every_region_hovers<S: Screen>(screen: &mut S, size: (usize
         );
     }
     *screen.cursor() = Cursor::at(index);
+}
+
+/// What a filter hint's probe types: a filter that hides what is typed is a dead filter.
+const FILTER_PROBE: &str = "qz";
+
+fn plain(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|l| crate::theme::remove_ansi_color(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Panics naming the first clickable footer hint whose key, on a fresh screen from `make`, neither
+/// ends the screen, nor changes the frame, nor moves `effects` (a count of what the screen's
+/// callbacks did: a nested screen opened, a config write). A `filter` hint must also show what is
+/// typed after it. The guard against functionality silently lost from a screen.
+pub(crate) fn assert_every_hint_is_alive<S: Screen>(make: &mut dyn FnMut() -> S, size: (usize, usize), effects: &dyn Fn() -> usize) {
+    let mut term = PreviewTerm::new(size, VecDeque::new(), false);
+    let mut first = make();
+    let name = first.name();
+    first.before();
+    let spans = first.draw(size).map.footer;
+    assert!(!spans.is_empty(), "{name} has no footer button");
+    for span in spans {
+        let what = format!("{name}: the hint `{}{}`", span.key, span.ch.map(String::from).unwrap_or_default());
+        let mut s = make();
+        s.before();
+        let base = s.draw(size);
+        let before = effects();
+        if let Flow::Done(_) = super::handle_key(&mut s, &mut term, &synthetic_key(&span.key, span.ch)) {
+            continue;
+        }
+        s.before();
+        let after = s.draw(size);
+        assert!(
+            after.lines != base.lines || effects() != before,
+            "{what} is dead: its key changed nothing"
+        );
+        if span.ch == Some('/') {
+            for c in FILTER_PROBE.chars() {
+                let _ = super::handle_key(&mut s, &mut term, &crate::input::KeyPress::char(c));
+                s.before();
+            }
+            let typed = plain(&s.draw(size).lines);
+            assert!(typed.contains(FILTER_PROBE), "{what} hides what is typed:\n{typed}");
+        }
+    }
 }
 
 fn press(x: i32, y: i32) -> MouseEvent {
