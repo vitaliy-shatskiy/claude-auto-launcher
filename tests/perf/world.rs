@@ -20,7 +20,7 @@ use claude_auto::sessions::{PickerRequest, run_picker};
 use claude_auto::ui::{PreviewTerm, Shown, parse_preview_keys};
 
 /// Bump on any change to what `build` writes: an older world on disk is then rebuilt.
-const VERSION: &str = "perf-world-v3";
+const VERSION: &str = "perf-world-v4";
 /// The terminal the frame paths render at.
 pub(crate) const SIZE: (usize, usize) = (250, 68);
 const SLUGS: usize = 7;
@@ -150,13 +150,30 @@ fn build(w: &World, dir: &Path) -> io::Result<()> {
     std::fs::write(dir.join("done"), VERSION)
 }
 
+/// Every world root is this many characters long, wherever the checkout is: the summary cache
+/// holds each session's path and each slug spells its project's path, so the bytes written grew
+/// with the target dir's path (a checkout 26 characters deeper wrote 5.4 KB more and failed).
+/// Short enough that the deepest transcript path stays under `MAX_PATH`.
+const ROOT_LEN: usize = 88;
+
+/// The world's root under `base`, padded to `ROOT_LEN`; an error when `base` is too long for it.
+fn root_in(base: &Path) -> io::Result<PathBuf> {
+    let name = format!("cap-{VERSION}-");
+    let used = base.to_string_lossy().chars().count() + 1 + name.len();
+    let pad = ROOT_LEN.checked_sub(used).ok_or_else(|| {
+        io::Error::other(format!(
+            "{} leaves no room for a {ROOT_LEN}-character world root: build from a shorter path",
+            base.display()
+        ))
+    })?;
+    Ok(base.join(format!("{name}{}", "x".repeat(pad))))
+}
+
 /// The world under `base` (the cargo target's `tmp`), built on first use and kept for later runs:
 /// it never changes, so every reader shares it. Built under a private name and renamed into place:
 /// two builders race safely, the loser uses the winner's copy.
 pub(crate) fn world(base: &Path) -> io::Result<World> {
-    let w = World {
-        root: base.join(format!("claude-auto-{VERSION}")),
-    };
+    let w = World { root: root_in(base)? };
     let ready = |r: &Path| std::fs::read_to_string(r.join("done")).is_ok_and(|v| v == VERSION);
     if !ready(&w.root) {
         let tmp = base.join(format!("claude-auto-{VERSION}.{}.tmp", std::process::id()));
