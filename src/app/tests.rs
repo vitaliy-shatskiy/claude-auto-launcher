@@ -129,6 +129,44 @@ fn on_demand_enter_skips_project_screen() {
     );
 }
 
+/// An unregistered cwd once scoped the picker to the whole account filtered by its leaf name:
+/// every page was read (149 pages, 5.5 s) to find none of its rows.
+#[test]
+fn an_unregistered_directory_scopes_sessions_to_its_own_transcript_folder() {
+    let mut s = LaunchState::fresh("work");
+    screens::start_in_cwd(&mut s, Path::new(r"C:\Users\x\Desktop"), &[]);
+    assert_eq!(
+        screens::session_slugs(&s),
+        ["C--Users-x-Desktop"],
+        "Claude Code's folder for that directory"
+    );
+    s.project_slugs = vec!["C--here".into(), String::new(), "C--here-alt".into()];
+    assert_eq!(
+        screens::session_slugs(&s),
+        ["C--here", "C--here-alt"],
+        "a registered one keeps its slugs"
+    );
+    let none = LaunchState::fresh("work");
+    assert!(screens::session_slugs(&none).is_empty(), "no project = the whole account");
+}
+
+/// `continue` checks the session `claude -c` attaches to by the same folder rule as the picker.
+#[test]
+fn continue_in_an_unregistered_directory_checks_its_own_newest_session() {
+    let root = std::env::temp_dir().join(format!("claude-auto-rs-cont-{}", crate::log::new_run_id()));
+    let cwd = root.join("Desk top");
+    let own = root
+        .join("projects")
+        .join(crate::plugins::projects::claude_slug(&cwd.to_string_lossy()));
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("mine-1.jsonl"), "{}").unwrap();
+    let mut s = LaunchState::fresh("work");
+    screens::start_in_cwd(&mut s, &cwd, &[]);
+    let id = crate::sessions::holder::continue_session_id(&root.join("projects"), &screens::session_slugs(&s), &[]);
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(id, "mine-1", "the cwd's own transcript is the one checked");
+}
+
 #[test]
 fn mouse_false_arms_nothing() {
     assert!(!screens::mouse_armed(false, None), "config mouse false");

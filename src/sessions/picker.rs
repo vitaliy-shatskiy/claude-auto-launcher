@@ -417,7 +417,7 @@ impl Screen for PickerScreen<'_> {
         if self.chat.as_mut().is_some_and(ChatPane::idle) || self.take_landed() || self.refresh_live() {
             return true;
         }
-        if self.fetch.is_none() || self.bucket().exhausted || self.resumable_count >= self.want {
+        if self.fetch.is_none() || self.bucket().exhausted || self.resumable_count >= self.want.max(self.fill_rows) {
             return false;
         }
         self.expand();
@@ -441,9 +441,8 @@ impl Screen for PickerScreen<'_> {
                 self.expand();
             }
         }
-        if self.fill_rows > 0 {
-            self.fill_to(self.fill_rows);
-        }
+        // No `fill_to` here: `before` runs ahead of every frame, and a scope whose rows sit far
+        // down the list (none at all in 149 pages, 5.5 s) held the first frame. Idle polls fill it.
         let bucket = match self.scope {
             PickerScope::Project => &mut self.project,
             PickerScope::All => &mut self.all,

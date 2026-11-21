@@ -299,10 +299,7 @@ pub(super) fn run_ui(
             }
         };
         let mode = launch_mode(&state.action);
-        let mut slugs: Vec<String> = state.project_slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
-        if slugs.is_empty() && !state.project_slug.is_empty() {
-            slugs.push(state.project_slug.clone());
-        }
+        let slugs = session_slugs(&state);
         let sessions_root = sessions::sessions_root(&run.cfg, &state.account);
         if mode.is_some_and(|m| m.attaches_newest) {
             let holder = {
@@ -516,6 +513,21 @@ pub(super) fn start_in_cwd(state: &mut LaunchState, cwd: &Path, projects: &[proj
     state.project = cwd.to_string_lossy().into_owned();
     state.project_slugs = projects::slugs_for_path(projects, &state.project);
     state.project_slug = state.project_slugs.first().cloned().unwrap_or_default();
+}
+
+/// The slugs the session picker (every account's store) and the held check for `continue` scope
+/// on; empty = the whole account.
+pub(super) fn session_slugs(state: &LaunchState) -> Vec<String> {
+    let mut slugs: Vec<String> = state.project_slugs.iter().filter(|s| !s.is_empty()).cloned().collect();
+    if slugs.is_empty() && !state.project_slug.is_empty() {
+        slugs.push(state.project_slug.clone());
+    }
+    // A directory the registry does not know: its own transcript folder, never the whole account
+    // filtered by leaf name, which read every page to find none of its rows (149 pages, 5.5 s).
+    if slugs.is_empty() && !state.project.is_empty() {
+        slugs.push(crate::plugins::projects::claude_slug(&state.project));
+    }
+    slugs
 }
 
 #[expect(clippy::too_many_arguments, reason = "the outcome record is assembled once, here")]

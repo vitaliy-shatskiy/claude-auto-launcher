@@ -569,3 +569,15 @@ fn a_wide_pane_wraps_message_text_at_110_and_keeps_the_owners_at_the_right_edge(
     );
     assert!(text.last().unwrap().starts_with("  word"), "Claude's stays left");
 }
+
+#[test]
+fn the_list_takes_at_least_half_and_grows_with_no_jump() {
+    let mut last = sessions_width(119);
+    for fw in 120..=320 {
+        let lw = sessions_width(fw);
+        assert!(lw * 2 >= fw, "{fw}: the list gets {lw}, under half");
+        assert!(fw - lw <= CHAT_PANEL, "{fw}: the chat never passes its 118");
+        assert!(lw - last <= 1, "{fw}: the list jumps from {last} to {lw}");
+        last = lw;
+    }
+}

@@ -97,6 +97,10 @@ fn rows_take_the_full_summary_in_place_when_it_lands_and_the_cache_keeps_it() {
     let (feed, landed) = channel();
     let mut screen = picker(&mut fetch, landed);
     text(&mut screen);
+    assert!(
+        screen.idle(),
+        "the first idle poll fetches the end page the first frame did not wait for"
+    );
     assert!(!screen.idle(), "nothing landed yet");
     gate.send(()).unwrap();
     let batch = results.recv().unwrap();

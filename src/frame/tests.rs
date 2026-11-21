@@ -79,6 +79,24 @@ fn a_footer_too_wide_for_its_buttons_stays_one_row_and_keeps_enter_filter_and_es
         assert!(f.lines.iter().flat_map(|l| &l.spans).all(|s| s.start >= 0 && s.line == 0));
     }
 }
+
+#[test]
+fn esc_outlasts_tab_on_a_narrow_footer() {
+    // Given the session picker's hints, when only some buttons fit 55 columns
+    let hints = [
+        Hint::plain("w/s", "move"),
+        Hint::ch("/", "filter", '/'),
+        Hint::key("enter", "open", "Enter"),
+        Hint::ch("f", "fork", 'f'),
+        Hint::key("tab", "all projects", "Tab"),
+        Hint::key("esc", "back", "Escape"),
+    ];
+    let f = new_hint_footer(&hints, &glyphs(true), 55, true);
+    // then the way back stays and tab goes first.
+    let text = &f.lines.first().unwrap().text;
+    assert!(text.contains("[esc] back") && !text.contains("[tab]"), "{text}");
+}
+
 #[test]
 fn hint_color_strips_back_to_plain() {
     let f = new_hint_footer(&launch_hints(), &glyphs(false), 0, false);
