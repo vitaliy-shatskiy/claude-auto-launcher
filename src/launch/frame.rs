@@ -389,7 +389,6 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
             recent: !inp.recent.is_empty(),
         },
     );
-    let foot_n = footer.lines.len();
     let painter = |l: &str, enabled: bool| add_launch_color(l, enabled, &g, roster);
     let account = layout::limit_line(&state.account, 30, inp.style.ascii);
     let lim_inner = if wide { rw.saturating_sub(2) } else { fw.saturating_sub(2) };
@@ -398,15 +397,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let launch_need = launch_lines.len() + 2;
     let top_h = if wide { launch_need.max(lim_need) } else { launch_need };
     let right = versions(inp.version, &g);
-    // Beside the limits the launch panel is as wide as its rows and its title need, no wider: the
-    // recent list under it takes the spare width.
-    let top_lw = if wide {
-        let rows_w = launch_lines.iter().map(|l| display_width(&theme::strip_ctl(l))).max().unwrap_or(0) + 4;
-        let title_w = display_width(&cockpit::identity(&g)) + display_width(&right) + 10;
-        rows_w.max(title_w).min(lw)
-    } else {
-        lw
-    };
+    let top_lw = if wide { launch_width(&launch_lines, &right, lw, &g) } else { lw };
     let launch = Panel {
         title: cockpit::identity(&g),
         page: String::new(),
@@ -430,7 +421,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         painter: &cockpit::no_paint,
         selected: None,
     };
-    let page_rows = inp.height.saturating_sub(1 + foot_n);
+    let page_rows = inp.height.saturating_sub(1 + footer.lines.len());
     let mut lines = if wide {
         cockpit::beside(cockpit::render(&launch, inp.style), top_lw, &cockpit::render(&limits, inp.style))
     } else {
@@ -448,6 +439,14 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     };
     let lines = frame::append_footer(lines, &footer, fw, inp.style, &light, &mut map);
     Frame { lines, map }
+}
+
+/// Beside the limits the launch panel is as wide as its rows and its title need, at most `most`:
+/// the recent list under it takes the spare width.
+fn launch_width(lines: &[String], right: &str, most: usize, g: &Glyphs) -> usize {
+    let rows_w = lines.iter().map(|l| display_width(&theme::strip_ctl(l))).max().unwrap_or(0) + 4;
+    let title_w = display_width(&cockpit::identity(g)) + display_width(right) + 10;
+    rows_w.max(title_w).min(most)
 }
 
 /// The row index a recent project's line has in the row map: `RECENT_ROW + i`, past every launch row.
