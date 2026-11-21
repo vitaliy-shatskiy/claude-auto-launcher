@@ -23,6 +23,8 @@ pub enum ChatView<'a> {
 const MAX_LINES: usize = 14;
 /// A message block takes at most 3/4 of the pane, never less than this.
 const MIN_BLOCK: usize = 16;
+/// The widest a message's text wraps, however wide the pane.
+const MAX_TEXT: usize = 110;
 /// The body's inset from its label's side.
 pub(super) const INSET: usize = 2;
 
@@ -43,7 +45,8 @@ pub(super) fn chat_lines(chat: ChatView<'_>, width: usize, rows: usize, ascii: b
             Some(dim(if ascii { "updating..." } else { "updating\u{2026}" })),
         ),
     };
-    let block_w = (width * 3 / 4).max(MIN_BLOCK).min(width.saturating_sub(INSET));
+    // A wide pane keeps readable lines: text wraps at MAX_TEXT, the owner's still at the right edge.
+    let block_w = (width * 3 / 4).max(MIN_BLOCK).min(width.saturating_sub(INSET)).min(MAX_TEXT);
     let mut blocks: Vec<Vec<String>> = Vec::new();
     let mut used = 0;
     for m in msgs.iter().rev() {
