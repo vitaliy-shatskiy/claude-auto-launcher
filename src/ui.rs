@@ -409,6 +409,8 @@ pub enum Hit {
     },
     /// A list row (absolute index).
     ListRow(i32),
+    /// A line of the workspace's sessions panel (its index there).
+    SessionRow(usize),
 }
 
 /// Which footer hint a click landed on.
@@ -440,10 +442,7 @@ pub fn hit_at(map: Option<&RowMap>, x: i32, y: i32, window_top: i32) -> Hit {
     }
     let row_y = y - window_top;
     if let Some((_, rows)) = map.side.as_ref().filter(|((a, b), _)| x >= *a && x < *b) {
-        return rows.iter().find(|r| r.y == row_y).map_or(Hit::None, |r| Hit::LaunchRow {
-            row: r.index,
-            name: r.name.clone(),
-        });
+        return rows.iter().find(|r| r.y == row_y).map_or(Hit::None, |r| Hit::SessionRow(r.index));
     }
     if map.hit_x.is_some_and(|(a, b)| x < a || x >= b) {
         return Hit::None;

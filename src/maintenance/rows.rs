@@ -301,7 +301,7 @@ impl Screen for RowsEditor {
         let (row, on_value) = match hit {
             Hit::LaunchRow { row, .. } => (*row, false),
             Hit::Cell { row, value, .. } => (*row, value == VALUE_CELL),
-            Hit::None | Hit::Footer { .. } | Hit::Action { .. } | Hit::ListRow(_) => return Flow::Continue,
+            Hit::None | Hit::Footer { .. } | Hit::Action { .. } | Hit::ListRow(_) | Hit::SessionRow(_) => return Flow::Continue,
         };
         self.notice = "";
         let armed = self.clicked == Some(row);

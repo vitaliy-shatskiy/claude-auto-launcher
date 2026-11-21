@@ -11,8 +11,8 @@ use super::paths::project_key;
 use super::select::{Row, RowKind, filter_words, project_count, project_rows};
 use crate::cockpit::{self, Focus, Panel};
 use crate::frame::{
-    self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioRow, RadioSpec, RowHit, RowMap, SESSION_ROW,
-    Style, TWO_PANE_WIDTH, new_hint_footer, new_radio_row,
+    self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioRow, RadioSpec, RowHit, RowMap, Style,
+    TWO_PANE_WIDTH, new_hint_footer, new_radio_row,
 };
 use crate::launch::{LAUNCH_MODES, launch_mode, step_option};
 use crate::layout::{display_width, limit_line, limit_path, viewport};
@@ -589,14 +589,14 @@ fn sessions_page(v: &ProjectView<'_>, sel: Option<&Row>, (fw, page_rows): (usize
     Frame { lines, map }
 }
 
-/// The sessions panel's lines in the row map (`SESSION_ROW + i`) under the `facts_h` rows of the
+/// The sessions panel's lines in the row map (their index there) under the `facts_h` rows of the
 /// selected panel; `None` without a listed session.
 fn session_hits(d: Option<&Detail>, facts_h: usize, sessions_h: usize) -> Option<Vec<RowHit>> {
     let n = d?.sessions.len().min(sessions_h.saturating_sub(2));
     (n > 0).then(|| {
         (0..n)
             .map(|i| RowHit {
-                index: SESSION_ROW + i,
+                index: i,
                 name: "session".to_owned(),
                 y: i32::try_from(facts_h + 1 + i).unwrap_or(0),
                 cells: Vec::new(),

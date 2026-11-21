@@ -4,7 +4,7 @@
 //! same order.
 
 use super::LaunchScreen;
-use crate::frame::{Frame, SESSION_ROW};
+use crate::frame::Frame;
 use crate::input::{KeyPress, vk};
 use crate::launch::LaunchState;
 use crate::launch::frame::HomePanel;
@@ -128,8 +128,7 @@ impl<'a> LaunchScreen<'a> {
 
     /// The second click on the session a click selected resumes it.
     pub(super) fn session_activate(&mut self, hit: &Hit) -> Option<Flow<LaunchState>> {
-        let Hit::LaunchRow { row, .. } = hit else { return None };
-        let i = row.checked_sub(SESSION_ROW)?;
+        let Hit::SessionRow(i) = *hit else { return None };
         let selected =
             matches!(self.home_focus(), Some(HomeFocus::Sessions(_))) && usize::try_from(self.session_cursor.index).ok() == Some(i);
         selected.then(|| self.resume(false))
@@ -167,9 +166,9 @@ impl<'a> LaunchScreen<'a> {
                 let f = self.home.as_mut().map(|h| h.click(hit))?;
                 Some(self.list_flow(f))
             }
-            Hit::LaunchRow { row, .. } if *row >= SESSION_ROW => {
+            Hit::SessionRow(i) => {
                 self.focus_on(HomeFocus::Sessions(0));
-                self.session_cursor.index = i32::try_from(row - SESSION_ROW).unwrap_or(0);
+                self.session_cursor.index = i32::try_from(*i).unwrap_or(0);
                 Some(Flow::Continue)
             }
             Hit::LaunchRow { .. } | Hit::Cell { .. } => {

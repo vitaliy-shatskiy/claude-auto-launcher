@@ -402,7 +402,12 @@ impl Screen for ProjectScreen<'_> {
                     self.cursor.index = *r;
                 }
             }
-            Hit::None | Hit::Footer { .. } | Hit::Action { value: None } | Hit::Cell { .. } | Hit::LaunchRow { .. } => {}
+            Hit::None
+            | Hit::Footer { .. }
+            | Hit::Action { value: None }
+            | Hit::Cell { .. }
+            | Hit::LaunchRow { .. }
+            | Hit::SessionRow(_) => {}
         }
         Flow::Continue
     }

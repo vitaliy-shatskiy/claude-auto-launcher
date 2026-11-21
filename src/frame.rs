@@ -563,10 +563,6 @@ pub struct RowMap {
     pub side: Option<((i32, i32), Vec<RowHit>)>,
 }
 
-/// The row index a workspace session line has in the row map: `SESSION_ROW + i`, past every
-/// launch row.
-pub const SESSION_ROW: usize = 1000;
-
 impl RowMap {
     /// The interior of a panel `width` cells wide whose left border is at column `left`.
     pub fn panel_interior(left: usize, width: usize) -> Option<(i32, i32)> {
