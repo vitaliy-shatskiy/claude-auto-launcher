@@ -9,6 +9,15 @@ use crate::input::{MouseEvent, synthetic_key};
 use crate::theme::{ACCENT_BG, BUTTON_BG};
 use crate::ui::PreviewTerm;
 
+/// Every terminal size a screen must draw without a panic: 0 and 1 cells, each side of the
+/// minimum and of the two-column break, the common sizes, a 10000-column report; heights 0 to 40
+/// and two tall ones.
+pub(crate) fn every_size() -> impl Iterator<Item = (usize, usize)> {
+    [0, 1, 49, 50, 119, 120, 140, 211, 280, 10_000]
+        .into_iter()
+        .flat_map(|w| (0..=40).chain([72, 85]).map(move |h| (w, h)))
+}
+
 /// Whether the cell at line `y` is the selected value, drawn `[value]`: it keeps its own paint
 /// under the pointer.
 fn is_selected_cell(frame: &Frame, row: i32, cell: &crate::frame::CellSpan) -> bool {

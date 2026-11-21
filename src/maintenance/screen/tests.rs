@@ -596,7 +596,8 @@ fn every_compact_screen_hint_is_alive() {
 fn a_first_click_only_selects_and_a_stray_click_does_nothing() {
     use crate::ui::screen_loop::hover_walk::{assert_first_click_never_acts, assert_no_stray_click_acts};
     let color = Style { color: true, ascii: false };
-    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+    // The walks try every cell: 280x72 lays out as 211x52 does, at twice the cells.
+    for size in [(80, 24), (120, 30), (211, 52)] {
         let mut ops = FakeOps {
             log: Rc::new(RefCell::new(Log::default())),
             exit_code: 0,
@@ -1217,5 +1218,23 @@ fn the_panels_run_to_the_footer_at_every_size() {
             );
             assert_eq!(display_width(above), size.0 - 1, "{size:?}: every column closes there: {above}");
         }
+    }
+}
+
+/// Every size a terminal can report: the maintenance page and the rows editor draw without a panic.
+#[test]
+fn maintenance_and_the_rows_editor_draw_at_every_size() {
+    let long: Vec<String> = (1..=40).map(|i| format!("status line {i}")).collect();
+    let page = page_of(info(false, None, None), &long.join("\n"), &reindex());
+    let mut rows = RowsEditor::new(
+        &RowsConfig {
+            rows: Some(vec![RowName::Account, RowName::Effort]),
+            ..RowsConfig::default()
+        },
+        Style { color: true, ascii: false },
+    );
+    for size in crate::ui::screen_loop::hover_walk::every_size() {
+        let _ = draw(&page, size);
+        let _ = rows.draw(size);
     }
 }

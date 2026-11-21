@@ -221,11 +221,9 @@ fn row_shown(frame: &Frame, tabs: usize) -> bool {
 #[test]
 fn at_every_size_the_focused_panel_is_drawn_or_enter_does_nothing() {
     let f = fx();
-    for w in [0, 1, 50, 119, 120, 140, 211, 280, 10_000] {
-        for h in (0..=40).chain([72, 85]) {
-            for tabs in 0..3 {
-                focused_at(&f, (w, h), tabs);
-            }
+    for size in crate::ui::screen_loop::hover_walk::every_size() {
+        for tabs in 0..3 {
+            focused_at(&f, size, tabs);
         }
     }
 }
@@ -268,47 +266,52 @@ thread_local! {
 /// The click, stray-click and hint walks over the workspace on each focus.
 #[test]
 fn the_workspace_passes_the_click_and_hint_walks() {
+    // One fixture tree, view and hiding for every screen of the walk.
     let f = fx();
     let c = clock;
     let color = Style { color: true, ascii: false };
+    let v = view(true);
+    let p = crate::prefs::Prefs::default();
+    let save = |_: &str, _: HideChange| -> Result<(), String> {
+        OPENED.with(|o| o.set(o.get() + 1));
+        Ok(())
+    };
+    let hiding = Hiding {
+        paths: RefCell::new(Vec::new()),
+        pinned: RefCell::new(Vec::new()),
+        save: &save,
+    };
+    let source = || Some(list(&f, color, &c).with_hiding(Some(&hiding)));
     for size in [(120, 30), (211, 52), (280, 72)] {
         for tabs in 0..3 {
             let mut make = || {
+                // A walk step's hide or pin never carries into the next screen.
+                hiding.paths.borrow_mut().clear();
+                hiding.pinned.borrow_mut().clear();
+                // A screen holds its rows and its key hook by `&mut`: each screen gets its own
+                // (the hook captures nothing, so its box allocates nothing).
                 let roster = Box::leak(Box::new(crate::launch::tests::four()));
-                let v: &'static LaunchView = Box::leak(Box::new(view(true)));
-                let p: &'static crate::prefs::Prefs = Box::leak(Box::new(crate::prefs::Prefs::default()));
-                let hook: &'static mut crate::launch::screen::OnKey<'static> = Box::leak(Box::new(|k: &KeyPress, _: &mut dyn Term| {
+                let hook: &mut crate::launch::screen::OnKey<'_> = Box::leak(Box::new(|k: &KeyPress, _: &mut dyn Term| {
                     let hit = crate::input::is_hotkey(k, 'u');
                     OPENED.with(|o| o.set(o.get() + usize::from(hit)));
                     hit
                 }));
-                let fx: &'static Fx = Box::leak(Box::new(fx()));
-                let cl: &'static dyn Fn() -> i64 = &clock;
-                let save: &'static dyn Fn(&str, HideChange) -> Result<(), String> = &|_: &str, _: HideChange| {
-                    OPENED.with(|o| o.set(o.get() + 1));
-                    Ok(())
-                };
-                let hiding: &'static Hiding<'static> = Box::leak(Box::new(Hiding {
-                    paths: RefCell::new(Vec::new()),
-                    pinned: RefCell::new(Vec::new()),
-                    save,
-                }));
-                let source: &'static dyn Fn() -> Option<ProjectScreen<'static>> =
-                    Box::leak(Box::new(move || Some(list(fx, color, cl).with_hiding(Some(hiding)))));
                 let st = roster.new_state();
-                let mut s = LaunchScreen::new(roster, st, v, p, 0, hook).with_home(source);
+                let mut s = LaunchScreen::new(roster, st, &v, &p, 0, hook).with_home(&source);
                 let _ = s.draw(size);
                 for _ in 0..tabs {
                     let _ = s.tab();
                 }
                 s
             };
-            let mut s = make();
-            assert_no_stray_click_acts(&mut s, size);
-            let mut s = make();
-            assert_first_click_never_acts(&mut s, size);
+            // The click walks try every cell: 280x72 lays out as 211x52 does, at twice the cells.
+            if size.0 < 280 {
+                let mut s = make();
+                assert_no_stray_click_acts(&mut s, size);
+                let mut s = make();
+                assert_first_click_never_acts(&mut s, size);
+            }
             assert_every_hint_is_alive(&mut make, size, &|| OPENED.with(std::cell::Cell::get));
         }
     }
-    let _ = (&f, c);
 }

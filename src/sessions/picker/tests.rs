@@ -342,3 +342,13 @@ fn a_first_click_only_selects_and_a_stray_click_does_nothing_in_the_picker() {
         assert_first_click_never_acts(&mut s, size);
     }
 }
+
+/// Every size a terminal can report: the picker draws its list without a panic.
+#[test]
+fn the_picker_draws_at_every_size() {
+    let rows = vec![row("a", "x", 2), row("b", "y", 3)];
+    let mut s = PickerScreen::new(rows, None, 0, &[], "", style(), clock());
+    for size in crate::ui::screen_loop::hover_walk::every_size() {
+        let _ = s.draw(size);
+    }
+}
