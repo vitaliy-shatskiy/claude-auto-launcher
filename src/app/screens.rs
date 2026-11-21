@@ -150,10 +150,9 @@ pub(super) fn run_ui(
     let mut project_source = String::new();
     let mut preselect = String::new();
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
-    // The running panel; a preview reads no session state of the machine it runs on.
-    if !run.preview {
-        view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
-    }
+    // The running panel: live records only (a dead or reused pid never counts); a preview reads
+    // them too, so the screenshot walk shows the panel the owner sees.
+    view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
     // The wide launch page's projects panel, once the registry is in (plugin projects join on
     // the project page only: listing them starts their processes).
     let home_clock = now_ms;
