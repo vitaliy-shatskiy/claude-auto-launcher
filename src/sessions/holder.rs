@@ -76,19 +76,58 @@ pub(crate) fn find_holder(dirs: &[PathBuf], session_id: &str) -> Option<Holder> 
 /// `sessions\` folder: the same record twice (sharing links the folders) counts once. Stale
 /// records (a dead pid, a reused one with another start) and unreadable ones never count.
 pub(crate) fn live_ids(dirs: &[PathBuf], start_of: &dyn Fn(u32) -> Option<u64>) -> HashSet<String> {
-    let mut ids = HashSet::new();
+    live_holders(dirs, start_of).into_iter().map(|h| h.session_id).collect()
+}
+
+/// Every live record across the `sessions\` folders, one per session, oldest process first.
+pub(crate) fn live_holders(dirs: &[PathBuf], start_of: &dyn Fn(u32) -> Option<u64>) -> Vec<Holder> {
+    let mut out: Vec<Holder> = Vec::new();
     for dir in dirs {
         let Ok(rd) = std::fs::read_dir(dir) else { continue };
         for e in rd.flatten() {
             let p = e.path();
             if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("json"))
                 && let Some(h) = live_record(&p, None, start_of)
+                && !out.iter().any(|o| o.session_id == h.session_id)
             {
-                ids.insert(h.session_id);
+                out.push(h);
             }
         }
     }
-    ids
+    out.sort_by_key(|h| h.since);
+    out
+}
+
+/// The launch page's running sessions: a name (the session's, else its kind and pid), what it is
+/// doing, and how long it has run at `now_ms`.
+pub(crate) fn running_sessions(dirs: &[PathBuf], now_ms: i64) -> Vec<crate::launch::frame::RunningSession> {
+    running_from(&live_holders(dirs, &super::win::process_start), now_ms)
+}
+
+/// FILETIME (100 ns since 1601) to Unix milliseconds.
+const FILETIME_UNIX_MS: i64 = 11_644_473_600_000;
+
+fn running_from(holders: &[Holder], now_ms: i64) -> Vec<crate::launch::frame::RunningSession> {
+    holders
+        .iter()
+        .map(|h| {
+            let name = clean_text(&h.name);
+            let kind = if h.kind.is_empty() {
+                "claude".to_owned()
+            } else {
+                clean_text(&h.kind)
+            };
+            crate::launch::frame::RunningSession {
+                name: if name.is_empty() { format!("{kind} {}", h.pid) } else { name },
+                project: clean_text(&h.status),
+                age: h
+                    .since
+                    .and_then(|ft| i64::try_from(ft / 10_000).ok())
+                    .map(|ms| super::frame::relative_age(ms - FILETIME_UNIX_MS, now_ms))
+                    .unwrap_or_default(),
+            }
+        })
+        .collect()
 }
 
 /// The newest transcript of the project's own slugs that `claude -c`
@@ -287,5 +326,54 @@ mod tests {
             ..anon
         };
         assert!(!warning(&esc, 0).chars().any(char::is_control));
+    }
+
+    #[test]
+    fn running_sessions_name_each_holder_and_its_age_and_fall_back_to_kind_and_pid() {
+        // Given: two holders, one named, started 12 min and 3 h before now.
+        let now_ms = 1_789_560_000_000;
+        let ft = |mins: i64| u64::try_from((now_ms - mins * 60_000 + FILETIME_UNIX_MS) * 10_000).ok();
+        let named = Holder {
+            pid: 7,
+            session_id: "a".into(),
+            name: "claude-auto design".into(),
+            status: "busy".into(),
+            kind: "interactive".into(),
+            since: ft(12),
+        };
+        let anon = Holder {
+            pid: 9,
+            session_id: "b".into(),
+            name: String::new(),
+            status: "idle\u{7}".into(),
+            since: ft(180),
+            ..named.clone()
+        };
+        // When / then
+        let r = running_from(&[named, anon], now_ms);
+        assert_eq!(
+            (r[0].name.as_str(), r[0].project.as_str(), r[0].age.as_str()),
+            ("claude-auto design", "busy", "12 min")
+        );
+        assert_eq!(
+            (r[1].name.as_str(), r[1].project.as_str(), r[1].age.as_str()),
+            ("interactive 9", "idle", "3 h")
+        );
+    }
+
+    #[test]
+    fn live_holders_count_a_shared_record_once_oldest_first() {
+        let start_of = |pid: u32| match pid {
+            10 => Some(500),
+            11 => Some(300),
+            _ => None,
+        };
+        let t = Tmp(std::env::temp_dir().join(format!("cars-live-holders-{}", std::process::id())));
+        let (a, b) = (t.0.join("a").join("sessions"), t.0.join("b").join("sessions"));
+        put(&a.join("10.json"), &rec(10, "s-10", "500", "", "interactive"));
+        put(&b.join("10.json"), &rec(10, "s-10", "500", "", "interactive"));
+        put(&b.join("11.json"), &rec(11, "s-11", "300", "", "interactive"));
+        let ids: Vec<String> = live_holders(&[a, b], &start_of).into_iter().map(|h| h.session_id).collect();
+        assert_eq!(ids, ["s-11", "s-10"]);
     }
 }

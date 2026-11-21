@@ -83,7 +83,7 @@ pub(super) fn run_ui(
     let accounts = tm.begin(&["accounts"]);
     let rate_dir = var("CLAUDE_AUTO_RATE_LIMITS_DIR").map_or_else(|| run.ctx.home.join(".claude").join("rate-limits"), PathBuf::from);
     let defaults = label_defaults(&canonical_root, &account_dirs);
-    let view = LaunchView {
+    let mut view = LaunchView {
         limits: env::rate_limit_summary(&run.cfg.accounts, &rate_dir, now_ms()),
         version,
         default_model_label: defaults.model,
@@ -156,6 +156,10 @@ pub(super) fn run_ui(
     let mut project_source = String::new();
     let mut preselect = String::new();
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
+    // The running panel; a preview reads no session state of the machine it runs on.
+    if !run.preview {
+        view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
+    }
     let mut chosen_how: Option<String>;
     let mut rows_store = ConfigRows { run };
     // Plugin messages and warnings met on the screens, printed once the console is back.
