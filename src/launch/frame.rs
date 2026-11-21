@@ -348,7 +348,8 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let g = theme::glyphs(inp.style.ascii);
     let fw = frame::frame_width(inp.width);
     let wide = inp.width >= cockpit::TWO_COLUMNS;
-    // The facts column keeps its width; the launch and recent panels take the spare cells.
+    // A two-column grid: the facts column keeps 46 cells right of the launch and recent panels,
+    // which share one width; past the grid the terminal stays background.
     let rw = if wide { cockpit::FACTS_WIDTH.min(fw / 2) } else { 0 };
     let lw = fw - rw;
     let rows = option_rows(roster, inp, &restored, lw.saturating_sub(3), &g);
@@ -431,7 +432,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     };
     let left_over = page_rows.saturating_sub(lines.len());
     let top = lines.len();
-    lines.extend(bottom_panels(inp, wide, (lw, rw), left_over, &g));
+    lines.extend(bottom_panels(inp, wide, (top_lw, rw), left_over, &g));
     map.rows.extend(recent_hits(inp, wide, left_over, top));
     let light = FooterLight {
         hover: frame::footer_hover(&footer, state.hover),
@@ -441,8 +442,8 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     Frame { lines, map }
 }
 
-/// Beside the limits the launch panel is as wide as its rows and its title need, at most `most`:
-/// the recent list under it takes the spare width.
+/// The left column's width: what the launch rows and the title need, at most `most`; recent under
+/// it takes the same width.
 fn launch_width(lines: &[String], right: &str, most: usize, g: &Glyphs) -> usize {
     let rows_w = lines.iter().map(|l| display_width(&theme::strip_ctl(l))).max().unwrap_or(0) + 4;
     let title_w = display_width(&cockpit::identity(g)) + display_width(right) + 10;

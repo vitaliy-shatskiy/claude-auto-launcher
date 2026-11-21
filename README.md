@@ -254,7 +254,9 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
   column (limits, versions, the selected project's facts) keeps the width its facts need; a list or
   text column (recent projects, sessions, the chat, the last run's output) takes the spare width.
   The rows editor and the path navigator are one focused panel in the same frame.
-- The launch page: the launch rows in a panel as wide as they are; right beside it, in a 46-cell column, the selected account's limits, one per line
+- The launch page, a two-column grid that ends at its right column (the terminal past it stays
+  background): the launch rows in a panel as wide as they are, recent under it at the same width;
+  right of them, in a 46-cell column, the selected account's limits, one per line
   (percentage bold, yellow from 70 %, red from 90 %) and the data's age on the panel's last row;
   under them the five newest projects (keys `1`-`5`, the newest session's title from the summary
   cache dim under each), the running Claude Code sessions with their age, and Claude Code's version,

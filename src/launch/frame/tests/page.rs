@@ -46,7 +46,11 @@ fn a_160x40_page_spans_the_width_and_ends_at_its_footer() {
     assert_golden("launch-160x40", &lines.join("\n"));
     assert!(lines.len() < 20, "content height, nothing pads to the bottom: {}", lines.len());
     let recent = lines.iter().find(|l| l.contains("recent")).unwrap();
-    assert_eq!(display_width(recent), 159, "the recent row spans the frame width");
+    assert_eq!(
+        display_width(recent),
+        display_width(&lines[0]),
+        "recent and the right column end where the top row does"
+    );
     assert!(display_width(&lines[0]) < 159, "the launch row is as wide as its content");
     let last = lines.len() - 1;
     assert!(lines[last].contains("[esc] quit"), "{:?}", lines[last]);
@@ -60,7 +64,11 @@ fn a_400x150_terminal_gets_a_full_width_page_from_the_top_left() {
     assert_golden("launch-400x150", &lines.join("\n"));
     assert!(lines.len() < 20, "content height on a huge terminal too");
     let recent = lines.iter().find(|l| l.contains("recent")).unwrap();
-    assert_eq!(display_width(recent), 399, "the recent row spans the terminal from column 0");
+    assert_eq!(
+        display_width(recent),
+        display_width(&lines[0]),
+        "one grid: recent ends where the top row does"
+    );
     assert!(lines.iter().all(|l| display_width(l) <= 399), "the last column stays free");
 }
 
@@ -141,6 +149,13 @@ fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
     let big = full(&r, &real_state(&r), (280, 72), &recent, &running, &golden_limits());
     assert_golden("launch-280x72", &big.join("\n"));
     let corner = big[0].chars().position(|c| c == '\u{256E}').unwrap() + 1;
+    let at = |needle: &str| {
+        let l = big.iter().find(|l| l.contains(needle)).unwrap();
+        l.chars().count() - l.split_once(needle).unwrap().1.chars().count() - needle.chars().count()
+    };
+    assert_eq!(at("\u{256D}\u{2500} running"), corner, "running sits under limits, one column edge");
+    assert_eq!(at("\u{256D}\u{2500} limits"), corner);
+    assert!(big.iter().all(|l| display_width(l) <= corner + 46), "nothing past the grid");
     assert!(corner < 100, "the launch panel ends at its rows, not at the far column: {corner}");
     assert!(
         big[0]
