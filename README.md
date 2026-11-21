@@ -225,7 +225,7 @@ picker when you resume. `u` on the launch screen opens maintenance.
 
 | Screen | Keys |
 |---|---|
-| **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices (named in the footer only when a row was restored, marked `*`) · `enter` next (with `projectScreen: "onDemand"`: launch) · `u` maintenance · a plugin's action key · `esc` quit |
+| **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices (named in the footer only when a row was restored, marked `*`) · `enter` next (with `projectScreen: "onDemand"`: launch) · `1`-`5` (or a click on the line) continue that recent project's newest session with the choices on screen, as `c` on the project screen does · `u` maintenance · a plugin's action key · `esc` quit |
 | **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `p` pin or unpin the project on top (saved to `pinnedProjects`) · `h` hide or show the project (saved to `hiddenProjects`) · `v` list the hidden projects, marked · `esc` back one step: an open filter, then a kept filter, then the hidden view, then the launch screen |
 | **Project filter** (`/`) | type words · `↑`/`↓` move while typing · `←`/`→` the action · `enter` runs the highlighted row (`no project matches` on the current directory when nothing matches) · `esc` clears |
 | **Path navigator** (`enter a path...`) | type a path · `↑`/`↓` move · `enter` or `→` enters the folder (on `use this folder`: picks it) · `←` up one folder · `backspace` on an empty segment goes up · `ctrl+backspace` drops a segment · `tab` completes, a second `tab` cycles · `esc` back to the list |
@@ -244,13 +244,20 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
 
 - Every screen fills the whole terminal from its top-left corner, at any size, and redraws on
   resize. A size report of 0 or over 10000 cells on a side is taken as 80x25 on that side.
-- The launch screen, maintenance and the rows editor are as tall as their content: a rounded
-  header box across the width (`✻ claude-auto`, `✻ claude-auto · maintenance`), a blank row, the
-  rows, a blank row, a dim rule and the key footer; nothing fills the rest of the terminal. On the
-  launch screen the box's right end holds the Claude Code version and the account's limits
-  (`v2.1.330   5h 4% · 7d 96% · fable 24% · 5 h ago`, coloured by level, the age dim); a narrow
-  terminal drops the limits first, then the version. The project screen, the session picker and
-  the path navigator keep their full-terminal page frame.
+- The launch screen, maintenance, the project screen and the session picker share one frame:
+  rounded panels side by side, each titled in its top border, one key footer line under them. The
+  panel the keys move in carries `✻ claude-auto ─ <page>` (just `✻ claude-auto` on the launch
+  screen) and the versions at its right end, in the accent colour; the other panels have a dim
+  border. Panel interiors are tinted, the focused one lighter (24-bit colour where the terminal
+  reports it, `COLORTERM` or Windows Terminal, else the nearest 256 colours; no tints in ASCII). The
+  selected row is filled and bold with `❯` at its left. Under 120 columns the panels stack.
+- The launch page: the launch rows; beside them the selected account's limits, one per line
+  (percentage bold, yellow from 70 %, red from 90 %) and the data's age on the panel's last row;
+  under them the five newest projects (keys `1`-`5`, the path or the last session under each), the
+  running Claude Code sessions with their age, and Claude Code's version and warnings. Panels with
+  items stretch to the footer; with no recent project and nothing running they shrink to their
+  empty-state lines. Under 110 columns the footer words shorten and `ctrl+r`, then `w/s`, give way
+  so it stays one line. The rows editor and the path navigator keep their own frames.
 - The pointer paints whatever it is over (a row label, a value, an action row, a footer key) and
   never selects it; a click or a key moves the selection.
 - Warnings (an unknown config key, a plugin that failed to describe) are listed on the maintenance
@@ -268,12 +275,14 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
 
 ### Maintenance
 
-One column of groups: Claude Code (its version and whether it is the newest, the builds on disk
-and their size), Checks, claude-auto (its version and self-update; `update`, `roll back` when
-offered), Launcher, Custom (configured actions), Warnings (with where to fix them). A group's
-facts sit on its title line, dim, the status word coloured; a group with no action is left out,
-Warnings always shows. Each action row is its key and name; a right-aligned column, ending under
-the header's right edge, holds the selected row's short hint or the action's live state: its step
+The focused panel lists the actions in groups: Claude Code, Checks, claude-auto (`update`,
+`roll back` when offered), Launcher, Custom (configured actions); a group with no action is left
+out. Beside it (under it below 120 columns): the last run (the tail of its report and done or
+failed), the versions (installed, newest, the builds on disk and their size, claude-auto and its
+self-update) and the warnings, each labelled `warning` or `error`, with where to fix them; no
+warning, no panel. Stacked, the Claude Code and claude-auto titles carry their facts instead of a
+versions panel. Each action row is its key and name; a right-aligned column, ending 2 cells before
+the panel's border, holds the selected row's short hint or the action's live state: its step
 within a second (what the command last printed, the seconds so far), then the first line of its
 report in green or `failed: <reason>` in red; `m` ends with `N of M connected`. `p` asks for a
 second press.
@@ -288,7 +297,9 @@ file path is refused.
 
 Left out and counted in the title: scratch directories (under the temp folder or an account root's
 `jobs\<id>\tmp`), and a project only headless sessions (`claude -p`, the SDKs) ever ran in, a git
-root included (`hideHeadlessProjects`). The action opens at `new` every launch.
+root included (`hideHeadlessProjects`). The action opens at `new` every launch. The list panel's
+title counts the known, pinned, hidden and worktree projects; from 120 columns the selected
+project (its path and how long ago it ran) and the action field sit in their own panels beside it.
 
 Search (`/`): space-separated words must all match; a pasted path (`C:\src\x`, a UNC path) matches
 as typed. Name starts with a word first, then name contains it, then path; a pin only breaks ties;
