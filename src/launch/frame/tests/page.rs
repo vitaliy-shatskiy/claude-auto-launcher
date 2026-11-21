@@ -45,7 +45,9 @@ fn a_160x40_page_spans_the_width_and_ends_at_its_footer() {
     let (f, lines) = page(&r, &real_state(&r), (160, 40));
     assert_golden("launch-160x40", &lines.join("\n"));
     assert!(lines.len() < 20, "content height, nothing pads to the bottom: {}", lines.len());
-    assert_eq!(display_width(&lines[0]), 159, "the header box spans the frame width");
+    let recent = lines.iter().find(|l| l.contains("recent")).unwrap();
+    assert_eq!(display_width(recent), 159, "the recent row spans the frame width");
+    assert!(display_width(&lines[0]) < 159, "the launch row is as wide as its content");
     let last = lines.len() - 1;
     assert!(lines[last].contains("[esc] quit"), "{:?}", lines[last]);
     assert_eq!(f.map.footer_y, Some(i32::try_from(last).unwrap()), "the footer's clicks follow it");
@@ -57,7 +59,8 @@ fn a_400x150_terminal_gets_a_full_width_page_from_the_top_left() {
     let (_, lines) = page(&r, &real_state(&r), (400, 150));
     assert_golden("launch-400x150", &lines.join("\n"));
     assert!(lines.len() < 20, "content height on a huge terminal too");
-    assert_eq!(display_width(&lines[0]), 399, "the header box spans the terminal from column 0");
+    let recent = lines.iter().find(|l| l.contains("recent")).unwrap();
+    assert_eq!(display_width(recent), 399, "the recent row spans the terminal from column 0");
     assert!(lines.iter().all(|l| display_width(l) <= 399), "the last column stays free");
 }
 
@@ -135,6 +138,18 @@ fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
     let wide = full(&r, &real_state(&r), (130, 40), &recent, &running, &golden_limits());
     assert_golden("launch-130x40", &wide.join("\n"));
     assert_eq!(wide.len(), 39, "lists with items stretch the panels to the footer");
+    let big = full(&r, &real_state(&r), (280, 72), &recent, &running, &golden_limits());
+    assert_golden("launch-280x72", &big.join("\n"));
+    let corner = big[0].chars().position(|c| c == '\u{256E}').unwrap() + 1;
+    assert!(corner < 100, "the launch panel ends at its rows, not at the far column: {corner}");
+    assert!(
+        big[0]
+            .chars()
+            .skip(corner)
+            .collect::<String>()
+            .starts_with("\u{256D}\u{2500} limits"),
+        "limits right beside it"
+    );
     assert_golden(
         "launch-80x24",
         &full(&r, &real_state(&r), (80, 24), &recent, &running, &golden_limits()).join("\n"),

@@ -325,7 +325,6 @@ fn the_limits_panel_shows_the_selected_account_one_limit_per_line_and_the_age_la
         let n = f.lines[i].chars().count();
         f.lines[i].chars().skip(n - crate::cockpit::FACTS_WIDTH).collect::<String>()
     };
-    assert_eq!(display_width(&wide.lines[1]), 159);
     let first = right(&wide, 1);
     assert!(first.starts_with("\u{2502}  5h ") && first.ends_with(" 41%  \u{2502}"), "{first}");
     assert!(right(&wide, 2).contains("7d") && right(&wide, 3).contains("15%"));

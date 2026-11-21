@@ -132,6 +132,9 @@ fn pin_last(mut lines: Vec<String>, last: String, height: usize) -> Vec<String> 
     lines
 }
 
+/// The widest a recent row is laid out (the chat's 110-cell text and its insets).
+const RECENT_TEXT: usize = 114;
+
 /// Recent projects: key, name and age, the last session's title dim under it; one line each when
 /// `two_line` is off.
 fn recent_lines(inp: &LaunchFrameInput<'_>, inner: usize, rows: usize, two_line: bool, hover: Option<usize>) -> Vec<String> {
@@ -149,6 +152,8 @@ fn recent_lines(inp: &LaunchFrameInput<'_>, inner: usize, rows: usize, two_line:
         ];
     }
     let per = if two_line { 2 } else { 1 };
+    // On a wide page the age stays near its name: rows are laid out in at most RECENT_TEXT cells.
+    let inner = inner.min(RECENT_TEXT);
     let mut out = Vec::new();
     for (i, p) in recent.iter().take((rows / per).min(5)).enumerate() {
         let age = cockpit::dim(&p.age);
@@ -392,13 +397,23 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let lim_need = lims.len() + usize::from(!age.is_empty()) + 2;
     let launch_need = launch_lines.len() + 2;
     let top_h = if wide { launch_need.max(lim_need) } else { launch_need };
+    let right = versions(inp.version, &g);
+    // Beside the limits the launch panel is as wide as its rows and its title need, no wider: the
+    // recent list under it takes the spare width.
+    let top_lw = if wide {
+        let rows_w = launch_lines.iter().map(|l| display_width(&theme::strip_ctl(l))).max().unwrap_or(0) + 4;
+        let title_w = display_width(&cockpit::identity(&g)) + display_width(&right) + 10;
+        rows_w.max(title_w).min(lw)
+    } else {
+        lw
+    };
     let launch = Panel {
         title: cockpit::identity(&g),
         page: String::new(),
-        right: versions(inp.version, &g),
+        right,
         focus: Focus::Focused,
         lines: launch_lines,
-        width: lw,
+        width: top_lw,
         height: top_h,
         painter: &painter,
         selected,
@@ -417,7 +432,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     };
     let page_rows = inp.height.saturating_sub(1 + foot_n);
     let mut lines = if wide {
-        cockpit::beside(cockpit::render(&launch, inp.style), lw, &cockpit::render(&limits, inp.style))
+        cockpit::beside(cockpit::render(&launch, inp.style), top_lw, &cockpit::render(&limits, inp.style))
     } else {
         let mut l = cockpit::render(&launch, inp.style);
         l.extend(cockpit::render(&limits, inp.style));
