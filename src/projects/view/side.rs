@@ -11,8 +11,15 @@ use crate::projects::select::{Row, RowKind};
 use crate::theme::{self, Glyphs};
 
 /// The selected project's sessions; on the launch page with the sessions focused, the identity
-/// and the selected row's fill.
-pub(super) fn sessions_panel<'p>(lines: Vec<String>, width: usize, height: usize, home: Option<Home>, g: &Glyphs) -> Panel<'p> {
+/// and the selected row's fill. A placeholder (`loading…`, `no sessions yet`) is no row to select.
+pub(super) fn sessions_panel<'p>(
+    lines: Vec<String>,
+    d: Option<&Detail>,
+    (width, height): (usize, usize),
+    home: Option<Home>,
+    g: &Glyphs,
+) -> Panel<'p> {
+    let listed = d.map_or(0, |d| d.sessions.len().min(lines.len()));
     let mut p = Panel::plain("sessions", lines, width, height);
     if let Some(Home {
         focus: HomeFocus::Sessions(i),
@@ -22,7 +29,10 @@ pub(super) fn sessions_panel<'p>(lines: Vec<String>, width: usize, height: usize
         p.title = cockpit::identity(g);
         "sessions".clone_into(&mut p.page);
         p.focus = Focus::Focused;
-        let at = i.min(p.lines.len().saturating_sub(1));
+        if listed == 0 {
+            return p;
+        }
+        let at = i.min(listed - 1);
         // The cursor mark as on every list: the fill alone is lost without colour.
         if let Some(line) = p.lines.get_mut(at)
             && let Some(rest) = line.strip_prefix("  ")
@@ -103,7 +113,7 @@ pub(super) fn sessions_page(
 ) -> Frame {
     let detail = v.detail.filter(|d| sel.is_some_and(|r| d.key == project_key(&r.path)));
     let listed = session_lines(sel, detail, v, fw.saturating_sub(2), page_rows.saturating_sub(2), g);
-    let lines = cockpit::render(&sessions_panel(listed, fw, page_rows, v.home, g), v.style);
+    let lines = cockpit::render(&sessions_panel(listed, detail, (fw, page_rows), v.home, g), v.style);
     let mut map = RowMap {
         hit_x: RowMap::panel_interior(0, fw),
         side: session_hits(detail, 0, page_rows).and_then(|rows| Some((RowMap::panel_interior(0, fw)?, rows))),

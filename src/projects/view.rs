@@ -383,7 +383,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         let mut right = cockpit::render(&Panel::plain(&title, facts, rw, facts_h), v.style);
         let sessions_h = page_rows.saturating_sub(facts_h);
         let listed = session_lines(sel, detail, v, rw.saturating_sub(2), sessions_h.saturating_sub(2), &g);
-        right.extend(cockpit::render(&sessions_panel(listed, rw, sessions_h, v.home, &g), v.style));
+        right.extend(cockpit::render(&sessions_panel(listed, detail, (rw, sessions_h), v.home, &g), v.style));
         lines = cockpit::beside(lines, lw, &right);
         if v.home.is_some() {
             side = session_hits(detail, facts_h, sessions_h).map(|rows| (RowMap::panel_interior(lw, rw), rows));

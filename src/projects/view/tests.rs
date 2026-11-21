@@ -242,6 +242,38 @@ fn no_sessions_and_loading_say_so() {
 }
 
 #[test]
+fn a_focused_sessions_panel_marks_no_placeholder_line() {
+    let ps = golden_projects();
+    let empty = Detail {
+        key: project_key(&ps[0].path),
+        ..Detail::default()
+    };
+    let full = sample_detail(&ps[0].path);
+    let home = Some(Home {
+        focus: HomeFocus::Sessions(0),
+        left_width: 60,
+    });
+    // The right column only: the list beside it marks its own cursor.
+    let frame = |d: Option<&Detail>| {
+        plain(&project_frame(&ProjectView {
+            detail: d,
+            home,
+            ..view(&ps, 1, r"C:\Users\sample\here", 130, 40)
+        }))
+        .iter()
+        .map(|l| l.chars().skip(60).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+    };
+    for (d, placeholder) in [(Some(&empty), "no sessions yet"), (None, "loading\u{2026}")] {
+        let f = frame(d);
+        assert!(f.contains(&format!("  {placeholder}")), "{placeholder} keeps its indent:\n{f}");
+        assert!(!f.contains('\u{276F}'), "{placeholder} is no selected row:\n{f}");
+    }
+    assert!(frame(Some(&full)).contains('\u{276F}'), "a listed session is marked");
+}
+
+#[test]
 fn golden_project_200x60_fills_the_terminal() {
     let ps = golden_projects();
     let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", 200, 60));
