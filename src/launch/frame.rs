@@ -34,6 +34,8 @@ pub struct LaunchFrameInput<'a> {
     pub warnings: usize,
     /// Newest first; keys 1-5 continue the first five.
     pub recent: &'a [RecentProject],
+    /// The registry is still being read: the empty recent panel says so instead of "none yet".
+    pub recent_loading: bool,
     pub running: &'a [RunningSession],
 }
 
@@ -130,7 +132,14 @@ fn pin_last(mut lines: Vec<String>, last: String, height: usize) -> Vec<String> 
 
 /// Recent projects: key, name and age, the last session's title dim under it; one line each when
 /// `two_line` is off.
-fn recent_lines(recent: &[RecentProject], inner: usize, rows: usize, two_line: bool, ascii: bool, hover: Option<usize>) -> Vec<String> {
+fn recent_lines(inp: &LaunchFrameInput<'_>, inner: usize, rows: usize, two_line: bool, hover: Option<usize>) -> Vec<String> {
+    let (recent, ascii) = (inp.recent, inp.style.ascii);
+    if recent.is_empty() && inp.recent_loading {
+        return vec![format!(
+            "  {}",
+            cockpit::dim(&format!("loading recent projects{}", layout::ellipsis(ascii)))
+        )];
+    }
     if recent.is_empty() {
         return vec![
             format!("  {}", cockpit::dim("no recent projects yet")),
@@ -468,12 +477,12 @@ fn bottom_panels(inp: &LaunchFrameInput<'_>, wide: bool, (lw, rw): (usize, usize
             return Vec::new();
         }
         let rh = if inp.recent.is_empty() { 4.min(left_over) } else { left_over };
-        let lines = recent_lines(inp.recent, lw - 2, rh - 2, false, style.ascii, hover);
+        let lines = recent_lines(inp, lw - 2, rh - 2, false, hover);
         return cockpit::render(&Panel::plain("recent", lines, lw, rh), style);
     }
     let status_h = STATUS_HEIGHT;
     let bh = bottom_height(inp, left_over);
-    let recent = Panel::plain("recent", recent_lines(inp.recent, lw - 2, bh - 2, true, style.ascii, hover), lw, bh);
+    let recent = Panel::plain("recent", recent_lines(inp, lw - 2, bh - 2, true, hover), lw, bh);
     let running = Panel::plain(
         "running",
         running_lines(inp.running, rw - 2, bh - status_h - 2, g),

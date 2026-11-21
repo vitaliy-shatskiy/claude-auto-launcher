@@ -177,12 +177,11 @@ impl<'a> LaunchScreen<'a> {
 
     /// `true` when the recent projects just arrived.
     fn take_recent(&mut self) -> bool {
-        if !self.view.recent.is_empty() {
-            return false;
-        }
         let Some(list) = self.recent.and_then(|s| s()) else { return false };
+        // Answered: the source is done with, and the panel stops saying it is loading.
+        self.recent = None;
         self.view.recent = list;
-        !self.view.recent.is_empty()
+        true
     }
 
     /// The launcher's own update check behind the screen.
@@ -300,6 +299,7 @@ impl Screen for LaunchScreen<'_> {
             notice: notice.as_deref(),
             warnings: self.warnings,
             recent: &self.view.recent,
+            recent_loading: self.recent.is_some(),
             running: &self.view.running,
             default_model_label: &self.view.default_model_label,
             default_advisor_label: &self.view.default_advisor_label,
@@ -521,6 +521,27 @@ mod tests {
         });
         let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), [press]);
         assert_eq!(run(&mut s, &mut t).unwrap().unwrap().picked, Some(2));
+    }
+
+    #[test]
+    fn the_recent_panel_says_loading_until_the_registry_answers() {
+        let mut r = four();
+        let v = view();
+        let p = Prefs::default();
+        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+        let answer = std::cell::RefCell::new(None);
+        let source = || answer.borrow().clone();
+        let st = r.new_state();
+        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook).with_recent(&source);
+        let text = |s: &mut LaunchScreen<'_>| s.draw((130, 40)).lines.join("\n");
+        assert!(text(&mut s).contains("loading recent projects"));
+        assert!(!s.idle(), "no answer yet: nothing to redraw");
+        *answer.borrow_mut() = Some(Vec::new());
+        assert!(s.idle(), "the answer redraws");
+        assert!(
+            text(&mut s).contains("no recent projects yet"),
+            "an empty answer is the empty state"
+        );
     }
 
     fn r_state() -> LaunchState {
