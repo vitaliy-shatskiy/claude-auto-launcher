@@ -14,9 +14,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   age on the panel's last row, recent projects, running sessions and Claude Code's state;
   maintenance shows the last run, the versions and the warnings beside its actions; the project
   screen shows the selected project and the action beside its list; the picker's chat preview is
-  its own panel. The rows editor and the path navigator keep their frames.
-- The rows editor is back to content height under a rounded header box; no empty page frame
-  fills the terminal.
+  its own panel. The rows editor and the path navigator are one focused cockpit panel each.
+- Project screen beside the list (from 120 columns): the list panel takes what its rows need (full
+  paths, at most 60 % of the width), the action field closes it on one line, and the right column
+  shows the selected project's path, git branch, session count and newest session, then its
+  sessions newest first with a green dot on a running one, from the summary cache off the UI thread.
+- Launch: the limits, running and Claude Code column keeps 46 cells, the launch and recent panels
+  take the rest; recent projects show their newest session's title, never the path; the Claude Code
+  panel names the last maintenance MCP check and its age when one is stored.
+- Maintenance: a hint too long for its row, and in a short stacked window the last run's state, go
+  on their own line under the row; the group titles carry the version facts cut to fit; a short
+  window drops the blank rows between groups first; with room for three columns the versions and
+  warnings keep 66 cells and the last run's output takes the rest.
+- The session picker's chat starts under the rule when it fits the pane; only a longer one ends its
+  newest message on the last row.
+- A cut panel title keeps a rule cell before the corner.
 - Maintenance lists its actions in groups (Claude Code, Checks, claude-auto, Launcher, Custom);
   hints and live states share one right-aligned column. claude-auto's entries read
   `update to <version>` and `roll back`.
@@ -25,6 +37,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Added
 
+- `docs/media/screens.ps1`: PNGs of every screen (launch, project, all-projects picker,
+  maintenance, path navigator, rows editor) at 280x72, 130x45 and 55x20 on the demo home, through
+  VHS, never a visible window; `target/screens/`. Exit 0 all written, 1 one failed, 2 did not run.
 - Launch keys `1`-`5` (or a click on the line) continue that recent project's newest session with
   the choices on screen, skipping the project screen, as its `c` would.
 

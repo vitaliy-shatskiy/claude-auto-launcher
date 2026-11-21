@@ -250,14 +250,19 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
   screen) and the versions at its right end, in the accent colour; the other panels have a dim
   border. Panel interiors are tinted, the focused one lighter (24-bit colour where the terminal
   reports it, `COLORTERM` or Windows Terminal, else the nearest 256 colours; no tints in ASCII). The
-  selected row is filled and bold with `❯` at its left. Under 120 columns the panels stack.
-- The launch page: the launch rows; beside them the selected account's limits, one per line
+  selected row is filled and bold with `❯` at its left. Under 120 columns the panels stack. A facts
+  column (limits, versions, the selected project's facts) keeps the width its facts need; a list or
+  text column (recent projects, sessions, the chat, the last run's output) takes the spare width.
+  The rows editor and the path navigator are one focused panel in the same frame.
+- The launch page: the launch rows; beside them, in a 46-cell column, the selected account's limits, one per line
   (percentage bold, yellow from 70 %, red from 90 %) and the data's age on the panel's last row;
-  under them the five newest projects (keys `1`-`5`, the path or the last session under each), the
-  running Claude Code sessions with their age, and Claude Code's version and warnings. Panels with
+  under them the five newest projects (keys `1`-`5`, the newest session's title from the summary
+  cache dim under each), the running Claude Code sessions with their age, and Claude Code's version,
+  the last maintenance MCP check (`MCP 2 of 2 · 3 h ago`, once maintenance `m` has run; the launch
+  never runs the check) and the warnings. Panels with
   items stretch to the footer; with no recent project and nothing running they shrink to their
   empty-state lines. Under 110 columns the footer words shorten and `ctrl+r`, then `w/s`, give way
-  so it stays one line. The rows editor and the path navigator keep their own frames.
+  so it stays one line.
 - The pointer paints whatever it is over (a row label, a value, an action row, a footer key) and
   never selects it; a click or a key moves the selection.
 - Warnings (an unknown config key, a plugin that failed to describe) are listed on the maintenance
@@ -281,8 +286,12 @@ out. Beside it (under it below 120 columns): the last run (the tail of its repor
 failed), the versions (installed, newest, the builds on disk and their size, claude-auto and its
 self-update) and the warnings, each labelled `warning` or `error`, with where to fix them; no
 warning, no panel. Stacked, the Claude Code and claude-auto titles carry their facts instead of a
-versions panel. Each action row is its key and name; a right-aligned column, ending 2 cells before
-the panel's border, holds the selected row's short hint or the action's live state: its step
+versions panel, cut from the end to fit. With room for three columns the versions and warnings
+keep 66 cells and the last run's output takes the rest. Each action row is its key and name; a
+right-aligned column, ending 2 cells before the panel's border, holds the selected row's short hint
+or the action's live state (on its own line under the row when it does not fit beside the name; in
+a short stacked window the last run's state always goes there, and the blank rows between groups go
+before an action is cut): its step
 within a second (what the command last printed, the seconds so far), then the first line of its
 report in green or `failed: <reason>` in red; `m` ends with `N of M connected`. `p` asks for a
 second press.
@@ -298,8 +307,12 @@ file path is refused.
 Left out and counted in the title: scratch directories (under the temp folder or an account root's
 `jobs\<id>\tmp`), and a project only headless sessions (`claude -p`, the SDKs) ever ran in, a git
 root included (`hideHeadlessProjects`). The action opens at `new` every launch. The list panel's
-title counts the known, pinned, hidden and worktree projects; from 120 columns the selected
-project (its path and how long ago it ran) and the action field sit in their own panels beside it.
+title counts the known, pinned, hidden and worktree projects, and the action field closes the list
+panel. From 120 columns the list panel is as wide as its rows need (name, full path, age), at most
+60 % of the width (a path is cut in the middle only past that), and the right column shows the
+selected project: its full path, git branch (read from `.git/HEAD`), session count and newest
+session, then its sessions newest first (age, title, a green dot on a running one; `no sessions
+yet`) down to the footer, from the summary cache off the UI thread once the cursor rests.
 
 Search (`/`): space-separated words must all match; a pasted path (`C:\src\x`, a UNC path) matches
 as typed. Name starts with a word first, then name contains it, then path; a pin only breaks ties;
