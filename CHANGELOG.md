@@ -4,37 +4,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
-### Changed
-
-- The cockpit frame on the launch screen, maintenance, the project screen and the session picker:
-  rounded panels titled in their top border, the focused one carrying `✻ claude-auto ─ <page>` and
-  the versions in the accent colour, tinted interiors (24-bit where the terminal reports it), a
-  filled bold selected row with `❯`, one footer line under the panels; under 120 columns the
-  panels stack. The launch screen shows the selected account's limits one per line with the data
-  age on the panel's last row, recent projects, running sessions and Claude Code's state;
-  maintenance shows the last run, the versions and the warnings beside its actions; the project
-  screen shows the selected project and the action beside its list; the picker's chat preview is
-  its own panel. The rows editor and the path navigator are one focused cockpit panel each.
-- Project screen beside the list (from 120 columns): the list panel takes what its rows need (full
-  paths, at most 60 % of the width), the action field closes it on one line, and the right column
-  shows the selected project's path, git branch, session count and newest session, then its
-  sessions newest first with a green dot on a running one, from the summary cache off the UI thread.
-- Launch: a two-column grid. The launch panel is as wide as its rows, recent under it at the same
-  width; the 46-cell column right of them stacks limits, running and Claude Code with their borders
-  in line; past the grid the terminal stays background; the session picker's chat text wraps at 110 cells; recent projects show their newest session's title, never the path; the Claude Code
-  panel names the last maintenance MCP check and its age when one is stored.
-- Maintenance: a hint too long for its row, and in a short stacked window the last run's state, go
-  on their own line under the row; the group titles carry the version facts cut to fit; a short
-  window drops the blank rows between groups first; with room for three columns the versions and
-  warnings keep 66 cells and the last run's output takes the rest.
-- The session picker's chat starts under the rule when it fits the pane; only a longer one ends its
-  newest message on the last row.
-- A cut panel title keeps a rule cell before the corner.
-- Maintenance lists its actions in groups (Claude Code, Checks, claude-auto, Launcher, Custom);
-  hints and live states share one right-aligned column. claude-auto's entries read
-  `update to <version>` and `roll back`.
-- Hovering a row label, a value, an action row, a recent project or a footer key paints it again
-  on these screens, without selecting it; one test walks every clickable region of each screen.
+## [0.9.0] — 2026-11-21
 
 ### Added
 
@@ -69,76 +39,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   reads before the first frame (cache hits and quick rows only, 2.9 MB on the budget's world) and
   what the summary worker then reads to finish those pages (128 MB). A full scan moved back onto
   the UI thread fails the check.
-
-### Changed
-
-- One page shell for every screen: a frame from the top row to the footer, the title on its top
-  border (`─ <screen> ─ <facts> ─`), the text three cells in, the key footer under it. The launch
-  screen joins it: its header box and the rule above the footer are gone.
-- Launch screen: the limits are percentages on the top border's right end
-  (`5h 4% · 7d 96% · fable 24% · 5 h ago`), no bar glyphs; the account row is one line. A narrow
-  terminal drops the limits before the frame. The `* restored (…), ctrl+r resets` line is gone:
-  the `*` marks stay and the footer names `ctrl+r reset` when a row was restored.
-- Config and plugin warnings no longer print before the screens: maintenance lists them with
-  where to fix them, and the launch footer badges `u maintenance ⚠ N` in yellow. A start without
-  screens still prints them.
-- Maintenance redesigned: a list of actions (`w`/`s` select, `enter` or the key runs) with short
-  names (`update anyway (rename)`, `delete old builds`, `MCP servers`) and a hint on the selected
-  row only, beside a facts grid (Claude Code version and whether it is the newest, builds on disk,
-  claude-auto and its self-update, warnings, the last action). Hashes are no longer shown. A long
-  action shows a live step line (what the command last printed and the seconds so far), then
-  `done` or `failed: <reason>`. `m` MCP servers ends with `N of M connected` and the server lines.
-- Every screen fills the whole terminal from its top-left corner at any size (0.9.0 centred a
-  240x80 page on a larger terminal); clicks count from column 0. A size report of 0 or over
-  10000 cells on a side is taken as 80x25 on that side.
-- Project screen from 100 columns: compact columns instead of the path flushed right. The name
-  column is the longest visible name (at most 40 % of the width), the path follows two cells
-  after it, the age sits right-aligned just after the longest visible path.
-- No row carries the dim `‹ a/d ←/→ ›` hint any more; the footer says it: `a/d ←/→ switch` on the
-  launch screen, `a/d ←/→ action` on the project screen. On a narrow launch screen the footer
-  keeps `w/s row` and the switch hint and wraps to a second line.
-- The README states what 1.0 keeps stable (config keys, plugin protocol 1, the `--launcher-*`
-  flags and their JSON, the `CLAUDE_AUTO_*` switches) and what stays internal.
-- Picker chat: messages keep their markdown shape (paragraphs, `•` and numbered items with a
-  hanging indent, bold headings, dimmed code blocks and tables, bold and inline code styled, no raw
-  markers), bodies sit 2 cells in from their label's side, and each message shows from its start,
-  capped at 14 lines plus `… N more lines`. Preview mode renders the same way.
-- Picker chat streams the transcript backwards in 64 KB steps, newest message first, until the
-  pane plus one screen is filled (8 MB cap): the first messages show after one small read instead
-  of an up-to-8 MB tail read. A session seen once is kept while the picker is open (going back
-  reads nothing); a grown transcript shows its earlier chat marked `updating…` meanwhile. A
-  below-normal prefetch reads one step per idle moment for the sessions beside the cursor and the
-  newest five (one pane, 1 MB each). Speed budget: `chat_load` 8 MB -> 64 KB, new `chat_revisit`
-  (0 bytes) and `chat_prefetch_open`.
-
-### Fixed
-
-- The picker's green dot marked any session written to in the last minute; it now marks only a
-  session a running Claude Code has open (`sessions\<pid>.json` in any account root, the pid alive
-  with its recorded start time, so a reused pid does not count).
-- Maintenance `m` (and `d`, `u`, the custom actions) no longer hang after the command finished:
-  the output was read to the pipe's end, and an MCP server `claude mcp list` started inherited the
-  pipe and held it open after `claude` exited. The read now ends a second after the exit.
-- The session picker opened late (seconds on a cold disk) after every update: it now shows its
-  rows at once, titled by their first prompt, and fills in titles and message counts as a
-  background scan finishes them; an update no longer discards the session summary cache.
-- Self-update `auto` installed a build again on the next start after `b` rolled it back; a
-  rolled-back build now comes back only through `c`, and a newer release updates as before.
-- Self-update trusted its record of the installed build after the exe was replaced by hand, and
-  hid the update; a start now forgets a record the exe does not match. A download cut off by an
-  exit (`claude-auto.exe.<pid>-<id>.new`) is deleted an hour later once its process is gone.
-- Self-update `auto` downloaded ~10 MB again on every start after a failed update (a checksum
-  mismatch, a locked folder); it now retries that release a day later and repeats the reason.
-- Self-update `auto` dropped a download still running when the screens closed, so each start
-  downloaded again; the check now lives until claude exits.
-- The picker's chat dropped `*` and `_` from paths and globs taken for emphasis
-  (`src/**/*.rs`, `__init__.py`, `\__pycache__\`); next to `/`, `\` or `.` they stay.
-- The picker showed every time at today's UTC offset, so a message from before the DST change
-  was an hour off; each time now takes the offset of its own date.
-
-## [0.9.0] — 2026-11-20
-
-### Added
 
 - claude-auto self-update from its GitHub releases (config `selfUpdate`: `notify` by default,
   `auto`, `off`; `updateRepo` for a fork; `CLAUDE_AUTO_NO_SELF_UPDATE=1`): a daily background
@@ -190,6 +90,75 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Changed
 
+- The cockpit frame on the launch screen, maintenance, the project screen and the session picker:
+  rounded panels titled in their top border, the focused one carrying `✻ claude-auto ─ <page>` and
+  the versions in the accent colour, tinted interiors (24-bit where the terminal reports it), a
+  filled bold selected row with `❯`, one footer line under the panels; under 120 columns the
+  panels stack. The launch screen shows the selected account's limits one per line with the data
+  age on the panel's last row, recent projects, running sessions and Claude Code's state;
+  maintenance shows the last run, the versions and the warnings beside its actions; the project
+  screen shows the selected project and the action beside its list; the picker's chat preview is
+  its own panel. The rows editor and the path navigator are one focused cockpit panel each.
+- Project screen beside the list (from 120 columns): the list panel takes what its rows need (full
+  paths, at most 60 % of the width), the action field closes it on one line, and the right column
+  shows the selected project's path, git branch, session count and newest session, then its
+  sessions newest first with a green dot on a running one, from the summary cache off the UI thread.
+- Launch: a two-column grid. The launch panel is as wide as its rows, recent under it at the same
+  width; the 46-cell column right of them stacks limits, running and Claude Code with their borders
+  in line; past the grid the terminal stays background; the session picker's chat text wraps at 110 cells; recent projects show their newest session's title, never the path; the Claude Code
+  panel names the last maintenance MCP check and its age when one is stored.
+- Maintenance: a hint too long for its row, and in a short stacked window the last run's state, go
+  on their own line under the row; the group titles carry the version facts cut to fit; a short
+  window drops the blank rows between groups first; with room for three columns the versions and
+  warnings keep 66 cells and the last run's output takes the rest.
+- The session picker's chat starts under the rule when it fits the pane; only a longer one ends its
+  newest message on the last row.
+- A cut panel title keeps a rule cell before the corner.
+- Maintenance lists its actions in groups (Claude Code, Checks, claude-auto, Launcher, Custom);
+  hints and live states share one right-aligned column. claude-auto's entries read
+  `update to <version>` and `roll back`.
+- Hovering a row label, a value, an action row, a recent project or a footer key paints it again
+  on these screens, without selecting it; one test walks every clickable region of each screen.
+
+- One page shell for every screen: a frame from the top row to the footer, the title on its top
+  border (`─ <screen> ─ <facts> ─`), the text three cells in, the key footer under it. The launch
+  screen joins it: its header box and the rule above the footer are gone.
+- Launch screen: the limits are percentages on the top border's right end
+  (`5h 4% · 7d 96% · fable 24% · 5 h ago`), no bar glyphs; the account row is one line. A narrow
+  terminal drops the limits before the frame. The `* restored (…), ctrl+r resets` line is gone:
+  the `*` marks stay and the footer names `ctrl+r reset` when a row was restored.
+- Config and plugin warnings no longer print before the screens: maintenance lists them with
+  where to fix them, and the launch footer badges `u maintenance ⚠ N` in yellow. A start without
+  screens still prints them.
+- Maintenance redesigned: a list of actions (`w`/`s` select, `enter` or the key runs) with short
+  names (`update anyway (rename)`, `delete old builds`, `MCP servers`) and a hint on the selected
+  row only, beside a facts grid (Claude Code version and whether it is the newest, builds on disk,
+  claude-auto and its self-update, warnings, the last action). Hashes are no longer shown. A long
+  action shows a live step line (what the command last printed and the seconds so far), then
+  `done` or `failed: <reason>`. `m` MCP servers ends with `N of M connected` and the server lines.
+- Every screen fills the whole terminal from its top-left corner at any size (0.9.0 centred a
+  240x80 page on a larger terminal); clicks count from column 0. A size report of 0 or over
+  10000 cells on a side is taken as 80x25 on that side.
+- Project screen from 100 columns: compact columns instead of the path flushed right. The name
+  column is the longest visible name (at most 40 % of the width), the path follows two cells
+  after it, the age sits right-aligned just after the longest visible path.
+- No row carries the dim `‹ a/d ←/→ ›` hint any more; the footer says it: `a/d ←/→ switch` on the
+  launch screen, `a/d ←/→ action` on the project screen. On a narrow launch screen the footer
+  keeps `w/s row` and the switch hint and wraps to a second line.
+- The README states what 1.0 keeps stable (config keys, plugin protocol 1, the `--launcher-*`
+  flags and their JSON, the `CLAUDE_AUTO_*` switches) and what stays internal.
+- Picker chat: messages keep their markdown shape (paragraphs, `•` and numbered items with a
+  hanging indent, bold headings, dimmed code blocks and tables, bold and inline code styled, no raw
+  markers), bodies sit 2 cells in from their label's side, and each message shows from its start,
+  capped at 14 lines plus `… N more lines`. Preview mode renders the same way.
+- Picker chat streams the transcript backwards in 64 KB steps, newest message first, until the
+  pane plus one screen is filled (8 MB cap): the first messages show after one small read instead
+  of an up-to-8 MB tail read. A session seen once is kept while the picker is open (going back
+  reads nothing); a grown transcript shows its earlier chat marked `updating…` meanwhile. A
+  below-normal prefetch reads one step per idle moment for the sessions beside the cursor and the
+  newest five (one pane, 1 MB each). Speed budget: `chat_load` 8 MB -> 64 KB, new `chat_revisit`
+  (0 bytes) and `chat_prefetch_open`.
+
 - Every screen is a full page: the launch screen, maintenance, the rows editor and the held-session
   question span the terminal's width (boxes and rules included) with the footer on the last row
   but one, like the project screen and the picker, and redraw on resize. A terminal over 240x80
@@ -209,6 +178,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 - The session picker's summary cache is `claude-auto-sessions.json` again (0.6.0 kept the old
   `claude-auto-rs-` prefix); the first cache write removes the old `claude-auto-rs-sessions.json`
   beside it (that exact file, nothing else).
+
+### Fixed
+
+- The picker's green dot marked any session written to in the last minute; it now marks only a
+  session a running Claude Code has open (`sessions\<pid>.json` in any account root, the pid alive
+  with its recorded start time, so a reused pid does not count).
+- Maintenance `m` (and `d`, `u`, the custom actions) no longer hang after the command finished:
+  the output was read to the pipe's end, and an MCP server `claude mcp list` started inherited the
+  pipe and held it open after `claude` exited. The read now ends a second after the exit.
+- The session picker opened late (seconds on a cold disk) after every update: it now shows its
+  rows at once, titled by their first prompt, and fills in titles and message counts as a
+  background scan finishes them; an update no longer discards the session summary cache.
+- Self-update `auto` installed a build again on the next start after `b` rolled it back; a
+  rolled-back build now comes back only through `c`, and a newer release updates as before.
+- Self-update trusted its record of the installed build after the exe was replaced by hand, and
+  hid the update; a start now forgets a record the exe does not match. A download cut off by an
+  exit (`claude-auto.exe.<pid>-<id>.new`) is deleted an hour later once its process is gone.
+- Self-update `auto` downloaded ~10 MB again on every start after a failed update (a checksum
+  mismatch, a locked folder); it now retries that release a day later and repeats the reason.
+- Self-update `auto` dropped a download still running when the screens closed, so each start
+  downloaded again; the check now lives until claude exits.
+- The picker's chat dropped `*` and `_` from paths and globs taken for emphasis
+  (`src/**/*.rs`, `__init__.py`, `\__pycache__\`); next to `/`, `\` or `.` they stay.
+- The picker showed every time at today's UTC offset, so a message from before the DST change
+  was an hour off; each time now takes the offset of its own date.
 
 ## [0.8.2] — 2026-11-11
 
