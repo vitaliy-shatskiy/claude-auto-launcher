@@ -193,6 +193,73 @@ fn the_filter_works_on_the_launch_page_list() {
     assert_eq!(out.unwrap().home_pick.unwrap().path, f.beta);
 }
 
+#[test]
+fn a_focused_list_on_a_short_wide_page_is_drawn_and_its_keys_never_panic() {
+    let f = fx();
+    let (out, frames) = drive_home(&f, (211, 20), "Tab,Escape,Escape");
+    assert!(
+        has(&frames[1], "* claude-auto - project"),
+        "the list is drawn, focused: {:#?}",
+        frames[1]
+    );
+    assert!(out.is_none());
+}
+
+/// Whether the frame showed the focused panel's selected row: the list's rows on the list, the
+/// cursor's session on the sessions panel, the launch rows on the launch panel.
+fn row_shown(frame: &Frame, tabs: usize) -> bool {
+    match tabs {
+        0 => !frame.map.rows.is_empty(),
+        1 => frame.map.list.as_ref().is_some_and(|l| l.row_count > 0),
+        _ => frame.map.side.as_ref().is_some_and(|s| !s.1.is_empty()),
+    }
+}
+
+/// Every size a terminal can report, every focus: no panic (debug arithmetic included), the
+/// focused panel drawn whenever the terminal is not too small, and Enter on the list or the
+/// sessions acts only on a row the frame showed.
+#[test]
+fn at_every_size_the_focused_panel_is_drawn_or_enter_does_nothing() {
+    let f = fx();
+    for w in [0, 1, 50, 119, 120, 140, 211, 280, 10_000] {
+        for h in (0..=40).chain([72, 85]) {
+            for tabs in 0..3 {
+                focused_at(&f, (w, h), tabs);
+            }
+        }
+    }
+}
+
+/// One size and focus of the sweep above (`tabs` Tab presses from the launch rows).
+fn focused_at(f: &Fx, (w, h): (usize, usize), tabs: usize) {
+    let c = clock;
+    let v = view(false);
+    let p = crate::prefs::Prefs::default();
+    let source = || Some(list(f, v.style, &c));
+    let mut roster = crate::launch::tests::four();
+    let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+    let st = roster.new_state();
+    let mut s = LaunchScreen::new(&mut roster, st, &v, &p, 0, &mut hook).with_home(&source);
+    if tabs > 0 {
+        let _ = s.tab();
+        // On alpha, whose two sessions the sessions panel lists.
+        s.cursor().index = 1;
+        s.before();
+    }
+    if tabs > 1 {
+        let _ = s.tab();
+    }
+    let frame = s.draw((w, h));
+    let shown = row_shown(&frame, tabs);
+    if w >= crate::frame::MIN_WIDTH && h >= crate::frame::MIN_HEIGHT {
+        assert!(shown, "{w}x{h} focus {tabs}: the focused panel is not drawn {:#?}", frame.lines);
+    }
+    if tabs > 0 && !shown {
+        let acted = matches!(s.enter(), Some(Flow::Done(Some(_))));
+        assert!(!acted, "{w}x{h} focus {tabs}: Enter acted on a row the frame did not show");
+    }
+}
+
 thread_local! {
     /// How often the walk's launch hook opened maintenance.
     static OPENED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

@@ -397,7 +397,9 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let rows = project_rows(v.projects, v.filter, v.cwd);
     let footer = new_hint_footer(&footer_hints(v), &g, fw, !v.style.color);
     // Beside the launch panel with the launch rows focused, the list stands alone in its column.
-    let wide = v.width >= cockpit::TWO_COLUMNS && v.home.is_none_or(|h| h.focus != HomeFocus::Launch);
+    // A list the launch page draws in its left column alone (`left_width` the whole frame) is never
+    // wide: no room is left beside it.
+    let wide = v.width >= cockpit::TWO_COLUMNS && v.home.is_none_or(|h| h.focus != HomeFocus::Launch && h.left_width < fw);
     // On the launch page the list keeps its name, path and age columns on every focus: a focus
     // move never shifts a row.
     let columns = v.width >= TWO_PANE_WIDTH || v.home.is_some();
@@ -450,15 +452,15 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let mut lines = cockpit::render(&list, v.style);
     let mut side = None;
     if wide {
-        let rw = fw - lw;
+        let rw = fw.saturating_sub(lw);
         let sel = rows.get(index);
         let detail = v.detail.filter(|d| sel.is_some_and(|r| d.key == project_key(&r.path)));
-        let facts = selected_lines(sel, detail, v, rw - 2);
+        let facts = selected_lines(sel, detail, v, rw.saturating_sub(2));
         let facts_h = (facts.len() + 2).min(page_rows.saturating_sub(3));
         let title = format!("selected {} {}", g.dot, sel.map_or(String::new(), |r| clean_text(&r.name)));
         let mut right = cockpit::render(&Panel::plain(&title, facts, rw, facts_h), v.style);
-        let sessions_h = page_rows - facts_h;
-        let listed = session_lines(sel, detail, v, rw - 2, sessions_h.saturating_sub(2), &g);
+        let sessions_h = page_rows.saturating_sub(facts_h);
+        let listed = session_lines(sel, detail, v, rw.saturating_sub(2), sessions_h.saturating_sub(2), &g);
         right.extend(cockpit::render(&sessions_panel(listed, rw, sessions_h, v.home, &g), v.style));
         lines = cockpit::beside(lines, lw, &right);
         if v.home.is_some() {
@@ -572,7 +574,7 @@ const LIST_MIN: usize = 74;
 /// The narrow page's sessions: the selected project's sessions panel alone, `fw` by `page_rows`.
 fn sessions_page(v: &ProjectView<'_>, sel: Option<&Row>, (fw, page_rows): (usize, usize), footer: &frame::Footer, g: &Glyphs) -> Frame {
     let detail = v.detail.filter(|d| sel.is_some_and(|r| d.key == project_key(&r.path)));
-    let listed = session_lines(sel, detail, v, fw - 2, page_rows.saturating_sub(2), g);
+    let listed = session_lines(sel, detail, v, fw.saturating_sub(2), page_rows.saturating_sub(2), g);
     let lines = cockpit::render(&sessions_panel(listed, fw, page_rows, v.home, g), v.style);
     let mut map = RowMap {
         hit_x: RowMap::panel_interior(0, fw),

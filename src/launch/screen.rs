@@ -74,6 +74,8 @@ pub struct LaunchScreen<'a> {
     session_cursor: Cursor,
     /// The width last drawn at: the workspace needs two columns.
     width: usize,
+    /// What the last frame showed of the workspace's panels.
+    seen: home::Seen,
 }
 
 impl std::fmt::Debug for LaunchScreen<'_> {
@@ -136,6 +138,7 @@ impl<'a> LaunchScreen<'a> {
             focus: HomeFocus::Launch,
             session_cursor: Cursor::at(0),
             width: 0,
+            seen: home::Seen::default(),
         }
     }
 
@@ -332,6 +335,9 @@ impl Screen for LaunchScreen<'_> {
     }
 
     fn enter(&mut self) -> Option<Flow<LaunchState>> {
+        if !self.row_seen() {
+            return Some(Flow::Continue);
+        }
         match (self.home_focus(), self.home.as_mut()) {
             (Some(HomeFocus::Projects), Some(h)) => {
                 let f = h.enter()?;
@@ -352,6 +358,9 @@ impl Screen for LaunchScreen<'_> {
 
     /// The focused panel's keys on the workspace; the launch rows have none.
     fn hotkey(&mut self, c: char) -> Flow<LaunchState> {
+        if !self.row_seen() {
+            return Flow::Continue;
+        }
         match (self.home_focus(), self.home.as_mut()) {
             (Some(HomeFocus::Projects), Some(h)) => {
                 let f = h.hotkey(c);

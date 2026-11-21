@@ -216,8 +216,29 @@ impl<'a> LaunchScreen<'a> {
         };
         let f = self.frame_with(size, Some(HomePanel { focus, draw: &paint }));
         self.home = Some(cell.into_inner());
+        self.seen = Seen {
+            list: f.map.list.as_ref().is_some_and(|l| l.row_count > 0),
+            sessions: f.map.side.as_ref().map_or(0, |s| s.1.len()),
+        };
         f
     }
+
+    /// Whether the last frame showed the focused panel's selected row: Enter and the panel's keys
+    /// act only on a row the owner saw (a short or tiny terminal draws no list).
+    pub(super) fn row_seen(&self) -> bool {
+        match self.home_focus() {
+            None | Some(HomeFocus::Launch) => true,
+            Some(HomeFocus::Projects) => self.seen.list,
+            Some(HomeFocus::Sessions(_)) => usize::try_from(self.session_cursor.index).is_ok_and(|i| i < self.seen.sessions),
+        }
+    }
+}
+
+/// What the last frame showed of the workspace: the list's rows, how many sessions.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Seen {
+    list: bool,
+    sessions: usize,
 }
 /// Two focuses are the same panel (the sessions cursor aside).
 fn same(a: HomeFocus, b: HomeFocus) -> bool {
