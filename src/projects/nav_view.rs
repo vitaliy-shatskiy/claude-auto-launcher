@@ -3,8 +3,9 @@
 
 use super::navigator::{NavRow, Navigator};
 use super::view::{action_hit, action_light, action_radio, clean_text};
+use crate::cockpit::{self, Focus, Panel};
 use crate::frame::{self, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RowMap, Style, new_hint_footer};
-use crate::layout::{limit_cells_right, new_box, viewport};
+use crate::layout::{limit_cells_right, viewport};
 use crate::list::{ListRow, add_picker_color, new_list_row};
 use crate::theme::{self, glyphs};
 
@@ -47,7 +48,7 @@ fn label(r: &NavRow) -> String {
     }
 }
 
-/// The navigator in the project screen's box: field, status, rows, action row.
+/// The navigator in the cockpit frame, one focused panel: field, status, rows, action row.
 pub(crate) fn navigator_frame(v: &NavView<'_>) -> Frame {
     if v.width < MIN_WIDTH || v.height < MIN_HEIGHT {
         return Frame {
@@ -69,7 +70,7 @@ pub(crate) fn navigator_frame(v: &NavView<'_>) -> Frame {
     let (start, visible) = viewport(rows.len(), index, list_lines);
     let field = format!(
         "   path  {}_",
-        limit_cells_right(&theme::strip_ctl(&v.nav.text), inner.saturating_sub(11))
+        limit_cells_right(&theme::strip_ctl(&v.nav.text), inner.saturating_sub(13))
     );
     let mut body = vec![field, format!("   {}", clean_text(&v.nav.status()))];
     let hover_row = usize::try_from(v.hover_row).ok();
@@ -78,25 +79,25 @@ pub(crate) fn navigator_frame(v: &NavView<'_>) -> Frame {
         body.push(new_list_row(&ListRow {
             mark: &mark,
             label: &label(r),
-            width: inner,
+            width: inner.saturating_sub(2),
             ascii: v.style.ascii,
             hover: hover_row == Some(i),
             ..ListRow::default()
         }));
     }
     body.resize(2 + list_lines, String::new());
-    let radio = action_radio(v.action, v.hover_value, inner, &g, true);
+    let radio = action_radio(v.action, v.hover_value, inner.saturating_sub(2), &g, true);
     let action_index = body.len();
     body.push(radio.text.clone());
-    let lines = new_box(&body, fw, &format!("project {} enter a path", g.h), &g, v.style.ascii);
-    let first_row_y = lines.len() - body.len() - 1;
-    let y = |n: usize| i32::try_from(first_row_y + n).unwrap_or(i32::MAX);
+    let shown = visible.min(rows.len());
+    // The panel's top border is line 0; its interior line n is frame line 1 + n.
+    let y = |n: usize| i32::try_from(1 + n).unwrap_or(i32::MAX);
     let mut map = RowMap {
         list: Some(ListMap {
             first_row_y: y(2),
-            row_count: i32::try_from(visible.min(rows.len())).unwrap_or(0),
+            row_count: i32::try_from(shown).unwrap_or(0),
             start: i32::try_from(start).unwrap_or(0),
-            row_ys: Vec::new(),
+            row_ys: (0..shown).map(|k| y(2 + k)).collect(),
         }),
         action: Some(action_hit(&radio, y(action_index), 0)),
         ..RowMap::default()
@@ -106,6 +107,17 @@ pub(crate) fn navigator_frame(v: &NavView<'_>) -> Frame {
         selected: action_light(v.action),
     };
     let painter = |l: &str, enabled: bool| add_picker_color(l, enabled, &g);
-    let lines = frame::complete_frame(&lines, &footer, fw, v.style, &painter, &light, &mut map);
+    let panel = Panel {
+        title: cockpit::identity(&g),
+        page: "project".into(),
+        right: "enter a path".into(),
+        focus: Focus::Focused,
+        lines: body,
+        width: fw,
+        height: v.height.saturating_sub(1 + footer.lines.len()).max(3),
+        painter: &painter,
+        selected: (!rows.is_empty()).then_some(2 + index - start),
+    };
+    let lines = frame::append_footer(cockpit::render(&panel, v.style), &footer, fw, v.style, &light, &mut map);
     Frame { lines, map }
 }

@@ -9,9 +9,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::cockpit::{self, Focus, Panel};
 use crate::config::RowsConfig;
 use crate::frame::{
-    CellSpan, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowHit, RowMap, Style, complete_frame, footer_hover, frame_width,
+    CellSpan, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowHit, RowMap, Style, append_footer, footer_hover, frame_width,
     new_hint_footer, too_small_frame,
 };
 use crate::input::{KeyPress, vk};
@@ -196,8 +197,8 @@ impl Screen for RowsEditor {
             } else {
                 let value = format!("hidden -> {}", self.value_label(*row));
                 // The cell never reaches past the frame's last column.
-                let start = display_width(&lead);
-                let end = (start + display_width(&value)).min(box_w.saturating_sub(1)).saturating_sub(1);
+                let start = 1 + display_width(&lead);
+                let end = (start + display_width(&value)).min(box_w.saturating_sub(2)).saturating_sub(1);
                 cells.push(CellSpan {
                     start: i32::try_from(start).unwrap_or(i32::MAX),
                     end: i32::try_from(end).unwrap_or(0),
@@ -210,7 +211,7 @@ impl Screen for RowsEditor {
             hits.push(RowHit {
                 index: i,
                 name: row.as_str().into(),
-                y: i32::try_from(crate::frame::BODY_TOP + i).unwrap_or(0),
+                y: i32::try_from(1 + i).unwrap_or(0),
                 cells,
             });
         }
@@ -245,18 +246,23 @@ impl Screen for RowsEditor {
             hover: footer_hover(&footer, self.cursor.hover),
             selected: Vec::new(),
         };
-        let title = format!("{} claude-auto {} launch rows", g.sparkle, g.dot);
-        let lines = crate::frame::header_page(body, width, &title, &[], self.style);
+        let painter = |l: &str, e: bool| crate::list::add_picker_color(l, e, &g);
+        let panel = Panel {
+            title: cockpit::identity(&g),
+            page: "launch rows".into(),
+            right: String::new(),
+            focus: Focus::Focused,
+            lines: body,
+            width: fw,
+            height: height.saturating_sub(1 + footer.lines.len()).max(3),
+            painter: &painter,
+            selected: Some(self.index()),
+        };
         let mut map = RowMap {
             rows: hits,
             ..RowMap::default()
         };
-        let sparkle = format!("{}{}{}", crate::theme::ACCENT, g.sparkle, crate::theme::RESET);
-        let painter = |l: &str, e: bool| {
-            let l = crate::list::add_picker_color(l, e, &g);
-            if e { l.replace(g.sparkle, &sparkle) } else { l }
-        };
-        let lines = complete_frame(&lines, &footer, fw, self.style, &painter, &light, &mut map);
+        let lines = append_footer(cockpit::render(&panel, self.style), &footer, fw, self.style, &light, &mut map);
         Frame { lines, map }
     }
 

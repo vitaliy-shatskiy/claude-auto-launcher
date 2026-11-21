@@ -158,6 +158,11 @@ fn every_clickable_region_of_the_project_screen_hovers_and_never_selects() {
         let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: true, ascii: false }, &c);
         assert_every_region_hovers(&mut s, size);
     }
+    // The path navigator, in the same cockpit panel: its folder rows and the action values.
+    let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: true, ascii: false }, &c);
+    s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
+    s.nav.as_mut().unwrap().text = format!(r"{}\root\", f.tree.0.display());
+    assert_every_region_hovers(&mut s, (130, 40));
 }
 
 /// In place (preview) the selected row's detail comes with the frame; a moved cursor asks again.
