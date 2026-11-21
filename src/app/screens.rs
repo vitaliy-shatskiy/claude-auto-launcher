@@ -215,7 +215,19 @@ pub(super) fn run_ui(
         if picked {
             chosen_how = Some("key".into());
         } else if opens_project_screen(run.cfg.project_screen, &state.action) {
-            let Some(chosen) = projects::run_project_screen(term.as_mut(), project_list, &run.ctx.cwd, style, &hiding, run.preview)? else {
+            let Some(chosen) = projects::run_project_screen(
+                term.as_mut(),
+                project_list,
+                &run.ctx.cwd,
+                style,
+                &hiding,
+                run.preview,
+                projects::detail::Stores {
+                    root: sessions::sessions_root(&run.cfg, &state.account),
+                    live_dirs: held_dirs.clone(),
+                },
+            )?
+            else {
                 if run.preview {
                     break UiEnd::PreviewPickerCancelled;
                 }

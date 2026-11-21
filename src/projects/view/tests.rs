@@ -54,6 +54,7 @@ fn view<'a>(ps: &'a [Project], index: usize, cwd: &'a str, w: usize, h: usize) -
         action: "new",
         hover_row: -1,
         hover_value: "",
+        detail: None,
     }
 }
 
@@ -92,9 +93,11 @@ fn col(line: &str, needle: &str) -> usize {
 #[test]
 fn wide_rows_keep_name_path_and_age_in_compact_columns() {
     let ps = golden_projects();
-    let lines = plain(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 200, 60)));
-    // The list panel's own columns: the left 82 cells of each line.
-    let left = |l: &String| l.chars().take(crate::cockpit::LEFT_WIDTH).collect::<String>();
+    let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", 200, 60));
+    let lw = list_panel_width(&f);
+    let lines = plain(&f);
+    // The list panel's own columns.
+    let left = |l: &String| l.chars().take(lw).collect::<String>();
     let row = |name: &str| left(lines.iter().find(|l| left(l).contains(&format!(" {name} "))).unwrap());
     let path_col = col(&row("gamma"), r"C:\Users");
     assert_eq!(col(&row("alpha"), r"C:\Users"), path_col, "paths share one column");
@@ -106,7 +109,7 @@ fn wide_rows_keep_name_path_and_age_in_compact_columns() {
         "two cells after the longest name"
     );
     let age_end = |l: &str, age: &str| col(l, age) + display_width(age);
-    let end = crate::cockpit::LEFT_WIDTH - 3;
+    let end = lw - 3;
     assert_eq!(age_end(&row("alpha"), "4 min"), end, "ages right-aligned 2 cells from the border");
     assert_eq!(age_end(&row("delta"), "23 d"), end);
 }
@@ -115,9 +118,10 @@ fn wide_rows_keep_name_path_and_age_in_compact_columns() {
 fn a_long_name_is_capped_at_forty_percent_and_the_path_cut_to_fit() {
     let mut ps = golden_projects();
     ps[0].name = "n".repeat(150);
-    let lines = plain(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 120, 30)));
+    let f = project_frame(&view(&ps, 1, r"C:\Users\sample\here", 120, 30));
+    let inner = list_panel_width(&f) - 4;
+    let lines = plain(&f);
     let alpha = lines.iter().skip(1).find(|l| l.contains("nnn")).unwrap();
-    let inner = crate::cockpit::LEFT_WIDTH - 4;
     assert_eq!(col(alpha, "C:"), 4 + inner * 2 / 5 + 2, "{alpha}");
     assert!(alpha.contains('\u{2026}'), "the name ends in an ellipsis: {alpha}");
     assert!(lines.iter().all(|l| display_width(l) <= 119));
@@ -142,6 +146,93 @@ fn golden_project_120x30_hover_color() {
         ..view(&ps, 2, r"C:\Users\sample\here", 120, 30)
     });
     assert_golden("project-120x30-hover-color", &text(&f));
+}
+
+/// The selected project's context as the detail worker builds it: a branch, five sessions, the
+/// newest running.
+fn sample_detail(path: &str) -> Detail {
+    let s = |title: &str, ago: i64, live: bool| crate::projects::detail::SessionLine {
+        title: title.into(),
+        modified_ms: NOW - ago,
+        live,
+    };
+    Detail {
+        key: project_key(path),
+        branch: Some("main".into()),
+        count: 18,
+        sessions: vec![
+            s("design the cockpit panels", 4 * MIN, true),
+            s("fix the invoice export paging", 3 * 60 * MIN, false),
+            s("triage the sync job alerts", 26 * 60 * MIN, false),
+            s("compare two apk resource trees", 3 * 1440 * MIN, false),
+            s("restart loop on the VM", 9 * 1440 * MIN, false),
+        ],
+    }
+}
+
+#[test]
+fn goldens_project_280x72_and_130x40_with_the_selected_context() {
+    let ps = golden_projects();
+    let d = sample_detail(&ps[0].path);
+    for (w, h) in [(280, 72), (130, 40)] {
+        let f = project_frame(&ProjectView {
+            detail: Some(&d),
+            ..view(&ps, 1, r"C:\Users\sample\here", w, h)
+        });
+        assert_golden(&format!("project-{w}x{h}-context"), &text(&f));
+        assert_eq!(f.lines.len(), h - 1);
+        let panels = usize::try_from(f.map.footer_y.unwrap()).unwrap();
+        assert!(
+            f.lines.iter().take(panels).all(|l| display_width(l) == w - 1),
+            "{w}x{h}: the panels span the frame"
+        );
+    }
+}
+
+#[test]
+fn the_list_takes_what_its_rows_need_and_the_context_the_rest() {
+    let ps = golden_projects();
+    let d = sample_detail(&ps[0].path);
+    let lines = plain(&project_frame(&ProjectView {
+        detail: Some(&d),
+        ..view(&ps, 1, r"C:\Users\sample\here", 280, 72)
+    }));
+    let corner = lines[0].chars().position(|c| c == '\u{256E}').unwrap() + 1;
+    let longest = r"C:\Users\sample\Desktop\Projects\gamma.worktrees\feature";
+    assert!(lines.iter().any(|l| l.contains(longest)), "the full path, never cut under the cap");
+    assert!(corner < 280 * 3 / 5, "the list panel ends at its content: {corner}");
+    let right = |l: &String| l.chars().skip(corner).collect::<String>();
+    assert!(right(&lines[0]).contains("selected \u{b7} alpha"));
+    for want in [
+        "branch    main",
+        "sessions  18",
+        "last      4 min  design the cockpit panels",
+        "  3 h  fix the invoice export paging",
+    ] {
+        assert!(lines.iter().any(|l| right(l).contains(want)), "{want}");
+    }
+    let action = lines.iter().position(|l| l.contains("action") && l.contains("[new]")).unwrap();
+    assert!(
+        lines[action].chars().position(|c| c == '[').unwrap() < corner,
+        "the action line sits in the list panel"
+    );
+    assert_eq!(action, 68, "on the list panel's last interior row");
+}
+
+#[test]
+fn no_sessions_and_loading_say_so() {
+    let ps = golden_projects();
+    let empty = Detail {
+        key: project_key(&ps[0].path),
+        ..Detail::default()
+    };
+    let none = text(&project_frame(&ProjectView {
+        detail: Some(&empty),
+        ..view(&ps, 1, r"C:\Users\sample\here", 130, 40)
+    }));
+    assert!(none.contains("no sessions yet"));
+    let loading = text(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 130, 40)));
+    assert!(loading.contains("loading\u{2026}") && !loading.contains("no sessions yet"));
 }
 
 #[test]
@@ -493,19 +584,17 @@ fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
 }
 
 #[test]
-fn beside_the_list_the_action_panel_and_the_list_row_on_its_line_each_get_their_own_clicks() {
+fn beside_the_context_the_action_line_closes_the_list_panel_with_its_own_clicks() {
     use crate::ui::{Hit, hit_at};
     let ps = many(12, "p");
     let f = project_frame(&view(&ps, 0, r"C:\cwd", 130, 30));
     let a = f.map.action.clone().unwrap();
     let first = a.cells.first().unwrap();
-    assert!(
-        first.start > i32::try_from(crate::cockpit::LEFT_WIDTH).unwrap(),
-        "the field sits in the right column"
-    );
+    let lw = i32::try_from(list_panel_width(&f)).unwrap();
+    assert!(a.cells.iter().all(|c| c.end < lw), "the field sits in the list panel");
     let l = f.map.list.clone().unwrap();
-    let at = l.row_ys.iter().position(|y| *y == a.y).expect("a list row shares the action line");
-    assert_eq!(hit_at(Some(&f.map), 10, a.y, 0), Hit::ListRow(l.start + i32::try_from(at).unwrap()));
+    assert!(l.row_ys.iter().all(|y| *y < a.y), "under every list row");
+    assert_eq!(hit_at(Some(&f.map), 10, l.row_ys[1], 0), Hit::ListRow(l.start + 1));
     assert_eq!(
         hit_at(Some(&f.map), first.start, a.y, 0),
         Hit::Action {
@@ -523,6 +612,11 @@ fn beside_the_list_the_action_panel_and_the_list_row_on_its_line_each_get_their_
         a.cells.iter().all(|c| cell(c).contains(&c.value)),
         "the cells point at the drawn values"
     );
+}
+
+/// The list panel's outer width: its top border up to the first corner.
+fn list_panel_width(f: &Frame) -> usize {
+    theme::remove_ansi_color(&f.lines[0]).chars().position(|c| c == '\u{256E}').unwrap() + 1
 }
 
 mod pins;

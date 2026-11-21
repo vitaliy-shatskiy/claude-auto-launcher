@@ -16,6 +16,12 @@ fn regions(f: &Frame) -> Vec<(i32, i32, String)> {
         out.push((4, r.y, format!("row {}", r.name)));
         out.extend(r.cells.iter().map(|c| (c.start, r.y, format!("{} = {}", r.name, c.value))));
     }
+    if let Some(a) = &f.map.action {
+        out.extend(a.cells.iter().map(|c| (c.start, a.y, format!("action = {}", c.value))));
+    }
+    if let Some(l) = &f.map.list {
+        out.extend(l.row_ys.iter().map(|y| (6, *y, format!("list row at {y}"))));
+    }
     let top = f.map.footer_y.unwrap_or(0);
     out.extend(f.map.footer.iter().map(|s| {
         (

@@ -2,6 +2,7 @@
 //! the registry of directories Claude Code has sessions in, the start selection, and the screen
 //! that picks where a session runs and what it does there.
 
+pub mod detail;
 mod nav_view;
 mod navigator;
 mod paths;
@@ -221,12 +222,18 @@ pub fn run_project_screen(
     style: Style,
     hiding: &Hiding<'_>,
     preview: bool,
+    stores: detail::Stores,
 ) -> Result<Option<ProjectChoice>, UiStop> {
     let clock = || registry::unix_ms(SystemTime::now());
     let cwd = cwd.to_string_lossy();
     let mut s = screen::ProjectScreen::new(projects, &cwd, "new", style, &clock)
         .with_hiding(Some(hiding))
-        .with_preview(preview);
+        .with_preview(preview)
+        .with_details(Some(if preview {
+            detail::DetailSource::in_place(stores)
+        } else {
+            detail::DetailSource::worker(stores)
+        }));
     crate::ui::screen_loop::run(&mut s, term)
 }
 

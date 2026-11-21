@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::Project;
+use super::detail::Detail;
 use super::paths::project_key;
 use super::select::{Row, RowKind, filter_words, project_count, project_rows};
 use crate::cockpit::{self, Focus, Panel};
@@ -143,6 +144,8 @@ pub(crate) struct ProjectView<'a> {
     pub hover_row: i32,
     /// Action value under the mouse ('' none); paints only.
     pub hover_value: &'a str,
+    /// The selected row's sessions and branch, once loaded (None = still loading).
+    pub detail: Option<&'a Detail>,
 }
 
 /// The footer follows the state: an open filter names only what works while typing (every
@@ -346,13 +349,17 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let footer = new_hint_footer(&footer_hints(v), &g, fw, !v.style.color);
     let wide = v.width >= cockpit::TWO_COLUMNS;
     let columns = v.width >= TWO_PANE_WIDTH;
-    let lw = if wide { cockpit::LEFT_WIDTH } else { fw };
     let page_rows = v.height.saturating_sub(1 + footer.lines.len()).max(8);
     let index = v.index.min(rows.len().saturating_sub(1));
-    // AC27: the list takes every row of its panel, so the panel fills a tall terminal. Stacked, the
-    // path of the cursor's row and the action field close the panel.
-    let list_lines = page_rows.saturating_sub(if wide { 2 } else { 4 }).max(3);
+    // AC27: the list takes every row of its panel, so the panel fills a tall terminal. The path of
+    // the cursor's row (stacked; beside, the selected panel has it) and the action field close it.
+    let list_lines = page_rows.saturating_sub(4).max(3);
     let (start, visible) = project_viewport(&rows, index, list_lines);
+    let lw = if wide {
+        list_width(rows.get(start..start + visible).unwrap_or_default(), fw, v, &g)
+    } else {
+        fw
+    };
     // Two cells free before the right border.
     let inner = lw.saturating_sub(4);
     let shown = rows.get(start..start + visible).unwrap_or_default();
@@ -366,21 +373,17 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let (mut body, row_ys) = list_body(&rows, &w, v, &g);
     let selected = row_ys.get(index.saturating_sub(start)).copied();
     let painter = |l: &str, enabled: bool| add_match_color(&add_picker_color(l, enabled, &g), enabled);
-    let radio_inner = if wide { fw - lw - 2 } else { inner };
-    let radio = action_radio(v.action, v.hover_value, radio_inner, &g, !wide);
-    let mut action = None;
-    if !wide {
-        body.resize(list_lines, String::new());
-        let path = theme::strip_ctl(rows.get(index).map_or("", |r| r.path.as_str()));
-        body.push(if path.is_empty() {
-            String::new()
-        } else {
-            let line = format!("   {}", cockpit::dim(&limit_path(&path, inner.saturating_sub(4), v.style.ascii)));
-            mark_matches(&line, &filter_words(v.filter), 3, usize::MAX)
-        });
-        action = Some(action_hit(&radio, i32::try_from(1 + body.len()).unwrap_or(0), 0));
-        body.push(radio.text.clone());
-    }
+    let radio = action_radio(v.action, v.hover_value, inner, &g, true);
+    body.resize(list_lines, String::new());
+    let path = theme::strip_ctl(rows.get(index).map_or("", |r| r.path.as_str()));
+    body.push(if path.is_empty() || wide {
+        String::new()
+    } else {
+        let line = format!("   {}", cockpit::dim(&limit_path(&path, inner.saturating_sub(4), v.style.ascii)));
+        mark_matches(&line, &filter_words(v.filter), 3, usize::MAX)
+    });
+    let action = Some(action_hit(&radio, i32::try_from(1 + body.len()).unwrap_or(0), 0));
+    body.push(radio.text);
     let list = Panel {
         title: cockpit::identity(&g),
         page: title(v, &g),
@@ -396,19 +399,14 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     if wide {
         let rw = fw - lw;
         let sel = rows.get(index);
-        let detail_h = 6;
-        let mut detail = Panel::plain(
-            &format!("selected {} {}", g.dot, sel.map_or(String::new(), |r| clean_text(&r.name))),
-            selected_lines(sel, v, rw - 2),
-            rw,
-            detail_h,
-        );
-        detail.painter = &painter;
-        let mut right = cockpit::render(&detail, v.style);
-        let mut act = Panel::plain("action", vec![radio.text.clone()], rw, page_rows - detail_h);
-        act.painter = &painter;
-        right.extend(cockpit::render(&act, v.style));
-        action = Some(action_hit(&radio, i32::try_from(detail_h + 1).unwrap_or(0), lw));
+        let detail = v.detail.filter(|d| sel.is_some_and(|r| d.key == project_key(&r.path)));
+        let facts = selected_lines(sel, detail, v, rw - 2);
+        let facts_h = (facts.len() + 2).min(page_rows.saturating_sub(3));
+        let title = format!("selected {} {}", g.dot, sel.map_or(String::new(), |r| clean_text(&r.name)));
+        let mut right = cockpit::render(&Panel::plain(&title, facts, rw, facts_h), v.style);
+        let sessions_h = page_rows - facts_h;
+        let listed = session_lines(sel, detail, v, rw - 2, sessions_h.saturating_sub(2), &g);
+        right.extend(cockpit::render(&Panel::plain("sessions", listed, rw, sessions_h), v.style));
         lines = cockpit::beside(lines, lw, &right);
     }
     let y = |n: usize| i32::try_from(1 + n).unwrap_or(i32::MAX);
@@ -430,21 +428,93 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     Frame { lines, map }
 }
 
-/// The cursor's project beside the list: its path, how long ago it ran, its worktree.
-fn selected_lines(r: Option<&Row>, v: &ProjectView<'_>, inner: usize) -> Vec<String> {
+/// The list panel beside the context: what its rows need (mark, name, the full path, age) and no
+/// more, at most 60 % of the frame; paths are cut only past that cap. Never narrower than the
+/// action field and the title need.
+fn list_width(shown: &[Row], fw: usize, v: &ProjectView<'_>, g: &Glyphs) -> usize {
+    let listed = || shown.iter().filter(|r| r.kind != RowKind::Path);
+    let label = listed()
+        .map(|r| display_width(&theme::strip_ctl(&label_text(r, v, g))))
+        .max()
+        .unwrap_or(0);
+    let path = listed().map(|r| display_width(&theme::strip_ctl(&r.path))).max().unwrap_or(0);
+    let age = listed().map(|r| display_width(&age_text(r, v))).max().unwrap_or(0);
+    let need = 4 + 3 + label + 2 + path + if age > 0 { 1 + age } else { 0 };
+    need.max(LIST_MIN_WIDTH).min(fw * 3 / 5)
+}
+
+/// The action field and the counts in the title need this much.
+const LIST_MIN_WIDTH: usize = 64;
+
+/// The label column of the selected panel's facts.
+const FACT_LABEL: usize = 10;
+
+fn fact(label: &str, value: &str) -> String {
+    format!("  {}{value}", cockpit::dim(&format!("{label:<FACT_LABEL$}")))
+}
+
+/// The cursor's project beside the list: its full path, the git branch, its session count and
+/// the newest session's title and age.
+fn selected_lines(r: Option<&Row>, d: Option<&Detail>, v: &ProjectView<'_>, inner: usize) -> Vec<String> {
     let Some(r) = r else { return Vec::new() };
-    let mut out = vec![format!(
-        "  {}",
-        cockpit::dim(&limit_path(&theme::strip_ctl(&r.path), inner.saturating_sub(4), v.style.ascii))
-    )];
-    let age = age_text(r, v);
-    if !age.is_empty() {
-        out.push(format!("  {}  {age}", cockpit::dim("last session")));
+    let ascii = v.style.ascii;
+    if r.kind == RowKind::Path {
+        return vec![format!("  {}", cockpit::dim("type a folder path; enter opens it"))];
     }
+    let room = inner.saturating_sub(2 + FACT_LABEL + 2);
+    let mut out = vec![fact("path", &limit_path(&theme::strip_ctl(&r.path), room, ascii))];
     if r.worktree {
-        out.push(format!("  {}", cockpit::dim("a worktree")));
+        out.push(fact("worktree", &limit_line(&clean_text(&r.name), room, ascii)));
+    }
+    let Some(d) = d else {
+        out.push(fact(
+            "sessions",
+            &cockpit::dim(&format!("loading{}", crate::layout::ellipsis(ascii))),
+        ));
+        return out;
+    };
+    if let Some(b) = &d.branch {
+        out.push(fact("branch", &limit_line(&clean_text(b), room, ascii)));
+    }
+    out.push(fact("sessions", &d.count.to_string()));
+    if let Some(s) = d.sessions.first() {
+        // The age leads: right-aligned at the far border it would sit a whole wide column away.
+        let age = relative_age(s.modified_ms, v.now_ms);
+        let title = limit_line(&clean_text(&s.title), room.saturating_sub(display_width(&age) + 2), ascii);
+        out.push(fact("last", &format!("{}  {title}", cockpit::dim(&age))));
     }
     out
+}
+
+/// The selected project's newest sessions, as many as `rows` hold: title, age, a green dot on a
+/// running one.
+fn session_lines(r: Option<&Row>, d: Option<&Detail>, v: &ProjectView<'_>, inner: usize, rows: usize, g: &Glyphs) -> Vec<String> {
+    let ascii = v.style.ascii;
+    if r.is_none_or(|r| r.kind == RowKind::Path) {
+        return Vec::new();
+    }
+    let Some(d) = d else {
+        return vec![format!("  {}", cockpit::dim(&format!("loading{}", crate::layout::ellipsis(ascii))))];
+    };
+    if d.sessions.is_empty() {
+        return vec![format!("  {}", cockpit::dim("no sessions yet"))];
+    }
+    let shown = d.sessions.iter().take(rows);
+    let ages: Vec<String> = shown.clone().map(|s| relative_age(s.modified_ms, v.now_ms)).collect();
+    let age_w = ages.iter().map(|a| display_width(a)).max().unwrap_or(0);
+    // Ages first, right-aligned in their own column: the titles take the spare width.
+    shown
+        .zip(&ages)
+        .map(|(s, age)| {
+            let dot = if s.live {
+                theme::tone(theme::TONE_LIVE, &g.on.to_string())
+            } else {
+                " ".to_owned()
+            };
+            let title = limit_line(&clean_text(&s.title), inner.saturating_sub(4 + age_w + 2 + 2), ascii);
+            format!("  {dot} {}  {title}", cockpit::dim(&format!("{age:>age_w$}")))
+        })
+        .collect()
 }
 
 /// The action field as a radio row inside a box of `inner` cells; unlabelled in its own panel,
