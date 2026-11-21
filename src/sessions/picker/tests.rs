@@ -245,6 +245,28 @@ fn idle_polls_load_pages_until_a_tall_terminal_is_filled() {
     assert!(calls <= 8, "and stop once it is full: {calls} pages");
 }
 
+/// The launch page's cwd row froze 5.5 s before the picker showed: the scope had no row in 149
+/// pages and the first frame waited for all of them.
+#[test]
+fn the_first_frame_fetches_no_page_past_the_opening_one() {
+    // Given: a scope whose rows the first 100 pages never hold.
+    let mut calls = 0;
+    let mut f = |have: usize, _s: &[String]| {
+        calls += 1;
+        let page = if have < 1000 { have..have + 10 } else { 0..0 };
+        page.map(|i| row(&format!("s{i}"), "other", 1)).collect::<Vec<Session>>()
+    };
+    let first = f(0, &[]);
+    let mut s = PickerScreen::new(first, Some(&mut f), 10, &[], "Desktop", style(), clock());
+    // When: the picker opens and Escape is the first event after its first frame.
+    let esc = crate::input::Event::Key(crate::input::scripted_key("Escape").unwrap());
+    let mut term = crate::ui::script_term::ScriptTerm::new((130, 40), [esc].into_iter());
+    assert_eq!(run(&mut s, &mut term), Ok(None));
+    drop(s);
+    // Then: the frame came from the opening page alone; the rest is for idle polls.
+    assert_eq!(calls, 1, "pages fetched before the first frame");
+}
+
 #[test]
 fn a_click_selects_and_a_second_click_opens() {
     let first = vec![row("a", "x", 1), row("b", "x", 1)];
