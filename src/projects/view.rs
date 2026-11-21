@@ -413,7 +413,13 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let lw = match v.home {
         Some(h) if wide => h.left_width.min(fw),
         // The selected project's facts and sessions keep the facts column's width; the list the rest.
-        _ if wide => fw - cockpit::FACTS_WIDTH.min(fw / 2),
+        // Under ~140 columns the facts give way to FACTS_MIN, as on the launch page.
+        _ if wide => {
+            fw - cockpit::FACTS_WIDTH
+                .min(fw.saturating_sub(LIST_MIN))
+                .max(cockpit::FACTS_MIN)
+                .min(fw / 2)
+        }
         _ => fw,
     };
     let list_focused = v.home.is_none_or(|h| h.focus == HomeFocus::Projects);
@@ -554,6 +560,9 @@ fn selected_lines(r: Option<&Row>, d: Option<&Detail>, v: &ProjectView<'_>, inne
     }
     out
 }
+
+/// The list's width before the facts beside it give way: a name, a path and an age.
+const LIST_MIN: usize = 74;
 
 /// The narrow page's sessions: the selected project's sessions panel alone, `fw` by `page_rows`.
 fn sessions_page(v: &ProjectView<'_>, sel: Option<&Row>, (fw, page_rows): (usize, usize), footer: &frame::Footer, g: &Glyphs) -> Frame {
