@@ -8,7 +8,9 @@
 //!   sessions `prefetch` names, never while the demand worker has work, never past one pane
 //!   height or `PREFETCH_BYTES` per session.
 //!
-//! Everything streamed stays for the life of the picker: going back to a session reads nothing.
+//! Every message streamed stays for the life of the picker: going back to a session reads nothing.
+//! A stream read to its start or cap is closed; at most `MAX_OPEN` stay open to resume, the least
+//! recently used closed first, never the one on screen.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -51,7 +53,20 @@ const REST_POLLS: u8 = 2;
 /// resumes from there when the cursor lands on it.
 pub const PREFETCH_BYTES: u64 = 1 << 20;
 
-type Streams = Arc<Mutex<HashMap<ChatKey, ChatStream<File>>>>;
+/// Streams kept open between jobs; past this many the least recently used one is closed (its
+/// messages stay shown; a later job reopens it from the file's end).
+const MAX_OPEN: usize = 16;
+
+/// The open streams, each with when it was last kept, and the demand worker's last session.
+#[derive(Debug, Default)]
+struct Kept {
+    open: HashMap<ChatKey, (ChatStream<File>, u64)>,
+    tick: u64,
+    /// The session on screen (the demand worker's last job): never closed for room.
+    viewed: Option<ChatKey>,
+}
+
+type Streams = Arc<Mutex<Kept>>;
 
 #[derive(Debug, Clone)]
 struct Job {
@@ -95,6 +110,8 @@ pub struct ChatPane {
     queue_fill: Fill,
     bytes: u64,
     timings: Timings,
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by the tests that count open streams"))]
+    streams: Streams,
     #[cfg_attr(not(test), expect(dead_code, reason = "held for the test that joins them"))]
     threads: Vec<JoinHandle<()>>,
 }
@@ -111,12 +128,33 @@ impl std::fmt::Debug for ChatPane {
 
 /// The stream of `key`: the one kept from an earlier job, else a new one from the file's end.
 fn take(streams: &Streams, key: &ChatKey) -> Option<ChatStream<File>> {
-    let kept = streams.lock().unwrap_or_else(PoisonError::into_inner).remove(key);
-    kept.or_else(|| ChatStream::open(&key.path))
+    let kept = streams.lock().unwrap_or_else(PoisonError::into_inner).open.remove(key);
+    kept.map(|(s, _)| s).or_else(|| ChatStream::open(&key.path))
 }
 
-fn keep(streams: &Streams, key: ChatKey, s: ChatStream<File>) {
-    streams.lock().unwrap_or_else(PoisonError::into_inner).insert(key, s);
+/// Keeps `s` open to resume, unless it is done (its file and carry closed: the messages it found
+/// went out in the replies). `viewed`: the demand worker's, the session on screen.
+fn keep(streams: &Streams, key: ChatKey, s: ChatStream<File>, viewed: bool) {
+    let mut k = streams.lock().unwrap_or_else(PoisonError::into_inner);
+    if viewed {
+        k.viewed = Some(key.clone());
+    }
+    if s.done() {
+        return;
+    }
+    k.tick += 1;
+    let tick = k.tick;
+    k.open.insert(key, (s, tick));
+    while k.open.len() > MAX_OPEN {
+        let oldest = k
+            .open
+            .iter()
+            .filter(|(key, _)| k.viewed.as_ref() != Some(*key))
+            .min_by_key(|(_, (_, t))| *t)
+            .map(|(key, _)| key.clone());
+        let Some(oldest) = oldest else { break };
+        k.open.remove(&oldest);
+    }
 }
 
 fn reply(key: &ChatKey, s: Option<&ChatStream<File>>, fill: Fill, bytes: u64, last: bool) -> Reply {
@@ -160,7 +198,7 @@ fn demand_loop(jobs: &Receiver<Job>, done: &Sender<Reply>, streams: &Streams) {
             }
         }
         let last = reply(&job.key, Some(&s), job.fill, 0, true);
-        keep(streams, job.key, s);
+        keep(streams, job.key, s, true);
         if done.send(last).is_err() {
             return;
         }
@@ -183,7 +221,7 @@ fn prefetch_loop(jobs: &Receiver<Job>, done: &Sender<Reply>, streams: &Streams) 
         let before = s.bytes_read();
         s.step();
         let r = reply(&job.key, Some(&s), job.fill, s.bytes_read() - before, true);
-        keep(streams, job.key, s);
+        keep(streams, job.key, s, false);
         if done.send(r).is_err() {
             return;
         }
@@ -199,9 +237,10 @@ impl ChatPane {
         let (prefetch, prefetch_jobs) = channel::<Job>();
         let (done, replies) = channel::<Reply>();
         let (s1, d1) = (Arc::clone(&streams), done.clone());
+        let s2 = Arc::clone(&streams);
         let threads = vec![
             std::thread::spawn(move || demand_loop(&demand_jobs, &d1, &s1)),
-            std::thread::spawn(move || prefetch_loop(&prefetch_jobs, &done, &streams)),
+            std::thread::spawn(move || prefetch_loop(&prefetch_jobs, &done, &s2)),
         ];
         Self {
             demand,
@@ -217,6 +256,7 @@ impl ChatPane {
             queue_fill: Fill { rows: 0, cols: 0 },
             bytes: 0,
             timings,
+            streams,
             threads,
         }
     }
@@ -337,6 +377,17 @@ impl ChatPane {
             );
         }
         changed
+    }
+
+    /// How many transcripts the workers hold open.
+    #[cfg(test)]
+    fn open_streams(&self) -> usize {
+        self.streams.lock().unwrap_or_else(PoisonError::into_inner).open.len()
+    }
+
+    #[cfg(test)]
+    fn is_open(&self, key: &ChatKey) -> bool {
+        self.streams.lock().unwrap_or_else(PoisonError::into_inner).open.contains_key(key)
     }
 
     /// The worker threads, for a test that proves they end with the pane.
