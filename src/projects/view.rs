@@ -410,18 +410,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     // the cursor's row (stacked; beside, the selected panel has it) and the action field close it.
     let list_lines = page_rows.saturating_sub(4).max(3);
     let (start, visible) = project_viewport(&rows, index, list_lines);
-    let lw = match v.home {
-        Some(h) if wide => h.left_width.min(fw),
-        // The selected project's facts and sessions keep the facts column's width; the list the rest.
-        // Under ~140 columns the facts give way to FACTS_MIN, as on the launch page.
-        _ if wide => {
-            fw - cockpit::FACTS_WIDTH
-                .min(fw.saturating_sub(LIST_MIN))
-                .max(cockpit::FACTS_MIN)
-                .min(fw / 2)
-        }
-        _ => fw,
-    };
+    let lw = list_panel_width(v, fw, wide);
     let list_focused = v.home.is_none_or(|h| h.focus == HomeFocus::Projects);
     // Two cells free before the right border.
     let inner = lw.saturating_sub(4);
@@ -559,6 +548,22 @@ fn selected_lines(r: Option<&Row>, d: Option<&Detail>, v: &ProjectView<'_>, inne
         out.push(fact("last", &format!("{}  {title}", cockpit::dim(&age))));
     }
     out
+}
+
+/// The list panel's width: beside the launch panel the workspace's left column; beside the
+/// selected project's facts and sessions the rest of the page, the facts keeping their column (under
+/// ~140 columns they give way to `FACTS_MIN`, as on the launch page); alone the whole frame.
+fn list_panel_width(v: &ProjectView<'_>, fw: usize, wide: bool) -> usize {
+    match v.home {
+        Some(h) if wide => h.left_width.min(fw),
+        _ if wide => {
+            fw - cockpit::FACTS_WIDTH
+                .min(fw.saturating_sub(LIST_MIN))
+                .max(cockpit::FACTS_MIN)
+                .min(fw / 2)
+        }
+        _ => fw,
+    }
 }
 
 /// The list's width before the facts beside it give way: a name, a path and an age.
