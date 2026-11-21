@@ -3,9 +3,10 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use super::PickerView;
-use crate::frame::{Footer, FooterLight, Frame, RowMap, add_hint_color, footer_hover, format_body_line};
+use crate::cockpit;
+use crate::frame::{Footer, FooterLight, Frame, RowMap, add_hint_color, footer_hover};
 use crate::list::add_hover_span_at;
-use crate::theme::{add_select_band_color, add_tone_color};
+use crate::theme::{add_select_band_color, add_tone_color, glyphs};
 
 /// Where a hover band goes on one memoised row: line, first character, length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,14 +20,17 @@ pub(super) struct Band {
 #[derive(Debug, Clone, Default)]
 pub struct Memo {
     pub(super) key: u64,
+    /// The sessions panel's interior line on each page row, then the footer's plain lines.
     pub(super) unpainted: Vec<String>,
     pub(super) painted: Vec<String>,
+    /// The chat panel's painted line on each page row (empty when stacked).
+    pub(super) right: Vec<String>,
+    pub(super) left_width: usize,
     pub(super) hover_row: i32,
     pub(super) hover: i32,
     pub(super) rows: Vec<(i32, Band)>,
     pub(super) footer: Option<Footer>,
     pub(super) footer_index: usize,
-    pub(super) width: usize,
     pub(super) map: RowMap,
     pub(super) selected: i32,
 }
@@ -78,7 +82,9 @@ impl Memo {
                 if idx == v.hover_row {
                     line = add_hover_span_at(&line, b.start, b.len)?;
                 }
-                *painted.get_mut(b.y)? = format_body_line(&line, self.width, v.style, &paint);
+                let panel = super::sessions_panel(String::new(), Vec::new(), self.left_width, 0, &paint, &glyphs(v.style.ascii));
+                let right = self.right.get(b.y).map_or("", String::as_str);
+                *painted.get_mut(b.y)? = format!("{}{right}", cockpit::line(&panel, &line, false, v.style));
             }
         }
         if self.hover != v.hover

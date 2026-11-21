@@ -230,9 +230,54 @@ pub fn run_project_screen(
     crate::ui::screen_loop::run(&mut s, term)
 }
 
+/// The launch page's recent projects: the five newest that are not hidden, newest first, each with
+/// its age at `now_ms`.
+pub(crate) fn recent_projects(projects: &[Project], now_ms: i64) -> Vec<crate::launch::frame::RecentProject> {
+    let mut shown: Vec<(&Project, i64)> = projects
+        .iter()
+        .filter(|p| !p.hidden)
+        .filter_map(|p| p.last_activity_ms.map(|t| (p, t)))
+        .collect();
+    shown.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    shown
+        .into_iter()
+        .take(5)
+        .map(|(p, t)| crate::launch::frame::RecentProject {
+            name: p.name.clone(),
+            path: p.path.clone(),
+            slug: p.slug.clone(),
+            slugs: p.slugs.clone(),
+            age: view::relative_age(t, now_ms),
+            last: String::new(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_projects_are_the_five_newest_shown_ones_newest_first() {
+        let at = |slug: &str, mins: i64, hidden: bool| Project {
+            last_activity_ms: Some(1_000_000_000 - mins * 60_000),
+            hidden,
+            ..crate::projects::select::tests::proj(slug, &format!(r"C:\w\{slug}"), slug)
+        };
+        let ps = vec![
+            at("a", 30, false),
+            at("b", 3, false),
+            at("h", 1, true),
+            at("c", 90, false),
+            at("d", 5, false),
+            at("e", 7, false),
+            at("f", 9, false),
+        ];
+        let r = recent_projects(&ps, 1_000_000_000);
+        let names: Vec<&str> = r.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["b", "d", "e", "f", "a"], "hidden h and the sixth (c) are left out");
+        assert_eq!((r[0].age.as_str(), r[0].slug.as_str()), ("3 min", "b"));
+    }
     use crate::projects::registry::tests::Tree;
     use crate::projects::select::tests::proj;
 

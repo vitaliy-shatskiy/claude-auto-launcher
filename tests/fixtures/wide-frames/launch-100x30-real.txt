@@ -1,14 +1,17 @@
-╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ✻ claude-auto                     v2.1.226 ↑ 2.1.230   5h 41% · 7d 63% · fable 15% · 12 min ago │
+╭─ ✻ claude-auto ───────────────────────────────────────── 0.9.0 · Claude Code 2.1.226 ↑ 2.1.230 ─╮
+│ ❯ account      [work 41%] ┊ personal 17% ┊ low 43%                                              │
+│   remote       ● [on] ○ off ○ on+QR ○ stop server                                               │
+│   model*       ○ Haiku 5.5 ○ Sonnet 5.5 ● [Opus 5.5[1M]] ○ Fable 5.2                            │
+│   effort*      ○ low ○ medium ○ high ● [xhigh] ○ max ○ ultracode                                │
+│   advisor*     ○ default ● [fable] ○ opus ○ off                                                 │
+│   permission*  ○ plan ○ auto ○ acceptEdits ● [bypass]                                           │
+│   mode         ● [normal] ○ safe                                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-
- ❯ account     [work 41%] ┊ personal 17% ┊ low 43%
-   remote      ● [on] ○ off ○ on+QR ○ stop server
-   model*      ○ Haiku 5.5 ○ Sonnet 5.5 ● [Opus 5.5[1M]] ○ Fable 5.2
-   effort*     ○ low ○ medium ○ high ● [xhigh] ○ max ○ ultracode
-   advisor*    ○ default ● [fable] ○ opus ○ off
-   permission* ○ plan ○ auto ○ acceptEdits ● [bypass]
-   mode        ● [normal] ○ safe
-
-  ───────────────────────────────────────────────────────────────────────────────────────────────
-  w/s row  ┊  a/d ←/→ switch  ┊  [enter] next  ┊  [u] maintenance  ┊  ctrl+r reset  ┊  [esc] quit
+╭─ limits · work ─────────────────────────────────────────────────────────────────────────────────╮
+│  5h 41%  7d 63%  fable 15%                                                     data 12 min ago  │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ recent ────────────────────────────────────────────────────────────────────────────────────────╮
+│  no recent projects yet                                                                         │
+│  enter opens the project list                                                                   │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+  w/s row  ┊  a/d switch  ┊  [enter] next  ┊  [u] maint  ┊  ^r reset  ┊  [esc] quit

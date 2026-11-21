@@ -1,13 +1,14 @@
-//! The maintenance page, pure: the header box, then one column of groups. A group's header names
-//! it in the accent colour with its facts inline (dim, the status word coloured); its actions sit
-//! indented under it, chip and name on the left, the hint or the live state right-aligned.
+//! The maintenance page, pure, in the cockpit frame: the actions in groups (title in the accent,
+//! chip and name on the left, the hint or the live state right-aligned) in the focused panel; the
+//! last run, the versions and the warnings in their own panels.
 
+use crate::cockpit::{self, Focus, Panel};
 use crate::frame::{
-    BODY_TOP, Footer, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowHit, RowMap, Style, complete_frame, footer_hover, frame_width,
-    header_page, new_hint_footer, right_edge, too_small_frame,
+    Footer, FooterLight, Frame, Hint, MIN_HEIGHT, MIN_WIDTH, RowHit, RowMap, Style, append_footer, footer_hover, frame_width,
+    new_hint_footer, too_small_frame,
 };
 use crate::layout::{display_width, limit_line};
-use crate::theme::{self, DIM_CLOSE, DIM_OPEN, Glyphs, SELECT_CLOSE, SELECT_OPEN, add_hover_span, glyphs, strip_ctl};
+use crate::theme::{self, DIM_CLOSE, DIM_OPEN, Glyphs, add_hover_span, glyphs, strip_ctl};
 
 use super::super::install::InstallInfo;
 use super::gib;
@@ -91,8 +92,6 @@ const CHIP_OPEN: char = '\u{f}';
 const CLOSE: char = '\u{10}';
 const ACCENT_OPEN: char = '\u{11}';
 
-/// The group title column.
-const GROUP_W: usize = 15;
 /// Where an action row's chip starts.
 const ROW_INDENT: &str = "   ";
 
@@ -118,23 +117,6 @@ fn facts(pieces: &[String], g: &Glyphs) -> String {
     pieces.join(&dim(&format!(" {} ", g.dot)))
 }
 
-fn claude_code_facts(p: &Page, g: &Glyphs) -> String {
-    let installed = p
-        .installed
-        .clone()
-        .or_else(|| p.info.matches.then(|| p.info.newest_version.clone()).flatten());
-    let newest = p.newest.clone().or_else(|| p.info.newest_version.clone());
-    let mut out = match (&installed, &newest) {
-        (Some(i), Some(n)) if i == n => vec![dim(&strip_ctl(i)), tint(GREEN_OPEN, "newest")],
-        (Some(i), Some(n)) => vec![dim(&strip_ctl(i)), tint(YELLOW_OPEN, &format!("update available {}", strip_ctl(n)))],
-        (Some(i), None) => vec![dim(&strip_ctl(i))],
-        (None, _) => vec![tint(YELLOW_OPEN, "version unknown")],
-    };
-    out.push(dim(&format!("{} builds", p.info.version_count)));
-    out.push(dim(&format!("{} GB", gib(p.info.versions_bytes))));
-    facts(&out, g)
-}
-
 /// `0.9.0 · up to date · self-update notify` from the module's `self-update notify, up to date`.
 fn launcher_facts(p: &Page, g: &Glyphs) -> String {
     let words = strip_ctl(&p.launcher);
@@ -148,34 +130,6 @@ fn launcher_facts(p: &Page, g: &Glyphs) -> String {
         None => out.push(dim(if words.is_empty() { "self-update off" } else { &words })),
     }
     facts(&out, g)
-}
-
-fn group_line(title: &str, facts: &str) -> String {
-    if facts.is_empty() {
-        return format!(" {}", tint(ACCENT_OPEN, title));
-    }
-    let pad = " ".repeat(GROUP_W.saturating_sub(display_width(title)));
-    format!(" {}{pad}{facts}", tint(ACCENT_OPEN, title))
-}
-
-fn warning_lines(p: &Page, g: &Glyphs) -> Vec<String> {
-    if p.warnings.is_empty() {
-        return vec![group_line("Warnings", &tint(GREEN_OPEN, "none"))];
-    }
-    let lead = " ".repeat(GROUP_W + 1);
-    let mut out = Vec::new();
-    for (i, w) in p.warnings.iter().enumerate() {
-        let text = tint(YELLOW_OPEN, &format!("{} {}", g.warn, strip_ctl(w)));
-        out.push(if i == 0 {
-            group_line("Warnings", &text)
-        } else {
-            format!("{lead}{text}")
-        });
-        if w.starts_with("config:") && !p.config_path.is_empty() {
-            out.push(format!("{lead}  {}", dim(&format!("fix it in {}", strip_ctl(&p.config_path)))));
-        }
-    }
-    out
 }
 
 /// The row's right column: the live state of the last action, else the selected row's hint.
@@ -225,17 +179,10 @@ fn action_row(p: &Page, i: usize, e: &Entry, edge: usize, color: bool, ascii: bo
     let body = format!("{} {name}", chip(e.key, color));
     let body = if hovered { add_hover_span(&body) } else { body };
     let pad = edge.saturating_sub(display_width(&left_plain) + display_width(&state));
-    let line = if state.is_empty() {
+    if state.is_empty() {
         format!("{ROW_INDENT}{body}")
     } else {
         format!("{ROW_INDENT}{body}{}{}", " ".repeat(pad), state_tint(p, e)(&state))
-    };
-    if selected {
-        // The band spans to the right edge so the fill reads as a row.
-        let fill = " ".repeat(edge.saturating_sub(display_width(&line)));
-        format!("{SELECT_OPEN}{line}{fill}{SELECT_CLOSE}")
-    } else {
-        line
     }
 }
 
@@ -267,14 +214,16 @@ fn paint(line: &str, color: bool, g: &Glyphs) -> String {
             .replace(RED_OPEN, theme::RED)
             .replace(YELLOW_OPEN, theme::YELLOW)
             .replace(CHIP_OPEN, &chip)
-            .replace(ACCENT_OPEN, &format!("{}{}", theme::BOLD, theme::ACCENT))
+            .replace(ACCENT_OPEN, &format!("{}{}", theme::BOLD, cockpit::ACCENT))
             .replace(CLOSE, theme::RESET);
         out.push_str(theme::RESET);
     }
     theme::add_select_band_color(&out, true)
 }
 
-/// The page at content height: header box, the groups one blank row apart, rule and footer.
+/// The page in the cockpit frame: the actions in groups in the focused panel; beside it (under it
+/// below `cockpit::TWO_COLUMNS` columns) the last run, the versions and the warnings. A panel with
+/// nothing to show is not drawn; a short terminal cuts the panels, never the footer.
 pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) -> Frame {
     let (width, height) = size;
     if width < MIN_WIDTH || height < MIN_HEIGHT {
@@ -285,8 +234,91 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
     }
     let g = glyphs(style.ascii);
     let fw = frame_width(width);
-    let edge = right_edge(width);
+    let wide = width >= cockpit::TWO_COLUMNS;
+    let lw = if wide { cockpit::MAINTENANCE_LEFT_WIDTH } else { fw };
+    let rw = fw - lw;
     let foot = footer(&g, fw, style.color);
+    let page_rows = height.saturating_sub(1 + foot.lines.len());
+    let (actions, rows) = action_lines(p, lw - 2, style, (!wide).then_some(&g));
+    let right_inner = if wide { rw - 2 } else { fw - 2 };
+    let versions = version_lines(p, &g);
+    let warnings = warning_lines(p, &g, right_inner);
+    let warn_h = if warnings.is_empty() { 0 } else { warnings.len() + 2 };
+    let ran = !p.last.is_empty() && p.phase != Phase::Idle;
+    let painter = |l: &str, e: bool| paint(l, e, &g);
+    let selected = rows
+        .iter()
+        .position(|r| r.index == p.selected)
+        .and_then(|i| rows.get(i))
+        .map(|r| usize::try_from(r.y).unwrap_or(1) - 1);
+    let left_h = if wide {
+        let run_need = if ran { 4 } else { 3 };
+        (actions.len() + 2).max(versions.len() + 2 + warn_h + run_need).min(page_rows)
+    } else {
+        (actions.len() + 2).min(page_rows)
+    };
+    let main = Panel {
+        title: cockpit::identity(&g),
+        page: "maintenance".into(),
+        right: env!("CARGO_PKG_VERSION").into(),
+        focus: Focus::Focused,
+        lines: actions,
+        width: lw,
+        height: left_h,
+        painter: &painter,
+        selected,
+    };
+    let mut lines = cockpit::render(&main, style);
+    let mut map = RowMap {
+        rows: rows
+            .into_iter()
+            .filter(|r| usize::try_from(r.y).is_ok_and(|y| y + 1 < left_h))
+            .collect(),
+        ..RowMap::default()
+    };
+    let panel = |title: &str, body: Vec<String>, w: usize, h: usize| {
+        let mut pn = Panel::plain(title, body, w, h);
+        pn.painter = &painter;
+        cockpit::render(&pn, style)
+    };
+    let run_title = if ran {
+        format!("{} {} last run", strip_ctl(&p.last), g.dot)
+    } else {
+        "last run".to_owned()
+    };
+    if wide {
+        let run_h = left_h.saturating_sub(versions.len() + 2 + warn_h).max(3);
+        let mut right = panel(&run_title, run_lines(p, rw - 2, run_h - 2, style.ascii), rw, run_h);
+        right.extend(panel("versions", versions, rw, 6));
+        if warn_h > 0 {
+            right.extend(panel("warnings", warnings, rw, warn_h));
+        }
+        right.truncate(page_rows.max(left_h));
+        lines = cockpit::beside(lines, lw, &right);
+    } else {
+        let mut room = page_rows.saturating_sub(lines.len());
+        if warn_h > 0 && room >= 3 {
+            let h = warn_h.min(room);
+            lines.extend(panel("warnings", warnings, fw, h));
+            room -= h;
+        }
+        if ran && room >= 3 {
+            let h = room.min(6);
+            lines.extend(panel(&run_title, run_lines(p, fw - 2, h - 2, style.ascii), fw, h));
+        }
+    }
+    let light = FooterLight {
+        hover: footer_hover(&foot, p.hover),
+        selected: Vec::new(),
+    };
+    let lines = append_footer(lines, &foot, fw, style, &light, &mut map);
+    Frame { lines, map }
+}
+
+/// The action rows under their group titles, a blank row between groups; their row hits sit at
+/// the page row each is drawn on (the panel's top border is row 0).
+/// `inline`: stacked, the Claude Code and claude-auto titles carry their facts (no versions panel).
+fn action_lines(p: &Page, inner: usize, style: Style, inline: Option<&Glyphs>) -> (Vec<String>, Vec<RowHit>) {
     let mut body: Vec<String> = Vec::new();
     let mut rows = Vec::new();
     let mut group: Option<Group> = None;
@@ -296,39 +328,111 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
                 body.push(String::new());
             }
             group = Some(e.group);
-            let facts = match e.group {
-                Group::ClaudeCode => claude_code_facts(p, &g),
-                Group::ClaudeAuto => launcher_facts(p, &g),
-                Group::Checks | Group::Launcher | Group::Custom => String::new(),
+            let facts = match (inline, e.group) {
+                (Some(g), Group::ClaudeCode) => facts(&[installed_text(p, g), disk_text(p, g)], g),
+                (Some(g), Group::ClaudeAuto) => launcher_facts(p, g),
+                _ => String::new(),
             };
-            body.push(group_line(e.group.title(), &facts));
+            let title = tint(ACCENT_OPEN, e.group.title());
+            body.push(if facts.is_empty() {
+                format!("  {title}")
+            } else {
+                format!("  {title}  {facts}")
+            });
         }
         rows.push(RowHit {
             index: i,
             name: e.key.to_string(),
-            y: i32::try_from(BODY_TOP + body.len()).unwrap_or(0),
+            y: i32::try_from(1 + body.len()).unwrap_or(0),
             cells: Vec::new(),
         });
-        body.push(action_row(p, i, e, edge, style.color, style.ascii));
+        body.push(action_row(p, i, e, inner.saturating_sub(2), style.color, style.ascii));
     }
-    if !body.is_empty() {
-        body.push(String::new());
+    (body, rows)
+}
+
+/// The installed build against the newest: `2.1.230 · newest`, `2.1.226 · update available 2.1.230`.
+fn installed_text(p: &Page, g: &Glyphs) -> String {
+    let installed = p
+        .installed
+        .clone()
+        .or_else(|| p.info.matches.then(|| p.info.newest_version.clone()).flatten());
+    match (&installed, &newest_of(p)) {
+        (Some(i), Some(n)) if i == n => facts(&[strip_ctl(i), tint(GREEN_OPEN, "newest")], g),
+        (Some(i), Some(n)) => facts(&[strip_ctl(i), tint(YELLOW_OPEN, &format!("update available {}", strip_ctl(n)))], g),
+        (Some(i), None) => strip_ctl(i),
+        (None, _) => tint(YELLOW_OPEN, "version unknown"),
     }
-    body.extend(warning_lines(p, &g));
-    // A short terminal cuts the body: the header, the rule, the footer and the headroom row stay.
-    let room = height.saturating_sub(BODY_TOP + 3 + foot.lines.len());
-    if body.len() > room {
-        body.truncate(room);
-        rows.retain(|r| usize::try_from(r.y).is_ok_and(|y| y < BODY_TOP + room));
+}
+
+fn newest_of(p: &Page) -> Option<String> {
+    p.newest.clone().or_else(|| p.info.newest_version.clone())
+}
+
+/// `3 builds · 0.8 GB`.
+fn disk_text(p: &Page, g: &Glyphs) -> String {
+    facts(
+        &[
+            format!("{} builds", p.info.version_count),
+            format!("{} GB", gib(p.info.versions_bytes)),
+        ],
+        g,
+    )
+}
+
+/// Installed, newest, the builds on disk and claude-auto, each after a dim label.
+fn version_lines(p: &Page, g: &Glyphs) -> Vec<String> {
+    let line = |label: &str, value: String| format!("  {}{value}", dim(&format!("{label:<14}")));
+    vec![
+        line("installed", installed_text(p, g)),
+        line("newest", newest_of(p).as_deref().map_or_else(|| dim("unknown"), strip_ctl)),
+        line("on disk", disk_text(p, g)),
+        line("claude-auto", launcher_facts(p, g)),
+    ]
+}
+
+/// One line per warning, its label coloured; a config warning names the file to fix it in.
+fn warning_lines(p: &Page, g: &Glyphs, inner: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for w in &p.warnings {
+        let w = strip_ctl(w);
+        let label = if w.contains("not found") || w.contains("failed") {
+            tint(RED_OPEN, "error  ")
+        } else {
+            tint(YELLOW_OPEN, "warning")
+        };
+        out.push(format!(
+            "  {label}  {} {}",
+            g.warn,
+            limit_line(&w, inner.saturating_sub(15), g.on == '*')
+        ));
+        if w.starts_with("config:") && !p.config_path.is_empty() {
+            out.push(format!("           {}", dim(&format!("fix it in {}", strip_ctl(&p.config_path)))));
+        }
     }
-    let title = format!("{} claude-auto {} maintenance", g.sparkle, g.dot);
-    let lines = header_page(body, width, &title, &[], style);
-    let mut map = RowMap { rows, ..RowMap::default() };
-    let light = FooterLight {
-        hover: footer_hover(&foot, p.hover),
-        selected: Vec::new(),
+    out
+}
+
+/// The last run: the tail of its report that fits, then where it stands.
+fn run_lines(p: &Page, inner: usize, rows: usize, ascii: bool) -> Vec<String> {
+    let state = match &p.phase {
+        Phase::Idle => return vec![format!("  {}", dim("nothing run yet"))],
+        Phase::Armed => tint(YELLOW_OPEN, "press again to run"),
+        Phase::Running(step) => tint(YELLOW_OPEN, &strip_ctl(step)),
+        Phase::Done => tint(GREEN_OPEN, "done"),
+        Phase::Failed(why) => tint(RED_OPEN, &format!("failed: {}", strip_ctl(why))),
     };
-    let painter = |l: &str, e: bool| paint(l, e, &g);
-    let lines = complete_frame(&lines, &foot, fw, style, &painter, &light, &mut map);
-    Frame { lines, map }
+    let report: Vec<String> = clean(&p.status)
+        .lines()
+        .map(|l| limit_line(&strip_ctl(l.trim_end()), inner.saturating_sub(3), ascii))
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let keep = rows.saturating_sub(1);
+    let mut out: Vec<String> = report
+        .iter()
+        .skip(report.len().saturating_sub(keep))
+        .map(|l| format!("  {l}"))
+        .collect();
+    out.push(format!("  {state}"));
+    out
 }

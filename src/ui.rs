@@ -196,6 +196,8 @@ pub struct ConsoleTerm {
     /// lines that differ. Empty = rewrite everything.
     shown: Shown,
     last_bytes: usize,
+    /// The terminal draws 24-bit colour: the cockpit's codes go out exact.
+    truecolor: bool,
 }
 
 const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
@@ -222,7 +224,15 @@ impl ConsoleTerm {
             peek: Handle::open_console("CONIN$"),
             shown: Shown::default(),
             last_bytes: 0,
+            truecolor: false,
         }
+    }
+
+    /// Frames go out with the cockpit's exact 24-bit colours.
+    #[must_use]
+    pub fn with_truecolor(mut self, on: bool) -> Self {
+        self.truecolor = on;
+        self
     }
 
     /// Restores everything: the input mode, the buffer, the output mode. Idempotent.
@@ -253,6 +263,13 @@ impl Term for ConsoleTerm {
     }
 
     fn paint(&mut self, lines: &[String]) {
+        let upgraded: Vec<String>;
+        let lines = if self.truecolor {
+            upgraded = lines.iter().map(|l| crate::theme::to_truecolor(l)).collect();
+            &upgraded
+        } else {
+            lines
+        };
         if self.alt {
             let size = self.size();
             let bytes = self.shown.update(size, lines);
@@ -422,7 +439,12 @@ pub fn hit_at(map: Option<&RowMap>, x: i32, y: i32, window_top: i32) -> Hit {
         return Hit::Footer { span, index };
     }
     let row_y = y - window_top;
-    if let Some(a) = map.action.as_ref().filter(|a| a.y == row_y) {
+    // Only from the action field's first cell on: beside a list, the same row is a list row.
+    if let Some(a) = map
+        .action
+        .as_ref()
+        .filter(|a| a.y == row_y && a.cells.first().is_some_and(|c| x >= c.start))
+    {
         return Hit::Action {
             value: a.cells.iter().find(|c| x >= c.start && x <= c.end).map(|c| c.value.clone()),
         };

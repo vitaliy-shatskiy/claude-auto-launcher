@@ -261,7 +261,19 @@ fn preview_dumps_the_launch_frame_and_launches_nothing() {
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/wide-frames/launch-100x30.txt")).unwrap();
     let golden = golden.replace("\r\n", "\n");
     let expected = if out.contains('\u{256D}') { golden } else { to_ascii(&golden) };
-    assert!(out.starts_with(&expected), "frame differs:\n{out}");
+    // The first frame may be drawn before the background registry read answers: the recent panel
+    // then says it is loading instead of its empty state. The rest of the frame is the same.
+    let blank = |s: &str| {
+        [
+            "no recent projects yet",
+            "enter opens the project list",
+            "loading recent projects\u{2026}",
+            "loading recent projects...",
+        ]
+        .iter()
+        .fold(s.to_owned(), |acc, w| acc.replace(w, &" ".repeat(w.chars().count())))
+    };
+    assert!(blank(&out).starts_with(&blank(&expected)), "frame differs:\n{out}");
     assert!(out.contains("--- preview, nothing launched ---"));
     assert!(out.contains("launch args        : \n"), "a default launch adds no arguments: {out}");
     assert!(!out.contains("ARGV"), "preview never starts claude");

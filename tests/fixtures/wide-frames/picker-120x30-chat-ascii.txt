@@ -1,29 +1,29 @@
-+- resume - 5 sessions -----------------------------------------------------------------------------------------------+
-|   * project-1  session title 1          7 min | session title 2                                                     |
-| > project-2  session title 2           14 min | 16.09 11:46 - 20 msgs - 4 KB - project-2                            |
-|   @ feature  session title 3           21 min | ------------------------------------------------------------------- |
-|   project-4  session title 4           28 min |                                                   you - 16.09 11:10 |
-|   project-5  session title 5           35 min |                                    make the picker preview a chat   |
-|                                               |                                                                     |
-|                                               | claude - 16.09 11:11                                                |
-|                                               |   Plan: read the transcript tail on a worker thread,                |
-|                                               |   then render it.                                                   |
-|                                               |                                                                     |
-|                                               |                                                   you - 16.09 11:12 |
-|                                               |                                                         ok, do it   |
-|                                               |                                                                     |
-|                                               | claude - 16.09 11:40                                                |
-|                                               |   Done. Every step is in the log. Every step is in                  |
-|                                               |   the log. Every step is in the log. Every step is                  |
-|                                               |   in the log. Every step is in the log. Every step                  |
-|                                               |   is in the log. Every step is in the log. Every                    |
-|                                               |   step is in the log. Every step is in the log.                     |
-|                                               |   Every step is in the log. Every step is in the                    |
-|                                               |   log. Every step is in the log. Every step is in                   |
-|                                               |   the log. Every step is in the log. Every step is                  |
-|                                               |   in the log. Every step is in the log. Every step                  |
-|                                               |   is in the log. Every step is in the log. Every                    |
-|                                               |   step is in the log. Every step is in the log. The                 |
-|                                               |   last line of the newest reply.                                    |
-+---------------------------------------------------------------------------------------------------------------------+
++- * claude-auto - resume - 5 sessions ----------------------++- chat - project-2 ------------------------------------+
+|   * project-1  session title 1                      7 min  || session title 2                                       |
+| > project-2  session title 2                       14 min  || 16.09 11:46 - 20 msgs - 4 KB - project-2              |
+|   @ feature  session title 3                       21 min  || ----------------------------------------------------- |
+|   project-4  session title 4                       28 min  || claude - 16.09 11:11                                  |
+|   project-5  session title 5                       35 min  ||   Plan: read the transcript tail on a                 |
+|                                                            ||   worker thread, then render it.                      |
+|                                                            ||                                                       |
+|                                                            ||                                     you - 16.09 11:12 |
+|                                                            ||                                           ok, do it   |
+|                                                            ||                                                       |
+|                                                            || claude - 16.09 11:40                                  |
+|                                                            ||   Done. Every step is in the log. Every               |
+|                                                            ||   step is in the log. Every step is in                |
+|                                                            ||   the log. Every step is in the log.                  |
+|                                                            ||   Every step is in the log. Every step is             |
+|                                                            ||   in the log. Every step is in the log.               |
+|                                                            ||   Every step is in the log. Every step is             |
+|                                                            ||   in the log. Every step is in the log.               |
+|                                                            ||   Every step is in the log. Every step is             |
+|                                                            ||   in the log. Every step is in the log.               |
+|                                                            ||   Every step is in the log. Every step is             |
+|                                                            ||   in the log. Every step is in the log.               |
+|                                                            ||   Every step is in the log. Every step is             |
+|                                                            ||   in the log. Every step is in the log.               |
+|                                                            ||   Every step is in the log. The last line             |
+|                                                            ||   ... 1 more line                                     |
++------------------------------------------------------------++-------------------------------------------------------+
   w/s move  :  [/] filter  :  [enter] open  :  [f] fork  :  [esc] back

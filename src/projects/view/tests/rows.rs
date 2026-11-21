@@ -62,7 +62,8 @@ fn a_project_named_like_the_bullet_is_not_painted_as_one() {
 #[test]
 fn cs218_one_height_cursor_in_window_no_blank_above_action() {
     let ps = many(40, "project-name");
-    for (w, h, detail) in [(50, 20, 1), (120, 30, 0)] {
+    // Stacked, the path line and the action field close the list panel; beside it they sit apart.
+    for (w, h, detail) in [(50, 20, Some(1)), (120, 30, None)] {
         let all = project_rows(&ps, "", r"C:\x");
         let mut height = None;
         let mut prev: Option<i32> = None;
@@ -72,7 +73,7 @@ fn cs218_one_height_cursor_in_window_no_blank_above_action() {
             assert_eq!(*height.get_or_insert(f.lines.len()), f.lines.len(), "{w}x{h} {gi}: height");
             let next = usize::try_from(l.start + l.row_count).unwrap();
             let sep = all.get(next).is_some_and(|r| r.kind == RowKind::Path);
-            if !sep {
+            if let (false, Some(detail)) = (sep, detail) {
                 assert_eq!(
                     l.row_ys.last().unwrap() + 1 + detail,
                     f.map.action.clone().unwrap().y,
@@ -113,10 +114,14 @@ fn hover_bands_the_row_and_the_value() {
     let v = project_frame(&ProjectView {
         hover_value: "resume",
         style: color,
-        ..view(&ps, 0, r"C:\somewhere", 120, 24)
+        ..view(&ps, 0, r"C:\somewhere", 130, 24)
     });
     let ay = usize::try_from(v.map.action.unwrap().y).unwrap();
-    assert!(v.lines[ay].contains(&format!("{}\u{25CB} resume", theme::BUTTON_BG)));
+    assert!(
+        v.lines[ay].contains(&format!("{}\u{25CB} resume", theme::BUTTON_BG)),
+        "{:?}",
+        v.lines[ay]
+    );
 }
 
 #[test]

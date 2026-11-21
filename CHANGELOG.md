@@ -6,16 +6,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ### Changed
 
-- The launch screen, maintenance and the rows editor are back to content height under a rounded
-  header box (`✻ claude-auto`, the version and the limits at its right end); no empty page frame
+- The cockpit frame on the launch screen, maintenance, the project screen and the session picker:
+  rounded panels titled in their top border, the focused one carrying `✻ claude-auto ─ <page>` and
+  the versions in the accent colour, tinted interiors (24-bit where the terminal reports it), a
+  filled bold selected row with `❯`, one footer line under the panels; under 120 columns the
+  panels stack. The launch screen shows the selected account's limits one per line with the data
+  age on the panel's last row, recent projects, running sessions and Claude Code's state;
+  maintenance shows the last run, the versions and the warnings beside its actions; the project
+  screen shows the selected project and the action beside its list; the picker's chat preview is
+  its own panel. The rows editor and the path navigator keep their frames.
+- The rows editor is back to content height under a rounded header box; no empty page frame
   fills the terminal.
-- Maintenance lists its actions in groups (Claude Code, Checks, claude-auto, Launcher, Custom,
-  Warnings) with each group's facts on its title line; hints and live states share one
-  right-aligned column. claude-auto's entries read `update to <version>` and `roll back`.
-- Hovering a row label, a value, an action row or a footer key paints it again on these screens,
-  without selecting it; one test walks every clickable region of each screen.
+- Maintenance lists its actions in groups (Claude Code, Checks, claude-auto, Launcher, Custom);
+  hints and live states share one right-aligned column. claude-auto's entries read
+  `update to <version>` and `roll back`.
+- Hovering a row label, a value, an action row, a recent project or a footer key paints it again
+  on these screens, without selecting it; one test walks every clickable region of each screen.
 
 ### Added
+
+- Launch keys `1`-`5` (or a click on the line) continue that recent project's newest session with
+  the choices on screen, skipping the project screen, as its `c` would.
 
 - A JSON Schema for the config, `schema/claude-auto.schema.json` (draft 2020-12): every key the
   launcher reads, with its type, allowed values, default and description. `config.example.json`

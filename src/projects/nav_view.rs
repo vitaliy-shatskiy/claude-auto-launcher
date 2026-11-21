@@ -85,7 +85,7 @@ pub(crate) fn navigator_frame(v: &NavView<'_>) -> Frame {
         }));
     }
     body.resize(2 + list_lines, String::new());
-    let radio = action_radio(v.action, v.hover_value, inner, &g);
+    let radio = action_radio(v.action, v.hover_value, inner, &g, true);
     let action_index = body.len();
     body.push(radio.text.clone());
     let lines = new_box(&body, fw, &format!("project {} enter a path", g.h), &g, v.style.ascii);
@@ -98,7 +98,7 @@ pub(crate) fn navigator_frame(v: &NavView<'_>) -> Frame {
             start: i32::try_from(start).unwrap_or(0),
             row_ys: Vec::new(),
         }),
-        action: Some(action_hit(&radio, y(action_index))),
+        action: Some(action_hit(&radio, y(action_index), 0)),
         ..RowMap::default()
     };
     let light = FooterLight {

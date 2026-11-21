@@ -20,6 +20,8 @@ fn view() -> LaunchView {
         default_model_label: "default".into(),
         default_advisor_label: "default".into(),
         labels_by_account: BTreeMap::new(),
+        recent: Vec::new(),
+        running: Vec::new(),
         style: Style { color: false, ascii: true },
     }
 }
@@ -155,7 +157,7 @@ fn the_first_frame_never_waits_for_the_update_check() {
     // Then: it drew and ended with what was known at start.
     assert!(out.is_some());
     let first = t.frames.unwrap().into_iter().next().unwrap();
-    assert!(has(&first, "v2.1.1") && has(&first, "Haiku 5.5"), "{first:#?}");
+    assert!(has(&first, "Claude Code 2.1.1") && has(&first, "Haiku 5.5"), "{first:#?}");
     go.send(()).unwrap();
 }
 
@@ -174,7 +176,10 @@ fn the_answer_redraws_header_and_model_row_and_keeps_the_selection() {
     };
     // Then: one more frame shows them, and the pick launches unchanged.
     let last = t.frames().last().unwrap();
-    assert!(has(last, "v2.1.2") && has(last, "Haiku 9.9") && has(last, "Opus 9"), "{last:#?}");
+    assert!(
+        has(last, "Claude Code 2.1.2") && has(last, "Haiku 9.9") && has(last, "Opus 9"),
+        "{last:#?}"
+    );
     assert_eq!(t.frames().len(), t.painted + 1, "exactly one redraw for the answer");
     assert_eq!(out.model, "haiku");
     assert_eq!(out.row, 2);
@@ -212,5 +217,5 @@ fn an_answer_already_in_shows_in_the_first_frame() {
         let mut s = LaunchScreen::new(&mut r, st, &vw, &p, 0, &mut hook).with_update(&w);
         run(&mut s, &mut t).unwrap();
     }
-    assert!(has(&t.frames.unwrap()[0], "v2.1.2"));
+    assert!(has(&t.frames.unwrap()[0], "Claude Code 2.1.2"));
 }

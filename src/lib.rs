@@ -4,6 +4,7 @@
 pub mod app;
 pub(crate) mod atomic_file;
 pub mod background;
+pub mod cockpit;
 pub mod config;
 pub mod env;
 pub mod frame;

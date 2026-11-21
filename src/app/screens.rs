@@ -11,7 +11,7 @@ use crate::input::{KeyPress, is_hotkey};
 use crate::launch::LaunchState;
 use crate::launch::PROJECT_ACTION;
 use crate::launch::launch_mode;
-use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore};
+use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore, apply_pick};
 use crate::log::Logger;
 use crate::log_data;
 use crate::out;
@@ -83,12 +83,14 @@ pub(super) fn run_ui(
     let accounts = tm.begin(&["accounts"]);
     let rate_dir = var("CLAUDE_AUTO_RATE_LIMITS_DIR").map_or_else(|| run.ctx.home.join(".claude").join("rate-limits"), PathBuf::from);
     let defaults = label_defaults(&canonical_root, &account_dirs);
-    let view = LaunchView {
+    let mut view = LaunchView {
         limits: env::rate_limit_summary(&run.cfg.accounts, &rate_dir, now_ms()),
         version,
         default_model_label: defaults.model,
         default_advisor_label: defaults.advisor,
         labels_by_account: defaults.by_account,
+        recent: Vec::new(),
+        running: Vec::new(),
         style,
     };
     tm.end(accounts);
@@ -108,7 +110,8 @@ pub(super) fn run_ui(
             return Ok(UiEnd::NoConsole);
         };
         let alt = !output_redirected && !input_redirected;
-        Box::new(ConsoleTerm::open(alt, Some(input), run.logger.clone()))
+        let truecolor = theme::truecolor_supported(var("COLORTERM").as_deref(), var("WT_SESSION").as_deref());
+        Box::new(ConsoleTerm::open(alt, Some(input), run.logger.clone()).with_truecolor(truecolor))
     };
 
     tm.end(console);
@@ -131,7 +134,13 @@ pub(super) fn run_ui(
     let prefetch = Background::start("registry", move || projects::project_registry(build_cache.as_deref(), &roots, hide));
     // A cancel or an error exit never waits for the build: its cache write is temp + rename. A
     // preview joins it: its per-PID cache file is removed below.
-    let mut prefetch = if run.preview { prefetch } else { prefetch.unjoined() };
+    let prefetch = RefCell::new(if run.preview { prefetch } else { prefetch.unjoined() });
+    // Keys 1-5 and the recent panel: the registry's newest projects once its read is in.
+    let recent_source = || {
+        let mut p = prefetch.try_borrow_mut().ok()?;
+        let reg = p.poll()?.as_ref().ok()?;
+        Some(projects::recent_projects(&reg.projects, now_ms()))
+    };
     // An unwritable or refused config keeps the change for this run only; the screen says why.
     let save_hidden = |path: &str, change: projects::HideChange| -> Result<(), String> {
         if run.preview {
@@ -147,6 +156,10 @@ pub(super) fn run_ui(
     let mut project_source = String::new();
     let mut preselect = String::new();
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
+    // The running panel; a preview reads no session state of the machine it runs on.
+    if !run.preview {
+        view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
+    }
     let mut chosen_how: Option<String>;
     let mut rows_store = ConfigRows { run };
     // Plugin messages and warnings met on the screens, printed once the console is back.
@@ -169,7 +182,9 @@ pub(super) fn run_ui(
             }
             launch_key(run, k, t, &plugin_lines)
         };
+        state.picked = None;
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
+            .with_recent(&recent_source)
             .with_rows(&mut rows_store)
             .with_update(&update)
             .with_self_update(launcher)
@@ -178,8 +193,10 @@ pub(super) fn run_ui(
             break UiEnd::Cancelled;
         };
         state = next;
+        let recent = std::mem::take(&mut screen.view.recent);
+        let mut prefetch_now = prefetch.borrow_mut();
         let registry_list = registry(
-            &mut prefetch,
+            &mut prefetch_now,
             &run.logger,
             status(term.as_mut(), run.preview, "loading projects..."),
         );
@@ -193,7 +210,11 @@ pub(super) fn run_ui(
             preselect.clone_from(&state.project);
         }
         let via_project = state.action == PROJECT_ACTION;
-        if opens_project_screen(run.cfg.project_screen, &state.action) {
+        let action_before = state.action.clone();
+        let picked = apply_pick(&mut state, &recent);
+        if picked {
+            chosen_how = Some("key".into());
+        } else if opens_project_screen(run.cfg.project_screen, &state.action) {
             let Some(chosen) = projects::run_project_screen(term.as_mut(), project_list, &run.ctx.cwd, style, &hiding, run.preview)? else {
                 if run.preview {
                     break UiEnd::PreviewPickerCancelled;
@@ -211,7 +232,9 @@ pub(super) fn run_ui(
         }
         // Back on the launch screen after a pick, the action row still says `project`.
         let back_to = |state: &mut LaunchState| {
-            if via_project {
+            if picked {
+                state.action.clone_from(&action_before);
+            } else if via_project {
                 PROJECT_ACTION.clone_into(&mut state.action);
             }
         };

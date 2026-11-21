@@ -67,6 +67,9 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
         restored: None,
         notice: None,
         warnings: 0,
+        recent: &[],
+        recent_loading: false,
+        running: &[],
         default_model_label: c.model_label,
         default_advisor_label: "default",
         default_labels: c.labels,
@@ -194,6 +197,9 @@ fn narrow_tier_draws_compact_rows_inside_the_frame() {
         restored: None,
         notice: None,
         warnings: 0,
+        recent: &[],
+        recent_loading: false,
+        running: &[],
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -202,12 +208,12 @@ fn narrow_tier_draws_compact_rows_inside_the_frame() {
     let f = launch_frame(&r, &inp);
     assert!(f.lines.iter().all(|l| display_width(l) <= 49), "{:#?}", f.lines);
     assert!(
-        f.lines.iter().any(|l| l.starts_with("   effort       < default >")),
+        f.lines.iter().any(|l| l.starts_with("|   effort       < default >")),
         "too wide rows collapse: {:#?}",
         f.lines
     );
     assert!(
-        f.lines.iter().any(|l| l.starts_with("   mode         * [normal] - safe")),
+        f.lines.iter().any(|l| l.starts_with("|   mode         * [normal] - safe")),
         "a row that fits stays a radio list: {:#?}",
         f.lines
     );
@@ -226,6 +232,9 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
         restored: None,
         notice: None,
         warnings: 0,
+        recent: &[],
+        recent_loading: false,
+        running: &[],
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -290,7 +299,7 @@ fn narrow_and_wide_frames_match_their_goldens() {
 }
 
 #[test]
-fn the_limits_sit_in_the_header_box_and_go_before_the_box_does() {
+fn the_limits_panel_shows_the_selected_account_one_limit_per_line_and_the_age_last() {
     let r = four();
     let personal: Limits = [(
         "work".to_owned(),
@@ -307,32 +316,33 @@ fn the_limits_sit_in_the_header_box_and_go_before_the_box_does() {
     .into();
     let s = r.new_state();
     let wide = frame_at(&r, &s, &golden_limits(), 160);
+    assert!(wide.lines[0].contains("limits \u{b7} work"), "{}", wide.lines[0]);
+    let right = |f: &Frame, i: usize| f.lines[i].chars().skip(82).collect::<String>();
+    let first = right(&wide, 1);
+    assert!(first.starts_with("\u{2502}  5h ") && first.ends_with(" 41%  \u{2502}"), "{first}");
+    assert!(right(&wide, 2).contains("7d") && right(&wide, 3).contains("15%"));
+    let launch_h = r.rows.len() + 2;
     assert!(
-        wide.lines[1].ends_with(" 5h 41% \u{b7} 7d 63% \u{b7} fable 15% \u{b7} 12 min ago \u{2502}"),
-        "{}",
-        wide.lines[1]
+        right(&wide, launch_h - 2).contains("data 12 min ago"),
+        "the age is on the last row: {:#?}",
+        wide.lines
     );
     let no_five = frame_at(&r, &s, &personal, 160);
     assert!(
-        no_five.lines[1].contains(" 7d 83% \u{b7} fable 1% \u{b7} just now "),
+        right(&no_five, 1).contains("7d") && right(&no_five, 1).contains("83%"),
         "{}",
-        no_five.lines[1]
+        right(&no_five, 1)
     );
+    assert!(!no_five.lines.iter().any(|l| l.contains(" 5h ")), "a missing limit draws no line");
+    assert!(right(&frame_at(&r, &s, &Limits::new(), 160), 1).contains("no data yet"));
+    // Stacked under 120 columns: the limits on one line, the age at its end.
+    let narrow = frame_at(&r, &s, &golden_limits(), 100);
+    let line = &narrow.lines[launch_h + 1];
     assert!(
-        !wide.lines.iter().any(|l| l.contains('\u{2591}') || l.contains('\u{2593}')),
-        "no bar glyphs"
+        line.contains("5h 41%  7d 63%  fable 15%") && line.contains("data 12 min ago"),
+        "{:#?}",
+        narrow.lines
     );
-    // 60 columns still hold the limits; narrower ones drop them.
-    for width in [50, 54] {
-        let f = frame_at(&r, &s, &golden_limits(), width);
-        assert!(f.lines[1].starts_with("\u{2502} \u{273b} claude-auto"), "{width}: {}", f.lines[1]);
-        assert!(
-            f.lines[0].ends_with('\u{256e}') && f.lines[1].ends_with('\u{2502}'),
-            "{width}: the box stays"
-        );
-        assert!(!f.lines[1].contains("5h"), "{width}: the limits go first: {}", f.lines[1]);
-        assert_eq!(display_width(&f.lines[0]), width - 1);
-    }
     let y = |name: &str| wide.map.rows.iter().find(|h| h.name == name).unwrap().y;
     assert_eq!(y("Remote"), y("Account") + 1, "the account row takes one line");
 }
@@ -353,6 +363,7 @@ fn ctrl_r_reset_and_the_warning_badge_show_only_when_they_apply() {
     let both = text(LaunchHints {
         warnings: 2,
         restored: true,
+        recent: false,
     });
     assert!(
         both.contains("[u] maintenance \u{26a0} 2") && both.contains("ctrl+r reset"),
@@ -365,6 +376,7 @@ fn ctrl_r_reset_and_the_warning_badge_show_only_when_they_apply() {
         &LaunchHints {
             warnings: 2,
             restored: false,
+            recent: false,
         },
     );
     let line: String = colored
@@ -398,6 +410,9 @@ fn row_map_points_at_the_drawn_lines() {
         restored: None,
         notice: None,
         warnings: 0,
+        recent: &[],
+        recent_loading: false,
+        running: &[],
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -424,20 +439,42 @@ fn footer_names_no_row_editing_keys() {
     let r = four();
     let s = r.new_state();
     let limits = golden_limits();
-    let base = [
-        "w/s row",
-        "a/d \u{2190}/\u{2192} switch",
-        "[enter] next",
-        "[u] maintenance",
-        "[esc] quit",
-    ];
+    let base = ["w/s row", "switch", "[enter] next", "[u] maint", "[esc] quit"];
     for width in [100, 120] {
         let f = frame_at(&r, &s, &limits, width);
-        let rule = f.lines.iter().rposition(|l| l.contains('─')).unwrap();
-        let text = f.lines[rule + 1..].join("\n");
+        let text = f.lines[usize::try_from(f.map.footer_y.unwrap()).unwrap()..].join("\n");
         assert!(base.iter().all(|h| text.contains(h)), "{width}: {text}");
         assert!(!["^w/^s", "^x", "[o]"].iter().any(|h| text.contains(h)), "{width}: {text}");
     }
+}
+
+#[test]
+fn under_110_columns_the_footer_shortens_and_stays_one_line_ctrl_r_going_first() {
+    let g = theme::glyphs(false);
+    let all = LaunchHints {
+        warnings: 2,
+        restored: true,
+        recent: true,
+    };
+    let text = |w: usize| {
+        let f = launch_footer(&g, w, false, &all);
+        assert_eq!(f.lines.len(), 1, "{w}: {:?}", f.lines);
+        f.lines[0].text.clone()
+    };
+    let wide = text(159);
+    assert!(
+        wide.contains("1-5 resume") && wide.contains("ctrl+r reset") && wide.contains("[u] maintenance"),
+        "{wide}"
+    );
+    let mid = text(99);
+    assert!(
+        mid.contains("1-5 go") && mid.contains("[u] maint ") && mid.contains("a/d switch") && mid.contains("^r reset"),
+        "{mid}"
+    );
+    let tight = text(90);
+    assert!(!tight.contains("reset") && tight.contains("w/s row"), "ctrl+r goes first: {tight}");
+    let narrow = text(79);
+    assert!(narrow.contains("1-5 go") && !narrow.contains("w/s"), "{narrow}");
 }
 
 #[test]
@@ -457,7 +494,7 @@ fn model_row_weak_to_strong_and_fable_cell() {
             && at("Opus 5.5[1M]") < at("Fable 5.2"),
         "haiku, sonnet, opus, fable: {line}"
     );
-    assert!(f.lines[1].contains("fable 15% (2 h ago)"), "{}", f.lines[1]);
+    assert!(f.lines.iter().any(|l| l.contains("fable (2 h ago) 15%")), "{:#?}", f.lines);
 
     let mut ordered = four();
     ordered.apply_model_order(&["fable".to_owned(), "haiku".to_owned()]);
@@ -482,6 +519,9 @@ fn too_small_terminal_gets_the_size_frame() {
         restored: None,
         notice: None,
         warnings: 0,
+        recent: &[],
+        recent_loading: false,
+        running: &[],
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &d,
