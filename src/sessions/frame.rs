@@ -409,8 +409,8 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let paint = painter();
     let wide = v.width >= cockpit::TWO_COLUMNS && !items.is_empty();
     let lw = if wide { cockpit::SESSIONS_LEFT_WIDTH } else { fw };
-    // Ages end 2 cells before the border.
-    let row_width = lw.saturating_sub(4);
+    // Ages end 2 cells before the border (a row keeps one trailing space).
+    let row_width = lw.saturating_sub(3);
     if items.is_empty() {
         return empty_built(
             empty_message(v.filter, hidden, headless),

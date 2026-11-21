@@ -1,9 +1,9 @@
 ╭─ ✻ claude-auto ─ resume · 5 sessions ───────────────────────────────────────────────────────────╮
-│ ❯ project-1  session title 1                                                            7 min   │
-│   project-2  session title 2                                                           14 min   │
-│   ⌂ feature  session title 3                                                           21 min   │
-│   project-4  session title 4                                                           28 min   │
-│   project-5  session title 5                                                           35 min   │
+│ ❯ project-1  session title 1                                                             7 min  │
+│   project-2  session title 2                                                            14 min  │
+│   ⌂ feature  session title 3                                                            21 min  │
+│   project-4  session title 4                                                            28 min  │
+│   project-5  session title 5                                                            35 min  │
 │                                                                                                 │
 │                                                                                                 │
 │                                                                                                 │
