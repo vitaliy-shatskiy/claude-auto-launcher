@@ -402,9 +402,14 @@ fn empty_built(message: String, title: String, footer: Footer, (fw, body_rows): 
 /// The chat panel at its widest: the 110-cell message text, its insets and the borders.
 const CHAT_PANEL: usize = 118;
 
-/// The sessions list's width beside the chat: every cell the chat's 118 leave, at least 62.
+/// Under this frame width the list takes at least half: a full chat panel cut titles at 120-160.
+const HALF_LIST_BELOW: usize = 200;
+
+/// The sessions list's width beside the chat: every cell the chat's 118 leave, at least 62, and
+/// below 200 columns at least half the frame.
 fn sessions_width(fw: usize) -> usize {
-    fw.saturating_sub(CHAT_PANEL).max(cockpit::SESSIONS_LEFT_WIDTH)
+    let half = if fw < HALF_LIST_BELOW { fw.div_ceil(2) } else { 0 };
+    fw.saturating_sub(CHAT_PANEL).max(cockpit::SESSIONS_LEFT_WIDTH).max(half)
 }
 
 fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
