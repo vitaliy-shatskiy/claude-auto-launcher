@@ -44,6 +44,8 @@ pub struct LaunchView {
     /// Newest first: the recent panel and keys 1-5.
     pub recent: Vec<RecentProject>,
     pub running: Vec<RunningSession>,
+    /// The last maintenance MCP check, `2 of 2 · 3 h ago`; empty when none is known.
+    pub mcp: String,
 }
 
 /// The launch screen over one state.
@@ -301,6 +303,7 @@ impl Screen for LaunchScreen<'_> {
             recent: &self.view.recent,
             recent_loading: self.recent.is_some(),
             running: &self.view.running,
+            mcp: &self.view.mcp,
             default_model_label: &self.view.default_model_label,
             default_advisor_label: &self.view.default_advisor_label,
             default_labels: self.labels(),
@@ -422,6 +425,7 @@ mod tests {
             labels_by_account: BTreeMap::new(),
             recent: Vec::new(),
             running: Vec::new(),
+            mcp: String::new(),
             style: Style { color: false, ascii: true },
         }
     }

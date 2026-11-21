@@ -155,12 +155,15 @@ fn only_the_selected_row_shows_its_hint() {
     let f = draw(&p, (120, 30));
     assert_eq!(count(&f.lines, "while claude"), 1, "{:#?}", f.lines);
     assert_eq!(count(&f.lines, "keeps the 2 newest"), 0, "no column of descriptions");
-    let row = f.lines.iter().find(|l| l.contains("[r] update anyway")).unwrap();
-    let left: String = row.chars().take(crate::cockpit::MAINTENANCE_LEFT_WIDTH).collect();
+    let at = f.lines.iter().position(|l| l.contains("[r] update anyway")).unwrap();
+    let under: String = f.lines[at + 1].chars().take(crate::cockpit::MAINTENANCE_LEFT_WIDTH).collect();
     assert!(
-        left.ends_with("in use  \u{2502}") || left.ends_with("\u{2026}  \u{2502}"),
-        "the hint ends 2 cells from the border: {left:?}"
+        under.contains("       while claude.exe is in use "),
+        "a hint too long for its row sits whole under it: {under:?}"
     );
+    let f = draw(&p, (160, 30));
+    let p_row = f.lines.iter().find(|l| l.contains("[p] delete old builds")).unwrap();
+    assert!(!p_row.contains("keeps"), "{p_row}");
 }
 
 #[test]
@@ -218,6 +221,8 @@ fn mcp_list_output_becomes_a_count_and_the_server_lines() {
     let v = mcp_summary(Verdict::done(out));
     assert!(!v.ok);
     assert_eq!(v.text.lines().next(), Some("1 of 2 connected"));
+    assert_eq!(mcp_counts(&v), Some((1, 2)), "what the launch page keeps");
+    assert_eq!(mcp_counts(&Verdict::done("No MCP servers configured.")), None);
     assert!(!v.text.contains("Checking"), "{}", v.text);
     let all = mcp_summary(Verdict::done("Checking\u{2026}\n\nalpha: npx alpha - \u{2714} Connected"));
     assert!(all.ok && all.text.starts_with("1 of 1 connected"), "{all:?}");
@@ -415,10 +420,57 @@ fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
     assert_golden("maintenance-130x40", &wide.join("\n"));
     assert!(wide.iter().any(|l| l.contains("update \u{b7} last run")) && wide.iter().any(|l| l.contains("error")));
     assert_golden("maintenance-80x24", &draw(&p, (80, 24)).lines.join("\n"));
+    let three = draw(&p, (250, 70)).lines;
+    assert_golden("maintenance-250x70", &three.join("\n"));
+    let versions = three.iter().find(|l| l.contains("installed")).unwrap();
+    assert!(
+        versions.ends_with('\u{2502}') && display_width(versions) == 249,
+        "the facts close the page: {versions}"
+    );
+    let value_end = display_width(versions.split_once("newest").unwrap().0) + 6;
+    assert!(
+        value_end > 249 - 66,
+        "the versions sit in the last 66 cells, beside the last run: {versions}"
+    );
     let s1 = draw(&page_of(info(true, None, None), "", &[]), (130, 40)).lines;
     assert_golden("maintenance-130x40-s1", &s1.join("\n"));
     assert_eq!(count(&s1, "warnings"), 0, "an empty warnings panel is not drawn");
     assert_eq!(count(&s1, "Custom"), 0, "an empty group is not drawn");
+}
+
+#[test]
+fn a_narrow_window_keeps_every_fact_and_moves_a_long_hint_under_its_row() {
+    let mut p = page_of(
+        info(true, None, None),
+        "Current version: 2.1.230\nClaude Code is up to date (2.1.230)",
+        &reindex(),
+    );
+    p.entries = entries(&[('b', "roll back claude-auto".into())], &reindex());
+    "update".clone_into(&mut p.last);
+    p.phase = Phase::Done;
+    "self-update notify, up to date".clone_into(&mut p.launcher);
+    p.selected = 1;
+    let lines: Vec<String> = draw(&p, (55, 20)).lines;
+    assert_golden("maintenance-55x20", &lines.join("\n"));
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}: {lines:#?}"))
+    };
+    assert_eq!(
+        at("while claude.exe is in use"),
+        at("[r] update anyway") + 1,
+        "the hint under its row, whole"
+    );
+    assert_eq!(
+        at("Current version: 2.1.230"),
+        at("[u] update") + 1,
+        "the last run under the action that ran"
+    );
+    assert!(lines[at("Claude Code")].contains("2.1.230 \u{b7} newest \u{b7} 3 builds"));
+    assert!(lines[at("claude-auto  ")].contains("0.9.0 \u{b7} up to date"));
+    assert!(lines.iter().all(|l| display_width(l) <= 54));
 }
 
 #[test]
@@ -468,6 +520,7 @@ fn every_clickable_region_hovers_and_never_selects() {
             ..Default::default()
         }],
         running: Vec::new(),
+        mcp: String::new(),
         style: color,
     };
     let prefs = crate::prefs::Prefs::default();

@@ -523,3 +523,48 @@ fn each_chat_stamp_takes_the_offset_of_its_own_date() {
     assert!(lines.contains("20.10 13:00"), "{lines}");
     assert!(lines.contains("20.11 12:00"), "{lines}");
 }
+
+#[test]
+fn a_chat_that_fits_starts_under_the_rule_and_a_longer_one_ends_on_the_last_row() {
+    let msg = |speaker, text: &str| ChatMessage {
+        speaker,
+        text: text.into(),
+        at_ms: None,
+    };
+    let few = [msg(Speaker::User, "short question"), msg(Speaker::Assistant, "short answer")];
+    let fit = chat::chat_lines(ChatView::Messages(&few), 60, 20, true, Zone(|_| 0));
+    assert!(fit[0].contains("you"), "the first message opens the pane: {fit:#?}");
+    assert_eq!(fit.len(), 5, "no padding above or below: {fit:#?}");
+    let many: Vec<ChatMessage> = (0..12).map(|i| msg(Speaker::Assistant, &format!("answer {i}"))).collect();
+    let over = chat::chat_lines(ChatView::Messages(&many), 60, 8, true, Zone(|_| 0));
+    assert_eq!(over.len(), 8);
+    assert!(over[7].contains("answer 11"), "the newest ends on the last row: {over:#?}");
+}
+
+#[test]
+fn a_wide_pane_wraps_message_text_at_110_and_keeps_the_owners_at_the_right_edge() {
+    let long = "word ".repeat(120);
+    let msgs = [
+        ChatMessage {
+            speaker: Speaker::User,
+            text: long.clone(),
+            at_ms: None,
+        },
+        ChatMessage {
+            speaker: Speaker::Assistant,
+            text: long,
+            at_ms: None,
+        },
+    ];
+    let lines = chat::chat_lines(ChatView::Messages(&msgs), 230, 60, true, Zone(|_| 0));
+    let plain: Vec<String> = lines.iter().map(|l| crate::theme::strip_ctl(l)).collect();
+    let text: Vec<&String> = plain.iter().filter(|l| l.contains("word")).collect();
+    assert!(text.iter().all(|l| l.trim().len() <= 110), "{plain:#?}");
+    let user = text.first().unwrap();
+    assert_eq!(
+        crate::layout::display_width(user.trim_end()),
+        230 - 2,
+        "the owner's text ends at the right inset"
+    );
+    assert!(text.last().unwrap().starts_with("  word"), "Claude's stays left");
+}

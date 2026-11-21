@@ -2,6 +2,7 @@
 //! the registry of directories Claude Code has sessions in, the start selection, and the screen
 //! that picks where a session runs and what it does there.
 
+pub mod detail;
 mod nav_view;
 mod navigator;
 mod paths;
@@ -24,6 +25,7 @@ use crate::ui::{Term, UiStop};
 pub use paths::project_key;
 pub(crate) use registry::path_from_transcript;
 pub use screen::{HideChange, Hiding};
+pub(crate) use view::relative_age;
 
 /// Every slug of the directory `path` names; empty when it is no known project.
 pub fn slugs_for_path(projects: &[Project], path: &str) -> Vec<String> {
@@ -221,18 +223,29 @@ pub fn run_project_screen(
     style: Style,
     hiding: &Hiding<'_>,
     preview: bool,
+    stores: detail::Stores,
 ) -> Result<Option<ProjectChoice>, UiStop> {
     let clock = || registry::unix_ms(SystemTime::now());
     let cwd = cwd.to_string_lossy();
     let mut s = screen::ProjectScreen::new(projects, &cwd, "new", style, &clock)
         .with_hiding(Some(hiding))
-        .with_preview(preview);
+        .with_preview(preview)
+        .with_details(Some(if preview {
+            detail::DetailSource::in_place(stores)
+        } else {
+            detail::DetailSource::worker(stores)
+        }));
     crate::ui::screen_loop::run(&mut s, term)
 }
 
 /// The launch page's recent projects: the five newest that are not hidden, newest first, each with
-/// its age at `now_ms`.
-pub(crate) fn recent_projects(projects: &[Project], now_ms: i64) -> Vec<crate::launch::frame::RecentProject> {
+/// its age at `now_ms` and the newest title `titles` holds for its slugs (lower-cased slug -> last write,
+/// title: `sessions::listing::newest_titles`).
+pub(crate) fn recent_projects(
+    projects: &[Project],
+    now_ms: i64,
+    titles: &std::collections::HashMap<String, (i64, String)>,
+) -> Vec<crate::launch::frame::RecentProject> {
     let mut shown: Vec<(&Project, i64)> = projects
         .iter()
         .filter(|p| !p.hidden)
@@ -248,7 +261,12 @@ pub(crate) fn recent_projects(projects: &[Project], now_ms: i64) -> Vec<crate::l
             slug: p.slug.clone(),
             slugs: p.slugs.clone(),
             age: view::relative_age(t, now_ms),
-            last: String::new(),
+            last: select::all_slugs(p)
+                .iter()
+                .filter_map(|s| titles.get(&s.to_lowercase()))
+                .max_by_key(|(at, _)| *at)
+                .map(|(_, title)| title.clone())
+                .unwrap_or_default(),
         })
         .collect()
 }
@@ -273,10 +291,19 @@ mod tests {
             at("e", 7, false),
             at("f", 9, false),
         ];
-        let r = recent_projects(&ps, 1_000_000_000);
+        let titles = std::collections::HashMap::from([
+            ("b".to_owned(), (5, "older".to_owned())),
+            ("b".to_owned(), (9, "fix the paging".to_owned())),
+        ]);
+        let r = recent_projects(&ps, 1_000_000_000, &titles);
         let names: Vec<&str> = r.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["b", "d", "e", "f", "a"], "hidden h and the sixth (c) are left out");
         assert_eq!((r[0].age.as_str(), r[0].slug.as_str()), ("3 min", "b"));
+        assert_eq!(
+            (r[0].last.as_str(), r[1].last.as_str()),
+            ("fix the paging", ""),
+            "each its newest cached title"
+        );
     }
     use crate::projects::registry::tests::Tree;
     use crate::projects::select::tests::proj;

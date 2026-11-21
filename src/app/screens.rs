@@ -91,6 +91,7 @@ pub(super) fn run_ui(
         labels_by_account: defaults.by_account,
         recent: Vec::new(),
         running: Vec::new(),
+        mcp: maintenance::last_mcp_check(&run.ctx.home, theme::glyphs(style.ascii).dot),
         style,
     };
     tm.end(accounts);
@@ -135,11 +136,18 @@ pub(super) fn run_ui(
     // A cancel or an error exit never waits for the build: its cache write is temp + rename. A
     // preview joins it: its per-PID cache file is removed below.
     let prefetch = RefCell::new(if run.preview { prefetch } else { prefetch.unjoined() });
+    // The recent panel's session titles: the summary cache read off the UI thread (it runs to MBs).
+    let titles_root = sessions::sessions_root(&run.cfg, &state.account);
+    let titles = RefCell::new(Background::start("recent titles", move || sessions::listing::newest_titles(&titles_root)).unjoined());
     // Keys 1-5 and the recent panel: the registry's newest projects once its read is in.
     let recent_source = || {
         let mut p = prefetch.try_borrow_mut().ok()?;
         let reg = p.poll()?.as_ref().ok()?;
-        Some(projects::recent_projects(&reg.projects, now_ms()))
+        let mut t = titles.try_borrow_mut().ok()?;
+        // A failed read lists the projects without titles.
+        let none = std::collections::HashMap::new();
+        let titles = t.poll()?.as_ref().unwrap_or(&none);
+        Some(projects::recent_projects(&reg.projects, now_ms(), titles))
     };
     // An unwritable or refused config keeps the change for this run only; the screen says why.
     let save_hidden = |path: &str, change: projects::HideChange| -> Result<(), String> {
@@ -215,7 +223,19 @@ pub(super) fn run_ui(
         if picked {
             chosen_how = Some("key".into());
         } else if opens_project_screen(run.cfg.project_screen, &state.action) {
-            let Some(chosen) = projects::run_project_screen(term.as_mut(), project_list, &run.ctx.cwd, style, &hiding, run.preview)? else {
+            let Some(chosen) = projects::run_project_screen(
+                term.as_mut(),
+                project_list,
+                &run.ctx.cwd,
+                style,
+                &hiding,
+                run.preview,
+                projects::detail::Stores {
+                    root: sessions::sessions_root(&run.cfg, &state.account),
+                    live_dirs: held_dirs.clone(),
+                },
+            )?
+            else {
                 if run.preview {
                     break UiEnd::PreviewPickerCancelled;
                 }

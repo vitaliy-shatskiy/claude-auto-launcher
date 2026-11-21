@@ -78,6 +78,7 @@ fn view(cfg: &Config, ctx: &PathCtx) -> LaunchView {
         labels_by_account: defaults.by_account,
         recent: Vec::new(),
         running: Vec::new(),
+        mcp: String::new(),
         style: NOT_DRAWN,
     }
 }

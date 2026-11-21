@@ -70,6 +70,7 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
         recent: &[],
         recent_loading: false,
         running: &[],
+        mcp: "",
         default_model_label: c.model_label,
         default_advisor_label: "default",
         default_labels: c.labels,
@@ -200,6 +201,7 @@ fn narrow_tier_draws_compact_rows_inside_the_frame() {
         recent: &[],
         recent_loading: false,
         running: &[],
+        mcp: "",
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -235,6 +237,7 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
         recent: &[],
         recent_loading: false,
         running: &[],
+        mcp: "",
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -317,7 +320,11 @@ fn the_limits_panel_shows_the_selected_account_one_limit_per_line_and_the_age_la
     let s = r.new_state();
     let wide = frame_at(&r, &s, &golden_limits(), 160);
     assert!(wide.lines[0].contains("limits \u{b7} work"), "{}", wide.lines[0]);
-    let right = |f: &Frame, i: usize| f.lines[i].chars().skip(82).collect::<String>();
+    // The facts column: the last FACTS_WIDTH cells, whatever the width.
+    let right = |f: &Frame, i: usize| {
+        let n = f.lines[i].chars().count();
+        f.lines[i].chars().skip(n - crate::cockpit::FACTS_WIDTH).collect::<String>()
+    };
     let first = right(&wide, 1);
     assert!(first.starts_with("\u{2502}  5h ") && first.ends_with(" 41%  \u{2502}"), "{first}");
     assert!(right(&wide, 2).contains("7d") && right(&wide, 3).contains("15%"));
@@ -413,6 +420,7 @@ fn row_map_points_at_the_drawn_lines() {
         recent: &[],
         recent_loading: false,
         running: &[],
+        mcp: "",
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -522,6 +530,7 @@ fn too_small_terminal_gets_the_size_frame() {
         recent: &[],
         recent_loading: false,
         running: &[],
+        mcp: "",
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &d,

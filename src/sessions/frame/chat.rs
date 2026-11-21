@@ -1,5 +1,5 @@
-//! The chat view under the preview card's rule: the newest messages filling the pane from the
-//! bottom, Claude's on the left, the owner's on the right in the cyan family, each under a dim
+//! The chat view under the preview card's rule: a chat that fits from the top, a longer one's
+//! newest messages filling the pane from the bottom, Claude's on the left, the owner's on the right in the cyan family, each under a dim
 //! `who · DD.MM HH:MM` label with its body 2 cells in from that side. Exports `chat_lines`.
 //! Markers only; colour comes after layout.
 
@@ -23,11 +23,13 @@ pub enum ChatView<'a> {
 const MAX_LINES: usize = 14;
 /// A message block takes at most 3/4 of the pane, never less than this.
 const MIN_BLOCK: usize = 16;
+/// The widest a message's text wraps, however wide the pane.
+const MAX_TEXT: usize = 110;
 /// The body's inset from its label's side.
 pub(super) const INSET: usize = 2;
 
-/// `rows` lines: the newest messages, bottom-aligned, the oldest shown one cut at the top. Each
-/// message shows from its start; the newest always ends on the last row.
+/// At most `rows` lines: every message from the top when they fit; else the newest ones ending on
+/// the last row, the oldest shown one cut at the top.
 pub(super) fn chat_lines(chat: ChatView<'_>, width: usize, rows: usize, ascii: bool, zone: Zone) -> Vec<String> {
     if rows == 0 || width == 0 {
         return Vec::new();
@@ -43,7 +45,8 @@ pub(super) fn chat_lines(chat: ChatView<'_>, width: usize, rows: usize, ascii: b
             Some(dim(if ascii { "updating..." } else { "updating\u{2026}" })),
         ),
     };
-    let block_w = (width * 3 / 4).max(MIN_BLOCK).min(width.saturating_sub(INSET));
+    // A wide pane keeps readable lines: text wraps at MAX_TEXT, the owner's still at the right edge.
+    let block_w = (width * 3 / 4).max(MIN_BLOCK).min(width.saturating_sub(INSET)).min(MAX_TEXT);
     let mut blocks: Vec<Vec<String>> = Vec::new();
     let mut used = 0;
     for m in msgs.iter().rev() {
@@ -63,9 +66,9 @@ pub(super) fn chat_lines(chat: ChatView<'_>, width: usize, rows: usize, ascii: b
         }
         lines.extend(b);
     }
+    // A chat that fits starts under the rule; only one that overflows ends its newest on the last row.
     let cut = lines.len().saturating_sub(rows);
     let mut out: Vec<String> = banner.into_iter().collect();
-    out.extend(vec![String::new(); rows.saturating_sub(lines.len())]);
     out.extend(lines.into_iter().skip(cut));
     out
 }

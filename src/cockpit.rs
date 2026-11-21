@@ -10,6 +10,9 @@ use crate::theme::{self, Glyphs};
 pub const LEFT_WIDTH: usize = 82;
 pub const MAINTENANCE_LEFT_WIDTH: usize = 50;
 pub const SESSIONS_LEFT_WIDTH: usize = 62;
+/// A facts column beside a list (launch: limits, running, Claude Code): what `fable (1 d ago)  24%`
+/// needs with its padding, at every width; the list column takes the rest.
+pub const FACTS_WIDTH: usize = 46;
 /// Under this many columns the columns stack.
 pub const TWO_COLUMNS: usize = 120;
 
@@ -116,7 +119,8 @@ pub fn render(p: &Panel<'_>, style: Style) -> Vec<String> {
     if !p.page.is_empty() {
         title = format!("{title} {} {}", g.h, p.page);
     }
-    let title = limit_line(&title, inner.saturating_sub(3), style.ascii);
+    // One rule cell always stays before the corner, so a cut title still reads as a border.
+    let title = limit_line(&title, inner.saturating_sub(4), style.ascii);
     let used = 1 + display_width(&title) + 2;
     let right = format!(" {} ", p.right);
     let fits_right = !p.right.is_empty() && used + display_width(&right) < inner;

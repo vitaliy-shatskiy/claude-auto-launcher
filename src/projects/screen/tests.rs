@@ -148,6 +148,42 @@ fn opening_nav_row0(f: &Fx) -> i32 {
     s.draw((80, 24)).map.list.unwrap().first_row_y
 }
 
+/// The hover rule over the project screen at both layouts: list rows, the action values, buttons.
+#[test]
+fn every_clickable_region_of_the_project_screen_hovers_and_never_selects() {
+    use crate::ui::screen_loop::hover_walk::assert_every_region_hovers;
+    let f = fx();
+    let c = clock;
+    for size in [(130, 40), (90, 30)] {
+        let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: true, ascii: false }, &c);
+        assert_every_region_hovers(&mut s, size);
+    }
+    // The path navigator, in the same cockpit panel: its folder rows and the action values.
+    let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: true, ascii: false }, &c);
+    s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
+    s.nav.as_mut().unwrap().text = format!(r"{}\root\", f.tree.0.display());
+    assert_every_region_hovers(&mut s, (130, 40));
+}
+
+/// In place (preview) the selected row's detail comes with the frame; a moved cursor asks again.
+#[test]
+fn the_context_follows_the_cursor() {
+    let f = fx();
+    let c = clock;
+    let stores = crate::projects::detail::Stores {
+        root: f.tree.0.join("no-projects-root"),
+        live_dirs: Vec::new(),
+    };
+    let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: false, ascii: true }, &c)
+        .with_details(Some(DetailSource::in_place(stores)));
+    s.before();
+    let first = s.detail.clone().unwrap();
+    assert_eq!(first.key, crate::projects::project_key(&f.cwd));
+    s.cursor.index = 1;
+    s.before();
+    assert_eq!(s.detail.unwrap().key, crate::projects::project_key(&f.alpha));
+}
+
 mod hide;
 mod keys;
 mod mouse;

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
+use super::detail::{Detail, DetailSource};
 use super::nav_view::{NavView, navigator_frame};
 use super::navigator::{Lister, NETWORK_LIMIT, Navigator, list_dirs};
 use super::paths::DriveCache;
@@ -87,6 +88,9 @@ pub(crate) struct ProjectScreen<'a> {
     limit: Duration,
     drives: DriveCache,
     preview: bool,
+    /// Where the selected project's sessions come from; None draws the context as loading.
+    details: Option<DetailSource>,
+    detail: Option<Detail>,
 }
 
 impl std::fmt::Debug for ProjectScreen<'_> {
@@ -128,11 +132,43 @@ impl<'a> ProjectScreen<'a> {
             limit: NETWORK_LIMIT,
             drives: DriveCache::new(),
             preview: false,
+            details: None,
+            detail: None,
         }
     }
 
     pub(crate) fn with_hiding(self, hiding: Option<&'a Hiding<'a>>) -> Self {
         Self { hiding, ..self }
+    }
+
+    /// The selected project's sessions and branch, from source.
+    pub(crate) fn with_details(self, details: Option<DetailSource>) -> Self {
+        Self { details, ..self }
+    }
+
+    /// Asks for the selected row's detail; an in-place source answers at once.
+    fn ask_detail(&mut self) -> bool {
+        let (Some(src), None) = (self.details.as_mut(), self.nav.as_ref()) else {
+            return false;
+        };
+        let Some(r) = self.rows.get(usize::try_from(self.cursor.index).unwrap_or(0)) else {
+            return false;
+        };
+        let slugs = if r.slugs.is_empty() {
+            vec![r.slug.clone()]
+        } else {
+            r.slugs.clone()
+        };
+        let mut changed = false;
+        if let Some(d) = src.ask(&r.path, &slugs) {
+            self.detail = Some(d);
+            changed = true;
+        }
+        if let Some(d) = src.poll() {
+            self.detail = Some(d);
+            changed = true;
+        }
+        changed
     }
 
     /// Preview mode: the navigator never creates a folder.
@@ -168,6 +204,16 @@ impl Screen for ProjectScreen<'_> {
         };
         let n = i32::try_from(n).unwrap_or(1);
         self.cursor.index = self.cursor.index.min(n - 1).max(0);
+        // Preview never idles: its source answers here, in place.
+        if matches!(self.details, Some(DetailSource::InPlace { .. })) {
+            self.ask_detail();
+        }
+    }
+
+    /// The cursor rested: the worker is asked for its row (a held key asks only once it stops),
+    /// and a finished detail redraws.
+    fn idle(&mut self) -> bool {
+        self.ask_detail()
     }
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {
@@ -203,6 +249,7 @@ impl Screen for ProjectScreen<'_> {
             action: &self.action,
             hover_row: self.cursor.hover_row,
             hover_value: &self.cursor.hover_value,
+            detail: self.detail.as_ref(),
         })
     }
 

@@ -1,17 +1,17 @@
-+- * claude-auto ------------------------ 0.9.0 - Claude Code 2.1.226 ^ 2.1.230 -++- limits - work -------------------+
-| > account      [work 41%] : personal 17% : low 43%                             ||  5h                          41%  |
-|   remote       * [on] - off - on+QR - stop server                              ||  7d                          63%  |
-|   model*       - Haiku 5.5 - Sonnet 5.5 * [Opus 5.5[1M]] - Fable 5.2           ||  fable                       15%  |
-|   effort*      - low - medium - high * [xhigh] - max - ultracode               ||                                   |
-|   advisor*     - default * [fable] - opus - off                                ||                                   |
-|   permission*  - plan - auto - acceptEdits * [bypass]                          ||                                   |
-|   mode         * [normal] - safe                                               ||  data 12 min ago                  |
-+--------------------------------------------------------------------------------++-----------------------------------+
-+- recent -----------------------------------------------------------------------++- running -------------------------+
-|  no recent projects yet                                                        ||  nothing running                  |
-|  enter opens the project list                                                  |+-----------------------------------+
-|                                                                                |+- claude code ---------------------+
-|                                                                                ||  2.1.226  ^ 2.1.230               |
-|                                                                                ||                                   |
-+--------------------------------------------------------------------------------++-----------------------------------+
++- * claude-auto --------------- 0.9.0 - Claude Code 2.1.226 ^ 2.1.230 -++- limits - work ----------------------------+
+| > account      [work 41%] : personal 17% : low 43%                    ||  5h                                   41%  |
+|   remote       * [on] - off - on+QR - stop server                     ||  7d                                   63%  |
+|   model*       - Haiku 5.5 - Sonnet 5.5 * [Opus 5.5[1M]] - Fable 5.2  ||  fable                                15%  |
+|   effort*      - low - medium - high * [xhigh] - max - ultracode      ||                                            |
+|   advisor*     - default * [fable] - opus - off                       ||                                            |
+|   permission*  - plan - auto - acceptEdits * [bypass]                 ||                                            |
+|   mode         * [normal] - safe                                      ||  data 12 min ago                           |
++-----------------------------------------------------------------------++--------------------------------------------+
++- recent --------------------------------------------------------------++- running ----------------------------------+
+|  no recent projects yet                                               ||  nothing running                           |
+|  enter opens the project list                                         |+--------------------------------------------+
+|                                                                       |+- claude code ------------------------------+
+|                                                                       ||  2.1.226  ^ 2.1.230                        |
+|                                                                       ||                                            |
++-----------------------------------------------------------------------++--------------------------------------------+
   w/s row  :  a/d <-/-> switch  :  [enter] next  :  [u] maintenance  :  ctrl+r reset  :  [esc] quit

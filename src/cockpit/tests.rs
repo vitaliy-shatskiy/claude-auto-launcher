@@ -39,6 +39,17 @@ fn the_right_text_goes_when_the_border_has_no_room() {
 }
 
 #[test]
+fn a_cut_title_keeps_a_rule_before_the_corner() {
+    let mut p = panel(Focus::Plain, &[]);
+    p.title = "18 sessions in every project".into();
+    p.right = String::new();
+    p.width = 20;
+    let top = render(&p, PLAIN)[0].clone();
+    assert_eq!(display_width(&top), 20);
+    assert!(top.ends_with("… ─╮"), "{top}");
+}
+
+#[test]
 fn the_page_word_follows_the_title_after_a_rule() {
     let mut p = panel(Focus::Plain, &[]);
     p.page = "maintenance".into();

@@ -119,6 +119,11 @@ fn facts(pieces: &[String], g: &Glyphs) -> String {
 
 /// `0.9.0 · up to date · self-update notify` from the module's `self-update notify, up to date`.
 fn launcher_facts(p: &Page, g: &Glyphs) -> String {
+    facts(&launcher_pieces(p), g)
+}
+
+/// The version, the state and the mode, each tinted.
+fn launcher_pieces(p: &Page) -> Vec<String> {
     let words = strip_ctl(&p.launcher);
     let mut out = vec![dim(env!("CARGO_PKG_VERSION"))];
     match words.split_once(", ") {
@@ -129,7 +134,7 @@ fn launcher_facts(p: &Page, g: &Glyphs) -> String {
         }
         None => out.push(dim(if words.is_empty() { "self-update off" } else { &words })),
     }
-    facts(&out, g)
+    out
 }
 
 /// The row's right column: the live state of the last action, else the selected row's hint.
@@ -164,9 +169,31 @@ fn state_tint(p: &Page, e: &Entry) -> fn(&str) -> String {
     }
 }
 
-/// One action row: chip and name on the left, the state or hint ending at `edge`. The selected
-/// row is a fill band; a hovered one paints its chip and name.
-fn action_row(p: &Page, i: usize, e: &Entry, edge: usize, color: bool, ascii: bool) -> String {
+/// The versions and warnings column beside the last run, once the page has room for three
+/// columns: a config warning's `fix it in <path>` line with its indent.
+const FACTS_WIDTH: usize = 66;
+/// The last run's output needs at least this much to stand as its own column.
+const RUN_MIN_WIDTH: usize = 60;
+
+/// How the action rows are laid out when room is short.
+#[derive(Debug, Clone, Copy)]
+struct Lay {
+    /// The last run's state goes on its own line under its row.
+    run_under: bool,
+    /// A blank row between the groups.
+    gaps: bool,
+}
+
+/// Where an action's name starts: the indent, the three-cell chip and a space; a state moved
+/// under its row starts here too.
+const NAME_COLUMN: usize = 7;
+
+/// One action row: chip and name on the left, the state or hint ending at `edge`. A state that
+/// does not fit beside the name, and the last run's state when `under` (stacked: the last run
+/// panel may not fit), goes on its own line under the row instead of being cut. The selected row
+/// is a fill band; a hovered one paints its chip and name.
+fn action_row(p: &Page, i: usize, e: &Entry, edge: usize, style: Style, under: bool) -> Vec<String> {
+    let (color, ascii) = (style.color, style.ascii);
     let selected = i == p.selected;
     let name = strip_ctl(&e.name);
     let left_plain = format!(
@@ -174,16 +201,29 @@ fn action_row(p: &Page, i: usize, e: &Entry, edge: usize, color: bool, ascii: bo
         if color { format!(" {} ", e.key) } else { format!("[{}]", e.key) }
     );
     let room = edge.saturating_sub(display_width(&left_plain) + 2);
-    let state = limit_line(&row_state(p, e, selected), room, ascii);
+    let state = row_state(p, e, selected);
     let hovered = i32::try_from(i).is_ok_and(|ii| ii == p.hover_row);
     let body = format!("{} {name}", chip(e.key, color));
     let body = if hovered { add_hover_span(&body) } else { body };
-    let pad = edge.saturating_sub(display_width(&left_plain) + display_width(&state));
+    let row = format!("{ROW_INDENT}{body}");
     if state.is_empty() {
-        format!("{ROW_INDENT}{body}")
-    } else {
-        format!("{ROW_INDENT}{body}{}{}", " ".repeat(pad), state_tint(p, e)(&state))
+        return vec![row];
     }
+    let ran = e.name == p.last && p.phase != Phase::Idle;
+    if display_width(&state) > room || (under && ran) {
+        let line = limit_line(&state, edge.saturating_sub(NAME_COLUMN), ascii);
+        return vec![row, format!("{}{}", " ".repeat(NAME_COLUMN), state_tint(p, e)(&line))];
+    }
+    let pad = edge.saturating_sub(display_width(&left_plain) + display_width(&state));
+    vec![format!("{row}{}{}", " ".repeat(pad), state_tint(p, e)(&state))]
+}
+
+/// `pieces` joined by a dim dot, the last ones left out until the line fits `room` cells.
+fn fit_facts(mut pieces: Vec<String>, room: usize, g: &Glyphs) -> String {
+    while pieces.len() > 1 && display_width(&strip_ctl(&facts(&pieces, g))) > room {
+        pieces.pop();
+    }
+    facts(&pieces, g)
 }
 
 fn footer(g: &Glyphs, width: usize, color: bool) -> Footer {
@@ -239,12 +279,12 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
     let rw = fw - lw;
     let foot = footer(&g, fw, style.color);
     let page_rows = height.saturating_sub(1 + foot.lines.len());
-    let (actions, rows) = action_lines(p, lw - 2, style, (!wide).then_some(&g));
     let right_inner = if wide { rw - 2 } else { fw - 2 };
     let versions = version_lines(p, &g);
     let warnings = warning_lines(p, &g, right_inner);
     let warn_h = if warnings.is_empty() { 0 } else { warnings.len() + 2 };
     let ran = !p.last.is_empty() && p.phase != Phase::Idle;
+    let (actions, rows) = fitted_actions(p, lw - 2, style, (!wide).then_some(&g), (page_rows, warn_h));
     let painter = |l: &str, e: bool| paint(l, e, &g);
     let selected = rows
         .iter()
@@ -286,7 +326,18 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
     } else {
         "last run".to_owned()
     };
-    if wide {
+    if wide && rw >= FACTS_WIDTH + RUN_MIN_WIDTH {
+        // Room for three columns: the facts keep their width, the last run's output takes the rest.
+        let run_w = rw - FACTS_WIDTH;
+        let run = panel(&run_title, run_lines(p, run_w - 2, left_h - 2, style.ascii), run_w, left_h);
+        let mut facts = panel("versions", versions, FACTS_WIDTH, 6);
+        let warnings = warning_lines(p, &g, FACTS_WIDTH - 2);
+        if warn_h > 0 {
+            facts.extend(panel("warnings", warnings, FACTS_WIDTH, warn_h));
+        }
+        facts.truncate(left_h);
+        lines = cockpit::beside(lines, lw, &cockpit::beside(run, run_w, &facts));
+    } else if wide {
         let run_h = left_h.saturating_sub(versions.len() + 2 + warn_h).max(3);
         let mut right = panel(&run_title, run_lines(p, rw - 2, run_h - 2, style.ascii), rw, run_h);
         right.extend(panel("versions", versions, rw, 6));
@@ -318,19 +369,52 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
 /// The action rows under their group titles, a blank row between groups; their row hits sit at
 /// the page row each is drawn on (the panel's top border is row 0).
 /// `inline`: stacked, the Claude Code and claude-auto titles carry their facts (no versions panel).
-fn action_lines(p: &Page, inner: usize, style: Style, inline: Option<&Glyphs>) -> (Vec<String>, Vec<RowHit>) {
+/// The action rows laid out for `rows` page rows and a warnings panel of `warn_h`: stacked with
+/// no room left for the last run panel, its state goes under the action that ran; a short window
+/// drops the blank rows between the groups before it cuts an action.
+fn fitted_actions(
+    p: &Page,
+    inner: usize,
+    style: Style,
+    inline: Option<&Glyphs>,
+    (rows, warn_h): (usize, usize),
+) -> (Vec<String>, Vec<RowHit>) {
+    let ran = !p.last.is_empty() && p.phase != Phase::Idle;
+    let mut lay = Lay {
+        run_under: false,
+        gaps: true,
+    };
+    let mut out = action_lines(p, inner, style, inline, lay);
+    if inline.is_some() && ran && rows.saturating_sub(out.0.len() + 2 + warn_h) < 3 {
+        lay.run_under = true;
+        out = action_lines(p, inner, style, inline, lay);
+    }
+    if out.0.len() + 2 > rows {
+        lay.gaps = false;
+        out = action_lines(p, inner, style, inline, lay);
+    }
+    out
+}
+
+fn action_lines(p: &Page, inner: usize, style: Style, inline: Option<&Glyphs>, lay: Lay) -> (Vec<String>, Vec<RowHit>) {
     let mut body: Vec<String> = Vec::new();
     let mut rows = Vec::new();
     let mut group: Option<Group> = None;
     for (i, e) in p.entries.iter().enumerate() {
         if group != Some(e.group) {
-            if group.is_some() {
+            if group.is_some() && lay.gaps {
                 body.push(String::new());
             }
             group = Some(e.group);
+            // Stacked, the facts the versions panel would hold ride on the titles, cut to fit.
+            let room = inner.saturating_sub(4 + e.group.title().len() + 2);
             let facts = match (inline, e.group) {
-                (Some(g), Group::ClaudeCode) => facts(&[installed_text(p, g), disk_text(p, g)], g),
-                (Some(g), Group::ClaudeAuto) => launcher_facts(p, g),
+                (Some(g), Group::ClaudeCode) => {
+                    let mut pieces = vec![installed_text(p, g)];
+                    pieces.extend(disk_pieces(p));
+                    fit_facts(pieces, room, g)
+                }
+                (Some(g), Group::ClaudeAuto) => fit_facts(launcher_pieces(p), room, g),
                 _ => String::new(),
             };
             let title = tint(ACCENT_OPEN, e.group.title());
@@ -346,7 +430,7 @@ fn action_lines(p: &Page, inner: usize, style: Style, inline: Option<&Glyphs>) -
             y: i32::try_from(1 + body.len()).unwrap_or(0),
             cells: Vec::new(),
         });
-        body.push(action_row(p, i, e, inner.saturating_sub(2), style.color, style.ascii));
+        body.extend(action_row(p, i, e, inner.saturating_sub(2), style, lay.run_under));
     }
     (body, rows)
 }
@@ -369,15 +453,16 @@ fn newest_of(p: &Page) -> Option<String> {
     p.newest.clone().or_else(|| p.info.newest_version.clone())
 }
 
+fn disk_pieces(p: &Page) -> Vec<String> {
+    vec![
+        format!("{} builds", p.info.version_count),
+        format!("{} GB", gib(p.info.versions_bytes)),
+    ]
+}
+
 /// `3 builds · 0.8 GB`.
 fn disk_text(p: &Page, g: &Glyphs) -> String {
-    facts(
-        &[
-            format!("{} builds", p.info.version_count),
-            format!("{} GB", gib(p.info.versions_bytes)),
-        ],
-        g,
-    )
+    facts(&disk_pieces(p), g)
 }
 
 /// Installed, newest, the builds on disk and claude-auto, each after a dim label.

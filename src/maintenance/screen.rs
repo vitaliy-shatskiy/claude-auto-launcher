@@ -167,6 +167,8 @@ pub(crate) trait Ops {
     fn launcher_key(&mut self, _key: char) -> Verdict {
         Verdict::done("")
     }
+    /// Keeps an MCP check's counts for the launch page.
+    fn remember_mcp(&mut self, _connected: usize, _total: usize) {}
     /// claude-auto's self-update mode and state in words (`notify · up to date`).
     fn launcher_state(&mut self) -> String {
         String::new()
@@ -252,6 +254,13 @@ fn mcp_summary(v: Verdict) -> Verdict {
         ok: connected == servers.len(),
         text,
     }
+}
+
+/// The counts of an `mcp_summary` head (`1 of 2 connected`); `None` for any other report.
+fn mcp_counts(v: &Verdict) -> Option<(usize, usize)> {
+    let head = v.text.lines().next()?.strip_suffix(" connected")?;
+    let (c, t) = head.split_once(" of ")?;
+    Some((c.parse().ok()?, t.parse().ok()?))
 }
 
 /// The screen's state between keys.
@@ -387,7 +396,11 @@ impl<'a> MaintScreen<'a> {
             'r' => self.live(term, "update anyway (rename)", "swapping", |ops, _| ops.rename_swap()),
             'd' => self.live(term, "doctor", "running claude doctor", |ops, s| ops.command_text(&["doctor"], s)),
             'm' => self.live(term, "MCP servers", &format!("checking{ell}"), |ops, s| {
-                mcp_summary(ops.command_text(&["mcp", "list"], s))
+                let v = mcp_summary(ops.command_text(&["mcp", "list"], s));
+                if let Some((connected, total)) = mcp_counts(&v) {
+                    ops.remember_mcp(connected, total);
+                }
+                v
             }),
             'p' if confirmed => {
                 let p = self.ops.prune();

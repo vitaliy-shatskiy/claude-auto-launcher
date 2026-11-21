@@ -415,6 +415,22 @@ impl SessionCache {
     }
 }
 
+/// Each slug's newest interactive session title as the summary cache holds it (lower-cased slug ->
+/// last write, title). Reads the cache file only, never a transcript.
+pub fn newest_titles(root: &Path) -> std::collections::HashMap<String, (i64, String)> {
+    let mut out: std::collections::HashMap<String, (i64, String)> = std::collections::HashMap::new();
+    for s in SessionCache::new(true).read(&cache_path(root)).into_values() {
+        if s.headless || s.title.is_empty() {
+            continue;
+        }
+        let e = out.entry(s.slug.to_lowercase()).or_insert((i64::MIN, String::new()));
+        if s.modified_ms > e.0 {
+            *e = (s.modified_ms, s.title);
+        }
+    }
+    out
+}
+
 /// A JSON object of the cache, for tests that count keys.
 #[cfg(test)]
 pub(crate) fn cache_keys(path: &Path) -> usize {

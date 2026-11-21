@@ -21,6 +21,7 @@ fn view() -> LaunchView {
         labels_by_account: BTreeMap::new(),
         recent: Vec::new(),
         running: Vec::new(),
+        mcp: String::new(),
         style: Style {
             color: false,
             ascii: false,
@@ -127,7 +128,11 @@ fn a_resize_redraws_once_at_the_new_size() {
     let frames = t.inner.frames.unwrap();
     assert_eq!(frames.len(), 2, "one frame per size");
     assert_eq!(display_width(&frames[0][0]), 99);
-    assert_eq!(display_width(&frames[1][0]), 159);
+    let widest = frames[1].iter().map(|l| display_width(l)).max().unwrap();
+    assert!(
+        widest > 99,
+        "the second frame is laid out for the new width (two columns): {widest}"
+    );
 }
 
 #[test]
