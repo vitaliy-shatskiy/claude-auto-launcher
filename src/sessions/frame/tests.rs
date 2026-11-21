@@ -172,7 +172,8 @@ fn right_pane(f: &Frame) -> Vec<String> {
 fn the_chat_fills_from_the_bottom_user_right_claude_left_bodies_inset_each_from_its_start() {
     let owned = golden_sessions();
     let s: Vec<&Session> = owned.iter().collect();
-    let f = picker_frame(&view(&s, 1, 120, 30), &mut Memo::default());
+    // The chat panel at 140 columns is as wide as the old right pane at 120.
+    let f = picker_frame(&view(&s, 1, 140, 30), &mut Memo::default());
     let right = right_pane(&f);
     assert_eq!(right[0].trim(), "session title 2");
     assert_eq!(right[1].trim(), "16.09 11:46 · 20 msgs · 4 KB · project-2");
@@ -286,11 +287,32 @@ fn a_cursor_move_writes_a_fraction_of_a_full_frame() {
 }
 
 #[test]
-fn sizes_read_in_kb_then_mb_and_the_list_pane_stops_growing() {
+fn a_hover_repainted_from_the_memo_equals_a_fresh_frame_beside_and_stacked() {
+    let owned = golden_sessions();
+    let s: Vec<&Session> = owned.iter().collect();
+    for width in [140, 100] {
+        let base = PickerView {
+            style: Style { color: true, ascii: false },
+            ..view(&s, 0, width, 30)
+        };
+        let mut memo = Memo::default();
+        let _ = picker_frame(&base, &mut memo);
+        for hover_row in [2, 3, -1] {
+            let v = PickerView { hover_row, ..base.clone() };
+            let repainted = picker_frame(&v, &mut memo).lines;
+            assert_eq!(
+                repainted,
+                picker_frame(&v, &mut Memo::default()).lines,
+                "{width}: hover {hover_row}"
+            );
+        }
+    }
+}
+
+#[test]
+fn sizes_read_in_kb_then_mb_and_the_list_fills_the_page() {
     assert_eq!(card::size_text(2048), "2 KB");
     assert_eq!(card::size_text(1_697_792), "1.6 MB", "the owner's 1,658 KB session");
-    assert_eq!(pane_widths(99, true).0, 39, "40 % at 100 columns");
-    assert_eq!(pane_widths(249, true).0, MAX_LIST_WIDTH, "capped on a 250-column terminal");
     assert_eq!(
         list_capacity(
             200,
@@ -359,7 +381,7 @@ fn every_size_fits_with_its_headroom_row() {
                     f.lines.iter().all(|l| crate::layout::display_width(l) < w),
                     "{w}x{h}: a line past column {w}"
                 );
-                assert!(f.lines[0].contains("sessions"), "{w}x{h}: a real render, not the stub");
+                assert!(f.lines[0].contains("resume"), "{w}x{h}: a real render, not the stub");
                 if w < 100 {
                     let list = f.map.list.unwrap_or_default();
                     let preview = if h < 30 { 2 } else { 6 };
@@ -417,7 +439,7 @@ fn empty_and_hidden_counts_are_stated() {
     let s: Vec<&Session> = owned.iter().collect();
     let f = picker_frame(&view(&s, 0, 100, 30), &mut Memo::default());
     assert!(
-        f.lines[0].contains("3 sessions ─ 1 empty hidden ─ 1 headless hidden"),
+        f.lines[0].contains("3 sessions · 1 empty hidden · 1 headless hidden"),
         "{}",
         f.lines[0]
     );

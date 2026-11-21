@@ -108,7 +108,6 @@ pub fn render(p: &Panel<'_>, style: Style) -> Vec<String> {
     let inner = p.width - 2;
     let focused = p.focus == Focus::Focused;
     let border = if focused { ACCENT } else { FAINT };
-    let tint = if focused { TINT_FOCUSED } else { TINT };
     // ASCII mode is a plain terminal: the body keeps its colours, the frame and the tints go.
     let c = style.color && !style.ascii;
     let edge = |s: &str| paint(s, border, c);
@@ -146,32 +145,42 @@ pub fn render(p: &Panel<'_>, style: Style) -> Vec<String> {
     top.push_str(&edge(&g.tr.to_string()));
 
     let mut out = vec![top];
-    let side = edge(&g.v.to_string());
     for i in 0..p.height - 2 {
         let raw = p.lines.get(i).map_or("", String::as_str);
-        let banded = p.selected == Some(i) && style.color;
-        let raw = if banded {
-            let pad = " ".repeat(inner.saturating_sub(display_width(raw)));
-            format!("{}{raw}{pad}{}", theme::SELECT_OPEN, theme::SELECT_CLOSE)
-        } else {
-            raw.to_owned()
-        };
-        let body = theme::add_tone_color(&format_body_line(&raw, inner, style, p.painter), style.color);
-        let body = theme::add_select_band_color(&body, style.color);
-        let pad = " ".repeat(inner.saturating_sub(display_width(&theme::remove_ansi_color(&body))));
-        let interior = if c {
-            format!(
-                "{tint}{}{pad}{}",
-                body.replace(theme::RESET, &format!("{}{tint}", theme::RESET)),
-                theme::RESET
-            )
-        } else {
-            format!("{body}{pad}")
-        };
-        out.push(format!("{side}{interior}{side}"));
+        out.push(line(p, raw, p.selected == Some(i), style));
     }
     out.push(edge(&format!("{}{}{}", g.bl, rule(&g, inner), g.br)));
     out
+}
+
+/// One interior line of `p` drawn with its side borders: `raw` cut to the interior, painted,
+/// banded when `selected`, tinted. A screen that repaints one line (a hover) calls it alone.
+pub fn line(p: &Panel<'_>, raw: &str, selected: bool, style: Style) -> String {
+    let g = theme::glyphs(style.ascii);
+    let inner = p.width.saturating_sub(2);
+    let focused = p.focus == Focus::Focused;
+    let c = style.color && !style.ascii;
+    let side = paint(&g.v.to_string(), if focused { ACCENT } else { FAINT }, c);
+    let tint = if focused { TINT_FOCUSED } else { TINT };
+    let raw = if selected && style.color {
+        let pad = " ".repeat(inner.saturating_sub(display_width(raw)));
+        format!("{}{raw}{pad}{}", theme::SELECT_OPEN, theme::SELECT_CLOSE)
+    } else {
+        raw.to_owned()
+    };
+    let body = theme::add_tone_color(&format_body_line(&raw, inner, style, p.painter), style.color);
+    let body = theme::add_select_band_color(&body, style.color);
+    let pad = " ".repeat(inner.saturating_sub(display_width(&theme::remove_ansi_color(&body))));
+    let interior = if c {
+        format!(
+            "{tint}{}{pad}{}",
+            body.replace(theme::RESET, &format!("{}{tint}", theme::RESET)),
+            theme::RESET
+        )
+    } else {
+        format!("{body}{pad}")
+    };
+    format!("{side}{interior}{side}")
 }
 
 /// Two columns of rendered panels side by side; the shorter is padded with blank cells.

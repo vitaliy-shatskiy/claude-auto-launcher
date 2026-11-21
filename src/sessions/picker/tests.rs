@@ -236,7 +236,7 @@ fn idle_polls_load_pages_until_a_tall_terminal_is_filled() {
     let mut s = PickerScreen::new(first, Some(&mut f), 10, &[], "", style(), clock());
     let idle = std::iter::repeat_n(crate::input::Event::Idle, 8);
     let esc = crate::input::Event::Key(crate::input::scripted_key("Escape").unwrap());
-    let mut term = crate::ui::script_term::ScriptTerm::new((100, 60), idle.chain([esc]));
+    let mut term = crate::ui::script_term::ScriptTerm::new((130, 60), idle.chain([esc]));
     assert_eq!(run(&mut s, &mut term), Ok(None));
     drop(s);
     let frames = term.inner.frames.unwrap();

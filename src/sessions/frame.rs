@@ -1,6 +1,6 @@
-//! The picker frame: master-detail at >= 100 columns, one
-//! column below with the preview underneath, and the frame memo that repaints only the lines a
-//! hover change touched.
+//! The picker frame in the cockpit style: the sessions panel (focused) and the chat panel beside it
+//! from 120 columns, one panel with the preview underneath below; and the frame memo that repaints
+//! only the lines a hover change touched.
 
 mod card;
 mod chat;
@@ -10,11 +10,12 @@ mod text;
 
 use super::listing::Session;
 use super::transcript::clean_text;
+use crate::cockpit::{self, Focus, Panel};
 use crate::frame::{
-    Footer, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RowMap, SHORT_PICKER_HEIGHT, Style, TWO_PANE_WIDTH, complete_frame,
+    BodyPainter, Footer, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RowMap, SHORT_PICKER_HEIGHT, Style, append_footer,
     footer_hover, frame_width, new_hint_footer, too_small_frame,
 };
-use crate::layout::{join_panes, limit_line, new_box, viewport};
+use crate::layout::{limit_line, viewport};
 use crate::list::{ListRow, new_list_row, row_band_length};
 use crate::theme::{self, Glyphs, glyphs};
 
@@ -238,12 +239,40 @@ fn picker_title(v: &PickerView<'_>, shown: usize, hidden: usize, headless: usize
 }
 
 struct Built {
+    /// The panels, painted, without the footer.
     lines: Vec<String>,
+    /// The sessions panel's interior line on each page row ('' on a border): the hover repaint.
+    raw: Vec<String>,
+    /// The chat panel's painted line on each page row; empty when the panels stack.
+    right: Vec<String>,
+    left_width: usize,
     footer: Footer,
     rows: Vec<(i32, Band)>,
     map: RowMap,
     /// The selected row (absolute index): never hover-banded.
     selected: i32,
+}
+
+/// The sessions panel: focused, carrying the identity and the page.
+pub(super) fn sessions_panel<'p>(
+    title: String,
+    lines: Vec<String>,
+    width: usize,
+    height: usize,
+    painter: BodyPainter<'p>,
+    g: &Glyphs,
+) -> Panel<'p> {
+    Panel {
+        title: cockpit::identity(g),
+        page: title,
+        right: String::new(),
+        focus: Focus::Focused,
+        lines,
+        width,
+        height,
+        painter,
+        selected: None,
+    }
 }
 
 /// The picker frame, memoised: a frame differing only in its hover repaints those lines.
@@ -269,10 +298,9 @@ pub fn picker_frame(v: &PickerView<'_>, memo: &mut Memo) -> Frame {
         selected: Vec::new(),
     };
     let mut map = b.map;
-    let paint = painter();
-    let lines = complete_frame(&b.lines, &b.footer, fw, v.style, &paint, &light, &mut map);
+    let lines = append_footer(b.lines, &b.footer, fw, v.style, &light, &mut map);
     let mut unpainted: Vec<String> = b
-        .lines
+        .raw
         .iter()
         .map(|l| l.replace([theme::HOVER_OPEN, theme::HOVER_CLOSE], ""))
         .collect();
@@ -287,12 +315,13 @@ pub fn picker_frame(v: &PickerView<'_>, memo: &mut Memo) -> Frame {
         key,
         unpainted,
         painted: lines.clone(),
+        right: b.right,
+        left_width: b.left_width,
         hover_row: v.hover_row,
         hover: v.hover,
         rows: b.rows,
         footer: Some(b.footer),
         footer_index,
-        width: fw,
         map: map.clone(),
         selected: b.selected,
     };
@@ -314,17 +343,14 @@ fn empty_message(filter: &str, hidden: usize, headless: usize) -> String {
     }
 }
 
-/// The widest list pane: past it a wide terminal's room goes to the preview, where text wraps.
-const MAX_LIST_WIDTH: usize = 72;
-
-/// The box's inner rows at this height: the terminal less the border, the footer and the
-/// headroom row.
+/// The sessions panel's interior rows at this height: the terminal less the borders, the footer
+/// and the headroom row.
 fn body_rows(height: usize, footer: &Footer) -> usize {
     height.saturating_sub(3 + footer.lines.len()).max(3)
 }
 
-/// (preview rows, list rows): the wide layout lists in every body row; the narrow one keeps a
-/// preview of 6 rows (2 below 30) under the list.
+/// (preview rows, list rows): beside the chat the list takes every row; stacked, a preview of 6
+/// rows (2 below 30) closes the sessions panel.
 fn split_rows(wide: bool, height: usize, body_rows: usize) -> (usize, usize) {
     if wide {
         (0, body_rows)
@@ -338,25 +364,36 @@ fn split_rows(wide: bool, height: usize, body_rows: usize) -> (usize, usize) {
 pub fn list_capacity(width: usize, height: usize, scope: PickerScope, style: Style) -> usize {
     let g = glyphs(style.ascii);
     let footer = picker_footer(scope, &g, frame_width(width), !style.color);
-    split_rows(width >= TWO_PANE_WIDTH, height, body_rows(height, &footer)).1
+    split_rows(width >= cockpit::TWO_COLUMNS, height, body_rows(height, &footer)).1
 }
 
-/// (list pane, detail pane) widths: 40 % for the list at >= 100 columns (at most
-/// `MAX_LIST_WIDTH`), else the whole frame.
-#[expect(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a frame width; [int] is banker's rounding"
-)]
-fn pane_widths(fw: usize, wide: bool) -> (usize, usize) {
-    let inner = fw.saturating_sub(2);
-    let left = if wide {
-        28.max((inner as f64 * 0.4).round_ties_even() as usize).min(MAX_LIST_WIDTH)
-    } else {
-        inner
-    };
-    (left, inner.saturating_sub(left + 1))
+/// The panel's interior lines placed at their page rows: row 0 and the last are its borders.
+fn raw_at(body: &[String]) -> Vec<String> {
+    let mut raw = vec![String::new()];
+    raw.extend(body.iter().cloned());
+    raw.push(String::new());
+    raw
+}
+
+/// Nothing to resume: the sessions panel says why.
+fn empty_built(message: String, title: String, footer: Footer, (fw, body_rows): (usize, usize), style: Style, g: &Glyphs) -> Built {
+    let mut body = vec![String::new(), message];
+    body.resize(body_rows, String::new());
+    let paint = painter();
+    let panel = sessions_panel(title, body.clone(), fw, body_rows + 2, &paint, g);
+    Built {
+        lines: cockpit::render(&panel, style),
+        raw: raw_at(&body),
+        right: Vec::new(),
+        left_width: fw,
+        footer,
+        rows: Vec::new(),
+        map: RowMap {
+            list: Some(ListMap::default()),
+            ..RowMap::default()
+        },
+        selected: -1,
+    }
 }
 
 fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
@@ -366,33 +403,31 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let hidden = v.sessions.len().saturating_sub(resumable_rows.len() + headless);
     let items: Vec<&Session> = resumable_rows.into_iter().filter(|s| matches(s, v.filter)).collect();
     let index = v.index.min(items.len().saturating_sub(1));
-    let h = g.h;
-    let title = picker_title(v, items.len(), hidden, headless, h);
+    let title = picker_title(v, items.len(), hidden, headless, g.dot);
     let footer = picker_footer(v.scope, g, fw, !v.style.color);
     let body_rows = body_rows(v.height, &footer);
+    let paint = painter();
+    let wide = v.width >= cockpit::TWO_COLUMNS && !items.is_empty();
+    let lw = if wide { cockpit::SESSIONS_LEFT_WIDTH } else { fw };
+    // Ages end 2 cells before the border.
+    let row_width = lw.saturating_sub(4);
     if items.is_empty() {
-        let mut body = vec![String::new(), empty_message(v.filter, hidden, headless)];
-        body.resize(body_rows, String::new());
-        return Built {
-            lines: new_box(&body, fw, &title, g, ascii),
+        return empty_built(
+            empty_message(v.filter, hidden, headless),
+            title,
             footer,
-            rows: Vec::new(),
-            map: RowMap {
-                list: Some(ListMap::default()),
-                ..RowMap::default()
-            },
-            selected: -1,
-        };
+            (fw, body_rows),
+            v.style,
+            g,
+        );
     }
-    let wide = v.width >= TWO_PANE_WIDTH;
-    let (left_width, right_width) = pane_widths(fw, wide);
     let ctx = RowCtx {
         index,
         hover_row: v.hover_row,
         scope: v.scope,
         clock: v.clock,
         g,
-        width: left_width,
+        width: row_width,
         ascii,
     };
     let s = items.get(index).copied().unwrap_or(items[0]);
@@ -402,7 +437,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let (start, visible) = viewport(items.len(), index, list_rows);
     for (i, it) in items.iter().enumerate().skip(start).take(visible) {
         let row = session_row(it, i, &ctx);
-        bands.push((i, i - start, row_band_length(&row, left_width)));
+        bands.push((i, i - start, row_band_length(&row, row_width)));
         list.push(row);
     }
     let pv = Preview {
@@ -411,15 +446,20 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
         ascii,
         zone: v.clock.zone,
     };
-    // AC27: the box always fills the terminal; the panes pad to the full body height.
+    // AC27: the panels always fill the terminal; the list pads to the full body height.
     list.resize(list_rows, String::new());
-    let body = if wide {
+    let (lines, right, body) = if wide {
+        let rw = fw - lw;
         let detail: Vec<String> = pv
-            .card(right_width.saturating_sub(2), body_rows, v.scope, v.chat)
+            .card(rw.saturating_sub(4), body_rows, v.scope, v.chat)
             .into_iter()
             .map(|l| format!(" {l}"))
             .collect();
-        join_panes(&list, &detail, left_width, right_width, g, ascii)
+        let mut chat = Panel::plain(&format!("chat {} {}", g.dot, clean_text(&s.project)), detail, rw, body_rows + 2);
+        chat.painter = &paint;
+        let right = cockpit::render(&chat, v.style);
+        let left = cockpit::render(&sessions_panel(title, list.clone(), lw, body_rows + 2, &paint, g), v.style);
+        (cockpit::beside(left, lw, &right), right, list)
     } else {
         let mut body = list;
         body.extend(
@@ -428,30 +468,23 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
                 .map(|l| format!("  {l}")),
         );
         body.resize(body_rows, String::new());
-        body
+        let lines = cockpit::render(&sessions_panel(title, body.clone(), fw, body_rows + 2, &paint, g), v.style);
+        (lines, Vec::new(), body)
     };
-    let lines = new_box(&body, fw, &title, g, ascii);
-    let first_row_y = lines.len() - body.len() - 1;
     let to_i = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
     Built {
         lines,
+        raw: raw_at(&body),
+        right,
+        left_width: lw,
         footer,
         rows: bands
             .into_iter()
-            .map(|(i, y, len)| {
-                (
-                    to_i(i),
-                    Band {
-                        y: first_row_y + y,
-                        start: 1,
-                        len,
-                    },
-                )
-            })
+            .map(|(i, y, len)| (to_i(i), Band { y: 1 + y, start: 0, len }))
             .collect(),
         map: RowMap {
             list: Some(ListMap {
-                first_row_y: to_i(first_row_y),
+                first_row_y: 1,
                 row_count: to_i(visible),
                 start: to_i(start),
                 row_ys: Vec::new(),
