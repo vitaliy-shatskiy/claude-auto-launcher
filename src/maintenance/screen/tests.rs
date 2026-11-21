@@ -420,6 +420,18 @@ fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
     assert_golden("maintenance-130x40", &wide.join("\n"));
     assert!(wide.iter().any(|l| l.contains("update \u{b7} last run")) && wide.iter().any(|l| l.contains("error")));
     assert_golden("maintenance-80x24", &draw(&p, (80, 24)).lines.join("\n"));
+    let three = draw(&p, (250, 70)).lines;
+    assert_golden("maintenance-250x70", &three.join("\n"));
+    let versions = three.iter().find(|l| l.contains("installed")).unwrap();
+    assert!(
+        versions.ends_with('\u{2502}') && display_width(versions) == 249,
+        "the facts close the page: {versions}"
+    );
+    let value_end = display_width(versions.split_once("newest").unwrap().0) + 6;
+    assert!(
+        value_end > 249 - 66,
+        "the versions sit in the last 66 cells, beside the last run: {versions}"
+    );
     let s1 = draw(&page_of(info(true, None, None), "", &[]), (130, 40)).lines;
     assert_golden("maintenance-130x40-s1", &s1.join("\n"));
     assert_eq!(count(&s1, "warnings"), 0, "an empty warnings panel is not drawn");

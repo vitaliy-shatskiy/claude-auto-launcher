@@ -169,6 +169,12 @@ fn state_tint(p: &Page, e: &Entry) -> fn(&str) -> String {
     }
 }
 
+/// The versions and warnings column beside the last run, once the page has room for three
+/// columns: a config warning's `fix it in <path>` line with its indent.
+const FACTS_WIDTH: usize = 66;
+/// The last run's output needs at least this much to stand as its own column.
+const RUN_MIN_WIDTH: usize = 60;
+
 /// How the action rows are laid out when room is short.
 #[derive(Debug, Clone, Copy)]
 struct Lay {
@@ -320,7 +326,18 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
     } else {
         "last run".to_owned()
     };
-    if wide {
+    if wide && rw >= FACTS_WIDTH + RUN_MIN_WIDTH {
+        // Room for three columns: the facts keep their width, the last run's output takes the rest.
+        let run_w = rw - FACTS_WIDTH;
+        let run = panel(&run_title, run_lines(p, run_w - 2, left_h - 2, style.ascii), run_w, left_h);
+        let mut facts = panel("versions", versions, FACTS_WIDTH, 6);
+        let warnings = warning_lines(p, &g, FACTS_WIDTH - 2);
+        if warn_h > 0 {
+            facts.extend(panel("warnings", warnings, FACTS_WIDTH, warn_h));
+        }
+        facts.truncate(left_h);
+        lines = cockpit::beside(lines, lw, &cockpit::beside(run, run_w, &facts));
+    } else if wide {
         let run_h = left_h.saturating_sub(versions.len() + 2 + warn_h).max(3);
         let mut right = panel(&run_title, run_lines(p, rw - 2, run_h - 2, style.ascii), rw, run_h);
         right.extend(panel("versions", versions, rw, 6));
