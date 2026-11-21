@@ -4,6 +4,7 @@
 use super::super::gib;
 use super::{ACCENT_OPEN, GREEN_OPEN, Page, Phase, RED_OPEN, YELLOW_OPEN, clean, dim, facts, launcher_facts, tint};
 use crate::layout::limit_line;
+use crate::self_update::{ROLLBACK_KEY, UPDATE_KEY};
 use crate::theme::{Glyphs, glyphs, strip_ctl};
 
 /// The installed build against the newest: `2.1.230 · newest`, `2.1.226 · update available 2.1.230`.
@@ -70,13 +71,15 @@ pub(super) fn warning_lines(p: &Page, g: &Glyphs, inner: usize) -> Vec<String> {
 }
 
 /// What each built-in row does, for the selected-action panel beside the rows.
-const DETAILS: [(char, &str); 6] = [
+const DETAILS: [(char, &str); 8] = [
     ('u', "downloads the newest Claude Code and switches to it"),
     ('r', "moves the running claude.exe aside, then updates"),
     ('p', "deletes every build but the 2 newest and the running one"),
     ('d', "runs claude doctor and shows its report"),
     ('m', "checks each MCP server's connection"),
     ('l', "show, hide and order the launch rows; pin a hidden row's value"),
+    (UPDATE_KEY, "downloads the newest claude-auto and swaps it in for the next start"),
+    (ROLLBACK_KEY, "puts back the previous claude-auto build for the next start"),
 ];
 
 /// Beside the rows on a wide page: the selected action - what it does, how to run it - and its

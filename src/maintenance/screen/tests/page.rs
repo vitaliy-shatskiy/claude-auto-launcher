@@ -258,3 +258,19 @@ fn gib_rounds_like_n1() {
     assert_eq!(gib(3_650_722_201), "3.4");
     assert_eq!(gib(1500 * GIB), "1,500.0");
 }
+
+#[test]
+fn every_built_in_row_says_what_it_does_and_only_a_configured_action_reads_as_one() {
+    use crate::self_update::{ROLLBACK_KEY, UPDATE_KEY};
+    let mut p = page_of(info(true, None, None), "", &reindex());
+    p.entries = entries(
+        &[(UPDATE_KEY, "update to 0.9.1".into()), (ROLLBACK_KEY, "roll back".into())],
+        &reindex(),
+    );
+    for (i, e) in p.entries.clone().iter().enumerate() {
+        p.selected = i;
+        let text = draw(&p, (211, 52)).lines.join("\n");
+        let generic = text.contains("a configured action");
+        assert_eq!(generic, e.group == Group::Custom, "row {}: {text}", e.key);
+    }
+}
