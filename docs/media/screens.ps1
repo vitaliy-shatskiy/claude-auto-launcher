@@ -10,6 +10,11 @@
 #
 # Run from the repository root after `cargo build`. Output: target/screens/<screen>-<WxH>.png.
 # Exit: 0 every PNG written, 1 one failed, 2 did not run (no binary, no vhs, an error).
+# Sizes: 80x24 classic; 120x30 the Windows Terminal default window (initialCols 120, initialRows
+# 30: learn.microsoft.com/windows/terminal/customize-settings/startup, read 21.11.2026);
+# 160x45; 211x52 FullHD maximized (Cascadia Mono 12pt); 280x72 2K maximized (measured); 320x85
+# 2K full screen; 55x20 narrow. home-projects and home-sessions: the launch page's focus moved
+# to the list and to the sessions (wide only; under 120 columns they are the launch page).
 [CmdletBinding()]
 param(
     [string]$Screens = 'launch,home-projects,home-sessions,project,picker-all,maintenance,navigator,rows-editor',
