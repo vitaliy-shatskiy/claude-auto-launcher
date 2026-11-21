@@ -334,3 +334,24 @@ fn a_second_update_or_roll_back_in_the_same_process_is_refused() {
         "the slot is free again once the first one ends"
     );
 }
+
+#[test]
+fn the_state_text_names_the_build_a_swap_left_for_the_next_start() {
+    let t = tmp("pending");
+    let l = local(&t.0, Mode::Notify);
+    let stub = full_stub(&t.0);
+    run(&l, NOW, &stub, &RealFiles, &Mutex::new(false));
+    l.act_with(UPDATE_KEY, &stub, &RealFiles);
+    assert_eq!(l.state_text(), "self-update notify, 99.0.0 installed - takes effect next start");
+    l.act_with(ROLLBACK_KEY, &NoNet, &RealFiles);
+    assert_eq!(l.state_text(), "self-update notify, 99.0.0 available", "back to the running build");
+    let older = Version([0, 0, 1]);
+    State {
+        installed: Version::current(),
+        previous: Some(older),
+        ..State::read(&l.state)
+    }
+    .write(&l.state);
+    l.act_with(ROLLBACK_KEY, &NoNet, &RealFiles);
+    assert_eq!(l.state_text(), "self-update notify, 0.0.1 installed - takes effect next start");
+}

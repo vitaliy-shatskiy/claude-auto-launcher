@@ -165,6 +165,10 @@ impl Local {
             Mode::Auto => "auto",
             Mode::Off => return "self-update off".into(),
         };
+        // A swap this start made (update or roll back) shows until the next start runs that build.
+        if let Some(v) = State::read(&self.state).installed.filter(|i| Some(*i) != Version::current()) {
+            return format!("self-update {mode}, {v} installed - takes effect next start");
+        }
         match self.offered() {
             Some(r) => format!("self-update {mode}, {} available", r.version),
             None => format!("self-update {mode}, up to date"),

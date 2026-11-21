@@ -127,7 +127,11 @@ fn launcher_pieces(p: &Page) -> Vec<String> {
     let mut out = vec![dim(env!("CARGO_PKG_VERSION"))];
     match words.split_once(", ") {
         Some((mode, state)) => {
-            let open = if state.contains("available") { YELLOW_OPEN } else { GREEN_OPEN };
+            let open = if state.contains("available") || state.contains("next start") {
+                YELLOW_OPEN
+            } else {
+                GREEN_OPEN
+            };
             out.push(tint(open, state));
             out.push(dim(mode));
         }
