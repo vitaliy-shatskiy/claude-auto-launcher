@@ -71,12 +71,12 @@ fn count(lines: &[String], needle: &str) -> usize {
 }
 
 #[test]
-fn the_header_spans_the_width_and_the_page_ends_at_its_content() {
+fn the_header_spans_the_width_and_the_page_ends_at_its_footer() {
     let f = draw(&page_of(info(true, Some("A"), Some("A")), "", &[]), (80, 24));
     assert_eq!(widest(&f.lines), frame_width(80));
     assert!(f.lines[0].contains("claude-auto \u{2500} maintenance"), "{}", f.lines[0]);
     assert_eq!(count(&f.lines, "Claude Code  2.1.230 \u{b7} newest"), 1, "{:#?}", f.lines);
-    assert!(f.lines.len() < 23, "content height, nothing pads to the bottom: {}", f.lines.len());
+    assert_eq!(f.lines.len(), 23, "the panels run to the footer (AC27)");
     assert!(f.lines.last().unwrap().contains("[esc] back"));
 }
 
@@ -1192,4 +1192,23 @@ fn the_running_frame_keeps_the_launcher_rows() {
     assert_eq!(run(&mut s, &mut t), Err(UiStop::KeysExhausted));
     let running = t.frames.iter().find(|f| f.contains("updating")).unwrap();
     assert!(running.contains("update claude-auto to 9.9.9"), "{running}");
+}
+
+/// AC27: at every size the panels run to the footer row; nothing is left blank under them.
+#[test]
+fn the_panels_run_to_the_footer_at_every_size() {
+    for status in ["", "doctor: all good"] {
+        let p = page_of(info(true, Some("A"), Some("A")), status, &[]);
+        for size in [(80, 24), (100, 30), (120, 30), (160, 45), (211, 52), (280, 72)] {
+            let f = draw(&p, size);
+            let fy = usize::try_from(f.map.footer_y.unwrap()).unwrap();
+            assert_eq!(fy, size.1 - 2, "{size:?}: the footer sits on the last row: {:#?}", f.lines);
+            let above = &f.lines[fy - 1];
+            assert!(
+                above.starts_with('\u{2570}'),
+                "{size:?}: a panel closes right above the footer: {above}"
+            );
+            assert_eq!(display_width(above), size.0 - 1, "{size:?}: every column closes there: {above}");
+        }
+    }
 }

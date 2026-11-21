@@ -4,15 +4,41 @@
 │   [r] update anyway (rename)                   ││  enter  or  r  runs it                                                      │
 │       while claude.exe is in use               ││                                                                             │
 │   [p] delete old builds                        ││                                                                             │
+│                                                ││                                                                             │
+│  Checks                                        ││                                                                             │
+│   [d] doctor                                   ││                                                                             │
+│   [m] MCP servers                              ││                                                                             │
+│                                                ││                                                                             │
+│  Launcher                                      ││                                                                             │
+│   [l] launch rows                              ││                                                                             │
+│                                                ││                                                                             │
+│  Custom                                        ││                                                                             │
+│   [i] full reindex                             ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
+│                                                ││                                                                             │
 │                                                │╰─────────────────────────────────────────────────────────────────────────────╯
-│  Checks                                        │╭─ versions ──────────────────────────────────────────────────────────────────╮
-│   [d] doctor                                   ││  installed     2.1.230 · newest                                             │
-│   [m] MCP servers                              ││  newest        2.1.230                                                      │
+│                                                │╭─ versions ──────────────────────────────────────────────────────────────────╮
+│                                                ││  installed     2.1.230 · newest                                             │
+│                                                ││  newest        2.1.230                                                      │
 │                                                ││  on disk       3 builds · 0.8 GB                                            │
-│  Launcher                                      ││  claude-auto   0.9.0 · self-update off                                      │
-│   [l] launch rows                              │╰─────────────────────────────────────────────────────────────────────────────╯
+│                                                ││  claude-auto   0.9.0 · self-update off                                      │
+│                                                │╰─────────────────────────────────────────────────────────────────────────────╯
 │                                                │╭─ warnings ──────────────────────────────────────────────────────────────────╮
-│  Custom                                        ││  warning  ⚠ config: unknown key "colour"                                    │
-│   [i] full reindex                             ││           fix it in C:\Users\sample\.claude\claude-auto.json                │
+│                                                ││  warning  ⚠ config: unknown key "colour"                                    │
+│                                                ││           fix it in C:\Users\sample\.claude\claude-auto.json                │
 ╰────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────────────────────────╯
   w/s move  ┊  [enter] run  ┊  [esc] back

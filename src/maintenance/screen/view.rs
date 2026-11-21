@@ -291,11 +291,13 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
         .position(|r| r.index == p.selected)
         .and_then(|i| rows.get(i))
         .map(|r| usize::try_from(r.y).unwrap_or(1) - 1);
+    // AC27: the panels run to the footer; stacked, the actions take what the warnings and the last
+    // run leave.
     let left_h = if wide {
-        let run_need = if ran { 4 } else { 3 };
-        (actions.len() + 2).max(versions.len() + 2 + warn_h + run_need).min(page_rows)
+        page_rows
     } else {
-        (actions.len() + 2).min(page_rows)
+        let below = warn_h + if ran { 6 } else { 0 };
+        page_rows.saturating_sub(below).max(actions.len() + 2).min(page_rows)
     };
     let main = Panel {
         title: cockpit::identity(&g),
@@ -327,15 +329,15 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
         let run_w = rw - FACTS_WIDTH;
         let (title, body) = selected_action(p, run_w - 2, left_h - 2, style.ascii);
         let run = panel(&title, body, run_w, left_h);
-        let mut facts = panel("versions", versions, FACTS_WIDTH, 6);
+        let mut facts = panel("versions", versions, FACTS_WIDTH, if warn_h > 0 { 6 } else { left_h });
         let warnings = warning_lines(p, &g, FACTS_WIDTH - 2);
         if warn_h > 0 {
-            facts.extend(panel("warnings", warnings, FACTS_WIDTH, warn_h));
+            facts.extend(panel("warnings", warnings, FACTS_WIDTH, left_h.saturating_sub(6)));
         }
         facts.truncate(left_h);
         lines = cockpit::beside(lines, lw, &cockpit::beside(run, run_w, &facts));
     } else if wide {
-        let run_h = left_h.saturating_sub(versions.len() + 2 + warn_h).max(3);
+        let run_h = left_h.saturating_sub(6 + warn_h).max(3);
         let (title, body) = selected_action(p, rw - 2, run_h - 2, style.ascii);
         let mut right = panel(&title, body, rw, run_h);
         right.extend(panel("versions", versions, rw, 6));
