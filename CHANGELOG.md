@@ -19,8 +19,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   paths, at most 60 % of the width), the action field closes it on one line, and the right column
   shows the selected project's path, git branch, session count and newest session, then its
   sessions newest first with a green dot on a running one, from the summary cache off the UI thread.
-- Launch: the limits, running and Claude Code column keeps 46 cells, the launch and recent panels
-  take the rest; recent projects show their newest session's title, never the path; the Claude Code
+- Launch: the launch panel is as wide as its rows, the limits panel (46 cells) right beside it;
+  recent spans the page under them (its rows laid out in 114 cells) beside the 46-cell running and
+  Claude Code column; the session picker's chat text wraps at 110 cells; recent projects show their newest session's title, never the path; the Claude Code
   panel names the last maintenance MCP check and its age when one is stored.
 - Maintenance: a hint too long for its row, and in a short stacked window the last run's state, go
   on their own line under the row; the group titles carry the version facts cut to fit; a short
