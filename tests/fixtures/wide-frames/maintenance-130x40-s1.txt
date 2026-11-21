@@ -1,0 +1,14 @@
+╭─ ✻ claude-auto ─ maintenance ────────── 0.9.0 ─╮╭─ last run ──────────────────────────────────────────────────────────────────╮
+│  Claude Code                                   ││  nothing run yet                                                            │
+│   [u] update                                   ││                                                                             │
+│   [r] update anyway (rename)                   ││                                                                             │
+│   [p] delete old builds                        ││                                                                             │
+│                                                ││                                                                             │
+│  Checks                                        │╰─────────────────────────────────────────────────────────────────────────────╯
+│   [d] doctor                                   │╭─ versions ──────────────────────────────────────────────────────────────────╮
+│   [m] MCP servers                              ││  installed     2.1.230 · newest                                             │
+│                                                ││  newest        2.1.230                                                      │
+│  Launcher                                      ││  on disk       3 builds · 0.8 GB                                            │
+│   [l] launch rows                              ││  claude-auto   0.9.0 · self-update off                                      │
+╰────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────────────────────────╯
+  w/s move  ┊  [enter] run  ┊  [esc] back

@@ -98,6 +98,28 @@ fn assert_golden(name: &str, actual: &str) {
 }
 
 #[test]
+fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
+    let owned = golden_sessions();
+    let s: Vec<&Session> = owned.iter().collect();
+    let wide = picker_frame(&view(&s, 1, 130, 40), &mut Memo::default()).lines;
+    assert_golden("picker-130x40", &wide.join("\n"));
+    assert!(
+        wide[0].contains("resume \u{b7} 5 sessions") && wide[0].contains("chat \u{b7} project-2"),
+        "{}",
+        wide[0]
+    );
+    assert_golden(
+        "picker-80x24",
+        &picker_frame(&view(&s, 1, 80, 24), &mut Memo::default()).lines.join("\n"),
+    );
+    let none: Vec<&Session> = Vec::new();
+    assert_golden(
+        "picker-130x40-s1",
+        &picker_frame(&view(&none, 0, 130, 40), &mut Memo::default()).lines.join("\n"),
+    );
+}
+
+#[test]
 fn golden_clock_is_the_fixture_time() {
     assert_eq!(local_stamp(GOLDEN_NOW, 0), "16.09 12:00");
     assert_eq!(

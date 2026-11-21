@@ -509,17 +509,25 @@ pub fn launch_footer(g: &Glyphs, width: usize, color: bool, extra: &LaunchHints)
     };
     let mut hints = vec![
         Hint::plain("w/s", "row").kept(),
-        Hint::plain(frame::switch_keys(g), "switch").kept(),
+        Hint::plain(if short { "a/d" } else { frame::switch_keys(g) }, "switch").kept(),
         Hint::key("enter", "next", "Enter"),
     ];
     if extra.recent {
         hints.push(Hint::plain("1-5", if short { "go" } else { "resume" }).kept());
     }
     hints.push(Hint::ch("u", if short { "maint" } else { "maintenance" }, 'u').badged(badge));
-    if extra.restored && !(short && extra.recent) {
+    if extra.restored {
         hints.push(Hint::plain(if short { "^r" } else { "ctrl+r" }, "reset").kept());
     }
     hints.push(Hint::key("esc", "quit", "Escape"));
+    // One line: what does not fit goes, ctrl+r first, then w/s (the arrows need no hint).
+    for drop in ["^r", "w/s"] {
+        let footer = new_hint_footer(&hints, g, width, !color);
+        if footer.lines.len() <= 1 {
+            return footer;
+        }
+        hints.retain(|h| h.token != drop);
+    }
     new_hint_footer(&hints, g, width, !color)
 }
 

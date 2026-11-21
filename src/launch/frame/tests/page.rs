@@ -59,6 +59,87 @@ fn a_400x150_terminal_gets_a_full_width_page_from_the_top_left() {
     assert!(lines.iter().all(|l| display_width(l) <= 399), "the last column stays free");
 }
 
+fn sample_recent() -> Vec<RecentProject> {
+    [
+        ("aurora-web", "3 min", "claude-auto design variants"),
+        ("LumenTrack.API", "4 h", ""),
+        ("quill-tools", "1 d", ""),
+        ("relay-monitor", "2 d", ""),
+    ]
+    .iter()
+    .map(|(n, a, last)| RecentProject {
+        name: (*n).into(),
+        path: format!(r"C:\Users\sample\Desktop\Projects\{n}"),
+        age: (*a).into(),
+        last: (*last).into(),
+        ..RecentProject::default()
+    })
+    .collect()
+}
+
+fn sample_running() -> Vec<RunningSession> {
+    [("claude-auto design", "busy", "12 min"), ("interactive 4120", "idle", "2 h")]
+        .iter()
+        .map(|(n, p, a)| RunningSession {
+            name: (*n).into(),
+            project: (*p).into(),
+            age: (*a).into(),
+        })
+        .collect()
+}
+
+/// The cockpit page with recent projects, running sessions and a newer Claude Code.
+fn full(
+    r: &Roster,
+    state: &LaunchState,
+    size: (usize, usize),
+    recent: &[RecentProject],
+    running: &[RunningSession],
+    limits: &Limits,
+) -> Vec<String> {
+    let version = VersionInfo {
+        installed: Some("2.1.329".into()),
+        newest: Some("2.1.330".into()),
+    };
+    let labels = DefaultLabels::new();
+    let inp = LaunchFrameInput {
+        state,
+        width: size.0,
+        height: size.1,
+        limits,
+        version: &version,
+        restored: None,
+        notice: None,
+        warnings: 2,
+        recent,
+        running,
+        default_model_label: "default",
+        default_advisor_label: "default",
+        default_labels: &labels,
+        style: Style {
+            color: false,
+            ascii: false,
+        },
+    };
+    launch_frame(r, &inp).lines
+}
+
+#[test]
+fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
+    let r = four();
+    let (recent, running) = (sample_recent(), sample_running());
+    let wide = full(&r, &real_state(&r), (130, 40), &recent, &running, &golden_limits());
+    assert_golden("launch-130x40", &wide.join("\n"));
+    assert_eq!(wide.len(), 39, "lists with items stretch the panels to the footer");
+    assert_golden(
+        "launch-80x24",
+        &full(&r, &real_state(&r), (80, 24), &recent, &running, &golden_limits()).join("\n"),
+    );
+    let s1 = full(&r, &r.new_state(), (130, 40), &[], &[], &Limits::new());
+    assert_golden("launch-130x40-s1", &s1.join("\n"));
+    assert!(s1.len() < 25, "empty lists shrink the panels and the footer follows: {}", s1.len());
+}
+
 #[test]
 fn the_switch_keys_sit_in_the_footer_only() {
     let r = four();

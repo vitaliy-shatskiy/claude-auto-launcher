@@ -469,6 +469,30 @@ fn title_shows_typing_and_notice() {
 }
 
 #[test]
+fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
+    let ps = golden_projects();
+    let pinned = [project_key(&ps[1].path)];
+    let wide = project_frame(&ProjectView {
+        pinned: &pinned,
+        ..view(&ps, 1, r"C:\Users\sample\here", 130, 40)
+    });
+    assert_golden("project-130x40", &text(&wide));
+    assert!(
+        wide.lines[0].contains("pinned 1") && wide.lines[0].contains("worktrees 1"),
+        "{}",
+        wide.lines[0]
+    );
+    assert_golden(
+        "project-80x24",
+        &text(&project_frame(&view(&ps, 1, r"C:\Users\sample\here", 80, 24))),
+    );
+    assert_golden(
+        "project-130x40-s1",
+        &text(&project_frame(&view(&[], 0, r"C:\Users\sample\here", 130, 40))),
+    );
+}
+
+#[test]
 fn beside_the_list_the_action_panel_and_the_list_row_on_its_line_each_get_their_own_clicks() {
     use crate::ui::{Hit, hit_at};
     let ps = many(12, "p");

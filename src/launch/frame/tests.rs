@@ -435,13 +435,42 @@ fn footer_names_no_row_editing_keys() {
     let r = four();
     let s = r.new_state();
     let limits = golden_limits();
-    let base = ["w/s row", "a/d \u{2190}/\u{2192} switch", "[enter] next", "[u] maint", "[esc] quit"];
+    let base = ["w/s row", "switch", "[enter] next", "[u] maint", "[esc] quit"];
     for width in [100, 120] {
         let f = frame_at(&r, &s, &limits, width);
         let text = f.lines[usize::try_from(f.map.footer_y.unwrap()).unwrap()..].join("\n");
         assert!(base.iter().all(|h| text.contains(h)), "{width}: {text}");
         assert!(!["^w/^s", "^x", "[o]"].iter().any(|h| text.contains(h)), "{width}: {text}");
     }
+}
+
+#[test]
+fn under_110_columns_the_footer_shortens_and_stays_one_line_ctrl_r_going_first() {
+    let g = theme::glyphs(false);
+    let all = LaunchHints {
+        warnings: 2,
+        restored: true,
+        recent: true,
+    };
+    let text = |w: usize| {
+        let f = launch_footer(&g, w, false, &all);
+        assert_eq!(f.lines.len(), 1, "{w}: {:?}", f.lines);
+        f.lines[0].text.clone()
+    };
+    let wide = text(159);
+    assert!(
+        wide.contains("1-5 resume") && wide.contains("ctrl+r reset") && wide.contains("[u] maintenance"),
+        "{wide}"
+    );
+    let mid = text(99);
+    assert!(
+        mid.contains("1-5 go") && mid.contains("[u] maint ") && mid.contains("a/d switch") && mid.contains("^r reset"),
+        "{mid}"
+    );
+    let tight = text(90);
+    assert!(!tight.contains("reset") && tight.contains("w/s row"), "ctrl+r goes first: {tight}");
+    let narrow = text(79);
+    assert!(narrow.contains("1-5 go") && !narrow.contains("w/s"), "{narrow}");
 }
 
 #[test]

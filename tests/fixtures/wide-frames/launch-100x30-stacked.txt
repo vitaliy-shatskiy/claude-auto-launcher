@@ -14,4 +14,4 @@
 │  no recent projects yet                                                                         │
 │  enter opens the project list                                                                   │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  w/s row  ┊  a/d ←/→ switch  ┊  [enter] next  ┊  [u] maint  ┊  [esc] quit
+  w/s row  ┊  a/d switch  ┊  [enter] next  ┊  [u] maint  ┊  [esc] quit

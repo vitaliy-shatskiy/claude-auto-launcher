@@ -1,0 +1,17 @@
+╭─ ✻ claude-auto ──────────────────────── 0.9.0 · Claude Code 2.1.329 ↑ 2.1.330 ─╮╭─ limits · work ─────────────────────────────╮
+│ ❯ account      [work] ┊ personal ┊ low                                         ││  no data yet                                │
+│   remote       ● [on] ○ off ○ on+QR ○ stop server                              ││  fills in after the first session           │
+│   model        ● [default] ○ Haiku 5.5 ○ Sonnet 5.5 ○ Opus 5.5[1M] ○ Fable 5.2 ││                                             │
+│   effort       ● [default] ○ low ○ medium ○ high ○ xhigh ○ max ○ ultracode     ││                                             │
+│   advisor      ● [default] ○ fable ○ opus ○ off                                ││                                             │
+│   permission   ● [default] ○ plan ○ auto ○ acceptEdits ○ bypass                ││                                             │
+│   mode         ● [normal] ○ safe                                               ││                                             │
+╰────────────────────────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────╯
+╭─ recent ───────────────────────────────────────────────────────────────────────╮╭─ running ───────────────────────────────────╮
+│  no recent projects yet                                                        ││  nothing running                            │
+│  enter opens the project list                                                  │╰─────────────────────────────────────────────╯
+│                                                                                │╭─ claude code ───────────────────────────────╮
+│                                                                                ││  2.1.329  ↑ 2.1.330                         │
+│                                                                                ││  ⚠ 2 warnings · u                           │
+╰────────────────────────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────╯
+  w/s row  ┊  a/d ←/→ switch  ┊  [enter] next  ┊  [u] maintenance ⚠ 2  ┊  [esc] quit

@@ -398,6 +398,30 @@ fn assert_golden(name: &str, actual: &str) {
 }
 
 #[test]
+fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
+    let mut p = page_of(
+        info(true, None, None),
+        "Current version: 2.1.230\nChecking for updates...\nClaude Code is up to date (2.1.230)",
+        &reindex(),
+    );
+    "update".clone_into(&mut p.last);
+    p.phase = Phase::Done;
+    p.warnings = vec![
+        "config: unknown key \"colour\"".into(),
+        "custom action 'sync': command not found".into(),
+    ];
+    p.config_path = r"C:\Users\sample\.claude\claude-auto.json".into();
+    let wide = draw(&p, (130, 40)).lines;
+    assert_golden("maintenance-130x40", &wide.join("\n"));
+    assert!(wide.iter().any(|l| l.contains("update \u{b7} last run")) && wide.iter().any(|l| l.contains("error")));
+    assert_golden("maintenance-80x24", &draw(&p, (80, 24)).lines.join("\n"));
+    let s1 = draw(&page_of(info(true, None, None), "", &[]), (130, 40)).lines;
+    assert_golden("maintenance-130x40-s1", &s1.join("\n"));
+    assert_eq!(count(&s1, "warnings"), 0, "an empty warnings panel is not drawn");
+    assert_eq!(count(&s1, "Custom"), 0, "an empty group is not drawn");
+}
+
+#[test]
 fn the_grouped_page_matches_its_goldens() {
     let mut p = page_of(info(true, None, None), "", &reindex());
     p.selected = 1;
