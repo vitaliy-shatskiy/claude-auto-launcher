@@ -1,36 +1,37 @@
-# A keyboard walk over the launch screen: switch accounts (each brings its remembered choices),
+# A keyboard walk over the launch page: switch accounts (each brings its remembered choices),
 # then step model, effort and advisor; in maintenance's rows editor move a row and hide mode.
-# Esc quits before anything is launched.
+# The recording stops on the launch page: nothing is launched.
 # Run from the repository root after `cargo build --release`:  vhs docs/media/launch-walk.tape
 # The demo home from demo-setup.ps1 is a throwaway folder under %TEMP%: no real config, prefs or
 # projects are read, and the run's own writes (logs, caches) land there.
+# 122 columns: the workspace (launch, projects, the right column) shows from 120.
 
 Output docs/media/launch-walk.gif
 Output docs/media/launch-walk.mp4
 Set Shell "pwsh"
 Set FontFamily "Cascadia Mono"
-Set FontSize 22
-Set Width 1472
-Set Height 592
-Set Padding 24
-Set Margin 40
+Set FontSize 20
+Set Width 1600
+Set Height 760
+Set Padding 20
+Set Margin 32
 Set MarginFill "target/vhs/backdrop-launch-walk.png"
 Set WindowBar Colorful
-Set WindowBarSize 44
+Set WindowBarSize 40
 Set BorderRadius 10
 Set Theme "GitHub Dark"
 Set Framerate 24
-Set TypingSpeed 60ms
+Set TypingSpeed 10ms
 
-# The typing stays hidden, so the first frame (the poster GitHub shows) is the launch screen.
+# The typing stays hidden, so the first frame (the poster GitHub shows) is the launch page.
 Hide
-Type ". ./docs/media/demo-setup.ps1; Clear-Host; claude-auto"
+Type ". ./docs/media/demo-setup.ps1; Set-Location $env:CLAUDE_AUTO_DEMO_DRIVE\; Clear-Host; claude-auto"
 Enter
-Sleep 3s
+Sleep 4s
 Show
 Sleep 1.5s
 
-# Accounts: each tab restores its own model, effort, advisor and permission.
+# Accounts: each tab restores its own model, effort, advisor and permission, and its limits.
 Right
 Sleep 1.2s
 Right
@@ -61,9 +62,9 @@ Left
 Sleep 1.2s
 
 # Row editing lives in maintenance: u, then l opens the rows editor; ctrl+w moves advisor above
-# effort, ctrl+x hides mode (it stays in place, dimmed), enter saves, esc back to the launch screen.
+# effort, ctrl+x hides mode (it stays in place, dimmed), enter saves, esc back to the launch page.
 Type "u"
-Sleep 1.2s
+Sleep 1.5s
 Type "l"
 Sleep 1s
 Type "ssss"
@@ -77,7 +78,9 @@ Sleep 1.2s
 Enter
 Sleep 1.5s
 Escape
-Sleep 2s
+Sleep 2.5s
 
+# Quit off camera: the last frame stays the launch page.
+Hide
 Escape
 Sleep 1s

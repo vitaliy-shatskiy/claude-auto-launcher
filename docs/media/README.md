@@ -4,7 +4,7 @@ Every image in the README is drawn by a script here. Redraw one only when what i
 
 | File | Generator | Source of truth |
 |---|---|---|
-| `launch-screen.png` | `launch-screen.tape` ([VHS](https://github.com/charmbracelet/vhs)) | the real `claude-auto` binary in preview mode on the demo home |
+| `launch-screen.png` | `launch-screen.tape` ([VHS](https://github.com/charmbracelet/vhs)) | the real `claude-auto` binary, run interactively on the demo home with `CLAUDE_AUTO_DEMO_MANY=1` (about 20 projects, two running sessions); nothing is launched |
 | `launch-walk.gif`, `launch-walk.mp4` | `launch-walk.tape` (VHS) | the real binary, run interactively on the demo home, quit with `esc` before a launch |
 | `sessions-walk.gif`, `sessions-walk.mp4` | `sessions-walk.tape` (VHS) | the real binary in preview mode, one run per step, on the demo home's invented projects and sessions |
 | `navigator-walk.gif`, `navigator-walk.mp4` | `navigator-walk.tape` (VHS) | the real binary in preview mode, one run per step, on the demo drive's folders; the create question is answered `esc` |
@@ -26,7 +26,7 @@ cargo build --release
 pwsh -File docs/media/render.ps1
 ```
 
-`render.ps1` runs `draw.mjs`, the four tapes, then paints over the cursor block VHS leaves on the screenshot. The tapes need `vhs` with `ttyd` and `ffmpeg` on PATH and the Cascadia Mono font. They take the
-release binary under `$env:CARGO_TARGET_DIR` (default `target`), else the debug one. In the walk
-the model names and the version in the title come from the `claude.exe` installed on the recording
-machine. The preview screenshot reads no catalog and shows the built-in model names.
+`render.ps1` runs `draw.mjs`, then the four tapes. The tapes record a 122-column terminal: the launch page shows as a workspace from 120 columns, and at that width the text keeps about 11 px at the README's full width. The preview walks hide the cursor through the console (`[Console]::CursorVisible`), since the escape alone does not hold under ConPTY. The tapes need `vhs` with `ttyd` and `ffmpeg` on PATH and the Cascadia Mono font. They take the
+release binary under `$env:CARGO_TARGET_DIR` (default `target`), else the debug one. In the still and the launch walk
+the model names and the Claude Code version come from the `claude.exe` installed on the recording
+machine; the preview walks read no catalog and show the built-in model names.

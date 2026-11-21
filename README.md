@@ -20,9 +20,9 @@
 <br>
 
 <p align="center">
-  <img alt="The launch screen: account tabs with five-hour usage, then model Opus, effort xhigh, advisor opus and permission auto picked for the main account" src="docs/media/launch-screen.png" width="100%">
+  <img alt="The launch page on a wide terminal: the launch panel with account tabs and five-hour usage, model Opus, effort xhigh, advisor opus and permission auto for the main account; the projects list under it; on the right the main account's limits, two running Claude Code sessions and the installed Claude Code version" src="docs/media/launch-screen.png" width="100%">
   <br>
-  <sub>The launch screen on three demo accounts: each tab brings back its own choices and shows its five-hour usage once something writes it (see <b>Files it writes</b>).</sub>
+  <sub>The launch page on three demo accounts: each tab brings back its own choices and shows its usage once something writes it (see <b>Files it writes</b>); the projects and what is running sit beside it.</sub>
 </p>
 
 > [!IMPORTANT]
@@ -214,21 +214,25 @@ A secondary account's session runs with `CLAUDE_CONFIG_DIR=<its root>`; on the c
 
 ## Screens and keys
 
-The screens run in order: launch (account tabs and the launch rows), project, then the session
-picker when you resume. `u` on the launch screen opens maintenance.
+On a terminal of 120 columns or more the launch page is a workspace: the launch panel (account tabs
+and the launch rows) with the projects list under it, and a right column that follows the focus.
+`tab` moves the focus launch -> projects -> sessions; with the projects focused the right column
+shows the selected project and its sessions. Narrower, the projects and the sessions are pages after
+the launch page. `r` on a project opens the session picker; `u` on the launch panel opens maintenance.
 
 <p align="center">
-  <a href="docs/media/launch-walk.mp4"><img alt="A keyboard walk: switching between three accounts brings back each one's model, effort, advisor and permission, then the model, effort and advisor rows are stepped; in the maintenance rows editor the advisor row moves up and mode is hidden, and the launch screen shows the new order" src="docs/media/launch-walk.gif" width="100%"></a>
+  <a href="docs/media/launch-walk.mp4"><img alt="A keyboard walk on the launch page: switching between three accounts brings back each one's model, effort, advisor and permission and its limits, then the model, effort and advisor rows are stepped; u opens maintenance, l its rows editor, where the advisor row moves above effort and mode is hidden; maintenance reports the rows saved and the launch page shows the new order" src="docs/media/launch-walk.gif" width="100%"></a>
   <br>
-  <sub>Switching accounts brings back each one's choices, then the model, effort and advisor rows are stepped.</sub>
+  <sub>Switching accounts brings back each one's choices, the rows are stepped, then the rows editor in maintenance reorders and hides rows.</sub>
 </p>
 
 | Screen | Keys |
 |---|---|
-| **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices (named in the footer only when a row was restored, marked `*`) · `enter` next (with `projectScreen: "onDemand"`: launch) · `1`-`5` (or a click on the line) continue that recent project's newest session with the choices on screen, as `c` on the project screen does · `u` maintenance · a plugin's action key · `esc` quit |
+| **Launch** | `w`/`s` or arrows move between rows · `a`/`d` or arrows change the value · `ctrl+r` resets the restored choices (named in the footer only when a row was restored, marked `*`) · `enter` next (with `projectScreen: "onDemand"`: launch) · `tab` the projects (wide: focus moves launch -> projects -> sessions -> launch) · `u` maintenance · a plugin's action key · `esc` quit |
 | **Project** | `enter` runs the action on the highlighted row · `a`/`d` step the action (`new`, `continue`, `resume`, `worktree`) · `c` continue · `r` resume · `t` new git worktree (`-w`) · `/` filter · `p` pin or unpin the project on top (saved to `pinnedProjects`) · `h` hide or show the project (saved to `hiddenProjects`) · `v` list the hidden projects, marked · `esc` back one step: an open filter, then a kept filter, then the hidden view, then the launch screen |
 | **Project filter** (`/`) | type words · `↑`/`↓` move while typing · `←`/`→` the action · `enter` runs the highlighted row (`no project matches` on the current directory when nothing matches) · `esc` clears |
 | **Path navigator** (`enter a path...`) | type a path · `↑`/`↓` move · `enter` or `→` enters the folder (on `use this folder`: picks it) · `←` up one folder · `backspace` on an empty segment goes up · `ctrl+backspace` drops a segment · `tab` completes, a second `tab` cycles · `esc` back to the list |
+| **Sessions panel** (wide, `tab` from the projects) | `w`/`s` move · `enter` resume · `f` fork · `v` the session picker with its chat · `tab` back to launch · `esc` the projects |
 | **Session picker** | `enter` open · `f` fork · `tab` this project or every project · `/` filter · `esc` back |
 | **Maintenance** | `w`/`s` or arrows select an action, `enter` or the action's key runs it: `u` update Claude Code · `r` update anyway (rename) · `p` delete old builds · `d` doctor · `m` MCP servers · `l` launch rows · `c` update claude-auto · `b` roll back claude-auto (`c` and `b` when offered) · one key per `maintenanceActions` entry (marked `custom`) · `esc` back |
 | **Rows editor** (`l`) | `w`/`s` row · `ctrl+w`/`ctrl+s` or `alt+↑`/`alt+↓` move it · `ctrl+x` or `space` hide/show (not `account`) · `a`/`d` or `←`/`→` the value a hidden row launches with · `enter` save to `rows` and `hiddenValues` · `esc` cancel |
@@ -252,18 +256,18 @@ warning (another claude holds the session you picked) has `[enter] go on` and `[
   reports it, `COLORTERM` or Windows Terminal, else the nearest 256 colours; no tints in ASCII). The
   selected row is filled and bold with `❯` at its left. Under 120 columns the panels stack. A facts
   column (limits, versions, the selected project's facts) keeps the width its facts need; a list or
-  text column (recent projects, sessions, the chat, the last run's output) takes the spare width.
+  text column (projects, sessions, the chat, the last run's output) takes the spare width.
   The rows editor and the path navigator are one focused panel in the same frame.
-- The launch page, a two-column grid that ends at its right column (the terminal past it stays
-  background): the launch rows in a panel as wide as they are, recent under it at the same width;
-  right of them, in a 46-cell column, the selected account's limits, one per line
-  (percentage bold, yellow from 70 %, red from 90 %) and the data's age on the panel's last row;
-  under them the five newest projects (keys `1`-`5`, the newest session's title from the summary
-  cache dim under each), the running Claude Code sessions with their age, and Claude Code's version,
-  the last maintenance MCP check (`MCP 2 of 2 · 3 h ago`, once maintenance `m` has run; the launch
-  never runs the check) and the warnings. Panels with
-  items stretch to the footer; with no recent project and nothing running they shrink to their
-  empty-state lines. Under 110 columns the footer words shorten and `ctrl+r`, then `w/s`, give way
+- The launch page from 120 columns is a workspace of two columns: the launch rows in a panel
+  on top, the projects list under it at the same width (the project screen's rows and action
+  field); right of them, in a 46-cell column, the selected account's limits, one per line
+  (percentage bold, yellow from 70 %, red from 90 %) and the data's age on the panel's last row.
+  Under the limits the right column follows the focus: with the launch rows focused, the running
+  Claude Code sessions with their age and Claude Code's version, the last maintenance MCP check
+  (`MCP 2 of 2 · 3 h ago`, once maintenance `m` has run; the launch never runs the check) and the
+  warnings; with the projects or the sessions focused, the selected project's facts and its
+  sessions. Panels stretch to the footer. Under 120 columns the projects and the sessions are pages
+  after the launch page, in the same frame. Under 110 columns the footer words shorten and `ctrl+r`, then `w/s`, give way
   so it stays one line.
 - The pointer paints whatever it is over (a row label, a value, an action row, a footer key) and
   never selects it; a click or a key moves the selection.
@@ -328,7 +332,7 @@ exists asks `create <path>? enter yes / esc no`: one level, never on a network p
 cursor move drops the question.
 
 <p align="center">
-  <a href="docs/media/navigator-walk.mp4"><img alt="The path navigator: the demo drive's folders listed under the typed path, h filters them to harbor-api, tab completes it, a missing docs folder asks create? enter yes / esc no, esc says no and esc again returns to the project list" src="docs/media/navigator-walk.gif" width="100%"></a>
+  <a href="docs/media/navigator-walk.mp4"><img alt="The path navigator in the projects panel under the launch rows: the demo drive's folders listed under the typed path, h filters them to harbor-api, tab completes it, a missing docs folder asks create? enter yes / esc no, esc says no and esc again returns to the projects list on the enter a path row" src="docs/media/navigator-walk.gif" width="100%"></a>
   <br>
   <sub>Type or pick a folder in the screen: tab completes, and a missing folder is created only after a yes.</sub>
 </p>
@@ -365,9 +369,9 @@ an older one is kept as `<id>.jsonl.<ms>.bak`, and a failed copy stops the launc
 nothing. Headless sessions are left out.
 
 <p align="center">
-  <a href="docs/media/sessions-walk.mp4"><img alt="The session picker: a project's past sessions on the left, the highlighted one's last messages previewed on the right, the preview following the cursor, then tab widens the list to every project" src="docs/media/sessions-walk.gif" width="100%"></a>
+  <a href="docs/media/sessions-walk.mp4"><img alt="Sessions: on the launch page tab focuses the projects and the right column shows the selected project's facts and sessions, following the cursor from aurora to harbor-api; r on aurora opens the session picker, its sessions on the left and the highlighted one's chat previewed on the right, the preview following the cursor, then tab widens the list to every project" src="docs/media/sessions-walk.gif" width="100%"></a>
   <br>
-  <sub>Resume from the session picker: the preview shows each past session's last messages before you open it.</sub>
+  <sub>The right column shows the selected project's sessions; the session picker previews each one's chat before you open it.</sub>
 </p>
 
 <details><summary><b>The project screen and the session picker</b> (golden frames from <code>tests/fixtures/wide-frames/</code>, sample data)</summary>
