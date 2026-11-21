@@ -3,21 +3,45 @@
 
 use std::collections::VecDeque;
 
-use super::{Cursor, Guards, Screen, mouse};
+use super::{Cursor, Guards, MouseStep, Screen, mouse};
 use crate::frame::Frame;
 use crate::input::MouseEvent;
 use crate::theme::{ACCENT_BG, BUTTON_BG};
 use crate::ui::PreviewTerm;
 
-/// One point per clickable region: a row outside its cells (column 4), each cell, each button.
+/// Whether the cell at line `y` is the selected value, drawn `[value]`: it keeps its own paint
+/// under the pointer.
+fn is_selected_cell(frame: &Frame, row: i32, cell: &crate::frame::CellSpan) -> bool {
+    let text: Vec<char> = usize::try_from(row)
+        .ok()
+        .and_then(|at| frame.lines.get(at))
+        .map(|line| crate::theme::remove_ansi_color(line).chars().collect())
+        .unwrap_or_default();
+    let first = usize::try_from(cell.start).unwrap_or(0);
+    let last = usize::try_from(cell.end).unwrap_or(0).min(text.len().saturating_sub(1));
+    text.get(first..=last).is_some_and(|s| s.contains(&'['))
+}
+
+/// One point per clickable region: a row outside its cells (column 4), each cell but the selected
+/// value, each button.
 fn regions(f: &Frame) -> Vec<(i32, i32, String)> {
     let mut out = Vec::new();
     for r in &f.map.rows {
         out.push((4, r.y, format!("row {}", r.name)));
-        out.extend(r.cells.iter().map(|c| (c.start, r.y, format!("{} = {}", r.name, c.value))));
+        out.extend(
+            r.cells
+                .iter()
+                .filter(|c| !is_selected_cell(f, r.y, c))
+                .map(|c| (c.start, r.y, format!("{} = {}", r.name, c.value))),
+        );
     }
     if let Some(a) = &f.map.action {
-        out.extend(a.cells.iter().map(|c| (c.start, a.y, format!("action = {}", c.value))));
+        out.extend(
+            a.cells
+                .iter()
+                .filter(|c| !is_selected_cell(f, a.y, c))
+                .map(|c| (c.start, a.y, format!("action = {}", c.value))),
+        );
     }
     if let Some(l) = &f.map.list {
         out.extend(l.row_ys.iter().map(|y| (6, *y, format!("list row at {y}"))));
@@ -62,6 +86,69 @@ pub(crate) fn assert_every_region_hovers<S: Screen>(screen: &mut S, size: (usize
             new != old && (new.contains(BUTTON_BG) || new.contains(ACCENT_BG)),
             "{name}: a hover over {what} paints nothing: {new:?}"
         );
+    }
+    *screen.cursor() = Cursor::at(index);
+}
+
+fn press(x: i32, y: i32) -> MouseEvent {
+    MouseEvent {
+        x,
+        y,
+        left: true,
+        buttons: 1,
+        ..MouseEvent::default()
+    }
+}
+
+/// Points on no hit target: both edges of every line, the column past the frame, the top border,
+/// and inside the right column on every line where two panels stand side by side.
+fn stray_points(f: &Frame, width: usize) -> Vec<(i32, i32, String)> {
+    let body = f.map.footer_y.map_or(f.lines.len(), |y| usize::try_from(y).unwrap_or(0));
+    let w = i32::try_from(width).unwrap_or(0);
+    let mut out = Vec::new();
+    for (y, line) in f.lines.iter().take(body).enumerate() {
+        let yi = i32::try_from(y).unwrap_or(0);
+        out.push((0, yi, format!("the left edge of line {y}")));
+        out.push((w - 1, yi, format!("the last column of line {y}")));
+        let chars: Vec<char> = crate::theme::remove_ansi_color(line).chars().collect();
+        // The left panel's right border, then the right panel's left border.
+        if let Some(p) = chars.windows(2).position(|c| "│╮╯".contains(c[0]) && "│╭╰".contains(c[1])) {
+            out.push((i32::try_from(p + 4).unwrap_or(0), yi, format!("the right column of line {y}")));
+        }
+    }
+    out.extend((0..w).step_by(5).map(|x| (x, 0, format!("the top border at {x}"))));
+    out
+}
+
+/// Panics naming the first click off every target that changed the frame or ended the screen.
+/// The screen must draw in colour (its borders are found by their glyphs).
+pub(crate) fn assert_no_stray_click_acts<S: Screen>(screen: &mut S, size: (usize, usize)) {
+    let mut term = PreviewTerm::new(size, VecDeque::new(), false);
+    let name = screen.name();
+    screen.before();
+    let base = screen.draw(size);
+    for (x, y, what) in stray_points(&base, size.0) {
+        let step = mouse(screen, &mut term, &press(x, y), Some(&base.map), &mut Guards::default());
+        assert!(!matches!(step, MouseStep::End(_)), "{name}: a click on {what} ended the screen");
+        screen.before();
+        let after = screen.draw(size);
+        assert_eq!(after.lines, base.lines, "{name}: a click on {what} changed the frame");
+    }
+}
+
+/// Panics naming the first target a single click acts on: a first click only selects.
+pub(crate) fn assert_first_click_never_acts<S: Screen>(screen: &mut S, size: (usize, usize)) {
+    let mut term = PreviewTerm::new(size, VecDeque::new(), false);
+    let index = screen.cursor().index;
+    let name = screen.name();
+    screen.before();
+    let base = screen.draw(size);
+    let targets: Vec<(i32, i32, String)> = regions(&base).into_iter().filter(|(_, _, w)| !w.starts_with("button")).collect();
+    for (x, y, what) in targets {
+        *screen.cursor() = Cursor::at(index);
+        let step = mouse(screen, &mut term, &press(x, y), Some(&base.map), &mut Guards::default());
+        assert!(!matches!(step, MouseStep::End(_)), "{name}: one click on {what} acted");
+        screen.before();
     }
     *screen.cursor() = Cursor::at(index);
 }

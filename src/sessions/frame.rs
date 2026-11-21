@@ -489,6 +489,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
                 start: to_i(start),
                 row_ys: Vec::new(),
             }),
+            hit_x: RowMap::panel_interior(0, lw),
             ..RowMap::default()
         },
         selected: to_i(index),

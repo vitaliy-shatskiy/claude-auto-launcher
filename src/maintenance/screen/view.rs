@@ -314,6 +314,7 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
             .into_iter()
             .filter(|r| usize::try_from(r.y).is_ok_and(|y| y + 1 < left_h))
             .collect(),
+        hit_x: RowMap::panel_interior(0, lw),
         ..RowMap::default()
     };
     let panel = |title: &str, body: Vec<String>, w: usize, h: usize| {

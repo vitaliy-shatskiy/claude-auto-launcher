@@ -116,8 +116,9 @@ pub trait Screen {
     fn click(&mut self, _hit: &Hit) -> Flow<Self::Output> {
         Flow::Continue
     }
-    /// A click on the LIST row a previous click selected; `None` = no handler.
-    fn activate(&mut self, _hit: &Hit) -> Option<Flow<Self::Output>> {
+    /// A click on the row a previous click selected (a list row, or a launch-shaped row outside its
+    /// cells); `None` = no handler, the click selects again.
+    fn activate(&mut self, _hit: &Hit, _term: &mut dyn Term) -> Option<Flow<Self::Output>> {
         None
     }
     /// Extra fields on every record of this screen.
@@ -178,7 +179,7 @@ fn log_screen<S: Screen>(term: &dyn Term, screen: &mut S, phase: &str, entered: 
 #[derive(Debug, Default)]
 struct Guards {
     acted: bool,
-    acted_row: i32,
+    acted_hit: Option<Hit>,
     acted_at: Option<u64>,
     footer_y: i32,
     footer_index: i32,
@@ -187,7 +188,7 @@ struct Guards {
     settle: bool,
     /// The list row a click selected. Only a click on it activates: a cursor the keyboard or
     /// the wheel moved never starts anything on one click.
-    selected: Option<i32>,
+    selected: Option<Hit>,
 }
 
 impl Guards {
@@ -241,7 +242,6 @@ fn run_loop<S: Screen>(
     let mut need_draw = true;
     let mut map: Option<RowMap> = None;
     let mut g = Guards {
-        acted_row: -1,
         footer_y: -1,
         footer_index: -1,
         settle: true,

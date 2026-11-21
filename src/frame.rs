@@ -499,7 +499,9 @@ pub fn new_radio_row(spec: &RadioSpec<'_>, g: &Glyphs) -> RadioRow {
             .iter()
             .zip(spec.values)
             .map(|(p, v)| {
-                if !spec.hover.is_empty() && v.eq_ignore_ascii_case(spec.hover) {
+                // The current value keeps its own paint under the pointer: a click that selected
+                // it draws what the arrows draw.
+                if !spec.hover.is_empty() && v.eq_ignore_ascii_case(spec.hover) && !v.eq_ignore_ascii_case(spec.current) {
                     theme::add_hover_span(p)
                 } else {
                     p.clone()
@@ -560,6 +562,19 @@ pub struct RowMap {
     pub footer_y: Option<i32>,
     pub footer: Vec<FooterSpan>,
     pub footer_lines: usize,
+    /// The columns `[start, end)` every row, list and action hit lies in: the interior of the
+    /// panel holding them. A click outside (a border, the column beside, past the frame) is no
+    /// hit; `None` leaves the whole line clickable.
+    pub hit_x: Option<(i32, i32)>,
+}
+
+impl RowMap {
+    /// The interior of a panel `width` cells wide whose left border is at column `left`.
+    pub fn panel_interior(left: usize, width: usize) -> Option<(i32, i32)> {
+        let a = i32::try_from(left + 1).ok()?;
+        let b = i32::try_from((left + width).saturating_sub(1)).ok()?;
+        Some((a, b))
+    }
 }
 
 /// A finished frame: its lines and its row map.

@@ -253,7 +253,8 @@ fn a_click_selects_and_a_second_click_opens() {
     assert_eq!(s.click(&Hit::ListRow(1)), Flow::Continue);
     s.before();
     assert_eq!(s.cursor.index, 1);
-    assert!(matches!(s.activate(&Hit::ListRow(1)), Some(Flow::Done(Some(p))) if p.session.session_id == "b"));
+    let mut t = PreviewTerm::new((100, 30), VecDeque::new(), false);
+    assert!(matches!(s.activate(&Hit::ListRow(1), &mut t), Some(Flow::Done(Some(p))) if p.session.session_id == "b"));
     assert_eq!(s.click(&Hit::ListRow(9)), Flow::Continue);
     assert_eq!(s.cursor.index, 1, "a click past the end moves nothing");
 }
@@ -288,4 +289,18 @@ fn keys_draw_their_frames_and_read_nothing_before_idle_polls() {
     assert_eq!(frames.len(), 3, "the opening frame and one per key");
     assert!(frames.iter().all(|f| f.iter().any(|l| l.contains("loading..."))), "{frames:#?}");
     assert_eq!(s.chat.as_ref().map(ChatPane::bytes_read), Some(0));
+}
+
+/// The click rule over the picker at every size: one click only selects, a click on no target
+/// (a border, the chat column, past the frame) changes nothing.
+#[test]
+fn a_first_click_only_selects_and_a_stray_click_does_nothing_in_the_picker() {
+    use crate::ui::screen_loop::hover_walk::{assert_first_click_never_acts, assert_no_stray_click_acts};
+    let color = Style { color: true, ascii: false };
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let first = vec![row("a", "x", 1), row("b", "x", 1), row("c", "x", 1)];
+        let mut s = PickerScreen::new(first, None, 0, &[], "", color, clock());
+        assert_no_stray_click_acts(&mut s, size);
+        assert_first_click_never_acts(&mut s, size);
+    }
 }

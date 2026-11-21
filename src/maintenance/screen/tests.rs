@@ -530,6 +530,62 @@ fn every_clickable_region_hovers_and_never_selects() {
     assert_every_region_hovers(&mut launch, (130, 45));
 }
 
+fn launch_view(color: Style) -> crate::launch::screen::LaunchView {
+    crate::launch::screen::LaunchView {
+        limits: crate::types::Limits::new(),
+        version: VersionInfo::default(),
+        default_model_label: "default".into(),
+        default_advisor_label: "default".into(),
+        labels_by_account: BTreeMap::new(),
+        recent: ["alpha", "beta"]
+            .iter()
+            .map(|n| crate::launch::frame::RecentProject {
+                name: (*n).into(),
+                path: format!(r"C:\w\{n}"),
+                age: "3 min".into(),
+                ..Default::default()
+            })
+            .collect(),
+        running: Vec::new(),
+        mcp: String::new(),
+        style: color,
+    }
+}
+
+/// The click rule over every compact screen at every size: a first click only selects, a click
+/// on no target (a border, the column beside, past the frame) changes nothing.
+#[test]
+fn a_first_click_only_selects_and_a_stray_click_does_nothing() {
+    use crate::ui::screen_loop::hover_walk::{assert_first_click_never_acts, assert_no_stray_click_acts};
+    let color = Style { color: true, ascii: false };
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut ops = FakeOps {
+            log: Rc::new(RefCell::new(Log::default())),
+            exit_code: 0,
+        };
+        let actions = reindex();
+        let mut m = MaintScreen::new(&mut ops, &actions, color);
+        assert_no_stray_click_acts(&mut m, size);
+        let mut rows = RowsEditor::new(
+            &RowsConfig {
+                rows: Some(vec![RowName::Account, RowName::Effort]),
+                ..RowsConfig::default()
+            },
+            color,
+        );
+        assert_no_stray_click_acts(&mut rows, size);
+        assert_first_click_never_acts(&mut rows, size);
+        let mut roster = crate::launch::tests::four();
+        let view = launch_view(color);
+        let prefs = crate::prefs::Prefs::default();
+        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+        let st = roster.new_state();
+        let mut launch = crate::launch::screen::LaunchScreen::new(&mut roster, st, &view, &prefs, 0, &mut hook);
+        assert_no_stray_click_acts(&mut launch, size);
+        assert_first_click_never_acts(&mut launch, size);
+    }
+}
+
 #[test]
 fn l_saves_a_hidden_rows_value_and_names_it_in_the_status() {
     let log = Rc::new(RefCell::new(Log {
@@ -828,6 +884,23 @@ fn a_click_selects_a_row_and_enter_runs_it() {
     assert_eq!(log.doctor, 1, "{status}");
     let (log, ..) = go(vec![click(4, d.y, false), esc()], &[], vec![], 0, (100, 24));
     assert_eq!(log.doctor, 0, "a click alone runs nothing");
+}
+
+#[test]
+fn a_second_click_on_the_selected_row_runs_it_and_a_click_on_another_only_selects() {
+    let m = map_at((100, 24), &[]);
+    let d = m.rows.iter().find(|r| r.name == "d").unwrap();
+    let other = m.rows.iter().find(|r| r.name != "d").unwrap();
+    let (log, status, ..) = go(vec![click(4, d.y, false), click(4, d.y, false), esc()], &[], vec![], 0, (100, 24));
+    assert_eq!(log.doctor, 1, "{status}");
+    let (log, ..) = go(
+        vec![click(4, other.y, false), click(4, d.y, false), esc()],
+        &[],
+        vec![],
+        0,
+        (100, 24),
+    );
+    assert_eq!(log.doctor, 0, "the first click on a row only selects it");
 }
 
 #[test]

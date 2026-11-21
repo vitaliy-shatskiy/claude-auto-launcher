@@ -75,11 +75,15 @@ pub(super) fn mouse<S: Screen>(
         return MouseStep::Key(synthetic_key(&span.key, span.ch));
     }
     let index = screen.cursor().index;
-    if let Hit::ListRow(r) = hit
-        && r == index
-        && g.selected == Some(r)
-    {
-        if g.acted && r == g.acted_row && (m.is_double_click || is_twin(now, g.acted_at)) {
+    // A row a click selected acts on the next click on it: a list row while the cursor still
+    // stands there, a launch-shaped row when its screen says it is still the selected one.
+    let still = match &hit {
+        Hit::ListRow(r) => *r == index,
+        Hit::LaunchRow { .. } => true,
+        Hit::None | Hit::Footer { .. } | Hit::Action { .. } | Hit::Cell { .. } => false,
+    };
+    if still && g.selected.as_ref() == Some(&hit) {
+        if g.acted && g.acted_hit.as_ref() == Some(&hit) && (m.is_double_click || is_twin(now, g.acted_at)) {
             return MouseStep::Redraw(false);
         }
         *term.last_activation() = Some(Activation {
@@ -89,9 +93,9 @@ pub(super) fn mouse<S: Screen>(
             queued: false,
         });
         g.settle = true;
-        if let Some(flow) = screen.activate(&hit) {
+        if let Some(flow) = screen.activate(&hit, term) {
             g.acted = true;
-            g.acted_row = r;
+            g.acted_hit = Some(hit.clone());
             g.acted_at = now;
             log_key(term, screen, "click", &[("button", json!("row"))]);
             if let Flow::Done(res) = flow {
@@ -107,9 +111,11 @@ pub(super) fn mouse<S: Screen>(
     }
     g.acted = false;
     let flow = screen.click(&hit);
-    if let Hit::ListRow(r) = hit {
-        g.selected = (screen.cursor().index == r).then_some(r);
-    }
+    g.selected = match &hit {
+        Hit::ListRow(r) => (screen.cursor().index == *r).then(|| hit.clone()),
+        Hit::LaunchRow { .. } => Some(hit.clone()),
+        Hit::None | Hit::Footer { .. } | Hit::Action { .. } | Hit::Cell { .. } => None,
+    };
     match flow {
         Flow::Done(res) => MouseStep::End(res),
         Flow::Continue => MouseStep::Redraw(true),

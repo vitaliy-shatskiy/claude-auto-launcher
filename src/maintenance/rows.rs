@@ -260,6 +260,7 @@ impl Screen for RowsEditor {
         };
         let mut map = RowMap {
             rows: hits,
+            hit_x: RowMap::panel_interior(0, fw),
             ..RowMap::default()
         };
         let lines = append_footer(cockpit::render(&panel, self.style), &footer, fw, self.style, &light, &mut map);

@@ -404,7 +404,7 @@ impl Screen for ProjectScreen<'_> {
 
     /// A second click on the row a click selected is Enter's gesture, but never the create
     /// question's yes: a click while it shows only drops it.
-    fn activate(&mut self, _hit: &Hit) -> Option<Flow<ProjectChoice>> {
+    fn activate(&mut self, _hit: &Hit, _term: &mut dyn Term) -> Option<Flow<ProjectChoice>> {
         if self.drop_question() {
             return Some(Flow::Continue);
         }

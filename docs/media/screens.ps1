@@ -5,7 +5,7 @@
 # headless terminal and screenshots it.
 # PowerShell, not Rust: glue around vhs, like render.ps1 (the media pipeline's own convention).
 #
-#   pwsh -NoProfile -File docs/media/screens.ps1                       every screen at 280x72, 130x45, 55x20
+#   pwsh -NoProfile -File docs/media/screens.ps1                       every screen at the seven sizes below
 #   -Screens 'launch,project'  -Sizes '130x45'  -Exe <path>            a subset, another build
 #
 # Run from the repository root after `cargo build`. Output: target/screens/<screen>-<WxH>.png.
@@ -13,7 +13,7 @@
 [CmdletBinding()]
 param(
     [string]$Screens = 'launch,project,picker-all,maintenance,navigator,rows-editor',
-    [string]$Sizes = '280x72,130x45,55x20',
+    [string]$Sizes = '80x24,120x30,160x45,211x52,280x72,320x85,55x20',
     [string]$Exe
 )
 $ErrorActionPreference = 'Stop'

@@ -524,7 +524,7 @@ impl Screen for PickerScreen<'_> {
         Flow::Continue
     }
 
-    fn activate(&mut self, _hit: &Hit) -> Option<Flow<Picked>> {
+    fn activate(&mut self, _hit: &Hit, _term: &mut dyn Term) -> Option<Flow<Picked>> {
         self.take(false).map(|p| Flow::Done(Some(p)))
     }
 

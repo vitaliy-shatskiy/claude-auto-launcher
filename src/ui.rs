@@ -438,6 +438,9 @@ pub fn hit_at(map: Option<&RowMap>, x: i32, y: i32, window_top: i32) -> Hit {
     if let Some((span, index)) = footer_hit(map, x, y, window_top) {
         return Hit::Footer { span, index };
     }
+    if map.hit_x.is_some_and(|(a, b)| x < a || x >= b) {
+        return Hit::None;
+    }
     let row_y = y - window_top;
     // Only from the action field's first cell on: beside a list, the same row is a list row.
     if let Some(a) = map

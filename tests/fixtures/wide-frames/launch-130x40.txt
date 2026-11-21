@@ -1,4 +1,4 @@
-╭─ ✻ claude-auto ───────────────────────── 0.9.0 · Claude Code 2.1.329 ↑ 2.1.330 ─╮╭─ limits · work ────────────────────────────╮
+╭─ ✻ claude-auto ───────────────────────────────────────────────────────── 0.9.0 ─╮╭─ limits · work ────────────────────────────╮
 │ ❯ account      [work 41%] ┊ personal 17% ┊ low 43%                              ││  5h                                   41%  │
 │   remote       ● [on] ○ off ○ on+QR ○ stop server                               ││  7d                                   63%  │
 │   model*       ○ default ○ Haiku 5.5 ○ Sonnet 5.5 ● [Opus 5.5[1M]] ○ Fable 5.2  ││  fable                                15%  │

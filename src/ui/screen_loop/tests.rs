@@ -66,7 +66,7 @@ impl Screen for List {
         }
         Flow::Continue
     }
-    fn activate(&mut self, _hit: &Hit) -> Option<Flow<i32>> {
+    fn activate(&mut self, _hit: &Hit, _term: &mut dyn Term) -> Option<Flow<i32>> {
         self.acts += 1;
         Some(Flow::Continue)
     }

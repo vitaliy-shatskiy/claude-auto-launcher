@@ -165,6 +165,25 @@ fn every_clickable_region_of_the_project_screen_hovers_and_never_selects() {
     assert_every_region_hovers(&mut s, (130, 40));
 }
 
+/// The click rule over the project list and the navigator at every size: one click only
+/// selects, a click on no target (a border, the context column, past the frame) changes nothing.
+#[test]
+fn a_first_click_only_selects_and_a_stray_click_does_nothing_on_the_project_screen() {
+    use crate::ui::screen_loop::hover_walk::{assert_first_click_never_acts, assert_no_stray_click_acts};
+    let f = fx();
+    let c = clock;
+    let color = Style { color: true, ascii: false };
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", color, &c);
+        assert_no_stray_click_acts(&mut s, size);
+        assert_first_click_never_acts(&mut s, size);
+        s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
+        s.nav.as_mut().unwrap().text = format!(r"{}\root\", f.tree.0.display());
+        assert_no_stray_click_acts(&mut s, size);
+        assert_first_click_never_acts(&mut s, size);
+    }
+}
+
 /// In place (preview) the selected row's detail comes with the frame; a moved cursor asks again.
 #[test]
 fn the_context_follows_the_cursor() {

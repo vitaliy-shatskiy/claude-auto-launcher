@@ -36,6 +36,8 @@ pub struct LaunchFrameInput<'a> {
     pub recent: &'a [RecentProject],
     /// The registry is still being read: the empty recent panel says so instead of "none yet".
     pub recent_loading: bool,
+    /// The recent project a click selected: drawn as the selected row; a second click continues it.
+    pub recent_selected: Option<usize>,
     pub running: &'a [RunningSession],
     /// The last maintenance MCP check (`2 of 2 · 3 h ago`), empty when unknown: never run here.
     pub mcp: &'a str,
@@ -166,7 +168,12 @@ fn recent_lines(inp: &LaunchFrameInput<'_>, inner: usize, rows: usize, two_line:
         } else {
             name
         };
-        let left = format!("  {}  {name}", theme::tone(theme::TONE_ACCENT, &(i + 1).to_string()));
+        let mark = if inp.recent_selected == Some(i) {
+            theme::glyphs(ascii).cursor
+        } else {
+            ' '
+        };
+        let left = format!("{mark} {}  {name}", theme::tone(theme::TONE_ACCENT, &(i + 1).to_string()));
         out.push(cockpit::spread(&left, &age, inner.saturating_sub(2)));
         // The newest session's title; none cached yet leaves the line blank (the row keeps its rhythm).
         if two_line {
@@ -397,7 +404,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let lim_need = lims.len() + usize::from(!age.is_empty()) + 2;
     let launch_need = launch_lines.len() + 2;
     let top_h = if wide { launch_need.max(lim_need) } else { launch_need };
-    let right = versions(inp.version, &g);
+    let right = versions(inp.version, &g, wide);
     let top_lw = if wide { launch_width(&launch_lines, &right, lw, &g) } else { lw };
     let launch = Panel {
         title: cockpit::identity(&g),
@@ -431,9 +438,9 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         l
     };
     let left_over = page_rows.saturating_sub(lines.len());
-    let top = lines.len();
+    map.rows.extend(recent_hits(inp, wide, left_over, lines.len()));
     lines.extend(bottom_panels(inp, wide, (top_lw, rw), left_over, &g));
-    map.rows.extend(recent_hits(inp, wide, left_over, top));
+    map.hit_x = RowMap::panel_interior(0, top_lw);
     let light = FooterLight {
         hover: frame::footer_hover(&footer, state.hover),
         selected: Vec::new(),
@@ -502,11 +509,14 @@ fn bottom_panels(inp: &LaunchFrameInput<'_>, wide: bool, (lw, rw): (usize, usize
         }
         let rh = if inp.recent.is_empty() { 4.min(left_over) } else { left_over };
         let lines = recent_lines(inp, lw - 2, rh - 2, false, hover);
-        return cockpit::render(&Panel::plain("recent", lines, lw, rh), style);
+        let mut recent = Panel::plain("recent", lines, lw, rh);
+        recent.selected = inp.recent_selected;
+        return cockpit::render(&recent, style);
     }
     let status_h = STATUS_HEIGHT;
     let bh = bottom_height(inp, left_over);
-    let recent = Panel::plain("recent", recent_lines(inp, lw - 2, bh - 2, true, hover), lw, bh);
+    let mut recent = Panel::plain("recent", recent_lines(inp, lw - 2, bh - 2, true, hover), lw, bh);
+    recent.selected = inp.recent_selected.map(|i| i * 2);
     let running = Panel::plain(
         "running",
         running_lines(inp.running, rw - 2, bh - status_h - 2, g),
@@ -524,10 +534,11 @@ fn bottom_panels(inp: &LaunchFrameInput<'_>, wide: bool, (lw, rw): (usize, usize
     cockpit::beside(cockpit::render(&recent, style), lw, &right)
 }
 
-/// `0.9.0 · Claude Code 2.1.330 ↑ 2.1.331`: the launcher, the installed Claude Code and a newer one.
-fn versions(v: &VersionInfo, g: &Glyphs) -> String {
+/// `0.9.0`, the launcher; stacked, where no Claude Code panel shows, `0.9.0 · Claude Code 2.1.330
+/// ↑ 2.1.331` (the installed Claude Code and a newer one). Beside, its panel holds them.
+fn versions(v: &VersionInfo, g: &Glyphs, panel: bool) -> String {
     let mut s = env!("CARGO_PKG_VERSION").to_owned();
-    if let Some(i) = v.installed.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(i) = v.installed.as_deref().filter(|s| !s.is_empty() && !panel) {
         s = format!("{s} {} Claude Code {i}", g.dot);
         if let Some(n) = v.newest.as_deref().filter(|n| !n.is_empty() && *n != i) {
             s = format!("{s} {} {n}", g.up);
@@ -535,7 +546,6 @@ fn versions(v: &VersionInfo, g: &Glyphs) -> String {
     }
     s
 }
-
 /// The footer: arrows are not clickable ("w/s" names two directions), every single action is.
 /// Under 110 columns the long words shorten and `ctrl+r` goes first.
 pub fn launch_footer(g: &Glyphs, width: usize, color: bool, extra: &LaunchHints) -> Footer {
@@ -620,7 +630,8 @@ fn account_strip(
         .iter()
         .zip(&row.values)
         .map(|(c, v)| {
-            if hovered_here && v.eq_ignore_ascii_case(&state.hover_value) {
+            // The selected account keeps its tint under the pointer: a click draws what a key draws.
+            if hovered_here && v.eq_ignore_ascii_case(&state.hover_value) && !v.eq_ignore_ascii_case(&state.account) {
                 theme::add_hover_span(c)
             } else {
                 c.clone()

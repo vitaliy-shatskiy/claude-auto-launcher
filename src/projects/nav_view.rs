@@ -100,6 +100,7 @@ pub(crate) fn navigator_frame(v: &NavView<'_>) -> Frame {
             row_ys: (0..shown).map(|k| y(2 + k)).collect(),
         }),
         action: Some(action_hit(&radio, y(action_index), 0)),
+        hit_x: RowMap::panel_interior(0, fw),
         ..RowMap::default()
     };
     let light = FooterLight {

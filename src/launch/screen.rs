@@ -68,6 +68,8 @@ pub struct LaunchScreen<'a> {
     /// Warnings maintenance shows: the footer's badge count.
     warnings: usize,
     recent: Option<&'a RecentSource<'a>>,
+    /// The recent project a click selected: the next click on it continues it.
+    recent_pick: Option<usize>,
 }
 
 /// The recent projects once known; `None` while the registry is still being read.
@@ -142,6 +144,7 @@ impl<'a> LaunchScreen<'a> {
             launcher: None,
             warnings: 0,
             recent: None,
+            recent_pick: None,
         }
     }
 
@@ -302,6 +305,7 @@ impl Screen for LaunchScreen<'_> {
             warnings: self.warnings,
             recent: &self.view.recent,
             recent_loading: self.recent.is_some(),
+            recent_selected: self.recent_pick,
             running: &self.view.running,
             mcp: &self.view.mcp,
             default_model_label: &self.view.default_model_label,
@@ -355,17 +359,19 @@ impl Screen for LaunchScreen<'_> {
     }
 
     /// A click on a row selects it; on an option cell it walks to that value through the same
-    /// stepper the arrows use. Nothing here starts a session.
+    /// stepper the arrows use; on a recent project's line it selects that project. Nothing here
+    /// starts a session.
     fn click(&mut self, hit: &Hit) -> Flow<LaunchState> {
         let (row, value) = match hit {
-            // A recent project's line does what its key does.
             Hit::LaunchRow { row, .. } if *row >= RECENT_ROW => {
-                return RECENT_KEYS.get(row - RECENT_ROW).map_or(Flow::Continue, |c| self.hotkey(*c));
+                self.recent_pick = Some(row - RECENT_ROW);
+                return Flow::Continue;
             }
             Hit::LaunchRow { row, .. } => (*row, None),
             Hit::Cell { row, value, .. } => (*row, Some(value.clone())),
             _ => return Flow::Continue,
         };
+        self.recent_pick = None;
         self.cursor.index = i32::try_from(row).unwrap_or(0);
         self.state.row = row;
         let Some(value) = value else { return Flow::Continue };
@@ -389,6 +395,13 @@ impl Screen for LaunchScreen<'_> {
         };
         self.walk(dir, steps);
         Flow::Continue
+    }
+
+    /// The second click on the recent project a click selected does what its key does.
+    fn activate(&mut self, hit: &Hit, _term: &mut dyn Term) -> Option<Flow<LaunchState>> {
+        let Hit::LaunchRow { row, .. } = hit else { return None };
+        let i = row.checked_sub(RECENT_ROW).filter(|i| self.recent_pick == Some(*i))?;
+        RECENT_KEYS.get(i).map(|c| self.hotkey(*c))
     }
 
     /// The caller's hook first (then a `rows` maintenance `l` saved shows), then ctrl+r (matched
@@ -499,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_recent_project_line_picks_it_like_its_key() {
+    fn a_click_selects_a_recent_project_line_and_a_second_click_picks_it_like_its_key() {
         let mut r = four();
         let v = LaunchView {
             recent: recent(&["alpha", "beta", "gamma"]),
@@ -523,8 +536,100 @@ mod tests {
             buttons: 1,
             ..MouseEvent::default()
         });
-        let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), [press]);
+        let esc = Event::Key(KeyPress::named(vk::ESCAPE));
+        let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), [press, esc]);
+        assert!(run(&mut s, &mut t).unwrap().is_none(), "one click only selects");
+        assert!(
+            t.inner.frames.unwrap().last().unwrap().iter().any(|l| l.contains("> 3  gamma")),
+            "the selected line carries the cursor"
+        );
+        let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), [press, press]);
         assert_eq!(run(&mut s, &mut t).unwrap().unwrap().picked, Some(2));
+    }
+
+    /// The frame a scripted run ends on (its last), in colour.
+    fn last_frame(events: Vec<Event>) -> Vec<String> {
+        let mut r = four();
+        let v = LaunchView {
+            style: Style { color: true, ascii: false },
+            ..view()
+        };
+        let p = Prefs::default();
+        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+        let st = r.new_state();
+        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook);
+        let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), events);
+        assert!(run(&mut s, &mut t).unwrap().is_none());
+        t.inner.frames.unwrap().last().unwrap().clone()
+    }
+
+    #[test]
+    fn a_value_a_click_selects_draws_as_the_arrows_draw_it() {
+        let mut r = four();
+        let v = LaunchView {
+            style: Style { color: true, ascii: false },
+            ..view()
+        };
+        let p = Prefs::default();
+        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+        let st = r.new_state();
+        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook);
+        let frame = s.draw((130, 40));
+        let esc = || Event::Key(KeyPress::named(vk::ESCAPE));
+        let mouse = |x: i32, y: i32, is_move: bool| {
+            Event::Mouse(MouseEvent {
+                x,
+                y,
+                left: !is_move,
+                buttons: u32::from(!is_move),
+                is_move,
+                ..MouseEvent::default()
+            })
+        };
+        for (row, value, keys) in [
+            ("Account", "personal", vec!["RightArrow"]),
+            ("Effort", "high", vec!["DownArrow", "DownArrow", "DownArrow"]),
+        ] {
+            let hit = frame.map.rows.iter().find(|h| h.name == row).unwrap();
+            let cell = hit.cells.iter().find(|c| c.value == value).unwrap();
+            // The pointer rests on the value it clicked.
+            let clicked = last_frame(vec![mouse(cell.start, hit.y, true), mouse(cell.start, hit.y, false), esc()]);
+            let mut typed: Vec<Event> = keys.iter().map(|k| Event::Key(crate::input::scripted_key(k).unwrap())).collect();
+            if row == "Effort" {
+                let steps = ["default", "low", "medium", "high"].iter().position(|x| *x == value).unwrap();
+                typed.extend((0..steps).map(|_| Event::Key(KeyPress::named(vk::RIGHT))));
+            }
+            typed.push(esc());
+            assert_eq!(clicked, last_frame(typed), "{row} = {value}: the click and the keys draw one frame");
+        }
+    }
+
+    #[test]
+    fn a_click_beside_a_recent_project_line_picks_nothing() {
+        let mut r = four();
+        let v = LaunchView {
+            recent: recent(&["alpha", "beta", "gamma"]),
+            ..view()
+        };
+        let p = Prefs::default();
+        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+        let st = r.new_state();
+        let mut s = LaunchScreen::new(&mut r, st, &v, &p, 0, &mut hook);
+        let frame = s.draw((130, 40));
+        let first = frame.map.rows.iter().find(|h| h.name == "recent").unwrap();
+        // The running column beside the recent panel, then the frame's last column.
+        let at = |x: i32| {
+            Event::Mouse(MouseEvent {
+                x,
+                y: first.y,
+                left: true,
+                buttons: 1,
+                ..MouseEvent::default()
+            })
+        };
+        let esc = Event::Key(KeyPress::named(vk::ESCAPE));
+        let mut t = crate::ui::script_term::ScriptTerm::new((130, 40), [at(110), at(110), at(129), at(129), esc]);
+        assert!(run(&mut s, &mut t).unwrap().is_none(), "no click off the line picks a project");
     }
 
     #[test]

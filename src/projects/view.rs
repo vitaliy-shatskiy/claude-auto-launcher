@@ -418,6 +418,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
             row_ys: row_ys.iter().map(|r| y(*r)).collect(),
         }),
         action,
+        hit_x: RowMap::panel_interior(0, lw),
         ..RowMap::default()
     };
     let light = FooterLight {
