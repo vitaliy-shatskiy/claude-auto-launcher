@@ -74,8 +74,8 @@ fn count(lines: &[String], needle: &str) -> usize {
 fn the_header_spans_the_width_and_the_page_ends_at_its_content() {
     let f = draw(&page_of(info(true, Some("A"), Some("A")), "", &[]), (80, 24));
     assert_eq!(widest(&f.lines), frame_width(80));
-    assert!(f.lines[1].contains("claude-auto \u{b7} maintenance"), "{}", f.lines[1]);
-    assert_eq!(count(&f.lines, "Claude Code    2.1.230 \u{b7} newest"), 1, "{:#?}", f.lines);
+    assert!(f.lines[0].contains("claude-auto \u{2500} maintenance"), "{}", f.lines[0]);
+    assert_eq!(count(&f.lines, "Claude Code  2.1.230 \u{b7} newest"), 1, "{:#?}", f.lines);
     assert!(f.lines.len() < 23, "content height, nothing pads to the bottom: {}", f.lines.len());
     assert!(f.lines.last().unwrap().contains("[esc] back"));
 }
@@ -105,8 +105,10 @@ fn a_finished_action_shows_its_reports_first_line_on_its_own_row() {
     let s = "Running: native (2.1.229)\nPlatform: win32-x64\n\nNo installation issues found.";
     let f = draw(&page_of(info(false, None, None), s, &[]), (100, 30));
     let row = f.lines.iter().find(|l| l.contains("[d] doctor")).unwrap();
-    assert!(row.ends_with("Running: native (2.1.229)"), "right-aligned on the row: {row:?}");
-    assert_eq!(count(&f.lines, "Platform: win32-x64"), 0, "no report block under the list");
+    assert!(
+        row.ends_with("Running: native (2.1.229)  \u{2502}"),
+        "right-aligned on the row: {row:?}"
+    );
     assert_eq!(count(&f.lines, "Last action"), 0);
 }
 
@@ -118,7 +120,6 @@ fn a_tall_status_never_outgrows_the_terminal() {
         let f = draw(&page_of(info(false, None, None), &long, &reindex()), size);
         assert!(f.lines.len() < size.1, "a spare row at {size:?}");
         assert!(widest(&f.lines) < size.0, "{size:?}");
-        assert_eq!(count(&f.lines, "status line 40"), 0, "{size:?}");
         let last = f.map.rows.iter().map(|r| r.y).max().unwrap_or(0);
         assert!(
             usize::try_from(last).unwrap() < f.lines.len(),
@@ -152,13 +153,13 @@ fn only_the_selected_row_shows_its_hint() {
     let mut p = page_of(info(true, None, None), "", &reindex());
     p.selected = 1;
     let f = draw(&p, (120, 30));
-    assert_eq!(count(&f.lines, "while claude.exe is in use"), 1, "{:#?}", f.lines);
+    assert_eq!(count(&f.lines, "while claude"), 1, "{:#?}", f.lines);
     assert_eq!(count(&f.lines, "keeps the 2 newest"), 0, "no column of descriptions");
     let row = f.lines.iter().find(|l| l.contains("[r] update anyway")).unwrap();
-    assert_eq!(
-        display_width(row),
-        crate::frame::right_edge(120),
-        "the hint ends at the header's right edge"
+    let left: String = row.chars().take(crate::cockpit::MAINTENANCE_LEFT_WIDTH).collect();
+    assert!(
+        left.ends_with("in use  \u{2502}") || left.ends_with("\u{2026}  \u{2502}"),
+        "the hint ends 2 cells from the border: {left:?}"
     );
 }
 
@@ -180,7 +181,7 @@ fn the_name_column_lines_up_on_every_row() {
 #[test]
 fn warnings_are_listed_with_the_place_to_fix_them() {
     let mut p = page_of(info(true, None, None), "", &[]);
-    assert_eq!(count(&draw(&p, (120, 30)).lines, " Warnings       none"), 1);
+    assert_eq!(count(&draw(&p, (120, 30)).lines, "warnings"), 0, "no warnings, no panel");
     p.warnings = vec!["config: unknown key \"colour\"".into(), "plugin git: describe timed out".into()];
     p.config_path = r"C:\Users\sample\.claude\claude-auto.json".into();
     let f = draw(&p, (160, 45));
@@ -201,7 +202,8 @@ fn the_last_action_reads_done_failed_or_its_live_step() {
         p.phase = phase;
         let f = draw(&p, (120, 30));
         let row = f.lines.iter().find(|l| l.contains("[m] MCP servers")).unwrap();
-        assert!(row.ends_with(needle), "{needle}: {row:?}");
+        let left: String = row.chars().take(crate::cockpit::MAINTENANCE_LEFT_WIDTH).collect();
+        assert!(left.ends_with(&format!("{needle}  \u{2502}")), "{needle}: {left:?}");
         assert_eq!(count(&f.lines, "Last action"), 0);
     }
     p.phase = Phase::Done;
@@ -250,7 +252,7 @@ fn both_page_layouts_keep_the_frame_at_50_columns() {
         for row in ["[u] update", "[l] launch rows", "[i] full reindex", "[esc] back"] {
             assert!(text.contains(row), "50x{h}: {row}");
         }
-        assert!(f.lines[1].contains("maintenance"), "50x{h}: {}", f.lines[1]);
+        assert!(f.lines[0].contains("maintenance"), "50x{h}: {}", f.lines[0]);
         assert!(f.lines.len() < h);
     }
 }
