@@ -291,11 +291,13 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
         .position(|r| r.index == p.selected)
         .and_then(|i| rows.get(i))
         .map(|r| usize::try_from(r.y).unwrap_or(1) - 1);
+    // AC27: the panels run to the footer; stacked, the actions take what the warnings and the last
+    // run leave.
     let left_h = if wide {
-        let run_need = if ran { 4 } else { 3 };
-        (actions.len() + 2).max(versions.len() + 2 + warn_h + run_need).min(page_rows)
+        page_rows
     } else {
-        (actions.len() + 2).min(page_rows)
+        let below = warn_h + if ran { 6 } else { 0 };
+        page_rows.saturating_sub(below).max(actions.len() + 2).min(page_rows)
     };
     let main = Panel {
         title: cockpit::identity(&g),
@@ -314,6 +316,7 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
             .into_iter()
             .filter(|r| usize::try_from(r.y).is_ok_and(|y| y + 1 < left_h))
             .collect(),
+        hit_x: RowMap::panel_interior(0, lw),
         ..RowMap::default()
     };
     let panel = |title: &str, body: Vec<String>, w: usize, h: usize| {
@@ -321,25 +324,22 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
         pn.painter = &painter;
         cockpit::render(&pn, style)
     };
-    let run_title = if ran {
-        format!("{} {} last run", strip_ctl(&p.last), g.dot)
-    } else {
-        "last run".to_owned()
-    };
     if wide && rw >= FACTS_WIDTH + RUN_MIN_WIDTH {
         // Room for three columns: the facts keep their width, the last run's output takes the rest.
         let run_w = rw - FACTS_WIDTH;
-        let run = panel(&run_title, run_lines(p, run_w - 2, left_h - 2, style.ascii), run_w, left_h);
-        let mut facts = panel("versions", versions, FACTS_WIDTH, 6);
+        let (title, body) = selected_action(p, run_w - 2, left_h - 2, style.ascii);
+        let run = panel(&title, body, run_w, left_h);
+        let mut facts = panel("versions", versions, FACTS_WIDTH, if warn_h > 0 { 6 } else { left_h });
         let warnings = warning_lines(p, &g, FACTS_WIDTH - 2);
         if warn_h > 0 {
-            facts.extend(panel("warnings", warnings, FACTS_WIDTH, warn_h));
+            facts.extend(panel("warnings", warnings, FACTS_WIDTH, left_h.saturating_sub(6)));
         }
         facts.truncate(left_h);
         lines = cockpit::beside(lines, lw, &cockpit::beside(run, run_w, &facts));
     } else if wide {
-        let run_h = left_h.saturating_sub(versions.len() + 2 + warn_h).max(3);
-        let mut right = panel(&run_title, run_lines(p, rw - 2, run_h - 2, style.ascii), rw, run_h);
+        let run_h = left_h.saturating_sub(6 + warn_h).max(3);
+        let (title, body) = selected_action(p, rw - 2, run_h - 2, style.ascii);
+        let mut right = panel(&title, body, rw, run_h);
         right.extend(panel("versions", versions, rw, 6));
         if warn_h > 0 {
             right.extend(panel("warnings", warnings, rw, warn_h));
@@ -355,7 +355,8 @@ pub(crate) fn maintenance_frame(p: &Page, size: (usize, usize), style: Style) ->
         }
         if ran && room >= 3 {
             let h = room.min(6);
-            lines.extend(panel(&run_title, run_lines(p, fw - 2, h - 2, style.ascii), fw, h));
+            let title = format!("{} {} last run", strip_ctl(&p.last), g.dot);
+            lines.extend(panel(&title, run_lines(p, fw - 2, h - 2, style.ascii), fw, h));
         }
     }
     let light = FooterLight {
@@ -496,6 +497,55 @@ fn warning_lines(p: &Page, g: &Glyphs, inner: usize) -> Vec<String> {
         }
     }
     out
+}
+
+/// What each built-in row does, for the selected-action panel beside the rows.
+const DETAILS: [(char, &str); 6] = [
+    ('u', "downloads the newest Claude Code and switches to it"),
+    ('r', "moves the running claude.exe aside, then updates"),
+    ('p', "deletes every build but the 2 newest and the running one"),
+    ('d', "runs claude doctor and shows its report"),
+    ('m', "checks each MCP server's connection"),
+    ('l', "show, hide and order the launch rows; pin a hidden row's value"),
+];
+
+/// Beside the rows on a wide page: the selected action - what it does, how to run it - and its
+/// last run, or the last run of another action under it.
+fn selected_action(p: &Page, inner: usize, rows: usize, ascii: bool) -> (String, Vec<String>) {
+    let Some(e) = p.entries.get(p.selected) else {
+        return ("last run".to_owned(), run_lines(p, inner, rows, ascii));
+    };
+    let what = DETAILS.iter().find(|(k, _)| *k == e.key).map_or("a configured action", |(_, d)| *d);
+    let how = vec![
+        format!("  {}", limit_line(what, inner.saturating_sub(3), ascii)),
+        String::new(),
+        format!(
+            "  {}  or  {}  runs it",
+            tint(ACCENT_OPEN, "enter"),
+            tint(ACCENT_OPEN, &e.key.to_string())
+        ),
+    ];
+    let name = strip_ctl(&e.name);
+    if p.phase == Phase::Idle {
+        return (name, how);
+    }
+    // A run's report and state come first; what the action does follows where rows are left.
+    let mine = strip_ctl(&p.last) == name;
+    let mut out = Vec::new();
+    if !mine {
+        out.push(format!("  {}", dim(&format!("last run  {}", strip_ctl(&p.last)))));
+    }
+    out.extend(run_lines(p, inner, rows.saturating_sub(out.len()), ascii));
+    if out.len() + 1 + how.len() <= rows {
+        out.push(String::new());
+        out.extend(how);
+    }
+    let title = if mine {
+        format!("{name} {} last run", glyphs(ascii).dot)
+    } else {
+        name
+    };
+    (title, out)
 }
 
 /// The last run: the tail of its report that fits, then where it stands.

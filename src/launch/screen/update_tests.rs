@@ -20,7 +20,6 @@ fn view() -> LaunchView {
         default_model_label: "default".into(),
         default_advisor_label: "default".into(),
         labels_by_account: BTreeMap::new(),
-        recent: Vec::new(),
         running: Vec::new(),
         mcp: String::new(),
         style: Style { color: false, ascii: true },

@@ -1,0 +1,19 @@
+[
+  { "project": "lumen-cli", "minutesAgo": 4400, "titles": ["add a --json flag to the status command", "the progress bar redraws twice on narrow terminals"] },
+  { "project": "tidepool", "minutesAgo": 4500, "titles": ["the nightly import skips files whose names carry spaces or brackets and nobody notices for days", "move the cron schedule into the config file", "write the runbook for a stuck import"] },
+  { "project": "ops\\grafana-dashboards", "minutesAgo": 4700, "titles": ["one dashboard per service with the same four golden signals panels"] },
+  { "project": "clients\\northwind\\billing-service-v2\\worktrees\\feature-invoice-pdf-export", "minutesAgo": 4800, "titles": ["render the invoice PDF on the server and keep the fonts embedded so print shops accept it", "the totals row rounds twice"] },
+  { "project": "ml\\churn-model", "minutesAgo": 5100, "titles": ["why did the recall drop after the feature store migration", "pin the training seed and log it with the run"] },
+  { "project": "quill", "minutesAgo": 5300, "titles": ["markdown tables lose their alignment row on paste"] },
+  { "project": "ember-site", "minutesAgo": 5900, "titles": ["the hero image loads at full size on phones and pushes the first paint past three seconds", "add the changelog page", "dark mode for the code blocks"] },
+  { "project": "atlas-maps", "minutesAgo": 6200, "titles": ["cluster the markers above zoom level eight", "tile cache headers"] },
+  { "project": "infra\\terraform\\staging", "minutesAgo": 6800, "titles": ["the plan wants to recreate the database again: find which attribute drifts and why it drifts"] },
+  { "project": "kite", "minutesAgo": 7300, "titles": ["retry the webhook with backoff", "sign the payload"] },
+  { "project": "orchard-mobile", "minutesAgo": 8100, "titles": ["the app crashes on resume when the token expired while it was in the background", "push notifications on the new SDK"] },
+  { "project": "sandbox", "minutesAgo": 9000, "titles": ["try the new parser crate on the sample logs"] },
+  { "project": "docs-portal", "minutesAgo": 10200, "titles": ["search results rank the archived pages above the current ones", "add the API reference generator"] },
+  { "project": "relay-chat", "minutesAgo": 11500, "titles": ["messages arrive out of order when two devices send within the same millisecond window", "typing indicator"] },
+  { "project": "pantry", "minutesAgo": 13000, "titles": ["barcode scan on low light"] },
+  { "project": "scripts\\backup-rotation", "minutesAgo": 15000, "titles": ["keep seven daily and four weekly snapshots, delete the rest after a dry run"] },
+  { "project": "meridian-analytics-warehouse", "minutesAgo": 18000, "titles": ["the weekly rollup double counts refunds issued on the last day of the week", "partition the events table by month", "backfill the missing March data"] }
+]

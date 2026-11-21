@@ -1,39 +1,39 @@
-╭─ ✻ claude-auto ─ project · 4 known · worktrees 1 ─────────────────────────╮╭─ selected · alpha ───────────────────────────────╮
-│   current directory  C:\Users\sample\here                                 ││  path      C:\Users\sample\Desktop\Proje…\alpha  │
-│                                                                           ││  branch    main                                  │
-│ ❯ alpha              C:\Users\sample\Desktop\Projects\alpha        4 min  ││  sessions  18                                    │
-│   beta-service       C:\Users\sample\Desktop\Project…\beta-service   8 h  ││  last      4 min  design the cockpit panels      │
-│   ⌂ gamma            C:\Users\sample\Desktop\Projects\gam…\feature   3 d  │╰──────────────────────────────────────────────────╯
-│   delta              D:\src\delta                                   23 d  │╭─ sessions ───────────────────────────────────────╮
-│                                                                           ││  ● 4 min  design the cockpit panels              │
-│   + enter a path...                                                       ││      3 h  fix the invoice export paging          │
-│                                                                           ││      1 d  triage the sync job alerts             │
-│                                                                           ││      3 d  compare two apk resource trees         │
-│                                                                           ││      9 d  restart loop on the VM                 │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│                                                                           ││                                                  │
-│   action  ● [new] ○ continue ○ resume ○ worktree                          ││                                                  │
-╰───────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────╯
-  w/s move    ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
-  [/] filter  ┊  [p] pin         ┊  [h] hide     ┊  [v] hidden    ┊  [esc] back
+╭─ ✻ claude-auto ─ project · 4 known · worktrees 1 ──────────────────────╮╭─ selected · alpha ──────────────────────────────────╮
+│   current directory  C:\Users\sample\here                              ││  path      C:\Users\sample\Desktop\Projects\alpha   │
+│                                                                        ││  branch    main                                     │
+│ ❯ alpha              C:\Users\sample\Desktop\Projects\alpha     4 min  ││  sessions  18                                       │
+│   beta-service       C:\Users\sample\Desktop\Proj…\beta-service   8 h  ││  last      4 min  design the cockpit panels         │
+│   ⌂ gamma            C:\Users\sample\Desktop\Projects\…\feature   3 d  │╰─────────────────────────────────────────────────────╯
+│   delta              D:\src\delta                                23 d  │╭─ sessions ──────────────────────────────────────────╮
+│                                                                        ││  ● 4 min  design the cockpit panels                 │
+│   + enter a path...                                                    ││      3 h  fix the invoice export paging             │
+│                                                                        ││      1 d  triage the sync job alerts                │
+│                                                                        ││      3 d  compare two apk resource trees            │
+│                                                                        ││      9 d  restart loop on the VM                    │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│                                                                        ││                                                     │
+│   action  ● [new] ○ continue ○ resume ○ worktree                       ││                                                     │
+╰────────────────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────╯
+  w/s move  ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree  ┊  [/] filter  ┊  [esc] back

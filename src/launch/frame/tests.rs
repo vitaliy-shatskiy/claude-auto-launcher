@@ -67,8 +67,7 @@ fn render(r: &Roster, c: &Case<'_>) -> String {
         restored: None,
         notice: None,
         warnings: 0,
-        recent: &[],
-        recent_loading: false,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: c.model_label,
@@ -198,8 +197,7 @@ fn narrow_tier_draws_compact_rows_inside_the_frame() {
         restored: None,
         notice: None,
         warnings: 0,
-        recent: &[],
-        recent_loading: false,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: "default",
@@ -210,8 +208,8 @@ fn narrow_tier_draws_compact_rows_inside_the_frame() {
     let f = launch_frame(&r, &inp);
     assert!(f.lines.iter().all(|l| display_width(l) <= 49), "{:#?}", f.lines);
     assert!(
-        f.lines.iter().any(|l| l.starts_with("|   effort       < default >")),
-        "too wide rows collapse: {:#?}",
+        f.lines.iter().any(|l| l.starts_with("|   effort       * [default]  +6")),
+        "a too wide row drops to its selected value and the count: {:#?}",
         f.lines
     );
     assert!(
@@ -234,8 +232,7 @@ fn frame_at(r: &Roster, s: &LaunchState, limits: &Limits, width: usize) -> Frame
         restored: None,
         notice: None,
         warnings: 0,
-        recent: &[],
-        recent_loading: false,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: "default",
@@ -256,27 +253,25 @@ fn row_line<'f>(f: &'f Frame, name: &str) -> &'f str {
 }
 
 #[test]
-fn a_narrow_terminal_collapses_only_the_rows_that_do_not_fit() {
+fn a_row_that_does_not_fit_keeps_its_mark_and_never_draws_arrows() {
     let r = four();
     let limits = golden_limits();
     let s = r.new_state();
-    for width in [50, 58, 60, 70, 78, 80, 90, 99] {
+    for width in [50, 58, 60, 70, 78, 80, 90, 99, 120] {
         let f = frame_at(&r, &s, &limits, width);
         for hit in f.map.rows.iter().filter(|h| h.name != "Account") {
             let line = &f.lines[usize::try_from(hit.y).unwrap()];
-            assert!(
-                line.contains('‹') != line.contains('●'),
-                "{width}: collapsed or a radio list: {line}"
-            );
+            assert!(line.contains('●'), "{width}: every row shows its selected mark: {line}");
+            assert!(!line.contains(['‹', '›', '<', '>']), "{width}: no arrows: {line}");
         }
         assert!(f.lines.iter().all(|l| display_width(l) < width), "{width}: {:#?}", f.lines);
     }
-    // Given 78 columns: effort's seven values do not fit, mode's two do.
+    // Given 78 columns: effort's seven values do not fit (the selected one and the count of the
+    // others), mode's two do.
     let f = frame_at(&r, &s, &limits, 78);
-    assert!(row_line(&f, "Effort").contains('‹'), "{:#?}", f.lines);
+    assert!(row_line(&f, "Effort").contains("● [default]  +6"), "{:#?}", f.lines);
     assert!(row_line(&f, "Mode").contains("● [normal] ○ safe"), "{:#?}", f.lines);
 }
-
 #[test]
 fn narrow_and_wide_frames_match_their_goldens() {
     let plain = four();
@@ -320,13 +315,12 @@ fn the_limits_panel_shows_the_selected_account_one_limit_per_line_and_the_age_la
     let s = r.new_state();
     let wide = frame_at(&r, &s, &golden_limits(), 160);
     assert!(wide.lines[0].contains("limits \u{b7} work"), "{}", wide.lines[0]);
-    // The facts column: the last FACTS_WIDTH cells, whatever the width.
-    let right = |f: &Frame, i: usize| {
-        let n = f.lines[i].chars().count();
-        f.lines[i].chars().skip(n - crate::cockpit::FACTS_WIDTH).collect::<String>()
-    };
+    // The facts column: right of the launch panel's corner.
+    let corner = wide.lines[0].chars().position(|c| c == '\u{256E}').unwrap() + 1;
+    let right = |f: &Frame, i: usize| f.lines[i].chars().skip(corner).collect::<String>();
     let first = right(&wide, 1);
-    assert!(first.starts_with("\u{2502}  5h ") && first.ends_with(" 41%  \u{2502}"), "{first}");
+    // Values follow the label column (the longest label and two cells), never the far border.
+    assert!(first.starts_with("\u{2502}  5h      41%"), "{first}");
     assert!(right(&wide, 2).contains("7d") && right(&wide, 3).contains("15%"));
     let launch_h = r.rows.len() + 2;
     assert!(
@@ -370,7 +364,7 @@ fn ctrl_r_reset_and_the_warning_badge_show_only_when_they_apply() {
     let both = text(LaunchHints {
         warnings: 2,
         restored: true,
-        recent: false,
+        home: false,
     });
     assert!(
         both.contains("[u] maintenance \u{26a0} 2") && both.contains("ctrl+r reset"),
@@ -383,7 +377,7 @@ fn ctrl_r_reset_and_the_warning_badge_show_only_when_they_apply() {
         &LaunchHints {
             warnings: 2,
             restored: false,
-            recent: false,
+            home: false,
         },
     );
     let line: String = colored
@@ -417,8 +411,7 @@ fn row_map_points_at_the_drawn_lines() {
         restored: None,
         notice: None,
         warnings: 0,
-        recent: &[],
-        recent_loading: false,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: "default",
@@ -462,7 +455,7 @@ fn under_110_columns_the_footer_shortens_and_stays_one_line_ctrl_r_going_first()
     let all = LaunchHints {
         warnings: 2,
         restored: true,
-        recent: true,
+        home: false,
     };
     let text = |w: usize| {
         let f = launch_footer(&g, w, false, &all);
@@ -471,18 +464,18 @@ fn under_110_columns_the_footer_shortens_and_stays_one_line_ctrl_r_going_first()
     };
     let wide = text(159);
     assert!(
-        wide.contains("1-5 resume") && wide.contains("ctrl+r reset") && wide.contains("[u] maintenance"),
+        wide.contains("ctrl+r reset") && wide.contains("[u] maintenance") && !wide.contains("1-5"),
         "{wide}"
     );
     let mid = text(99);
     assert!(
-        mid.contains("1-5 go") && mid.contains("[u] maint ") && mid.contains("a/d switch") && mid.contains("^r reset"),
+        mid.contains("[u] maint ") && mid.contains("a/d switch") && mid.contains("^r reset"),
         "{mid}"
     );
-    let tight = text(90);
+    let tight = text(80);
     assert!(!tight.contains("reset") && tight.contains("w/s row"), "ctrl+r goes first: {tight}");
-    let narrow = text(79);
-    assert!(narrow.contains("1-5 go") && !narrow.contains("w/s"), "{narrow}");
+    let narrow = text(70);
+    assert!(narrow.contains("[esc] quit") && !narrow.contains("w/s"), "{narrow}");
 }
 
 #[test]
@@ -527,8 +520,7 @@ fn too_small_terminal_gets_the_size_frame() {
         restored: None,
         notice: None,
         warnings: 0,
-        recent: &[],
-        recent_loading: false,
+        home: None,
         running: &[],
         mcp: "",
         default_model_label: "default",

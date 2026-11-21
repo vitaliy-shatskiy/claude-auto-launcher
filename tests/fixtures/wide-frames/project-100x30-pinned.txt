@@ -1,11 +1,12 @@
 ╭─ ✻ claude-auto ─ project · 3 known · pinned 1 ──────────────────────────────────────────────────╮
 │   current directory  C:\elsewhere                                                               │
 │                                                                                                 │
-│ ❯ ↑ p-2              C:\w\p2      2 min                                                         │
-│   p-1                C:\w\p1      1 min                                                         │
-│   p-3                C:\w\p3      3 min                                                         │
+│ ❯ ↑ p-2              C:\w\p2                                                             2 min  │
+│   p-1                C:\w\p1                                                             1 min  │
+│   p-3                C:\w\p3                                                             3 min  │
 │                                                                                                 │
 │   + enter a path...                                                                             │
+│                                                                                                 │
 │                                                                                                 │
 │                                                                                                 │
 │                                                                                                 │
@@ -25,5 +26,4 @@
 │   C:\w\p2                                                                                       │
 │   action  ● [new] ○ continue ○ resume ○ worktree                                                │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  w/s move    ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [r] resume  ┊  [t] worktree
-  [/] filter  ┊  [p] pin         ┊  [h] hide     ┊  [v] hidden    ┊  [esc] back
+  w/s move  ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue  ┊  [/] filter  ┊  [esc] back

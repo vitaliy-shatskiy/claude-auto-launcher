@@ -61,11 +61,25 @@ if ($real) {
 # Invented sessions from demo-sessions.json, each dated its minutes ago.
 # The main account's own root: sharing is off in the demo roster, so its picker reads here.
 $projectsRoot = Join-Path $t '.claude' -AdditionalChildPath 'projects'
+$demoSessions = @(Get-Content -Raw -LiteralPath 'docs/media/demo-sessions.json' | ConvertFrom-Json)
+# The screenshot walk sets CLAUDE_AUTO_DEMO_MANY=1 before dot-sourcing: ~20 projects and ~40 sessions as a real
+# home has, varied names and path lengths, all older than the README's three (their order stays).
+if ($env:CLAUDE_AUTO_DEMO_MANY -eq '1') {
+    foreach ($p in (Get-Content -Raw -LiteralPath 'docs/media/demo-sessions-many.json' | ConvertFrom-Json)) {
+        $i = 0
+        foreach ($title in $p.titles) {
+            $demoSessions += [pscustomobject]@{
+                project = $p.project; minutesAgo = $p.minutesAgo + 97 * $i++
+                turns = @(, @('user', $title)) + @(, @('assistant', 'Done: the change is in and the tests pass.'))
+            }
+        }
+    }
+}
 $n = 0
-foreach ($s in (Get-Content -Raw -LiteralPath 'docs/media/demo-sessions.json' | ConvertFrom-Json)) {
+foreach ($s in $demoSessions) {
     $n++
     $cwd = "${letter}:\$($s.project)"
-    $dir = Join-Path $projectsRoot "$letter--$($s.project)"
+    $dir = Join-Path $projectsRoot ("$letter--$($s.project)" -replace '[\\:. ]', '-')
     New-Item -ItemType Directory -Force -Path $cwd, $dir | Out-Null
     $id = '{0:x8}-0000-4000-8000-{1:x12}' -f (0x5e551000 + $n), $n
     $when = [DateTimeOffset]::UtcNow.AddMinutes(-[double]$s.minutesAgo)
@@ -80,6 +94,20 @@ foreach ($s in (Get-Content -Raw -LiteralPath 'docs/media/demo-sessions.json' | 
     $file = Join-Path $dir "$id.jsonl"
     [IO.File]::WriteAllText($file, ($lines -join "`n") + "`n")
     (Get-Item -LiteralPath $file).LastWriteTimeUtc = $when.UtcDateTime
+}
+
+
+# Two running sessions for the screenshot walk: live records of this shell's own process (it runs
+# for the whole walk), on the newest aurora and harbor-api sessions.
+if ($env:CLAUDE_AUTO_DEMO_MANY -eq '1') {
+    $live = Join-Path $t '.claude' -AdditionalChildPath 'sessions'
+    New-Item -ItemType Directory -Force -Path $live | Out-Null
+    $start = (Get-Process -Id $PID).StartTime.ToFileTimeUtc()
+    foreach ($r in @(@{ n = 1; cwd = "${letter}:\aurora"; name = 'theme flicker'; status = 'busy' }, @{ n = 4; cwd = "${letter}:\harbor-api"; name = 'search rate limit'; status = 'idle' })) {
+        $sid = '{0:x8}-0000-4000-8000-{1:x12}' -f (0x5e551000 + $r.n), $r.n
+        $body = [ordered]@{ pid = $PID; sessionId = $sid; cwd = $r.cwd; procStart = "$start"; status = $r.status; name = $r.name; kind = 'interactive' } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText((Join-Path $live "demo-$($r.n).json"), $body)
+    }
 }
 
 $env:USERPROFILE = $t

@@ -29,6 +29,7 @@ fn view<'a>(s: &'a [&'a Session], index: usize, w: usize, h: usize) -> PickerVie
         sessions: s,
         index,
         filter: "",
+        typing: false,
         width: w,
         height: h,
         clock: Clock {

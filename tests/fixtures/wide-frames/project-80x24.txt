@@ -15,9 +15,9 @@
 │                                                                             │
 │                                                                             │
 │                                                                             │
+│                                                                             │
+│                                                                             │
 │   C:\Users\sample\Desktop\Projects\alpha                                    │
 │   action  ● [new] ○ continue ○ resume ○ worktree                            │
 ╰─────────────────────────────────────────────────────────────────────────────╯
-  w/s move    ┊  a/d ←/→ action  ┊  [enter] run  ┊  [c] continue
-  [r] resume  ┊  [t] worktree    ┊  [/] filter   ┊  [p] pin
-  [h] hide    ┊  [v] hidden      ┊  [esc] back
+  w/s move  ┊  a/d ←/→ action  ┊  [enter] run  ┊  [/] filter  ┊  [esc] back

@@ -11,7 +11,7 @@ use crate::input::{KeyPress, is_hotkey};
 use crate::launch::LaunchState;
 use crate::launch::PROJECT_ACTION;
 use crate::launch::launch_mode;
-use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore, apply_pick};
+use crate::launch::screen::{LaunchScreen, LaunchView, RowsStore};
 use crate::log::Logger;
 use crate::log_data;
 use crate::out;
@@ -89,7 +89,6 @@ pub(super) fn run_ui(
         default_model_label: defaults.model,
         default_advisor_label: defaults.advisor,
         labels_by_account: defaults.by_account,
-        recent: Vec::new(),
         running: Vec::new(),
         mcp: maintenance::last_mcp_check(&run.ctx.home, theme::glyphs(style.ascii).dot),
         style,
@@ -136,19 +135,6 @@ pub(super) fn run_ui(
     // A cancel or an error exit never waits for the build: its cache write is temp + rename. A
     // preview joins it: its per-PID cache file is removed below.
     let prefetch = RefCell::new(if run.preview { prefetch } else { prefetch.unjoined() });
-    // The recent panel's session titles: the summary cache read off the UI thread (it runs to MBs).
-    let titles_root = sessions::sessions_root(&run.cfg, &state.account);
-    let titles = RefCell::new(Background::start("recent titles", move || sessions::listing::newest_titles(&titles_root)).unjoined());
-    // Keys 1-5 and the recent panel: the registry's newest projects once its read is in.
-    let recent_source = || {
-        let mut p = prefetch.try_borrow_mut().ok()?;
-        let reg = p.poll()?.as_ref().ok()?;
-        let mut t = titles.try_borrow_mut().ok()?;
-        // A failed read lists the projects without titles.
-        let none = std::collections::HashMap::new();
-        let titles = t.poll()?.as_ref().unwrap_or(&none);
-        Some(projects::recent_projects(&reg.projects, now_ms(), titles))
-    };
     // An unwritable or refused config keeps the change for this run only; the screen says why.
     let save_hidden = |path: &str, change: projects::HideChange| -> Result<(), String> {
         if run.preview {
@@ -164,9 +150,35 @@ pub(super) fn run_ui(
     let mut project_source = String::new();
     let mut preselect = String::new();
     let held_dirs: Vec<PathBuf> = run.cfg.accounts.iter().map(|a| Path::new(&a.root).join("sessions")).collect();
-    // The running panel; a preview reads no session state of the machine it runs on.
-    if !run.preview {
-        view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
+    // The running panel: live records only (a dead or reused pid never counts); a preview reads
+    // them too, so the screenshot walk shows the panel the owner sees.
+    view.running = sessions::holder::running_sessions(&held_dirs, now_ms());
+    // The wide launch page's projects panel, once the registry is in (plugin projects join on
+    // the project page only: listing them starts their processes).
+    let home_clock = now_ms;
+    let home_account = state.account.clone();
+    let home_source = || {
+        let mut p = prefetch.try_borrow_mut().ok()?;
+        let reg = p.poll()?.as_ref().ok()?;
+        let stores = projects::detail::Stores {
+            root: sessions::sessions_root(&run.cfg, &home_account),
+            live_dirs: held_dirs.clone(),
+        };
+        Some(projects::home_list(
+            &reg.projects,
+            &run.ctx.cwd,
+            style,
+            &hiding,
+            run.preview,
+            stores,
+            &home_clock,
+        ))
+    };
+    // A preview never idles: the registry is read before its first frame, so the projects panel
+    // shows in the printed frames.
+    if run.preview {
+        let mut p = prefetch.borrow_mut();
+        let _ = registry(&mut p, &run.logger, || {});
     }
     let mut chosen_how: Option<String>;
     let mut rows_store = ConfigRows { run };
@@ -190,9 +202,10 @@ pub(super) fn run_ui(
             }
             launch_key(run, k, t, &plugin_lines)
         };
-        state.picked = None;
+        // Per run of the screen: its borrows end with it (the source outlives the loop).
+        let home_here = || home_source();
         let mut screen = LaunchScreen::new(&mut roster, state.clone(), &view, &prefs_file, now_ms(), &mut hook)
-            .with_recent(&recent_source)
+            .with_home(&home_here)
             .with_rows(&mut rows_store)
             .with_update(&update)
             .with_self_update(launcher)
@@ -201,7 +214,6 @@ pub(super) fn run_ui(
             break UiEnd::Cancelled;
         };
         state = next;
-        let recent = std::mem::take(&mut screen.view.recent);
         let mut prefetch_now = prefetch.borrow_mut();
         let registry_list = registry(
             &mut prefetch_now,
@@ -219,9 +231,37 @@ pub(super) fn run_ui(
         }
         let via_project = state.action == PROJECT_ACTION;
         let action_before = state.action.clone();
-        let picked = apply_pick(&mut state, &recent);
-        if picked {
-            chosen_how = Some("key".into());
+        let home_session = state.home_session.take();
+        let home_preview = state.home_preview.take();
+        let picked = state.home_pick.is_some();
+        if let Some(chosen) = state.home_pick.take() {
+            // The wide launch page's projects or sessions panel picked: no project page.
+            state.project.clone_from(&chosen.path);
+            state.project_slug.clone_from(&chosen.slug);
+            state.project_slugs.clone_from(&chosen.slugs);
+            state.action.clone_from(&chosen.action);
+            chosen_how = Some(chosen.how);
+            if let Some((id, fork)) = home_session {
+                let holder = if fork { None } else { sessions::session_holder(&held_dirs, &id) };
+                if confirm_held(term.as_mut(), holder.as_deref(), style)? {
+                    break launch_end(
+                        state,
+                        Some(id),
+                        fork,
+                        view,
+                        roster,
+                        merged.restored,
+                        project_source,
+                        preselect,
+                        chosen_how,
+                    );
+                }
+                if run.preview {
+                    break UiEnd::PreviewHeldBack;
+                }
+                state.action.clone_from(&action_before);
+                continue;
+            }
         } else if opens_project_screen(run.cfg.project_screen, &state.action) {
             let Some(chosen) = projects::run_project_screen(
                 term.as_mut(),
@@ -250,7 +290,7 @@ pub(super) fn run_ui(
             start_in_cwd(&mut state, &run.ctx.cwd, project_list);
             chosen_how = Some("cwd".into());
         }
-        // Back on the launch screen after a pick, the action row still says `project`.
+        // Back on the launch screen after a pick, the action row says what it said.
         let back_to = |state: &mut LaunchState| {
             if picked {
                 state.action.clone_from(&action_before);
@@ -314,6 +354,7 @@ pub(super) fn run_ui(
             style,
             live_dirs: &held_dirs,
             preview: run.preview,
+            select: home_preview.as_deref(),
         };
         let project = state.project.clone();
         let plugin_sessions = |slugs: &[String]| session_entries(run, &project, slugs, &plugin_lines);

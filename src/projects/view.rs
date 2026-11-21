@@ -11,8 +11,8 @@ use super::paths::project_key;
 use super::select::{Row, RowKind, filter_words, project_count, project_rows};
 use crate::cockpit::{self, Focus, Panel};
 use crate::frame::{
-    self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioRow, RadioSpec, RowMap, Style,
-    TWO_PANE_WIDTH, new_hint_footer, new_radio_row,
+    self, ActionHit, CellSpan, FooterLight, Frame, Hint, ListMap, MIN_HEIGHT, MIN_WIDTH, RadioRow, RadioSpec, RowHit, RowMap, SESSION_ROW,
+    Style, TWO_PANE_WIDTH, new_hint_footer, new_radio_row,
 };
 use crate::launch::{LAUNCH_MODES, launch_mode, step_option};
 use crate::layout::{display_width, limit_line, limit_path, viewport};
@@ -146,11 +146,55 @@ pub(crate) struct ProjectView<'a> {
     pub hover_value: &'a str,
     /// The selected row's sessions and branch, once loaded (None = still loading).
     pub detail: Option<&'a Detail>,
+    /// On the launch page: which panel has focus and the list panel's width (the launch panel's
+    /// above it). `None` = the project page, the list focused at its own width.
+    pub home: Option<Home>,
+}
+
+/// Which panel of the launch page's workspace has focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HomeFocus {
+    Launch,
+    Projects,
+    /// The selected project's sessions, the cursor on the n-th.
+    Sessions(usize),
+}
+
+/// The list drawn under the launch panel: its focus and its width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Home {
+    pub focus: HomeFocus,
+    pub left_width: usize,
 }
 
 /// The footer follows the state: an open filter names only what works while typing (every
 /// button a named key, so a click on one is never typed into the filter).
 fn footer_hints(v: &ProjectView<'_>) -> Vec<Hint> {
+    match v.home.map(|h| h.focus) {
+        Some(HomeFocus::Sessions(_)) => {
+            // Resume and fork only where the panel lists a session of the selected project.
+            let rows = project_rows(v.projects, v.filter, v.cwd);
+            let sel = rows.get(v.index.min(rows.len().saturating_sub(1)));
+            let listed = v
+                .detail
+                .is_some_and(|d| !d.sessions.is_empty() && sel.is_some_and(|r| r.kind != RowKind::Path && d.key == project_key(&r.path)));
+            let mut h = vec![Hint::plain("w/s", "move").kept()];
+            if listed {
+                h.push(Hint::key("enter", "resume", "Enter"));
+                h.push(Hint::ch("f", "fork", 'f'));
+                h.push(Hint::ch("v", "chat", 'v'));
+            }
+            h.push(Hint::key("tab", "launch", "Tab"));
+            h.push(Hint::key("esc", "projects", "Escape"));
+            return h;
+        }
+        Some(HomeFocus::Projects) if !v.typing => {
+            let mut h = project_hints(v);
+            h.insert(3, Hint::key("tab", "sessions", "Tab"));
+            return h;
+        }
+        Some(HomeFocus::Launch | HomeFocus::Projects) | None => {}
+    }
     if v.typing {
         return vec![
             Hint::plain("up/down", "move").kept(),
@@ -159,6 +203,11 @@ fn footer_hints(v: &ProjectView<'_>) -> Vec<Hint> {
             Hint::key("esc", "clear", "Escape"),
         ];
     }
+    project_hints(v)
+}
+
+/// The list's own keys, the filter closed.
+fn project_hints(v: &ProjectView<'_>) -> Vec<Hint> {
     let mut h = vec![
         Hint::plain("w/s", "move").kept(),
         Hint::plain(frame::switch_keys(&glyphs(v.style.ascii)), "action").kept(),
@@ -186,7 +235,8 @@ fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
     if !v.notice.is_empty() {
         return format!("project{} {d} {}", filter.unwrap_or_default(), clean_text(v.notice));
     }
-    let mut t = format!("project {d} {known} known");
+    // The filter leads: a narrow list panel cuts the title's tail, never what is typed.
+    let mut t = format!("project{} {d} {known} known", filter.unwrap_or_default());
     let worktrees = v.projects.iter().filter(|p| p.worktree.is_some()).count();
     for (n, what) in [(v.pinned.len(), "pinned"), (hidden, "hidden"), (worktrees, "worktrees")] {
         if n > 0 {
@@ -196,7 +246,7 @@ fn title(v: &ProjectView<'_>, g: &Glyphs) -> String {
     if !v.marked.is_empty() {
         t = format!("{t} {d} {} hidden listed", v.marked.len());
     }
-    t + &filter.unwrap_or_default()
+    t
 }
 
 /// A project or cwd row's label: the name with its pin, worktree and hidden or missing marks.
@@ -222,16 +272,15 @@ fn age_text(r: &Row, v: &ProjectView<'_>) -> String {
     r.last_activity_ms.map(|t| relative_age(t, v.now_ms)).unwrap_or_default()
 }
 
-/// The compact columns of the visible rows: the longest name (at most 40 % of the inner width),
-/// the longest path cut to what is left of `inner`, the widest age.
+/// The columns of the visible rows: the longest name (at most 40 % of the inner width), the path
+/// in what is left of `inner`, the widest age right-aligned at the panel's edge.
 fn list_columns(rows: &[Row], inner: usize, v: &ProjectView<'_>, g: &Glyphs) -> Columns {
     let listed = || rows.iter().filter(|r| r.kind != RowKind::Path);
     let widest = |w: &dyn Fn(&Row) -> usize| listed().map(w).max().unwrap_or(0);
     let label = widest(&|r| display_width(&theme::strip_ctl(&label_text(r, v, g)))).min(inner * 2 / 5);
     let age = widest(&|r| display_width(&age_text(r, v)));
     let room = inner.saturating_sub(3 + label + 2 + if age > 0 { 1 + age } else { 0 });
-    let tail = widest(&|r| display_width(&theme::strip_ctl(&r.path))).min(room);
-    Columns { label, tail, age }
+    Columns { label, tail: room, age }
 }
 
 /// One list row's text: project, cwd, or the free-path row. `cols`: the wide frame's columns.
@@ -347,19 +396,22 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let fw = frame::frame_width(v.width);
     let rows = project_rows(v.projects, v.filter, v.cwd);
     let footer = new_hint_footer(&footer_hints(v), &g, fw, !v.style.color);
-    let wide = v.width >= cockpit::TWO_COLUMNS;
-    let columns = v.width >= TWO_PANE_WIDTH;
+    // Beside the launch panel with the launch rows focused, the list stands alone in its column.
+    let wide = v.width >= cockpit::TWO_COLUMNS && v.home.is_none_or(|h| h.focus != HomeFocus::Launch);
+    // On the launch page the list keeps its name, path and age columns on every focus: a focus
+    // move never shifts a row.
+    let columns = v.width >= TWO_PANE_WIDTH || v.home.is_some();
     let page_rows = v.height.saturating_sub(1 + footer.lines.len()).max(8);
     let index = v.index.min(rows.len().saturating_sub(1));
+    if !wide && matches!(v.home.map(|h| h.focus), Some(HomeFocus::Sessions(_))) {
+        return sessions_page(v, rows.get(index), (fw, page_rows), &footer, &g);
+    }
     // AC27: the list takes every row of its panel, so the panel fills a tall terminal. The path of
     // the cursor's row (stacked; beside, the selected panel has it) and the action field close it.
     let list_lines = page_rows.saturating_sub(4).max(3);
     let (start, visible) = project_viewport(&rows, index, list_lines);
-    let lw = if wide {
-        list_width(rows.get(start..start + visible).unwrap_or_default(), fw, v, &g)
-    } else {
-        fw
-    };
+    let lw = list_panel_width(v, fw, wide);
+    let list_focused = v.home.is_none_or(|h| h.focus == HomeFocus::Projects);
     // Two cells free before the right border.
     let inner = lw.saturating_sub(4);
     let shown = rows.get(start..start + visible).unwrap_or_default();
@@ -376,7 +428,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let radio = action_radio(v.action, v.hover_value, inner, &g, true);
     body.resize(list_lines, String::new());
     let path = theme::strip_ctl(rows.get(index).map_or("", |r| r.path.as_str()));
-    body.push(if path.is_empty() || wide {
+    body.push(if path.is_empty() || wide || v.home.is_some() {
         String::new()
     } else {
         let line = format!("   {}", cockpit::dim(&limit_path(&path, inner.saturating_sub(4), v.style.ascii)));
@@ -385,10 +437,10 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let action = Some(action_hit(&radio, i32::try_from(1 + body.len()).unwrap_or(0), 0));
     body.push(radio.text);
     let list = Panel {
-        title: cockpit::identity(&g),
-        page: title(v, &g),
+        title: if list_focused { cockpit::identity(&g) } else { "projects".into() },
+        page: if list_focused { title(v, &g) } else { String::new() },
         right: String::new(),
-        focus: Focus::Focused,
+        focus: if list_focused { Focus::Focused } else { Focus::Plain },
         lines: body,
         width: lw,
         height: page_rows,
@@ -396,6 +448,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         selected,
     };
     let mut lines = cockpit::render(&list, v.style);
+    let mut side = None;
     if wide {
         let rw = fw - lw;
         let sel = rows.get(index);
@@ -406,8 +459,11 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
         let mut right = cockpit::render(&Panel::plain(&title, facts, rw, facts_h), v.style);
         let sessions_h = page_rows - facts_h;
         let listed = session_lines(sel, detail, v, rw - 2, sessions_h.saturating_sub(2), &g);
-        right.extend(cockpit::render(&Panel::plain("sessions", listed, rw, sessions_h), v.style));
+        right.extend(cockpit::render(&sessions_panel(listed, rw, sessions_h, v.home, &g), v.style));
         lines = cockpit::beside(lines, lw, &right);
+        if v.home.is_some() {
+            side = session_hits(detail, facts_h, sessions_h).map(|rows| (RowMap::panel_interior(lw, rw), rows));
+        }
     }
     let y = |n: usize| i32::try_from(1 + n).unwrap_or(i32::MAX);
     let mut map = RowMap {
@@ -418,6 +474,8 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
             row_ys: row_ys.iter().map(|r| y(*r)).collect(),
         }),
         action,
+        hit_x: RowMap::panel_interior(0, lw),
+        side: side.and_then(|(x, rows)| Some((x?, rows))),
         ..RowMap::default()
     };
     let light = FooterLight {
@@ -428,23 +486,29 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     Frame { lines, map }
 }
 
-/// The list panel beside the context: what its rows need (mark, name, the full path, age) and no
-/// more, at most 60 % of the frame; paths are cut only past that cap. Never narrower than the
-/// action field and the title need.
-fn list_width(shown: &[Row], fw: usize, v: &ProjectView<'_>, g: &Glyphs) -> usize {
-    let listed = || shown.iter().filter(|r| r.kind != RowKind::Path);
-    let label = listed()
-        .map(|r| display_width(&theme::strip_ctl(&label_text(r, v, g))))
-        .max()
-        .unwrap_or(0);
-    let path = listed().map(|r| display_width(&theme::strip_ctl(&r.path))).max().unwrap_or(0);
-    let age = listed().map(|r| display_width(&age_text(r, v))).max().unwrap_or(0);
-    let need = 4 + 3 + label + 2 + path + if age > 0 { 1 + age } else { 0 };
-    need.max(LIST_MIN_WIDTH).min(fw * 3 / 5)
+/// The selected project's sessions; on the launch page with the sessions focused, the identity
+/// and the selected row's fill.
+fn sessions_panel<'p>(lines: Vec<String>, width: usize, height: usize, home: Option<Home>, g: &Glyphs) -> Panel<'p> {
+    let mut p = Panel::plain("sessions", lines, width, height);
+    if let Some(Home {
+        focus: HomeFocus::Sessions(i),
+        ..
+    }) = home
+    {
+        p.title = cockpit::identity(g);
+        "sessions".clone_into(&mut p.page);
+        p.focus = Focus::Focused;
+        let at = i.min(p.lines.len().saturating_sub(1));
+        // The cursor mark as on every list: the fill alone is lost without colour.
+        if let Some(line) = p.lines.get_mut(at)
+            && let Some(rest) = line.strip_prefix("  ")
+        {
+            *line = format!(" {}{rest}", g.cursor);
+        }
+        p.selected = Some(at);
+    }
+    p
 }
-
-/// The action field and the counts in the title need this much.
-const LIST_MIN_WIDTH: usize = 64;
 
 /// The label column of the selected panel's facts.
 const FACT_LABEL: usize = 10;
@@ -484,6 +548,59 @@ fn selected_lines(r: Option<&Row>, d: Option<&Detail>, v: &ProjectView<'_>, inne
         out.push(fact("last", &format!("{}  {title}", cockpit::dim(&age))));
     }
     out
+}
+
+/// The list panel's width: beside the launch panel the workspace's left column; beside the
+/// selected project's facts and sessions the rest of the page, the facts keeping their column (under
+/// ~140 columns they give way to `FACTS_MIN`, as on the launch page); alone the whole frame.
+fn list_panel_width(v: &ProjectView<'_>, fw: usize, wide: bool) -> usize {
+    match v.home {
+        Some(h) if wide => h.left_width.min(fw),
+        _ if wide => {
+            fw - cockpit::FACTS_WIDTH
+                .min(fw.saturating_sub(LIST_MIN))
+                .max(cockpit::FACTS_MIN)
+                .min(fw / 2)
+        }
+        _ => fw,
+    }
+}
+
+/// The list's width before the facts beside it give way: a name, a path and an age.
+const LIST_MIN: usize = 74;
+
+/// The narrow page's sessions: the selected project's sessions panel alone, `fw` by `page_rows`.
+fn sessions_page(v: &ProjectView<'_>, sel: Option<&Row>, (fw, page_rows): (usize, usize), footer: &frame::Footer, g: &Glyphs) -> Frame {
+    let detail = v.detail.filter(|d| sel.is_some_and(|r| d.key == project_key(&r.path)));
+    let listed = session_lines(sel, detail, v, fw - 2, page_rows.saturating_sub(2), g);
+    let lines = cockpit::render(&sessions_panel(listed, fw, page_rows, v.home, g), v.style);
+    let mut map = RowMap {
+        hit_x: RowMap::panel_interior(0, fw),
+        side: session_hits(detail, 0, page_rows).and_then(|rows| Some((RowMap::panel_interior(0, fw)?, rows))),
+        ..RowMap::default()
+    };
+    let light = FooterLight {
+        hover: frame::footer_hover(footer, v.hover),
+        selected: Vec::new(),
+    };
+    let lines = frame::append_footer(lines, footer, fw, v.style, &light, &mut map);
+    Frame { lines, map }
+}
+
+/// The sessions panel's lines in the row map (`SESSION_ROW + i`) under the `facts_h` rows of the
+/// selected panel; `None` without a listed session.
+fn session_hits(d: Option<&Detail>, facts_h: usize, sessions_h: usize) -> Option<Vec<RowHit>> {
+    let n = d?.sessions.len().min(sessions_h.saturating_sub(2));
+    (n > 0).then(|| {
+        (0..n)
+            .map(|i| RowHit {
+                index: SESSION_ROW + i,
+                name: "session".to_owned(),
+                y: i32::try_from(facts_h + 1 + i).unwrap_or(0),
+                cells: Vec::new(),
+            })
+            .collect()
+    })
 }
 
 /// The selected project's newest sessions, as many as `rows` hold: title, age, a green dot on a

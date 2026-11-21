@@ -78,8 +78,11 @@ fn clock() -> i64 {
     10_000
 }
 
+/// The terminal the scripted runs draw on: wide enough for every footer button in one row.
+const SIZE: (usize, usize) = (160, 24);
+
 fn drive_with(ps: &[Project], cwd: &str, initial: &str, events: Vec<Event>, answer: &str) -> (Option<ProjectChoice>, Script) {
-    let mut t = Script::new((80, 24), events).answering(answer);
+    let mut t = Script::new(SIZE, events).answering(answer);
     let c = clock;
     let out = run_screen(&mut t, ps, Path::new(cwd), initial, Style { color: false, ascii: true }, &c, None).unwrap();
     (out, t)
@@ -94,7 +97,7 @@ fn opening_map(f: &Fx) -> crate::frame::RowMap {
     let c = clock;
     let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", Style { color: false, ascii: true }, &c);
     s.before();
-    s.draw((80, 24)).map
+    s.draw(SIZE).map
 }
 
 /// One launcher run's project screen over `config`: `hiddenProjects` and `pinnedProjects` read
@@ -119,7 +122,7 @@ fn run_events_with_config(f: &Fx, config: &str, events: Vec<Event>) -> Vec<Vec<S
 }
 
 fn run_hiding(f: &Fx, hiding: &Hiding<'_>, events: Vec<Event>) -> Vec<Vec<String>> {
-    let mut t = Script::new((80, 24), events);
+    let mut t = Script::new(SIZE, events);
     let c = clock;
     let style = Style { color: false, ascii: true };
     assert!(
@@ -145,7 +148,7 @@ fn opening_nav_row0(f: &Fx) -> i32 {
     s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
     s.nav.as_mut().unwrap().text = format!(r"{}\root\x", f.tree.0.display());
     s.before();
-    s.draw((80, 24)).map.list.unwrap().first_row_y
+    s.draw(SIZE).map.list.unwrap().first_row_y
 }
 
 /// The hover rule over the project screen at both layouts: list rows, the action values, buttons.
@@ -163,6 +166,49 @@ fn every_clickable_region_of_the_project_screen_hovers_and_never_selects() {
     s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
     s.nav.as_mut().unwrap().text = format!(r"{}\root\", f.tree.0.display());
     assert_every_region_hovers(&mut s, (130, 40));
+}
+
+/// Every footer hint of the project list is alive at every size; the filter shows what is typed
+/// beside a title full of counts.
+#[test]
+fn every_project_hint_is_alive() {
+    use crate::ui::screen_loop::hover_walk::assert_every_hint_is_alive;
+    let f = fx();
+    let c = clock;
+    let saves = std::cell::Cell::new(0);
+    let save = |_: &str, _: HideChange| -> Result<(), String> {
+        saves.set(saves.get() + 1);
+        Ok(())
+    };
+    let hiding = Hiding {
+        paths: RefCell::new(vec![f.beta.clone()]),
+        pinned: RefCell::new(vec![f.alpha.clone()]),
+        save: &save,
+    };
+    let color = Style { color: true, ascii: false };
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut make = || ProjectScreen::new(&f.projects, &f.cwd, "new", color, &c).with_hiding(Some(&hiding));
+        assert_every_hint_is_alive(&mut make, size, &|| saves.get());
+    }
+}
+
+/// The click rule over the project list and the navigator at every size: one click only
+/// selects, a click on no target (a border, the context column, past the frame) changes nothing.
+#[test]
+fn a_first_click_only_selects_and_a_stray_click_does_nothing_on_the_project_screen() {
+    use crate::ui::screen_loop::hover_walk::{assert_first_click_never_acts, assert_no_stray_click_acts};
+    let f = fx();
+    let c = clock;
+    let color = Style { color: true, ascii: false };
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut s = ProjectScreen::new(&f.projects, &f.cwd, "new", color, &c);
+        assert_no_stray_click_acts(&mut s, size);
+        assert_first_click_never_acts(&mut s, size);
+        s.nav = Some(Navigator::new(list_dirs, NETWORK_LIMIT));
+        s.nav.as_mut().unwrap().text = format!(r"{}\root\", f.tree.0.display());
+        assert_no_stray_click_acts(&mut s, size);
+        assert_first_click_never_acts(&mut s, size);
+    }
 }
 
 /// In place (preview) the selected row's detail comes with the frame; a moved cursor asks again.
@@ -185,6 +231,7 @@ fn the_context_follows_the_cursor() {
 }
 
 mod hide;
+mod home;
 mod keys;
 mod mouse;
 mod nav;

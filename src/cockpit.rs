@@ -10,9 +10,13 @@ use crate::theme::{self, Glyphs};
 pub const LEFT_WIDTH: usize = 82;
 pub const MAINTENANCE_LEFT_WIDTH: usize = 50;
 pub const SESSIONS_LEFT_WIDTH: usize = 62;
-/// A facts column beside a list (launch: limits, running, Claude Code): what `fable (1 d ago)  24%`
-/// needs with its padding, at every width; the list column takes the rest.
-pub const FACTS_WIDTH: usize = 46;
+/// A facts or status column beside a list (limits, running, Claude Code, the selected project and its
+/// sessions): one fixed width at every page width; the list column takes the rest.
+pub const FACTS_WIDTH: usize = 60;
+
+/// The narrowest the facts column gives way to on a page whose launch rows need the room: what
+/// `fable (1 d ago)  24%` needs with its padding.
+pub const FACTS_MIN: usize = 46;
 /// Under this many columns the columns stack.
 pub const TWO_COLUMNS: usize = 120;
 

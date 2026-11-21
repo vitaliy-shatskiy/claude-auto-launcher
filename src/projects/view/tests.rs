@@ -55,6 +55,7 @@ fn view<'a>(ps: &'a [Project], index: usize, cwd: &'a str, w: usize, h: usize) -
         hover_row: -1,
         hover_value: "",
         detail: None,
+        home: None,
     }
 }
 
@@ -155,6 +156,7 @@ fn sample_detail(path: &str) -> Detail {
         title: title.into(),
         modified_ms: NOW - ago,
         live,
+        session_id: format!("id-{title}"),
     };
     Detail {
         key: project_key(path),
@@ -200,7 +202,11 @@ fn the_list_takes_what_its_rows_need_and_the_context_the_rest() {
     let corner = lines[0].chars().position(|c| c == '\u{256E}').unwrap() + 1;
     let longest = r"C:\Users\sample\Desktop\Projects\gamma.worktrees\feature";
     assert!(lines.iter().any(|l| l.contains(longest)), "the full path, never cut under the cap");
-    assert!(corner < 280 * 3 / 5, "the list panel ends at its content: {corner}");
+    assert_eq!(
+        corner,
+        279 - crate::cockpit::FACTS_WIDTH,
+        "the context keeps its width, the list the rest"
+    );
     let right = |l: &String| l.chars().skip(corner).collect::<String>();
     assert!(right(&lines[0]).contains("selected \u{b7} alpha"));
     for want in [
@@ -293,7 +299,7 @@ fn task6_rows_map_footer_and_cwd_path() {
         "current directory",
         "enter a path",
         "continue",
-        "[t] worktree",
+        "worktree",
         r"C:\somewhere",
     ] {
         assert!(t.contains(s), "{s}");
@@ -323,8 +329,8 @@ fn a_scrolled_list_maps_its_real_start() {
     let ps = many(30, "scrollproj");
     let f = project_frame(&view(&ps, 29, r"C:\somewhere", 78, 24));
     let l = f.map.list.unwrap();
-    // 0.9.0: the footer's `p` button takes a third footer line at 78 columns, one list row less.
-    assert_eq!((l.first_row_y, l.row_count, l.start), (1, 15, 17));
+    // The footer is one row at every width: the list keeps the rows above it.
+    assert_eq!((l.first_row_y, l.row_count, l.start), (1, 17, 15));
 }
 
 #[test]
@@ -421,32 +427,36 @@ fn action_field_radio_cells_and_compact_form() {
     let f80 = project_frame(&view(&ps, 0, r"C:\cwd", 80, 24));
     assert!(
         text(&f80).contains("a/d \u{2190}/\u{2192} action") && text(&f80).contains("[esc] back"),
-        "a footer too wide keeps its buttons and the kept hints"
+        "a footer too narrow for every button keeps the move and switch hints"
     );
-    assert_eq!(f80.map.footer_lines, 3, "0.9.0: the p button wraps the footer to a third line");
+    assert_eq!(f80.map.footer_lines, 1, "the footer never wraps");
 }
 
-/// Item 5: w/s and a/d survive every width from 78 to 120, beside every button.
+/// Item 5: w/s, a/d, enter, the filter and esc survive every width from 78 up in one footer row;
+/// the other buttons drop, the last listed first, and all of them show where they fit.
 #[test]
 fn the_move_and_action_hints_survive_78_to_120_columns() {
     let ps = vec![proj("A", r"C:\w\alpha", "alpha")];
-    for w in [78, 100, 120] {
+    for w in [78, 100, 120, 160] {
         let f = project_frame(&view(&ps, 0, r"C:\cwd", w, 24));
         let fy = usize::try_from(f.map.footer_y.unwrap()).unwrap();
-        let footer = f.lines[fy..].join("\n");
+        assert_eq!(f.map.footer_lines, 1, "{w}: one footer row");
+        let footer = &f.lines[fy];
         for hint in [
             "w/s move",
             "a/d \u{2190}/\u{2192} action",
             "[enter] run",
-            "[c] continue",
             "[/] filter",
-            "[h] hide",
-            "[v] hidden",
             "[esc] back",
         ] {
             assert!(footer.contains(hint), "{w}: {hint} in\n{footer}");
         }
         assert!(f.lines.iter().all(|l| display_width(l) < w), "{w}: fits");
+    }
+    let wide = project_frame(&view(&ps, 0, r"C:\cwd", 200, 24));
+    let footer = &wide.lines[usize::try_from(wide.map.footer_y.unwrap()).unwrap()];
+    for hint in ["[c] continue", "[p] pin", "[h] hide", "[v] hidden"] {
+        assert!(footer.contains(hint), "200: {hint} in\n{footer}");
     }
 }
 
@@ -480,7 +490,7 @@ fn the_footer_follows_filter_kept_filter_and_hidden_view() {
     assert!(kept.contains("[esc] clear") && kept.contains("[/] filter"), "{kept}");
     let (hidden, _) = footer(ProjectView {
         show_hidden: true,
-        ..view(&ps, 0, r"C:\cwd", 78, 24)
+        ..view(&ps, 0, r"C:\cwd", 200, 24)
     });
     assert!(hidden.contains("[v] back") && !hidden.contains("[v] hidden"), "{hidden}");
 }
@@ -521,12 +531,12 @@ fn footer_lights_the_selected_action_and_the_hover() {
     let r = project_frame(&ProjectView {
         action: "resume",
         style: color,
-        ..view(&ps, 0, r"C:\cwd", 80, 24)
+        ..view(&ps, 0, r"C:\cwd", 200, 24)
     });
     assert!(text(&r).contains(&lit));
     let n = project_frame(&ProjectView {
         style: color,
-        ..view(&ps, 0, r"C:\cwd", 80, 24)
+        ..view(&ps, 0, r"C:\cwd", 200, 24)
     });
     assert!(
         !text(&n).contains(&format!("{}{}", theme::ACCENT_BG, theme::ACCENT_FG)),
@@ -536,7 +546,7 @@ fn footer_lights_the_selected_action_and_the_hover() {
     let h = project_frame(&ProjectView {
         style: color,
         hover: c_index,
-        ..view(&ps, 0, r"C:\cwd", 100, 24)
+        ..view(&ps, 0, r"C:\cwd", 200, 24)
     });
     let fy = usize::try_from(h.map.footer_y.unwrap()).unwrap();
     assert!(h.lines[fy].contains(theme::ACCENT_BG));

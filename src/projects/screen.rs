@@ -57,7 +57,8 @@ const SHOW_HIDDEN_KEY: char = 'v';
 
 /// The project screen's own state; the loop's cursor carries the index and the hover.
 pub(crate) struct ProjectScreen<'a> {
-    projects: &'a [Project],
+    /// Owned: the launch page's projects panel holds the screen beside the list it loaded.
+    projects: Vec<Project>,
     hiding: Option<&'a Hiding<'a>>,
     show_hidden: bool,
     /// `projects` as listed: hand-hidden ones hidden, or every one shown in the show-hidden view.
@@ -91,6 +92,8 @@ pub(crate) struct ProjectScreen<'a> {
     /// Where the selected project's sessions come from; None draws the context as loading.
     details: Option<DetailSource>,
     detail: Option<Detail>,
+    /// Set while the launch page holds the screen as its projects panel.
+    pub(crate) home: Option<super::view::Home>,
 }
 
 impl std::fmt::Debug for ProjectScreen<'_> {
@@ -104,11 +107,11 @@ impl std::fmt::Debug for ProjectScreen<'_> {
 }
 
 impl<'a> ProjectScreen<'a> {
-    pub(crate) fn new(projects: &'a [Project], cwd: &str, initial_action: &str, style: Style, clock: &'a dyn Fn() -> i64) -> Self {
+    pub(crate) fn new(projects: &[Project], cwd: &str, initial_action: &str, style: Style, clock: &'a dyn Fn() -> i64) -> Self {
         let mut hotkeys = vec!['/', SHOW_HIDDEN_KEY];
         hotkeys.extend(LAUNCH_MODES.iter().filter_map(|m| m.hotkey));
         Self {
-            projects,
+            projects: projects.to_vec(),
             hiding: None,
             show_hidden: false,
             view: projects.to_vec(),
@@ -134,6 +137,7 @@ impl<'a> ProjectScreen<'a> {
             preview: false,
             details: None,
             detail: None,
+            home: None,
         }
     }
 
@@ -250,6 +254,7 @@ impl Screen for ProjectScreen<'_> {
             hover_row: self.cursor.hover_row,
             hover_value: &self.cursor.hover_value,
             detail: self.detail.as_ref(),
+            home: self.home,
         })
     }
 
@@ -404,7 +409,7 @@ impl Screen for ProjectScreen<'_> {
 
     /// A second click on the row a click selected is Enter's gesture, but never the create
     /// question's yes: a click while it shows only drops it.
-    fn activate(&mut self, _hit: &Hit) -> Option<Flow<ProjectChoice>> {
+    fn activate(&mut self, _hit: &Hit, _term: &mut dyn Term) -> Option<Flow<ProjectChoice>> {
         if self.drop_question() {
             return Some(Flow::Continue);
         }

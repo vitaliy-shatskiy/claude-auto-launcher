@@ -482,12 +482,24 @@ impl Screen for MaintScreen<'_> {
         Some(i32::try_from(self.page.entries.len().max(1)).unwrap_or(1))
     }
 
-    /// A click selects a row; enter or its key runs it.
+    /// A click selects a row; enter, its key or a second click on it runs it.
     fn click(&mut self, hit: &Hit) -> Flow<()> {
         if let Hit::LaunchRow { row, .. } = hit {
             self.cursor.index = i32::try_from(*row).unwrap_or(0);
         }
         Flow::Continue
+    }
+
+    /// The second click on the selected row is its key: the same confirm bookkeeping.
+    fn activate(&mut self, hit: &Hit, term: &mut dyn Term) -> Option<Flow<()>> {
+        let Hit::LaunchRow { row, .. } = hit else { return None };
+        if *row != self.page.selected {
+            return None;
+        }
+        let key = self.page.entries.get(*row)?.key;
+        let (was_pending, armed_at) = (self.pending.take(), self.pending_at.take());
+        self.press_checked(key, term, was_pending, armed_at);
+        Some(Flow::Continue)
     }
 
     /// Every key passes here first: the confirm bookkeeping, then Enter on the selected row, then

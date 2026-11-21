@@ -167,7 +167,6 @@ fn a_tab_switch_then_a_neutral_cwd_starts_in_the_arriving_tabs_remembered_projec
         default_model_label: "default".into(),
         default_advisor_label: "default".into(),
         labels_by_account: std::collections::BTreeMap::new(),
-        recent: Vec::new(),
         running: Vec::new(),
         mcp: String::new(),
         style: crate::frame::Style { color: false, ascii: true },

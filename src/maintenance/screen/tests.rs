@@ -71,12 +71,12 @@ fn count(lines: &[String], needle: &str) -> usize {
 }
 
 #[test]
-fn the_header_spans_the_width_and_the_page_ends_at_its_content() {
+fn the_header_spans_the_width_and_the_page_ends_at_its_footer() {
     let f = draw(&page_of(info(true, Some("A"), Some("A")), "", &[]), (80, 24));
     assert_eq!(widest(&f.lines), frame_width(80));
     assert!(f.lines[0].contains("claude-auto \u{2500} maintenance"), "{}", f.lines[0]);
     assert_eq!(count(&f.lines, "Claude Code  2.1.230 \u{b7} newest"), 1, "{:#?}", f.lines);
-    assert!(f.lines.len() < 23, "content height, nothing pads to the bottom: {}", f.lines.len());
+    assert_eq!(f.lines.len(), 23, "the panels run to the footer (AC27)");
     assert!(f.lines.last().unwrap().contains("[esc] back"));
 }
 
@@ -513,12 +513,6 @@ fn every_clickable_region_hovers_and_never_selects() {
         default_model_label: "default".into(),
         default_advisor_label: "default".into(),
         labels_by_account: BTreeMap::new(),
-        recent: vec![crate::launch::frame::RecentProject {
-            name: "alpha".into(),
-            path: r"C:\w\alpha".into(),
-            age: "3 min".into(),
-            ..Default::default()
-        }],
         running: Vec::new(),
         mcp: String::new(),
         style: color,
@@ -528,6 +522,99 @@ fn every_clickable_region_hovers_and_never_selects() {
     let st = roster.new_state();
     let mut launch = crate::launch::screen::LaunchScreen::new(&mut roster, st, &view, &prefs, 0, &mut hook);
     assert_every_region_hovers(&mut launch, (130, 45));
+}
+
+fn launch_view(color: Style) -> crate::launch::screen::LaunchView {
+    crate::launch::screen::LaunchView {
+        limits: crate::types::Limits::new(),
+        version: VersionInfo::default(),
+        default_model_label: "default".into(),
+        default_advisor_label: "default".into(),
+        labels_by_account: BTreeMap::new(),
+        running: Vec::new(),
+        mcp: String::new(),
+        style: color,
+    }
+}
+
+/// Every footer hint of maintenance, the rows editor and the launch screen is alive at every size.
+#[test]
+fn every_compact_screen_hint_is_alive() {
+    use crate::ui::screen_loop::hover_walk::assert_every_hint_is_alive;
+    let color = Style { color: true, ascii: false };
+    let actions = reindex();
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut make = || {
+            let ops = Box::leak(Box::new(FakeOps {
+                log: Rc::new(RefCell::new(Log::default())),
+                exit_code: 0,
+            }));
+            MaintScreen::new(ops, &actions, color)
+        };
+        assert_every_hint_is_alive(&mut make, size, &|| 0);
+        let mut make = || {
+            let mut r = RowsEditor::new(
+                &RowsConfig {
+                    rows: Some(vec![RowName::Account, RowName::Effort, RowName::Mode]),
+                    ..RowsConfig::default()
+                },
+                color,
+            );
+            *r.cursor() = Cursor::at(1);
+            r
+        };
+        assert_every_hint_is_alive(&mut make, size, &|| 0);
+        let opened: &'static std::cell::Cell<usize> = Box::leak(Box::new(std::cell::Cell::new(0)));
+        let view: &'static _ = Box::leak(Box::new(launch_view(color)));
+        let prefs: &'static _ = Box::leak(Box::new(crate::prefs::Prefs::default()));
+        // A launch screen borrows its roster and hook mutably: each hint gets fresh ones (leaked,
+        // a test's few bytes).
+        let mut make = || {
+            let roster = Box::leak(Box::new(crate::launch::tests::four()));
+            let hook: &'static mut crate::launch::screen::OnKey<'static> = Box::leak(Box::new(|k: &KeyPress, _: &mut dyn Term| {
+                let hit = crate::input::is_hotkey(k, 'u');
+                opened.set(opened.get() + usize::from(hit));
+                hit
+            }));
+            let st = roster.new_state();
+            crate::launch::screen::LaunchScreen::new(roster, st, view, prefs, 0, hook)
+        };
+        assert_every_hint_is_alive(&mut make, size, &|| opened.get());
+    }
+}
+
+/// The click rule over every compact screen at every size: a first click only selects, a click
+/// on no target (a border, the column beside, past the frame) changes nothing.
+#[test]
+fn a_first_click_only_selects_and_a_stray_click_does_nothing() {
+    use crate::ui::screen_loop::hover_walk::{assert_first_click_never_acts, assert_no_stray_click_acts};
+    let color = Style { color: true, ascii: false };
+    for size in [(80, 24), (120, 30), (211, 52), (280, 72)] {
+        let mut ops = FakeOps {
+            log: Rc::new(RefCell::new(Log::default())),
+            exit_code: 0,
+        };
+        let actions = reindex();
+        let mut m = MaintScreen::new(&mut ops, &actions, color);
+        assert_no_stray_click_acts(&mut m, size);
+        let mut rows = RowsEditor::new(
+            &RowsConfig {
+                rows: Some(vec![RowName::Account, RowName::Effort]),
+                ..RowsConfig::default()
+            },
+            color,
+        );
+        assert_no_stray_click_acts(&mut rows, size);
+        assert_first_click_never_acts(&mut rows, size);
+        let mut roster = crate::launch::tests::four();
+        let view = launch_view(color);
+        let prefs = crate::prefs::Prefs::default();
+        let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
+        let st = roster.new_state();
+        let mut launch = crate::launch::screen::LaunchScreen::new(&mut roster, st, &view, &prefs, 0, &mut hook);
+        assert_no_stray_click_acts(&mut launch, size);
+        assert_first_click_never_acts(&mut launch, size);
+    }
 }
 
 #[test]
@@ -831,6 +918,60 @@ fn a_click_selects_a_row_and_enter_runs_it() {
 }
 
 #[test]
+fn beside_the_rows_a_wide_page_shows_what_the_selected_action_does_and_how_to_run_it() {
+    let mut ops = FakeOps {
+        log: Rc::new(RefCell::new(Log::default())),
+        exit_code: 0,
+    };
+    let actions = reindex();
+    let mut m = MaintScreen::new(
+        &mut ops,
+        &actions,
+        Style {
+            color: false,
+            ascii: false,
+        },
+    );
+    let text = |m: &mut MaintScreen<'_>, at: i32| {
+        *m.cursor() = Cursor::at(at);
+        m.before();
+        m.draw((211, 52)).lines.join("\n")
+    };
+    let first = text(&mut m, 0);
+    assert!(
+        first.contains("─ update ─") && first.contains("downloads the newest Claude Code"),
+        "{first}"
+    );
+    assert!(first.contains("enter  or  u  runs it"), "{first}");
+    let doctor = m.page.entries.iter().position(|e| e.key == 'd').unwrap();
+    let d = text(&mut m, i32::try_from(doctor).unwrap());
+    assert!(d.contains("runs claude doctor") && d.contains("enter  or  d  runs it"), "{d}");
+    let narrow = {
+        *m.cursor() = Cursor::at(0);
+        m.before();
+        m.draw((100, 30)).lines.join("\n")
+    };
+    assert!(!narrow.contains("runs it"), "stacked, the details stay off the page: {narrow}");
+}
+
+#[test]
+fn a_second_click_on_the_selected_row_runs_it_and_a_click_on_another_only_selects() {
+    let m = map_at((100, 24), &[]);
+    let d = m.rows.iter().find(|r| r.name == "d").unwrap();
+    let other = m.rows.iter().find(|r| r.name != "d").unwrap();
+    let (log, status, ..) = go(vec![click(4, d.y, false), click(4, d.y, false), esc()], &[], vec![], 0, (100, 24));
+    assert_eq!(log.doctor, 1, "{status}");
+    let (log, ..) = go(
+        vec![click(4, other.y, false), click(4, d.y, false), esc()],
+        &[],
+        vec![],
+        0,
+        (100, 24),
+    );
+    assert_eq!(log.doctor, 0, "the first click on a row only selects it");
+}
+
+#[test]
 fn w_and_s_move_the_selection_when_no_row_owns_them() {
     let enter = || Event::Key(KeyPress::named(vk::ENTER));
     // Rows: u, r, p, d - three moves down land on doctor.
@@ -1051,4 +1192,23 @@ fn the_running_frame_keeps_the_launcher_rows() {
     assert_eq!(run(&mut s, &mut t), Err(UiStop::KeysExhausted));
     let running = t.frames.iter().find(|f| f.contains("updating")).unwrap();
     assert!(running.contains("update claude-auto to 9.9.9"), "{running}");
+}
+
+/// AC27: at every size the panels run to the footer row; nothing is left blank under them.
+#[test]
+fn the_panels_run_to_the_footer_at_every_size() {
+    for status in ["", "doctor: all good"] {
+        let p = page_of(info(true, Some("A"), Some("A")), status, &[]);
+        for size in [(80, 24), (100, 30), (120, 30), (160, 45), (211, 52), (280, 72)] {
+            let f = draw(&p, size);
+            let fy = usize::try_from(f.map.footer_y.unwrap()).unwrap();
+            assert_eq!(fy, size.1 - 2, "{size:?}: the footer sits on the last row: {:#?}", f.lines);
+            let above = &f.lines[fy - 1];
+            assert!(
+                above.starts_with('\u{2570}'),
+                "{size:?}: a panel closes right above the footer: {above}"
+            );
+            assert_eq!(display_width(above), size.0 - 1, "{size:?}: every column closes there: {above}");
+        }
+    }
 }

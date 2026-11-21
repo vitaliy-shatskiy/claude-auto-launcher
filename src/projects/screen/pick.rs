@@ -26,7 +26,7 @@ impl ProjectScreen<'_> {
         }
         let target = row.path.clone();
         let slugs = if row.kind == RowKind::Cwd {
-            slugs_for_path(self.projects, &target)
+            slugs_for_path(&self.projects, &target)
         } else {
             row.slugs.clone()
         };
@@ -45,7 +45,7 @@ impl ProjectScreen<'_> {
         let NavStep::Pick(path) = nav.enter(index) else {
             return Flow::Continue;
         };
-        let slugs = slugs_for_path(self.projects, &path);
+        let slugs = slugs_for_path(&self.projects, &path);
         Flow::Done(Some(choice(path, &self.action, how, slugs)))
     }
 
@@ -67,6 +67,32 @@ impl ProjectScreen<'_> {
             nav.type_char(key.ch);
         }
         true
+    }
+
+    /// The selected project's sessions once its detail is in (the launch page's sessions panel).
+    pub(crate) fn sessions(&self) -> &[crate::projects::detail::SessionLine] {
+        let at = usize::try_from(self.cursor.index).ok().and_then(|i| self.rows.get(i));
+        match (at, self.detail.as_ref()) {
+            (Some(r), Some(d)) if r.kind != RowKind::Path && d.key == crate::projects::paths::project_key(&r.path) => &d.sessions,
+            _ => &[],
+        }
+    }
+
+    /// Whether the list is in a state of its own (a typed filter, the navigator) that Tab and Esc
+    /// belong to.
+    pub(crate) fn busy(&self) -> bool {
+        self.cursor.typing || self.nav.is_some()
+    }
+
+    /// The selected project as a resume pick: what the launch page's sessions panel continues.
+    pub(crate) fn resume_here(&mut self, how: &str) -> Option<ProjectChoice> {
+        let keep = std::mem::replace(&mut self.action, "resume".to_owned());
+        let flow = self.commit(how);
+        self.action = keep;
+        match flow {
+            Flow::Done(Some(c)) => Some(c),
+            Flow::Done(None) | Flow::Continue => None,
+        }
     }
 
     /// The create question takes a deliberate yes (Enter or its footer button); a click or a

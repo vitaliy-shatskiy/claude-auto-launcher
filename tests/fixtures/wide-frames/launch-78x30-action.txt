@@ -2,8 +2,8 @@
 │ ❯ account      [work] ┊ personal ┊ low                                    │
 │   remote       ● [on] ○ off ○ on+QR ○ stop server                         │
 │   action       ● [new] ○ project ○ continue ○ resume ○ worktree           │
-│   model        ‹ default ›                                                │
-│   effort       ‹ default ›                                                │
+│   model        ● [default]  +4                                            │
+│   effort       ● [default]  +6                                            │
 │   advisor      ● [default] ○ fable ○ opus ○ off                           │
 │   permission   ● [default] ○ plan ○ auto ○ acceptEdits ○ bypass           │
 │   mode         ● [normal] ○ safe                                          │
@@ -11,9 +11,19 @@
 ╭─ limits · work ───────────────────────────────────────────────────────────╮
 │  no data yet                                                              │
 │  fills in after the first session                                         │
-╰───────────────────────────────────────────────────────────────────────────╯
-╭─ recent ──────────────────────────────────────────────────────────────────╮
-│  no recent projects yet                                                   │
-│  enter opens the project list                                             │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
+│                                                                           │
 ╰───────────────────────────────────────────────────────────────────────────╯
   w/s row  ┊  a/d switch  ┊  [enter] next  ┊  [u] maint  ┊  [esc] quit

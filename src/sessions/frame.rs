@@ -78,6 +78,8 @@ pub struct PickerView<'a> {
     pub sessions: &'a [&'a Session],
     pub index: usize,
     pub filter: &'a str,
+    /// The filter box is open: the title shows it with its cursor even while empty.
+    pub typing: bool,
     pub width: usize,
     pub height: usize,
     pub clock: Clock,
@@ -218,6 +220,10 @@ fn picker_footer(scope: PickerScope, g: &Glyphs, width: usize, plain: bool) -> F
 
 fn picker_title(v: &PickerView<'_>, shown: usize, hidden: usize, headless: usize, h: char) -> String {
     let mut parts = vec!["resume".to_owned()];
+    // The filter leads: a narrow sessions panel cuts the title's tail, never what is typed.
+    if !v.filter.is_empty() || v.typing {
+        parts.push(format!("filter: {}{}", clean_text(v.filter), if v.typing { "_" } else { "" }));
+    }
     if v.scope == PickerScope::Project {
         parts.push(if v.project_name.is_empty() {
             "this project".to_owned()
@@ -231,9 +237,6 @@ fn picker_title(v: &PickerView<'_>, shown: usize, hidden: usize, headless: usize
     }
     if headless > 0 {
         parts.push(format!("{headless} headless hidden"));
-    }
-    if !v.filter.is_empty() {
-        parts.push(format!("filter: {}", clean_text(v.filter)));
     }
     parts.join(&format!(" {h} "))
 }
@@ -396,6 +399,14 @@ fn empty_built(message: String, title: String, footer: Footer, (fw, body_rows): 
     }
 }
 
+/// The chat panel at its widest: the 110-cell message text, its insets and the borders.
+const CHAT_PANEL: usize = 118;
+
+/// The sessions list's width beside the chat: every cell the chat's 118 leave, at least 62.
+fn sessions_width(fw: usize) -> usize {
+    fw.saturating_sub(CHAT_PANEL).max(cockpit::SESSIONS_LEFT_WIDTH)
+}
+
 fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let ascii = v.style.ascii;
     let resumable_rows: Vec<&Session> = v.sessions.iter().copied().filter(|s| resumable(s)).collect();
@@ -408,8 +419,8 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     let body_rows = body_rows(v.height, &footer);
     let paint = painter();
     let wide = v.width >= cockpit::TWO_COLUMNS && !items.is_empty();
-    let lw = if wide { cockpit::SESSIONS_LEFT_WIDTH } else { fw };
-    // Ages end 2 cells before the border (a row keeps one trailing space).
+    let lw = if wide { sessions_width(fw) } else { fw };
+    // Ages end 2 cells before the border (a row keeps one trailing space); titles take the width.
     let row_width = lw.saturating_sub(3);
     if items.is_empty() {
         return empty_built(
@@ -449,6 +460,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
     // AC27: the panels always fill the terminal; the list pads to the full body height.
     list.resize(list_rows, String::new());
     let (lines, right, body) = if wide {
+        // The chat is as wide as its 110-cell text and insets; past it the terminal stays background.
         let rw = fw - lw;
         let detail: Vec<String> = pv
             .card(rw.saturating_sub(4), body_rows, v.scope, v.chat)
@@ -489,6 +501,7 @@ fn build(v: &PickerView<'_>, g: &Glyphs, fw: usize) -> Built {
                 start: to_i(start),
                 row_ys: Vec::new(),
             }),
+            hit_x: RowMap::panel_interior(0, lw),
             ..RowMap::default()
         },
         selected: to_i(index),

@@ -16,6 +16,8 @@ const LIMIT: usize = 60;
 /// One session of the selected project.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SessionLine {
+    /// What a resume from the launch page's sessions panel hands the launch.
+    pub session_id: String,
     pub title: String,
     pub modified_ms: i64,
     /// A running Claude Code has it open.
@@ -93,6 +95,7 @@ fn load(stores: &Stores, ask: &Ask, live: &dyn Fn(&[PathBuf]) -> HashSet<String>
         })
         .map(|s| SessionLine {
             live: ids.contains(&s.session_id),
+            session_id: s.session_id,
             title: s.title,
             modified_ms: s.modified_ms,
         })

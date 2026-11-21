@@ -11,6 +11,7 @@ use crate::frame::{
     new_hint_footer, new_radio_row,
 };
 use crate::layout::{self, display_width};
+use crate::projects::view::{Home, HomeFocus};
 use crate::theme::{self, Glyphs};
 use crate::types::{DefaultLabels, LimitRecord, Limits, VersionInfo};
 
@@ -32,10 +33,9 @@ pub struct LaunchFrameInput<'a> {
     pub notice: Option<&'a str>,
     /// How many warnings maintenance holds: the footer's badge.
     pub warnings: usize,
-    /// Newest first; keys 1-5 continue the first five.
-    pub recent: &'a [RecentProject],
-    /// The registry is still being read: the empty recent panel says so instead of "none yet".
-    pub recent_loading: bool,
+    /// The project list and its sessions: panels beside the launch panel on a wide page, pages
+    /// after it on a narrow one; `None` while the registry is still being read.
+    pub(crate) home: Option<HomePanel<'a>>,
     pub running: &'a [RunningSession],
     /// The last maintenance MCP check (`2 of 2 · 3 h ago`), empty when unknown: never run here.
     pub mcp: &'a str,
@@ -43,21 +43,6 @@ pub struct LaunchFrameInput<'a> {
 
 fn pad_right(s: &str, width: usize) -> String {
     format!("{s:<width$}")
-}
-
-/// A recent project on the launch page: keys 1-5 continue its newest session.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RecentProject {
-    pub name: String,
-    pub path: String,
-    /// The slug of its newest activity and every slug of the directory, as the project screen
-    /// hands them to the launch.
-    pub slug: String,
-    pub slugs: Vec<String>,
-    /// `3 min`, `2 d`: how long ago its newest session ran.
-    pub age: String,
-    /// Its newest session's title from the summary cache; empty when none is cached.
-    pub last: String,
 }
 
 /// A running Claude Code session.
@@ -107,11 +92,20 @@ fn limit_lines(l: Option<&LimitRecord>, inner: usize, one_line: bool) -> (Vec<St
             String::new(),
         );
     }
+    // Values follow a label column (the longest label and two cells), as the selected panel's facts.
+    let shown: Vec<(&String, i64)> = shown.collect();
+    let label_w = shown
+        .iter()
+        .map(|(k, _)| display_width(k))
+        .max()
+        .unwrap_or(0)
+        .min(inner.saturating_sub(10));
     let lines = shown
+        .iter()
         .map(|(k, p)| {
-            let tone = tone_of(p);
-            let left = format!("  {}", cockpit::dim(&layout::limit_line(k, inner.saturating_sub(10), false)));
-            cockpit::spread(&left, &theme::tone(tone, &format!("{p}%")), inner.saturating_sub(2))
+            let label = layout::limit_line(k, label_w, false);
+            let pad = " ".repeat(label_w.saturating_sub(display_width(&label)) + 2);
+            format!("  {}{pad}{}", cockpit::dim(&label), theme::tone(tone_of(*p), &format!("{p:>3}%")))
         })
         .collect();
     let age = if l.age_text.is_empty() {
@@ -132,51 +126,12 @@ fn pin_last(mut lines: Vec<String>, last: String, height: usize) -> Vec<String> 
     lines
 }
 
-/// The widest a recent row is laid out (the chat's 110-cell text and its insets).
-const RECENT_TEXT: usize = 114;
-
-/// Recent projects: key, name and age, the last session's title dim under it; one line each when
-/// `two_line` is off.
-fn recent_lines(inp: &LaunchFrameInput<'_>, inner: usize, rows: usize, two_line: bool, hover: Option<usize>) -> Vec<String> {
-    let (recent, ascii) = (inp.recent, inp.style.ascii);
-    if recent.is_empty() && inp.recent_loading {
-        return vec![format!(
-            "  {}",
-            cockpit::dim(&format!("loading recent projects{}", layout::ellipsis(ascii)))
-        )];
-    }
-    if recent.is_empty() {
-        return vec![
-            format!("  {}", cockpit::dim("no recent projects yet")),
-            format!("  {}", theme::tone(theme::TONE_FAINT, "enter opens the project list")),
-        ];
-    }
-    let per = if two_line { 2 } else { 1 };
-    // On a wide page the age stays near its name: rows are laid out in at most RECENT_TEXT cells.
-    let inner = inner.min(RECENT_TEXT);
-    let mut out = Vec::new();
-    for (i, p) in recent.iter().take((rows / per).min(5)).enumerate() {
-        let age = cockpit::dim(&p.age);
-        let room = inner.saturating_sub(5 + display_width(&p.age) + 4);
-        let name = layout::limit_line(&p.name, room, ascii);
-        let name = if hover == Some(i) {
-            theme::add_hover_span(&name)
-        } else if i == 0 {
-            theme::tone(theme::TONE_STRONG, &name)
-        } else {
-            name
-        };
-        let left = format!("  {}  {name}", theme::tone(theme::TONE_ACCENT, &(i + 1).to_string()));
-        out.push(cockpit::spread(&left, &age, inner.saturating_sub(2)));
-        // The newest session's title; none cached yet leaves the line blank (the row keeps its rhythm).
-        if two_line {
-            out.push(format!(
-                "     {}",
-                cockpit::dim(&layout::limit_line(&p.last, inner.saturating_sub(7), ascii))
-            ));
-        }
-    }
-    out
+/// The projects panel while the registry is still being read.
+fn loading_lines(ascii: bool) -> Vec<String> {
+    vec![format!(
+        "  {}",
+        cockpit::dim(&format!("loading projects{}", layout::ellipsis(ascii)))
+    )]
 }
 
 fn running_lines(running: &[RunningSession], inner: usize, rows: usize, g: &Glyphs) -> Vec<String> {
@@ -266,9 +221,13 @@ fn option_rows(
             current
         }
     };
-    let radio_of = |row: &super::RowDef, prefix: &str, hover: &str| {
+    // `only_current`: the row as its selected value alone, for a row whose values do not fit.
+    let radio_of = |row: &super::RowDef, prefix: &str, hover: &str, only_current: bool| {
         let texts: Vec<String> = row.values.iter().map(|v| ctx.text(roster, row, v)).collect();
-        let values = visible_row_values(roster, row, &ctx);
+        let mut values = visible_row_values(roster, row, &ctx);
+        if only_current {
+            values.retain(|v| v == shown_of(row));
+        }
         let vtexts: Vec<String> = values
             .iter()
             .map(|v| {
@@ -287,7 +246,8 @@ fn option_rows(
                 current: shown_of(row),
                 texts: &vtexts,
                 label_width,
-                max_width: if inp.width >= frame::TWO_PANE_WIDTH { inner } else { 0 },
+                // Every row keeps its marks: a row too wide drops to its selected value below.
+                max_width: 0,
                 hover,
                 compact: false,
             },
@@ -306,17 +266,13 @@ fn option_rows(
         let (mut line, mut cells) = if row.name == RowName::Account {
             account_strip(row, state, inp.limits, &prefix, &label_part, inner, g, hovered_here)
         } else {
-            let radio = radio_of(row, &prefix, if hovered_here { &state.hover_value } else { "" });
+            let radio = radio_of(row, &prefix, if hovered_here { &state.hover_value } else { "" }, false);
             (radio.text, radio.cells)
         };
-        // Only a row that does not fit collapses to `< value >`: the others stay readable.
+        // Only a row that does not fit drops to its selected value and the count of the others.
         if display_width(&line) > inner {
-            line = format!(
-                "{prefix}{label_part}{} {} {}",
-                g.l_angle,
-                ctx.text(roster, row, shown_of(row)),
-                g.r_angle
-            );
+            let others = visible_row_values(roster, row, &ctx).len().saturating_sub(1);
+            line = format!("{}  +{others}", radio_of(row, &prefix, "", true).text.trim_end());
             cells = Vec::new();
         }
         // The pointer on the row outside its values paints the label: hover never selects.
@@ -334,7 +290,7 @@ fn option_rows(
 }
 
 /// The launch page: the launch panel (focused, carrying the identity and the versions), the
-/// selected account's limits beside it, recent projects, running sessions and Claude Code's state
+/// selected account's limits beside it, the projects, running sessions and Claude Code's state
 /// under them; under `cockpit::TWO_COLUMNS` columns the panels stack.
 pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let state = inp.state;
@@ -345,35 +301,21 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
             map: RowMap::default(),
         };
     }
+    if let Some(f) = narrow_page(inp) {
+        return f;
+    }
     let g = theme::glyphs(inp.style.ascii);
     let fw = frame::frame_width(inp.width);
     let wide = inp.width >= cockpit::TWO_COLUMNS;
-    // A two-column grid: the facts column keeps 46 cells right of the launch and recent panels,
-    // which share one width; past the grid the terminal stays background.
-    let rw = if wide { cockpit::FACTS_WIDTH.min(fw / 2) } else { 0 };
+    let rw = if wide { facts_width(roster, inp, &restored, fw, &g) } else { 0 };
     let lw = fw - rw;
     let rows = option_rows(roster, inp, &restored, lw.saturating_sub(3), &g);
     let selected = rows.iter().position(|r| r.0 == state.row);
     let mut map = RowMap {
-        rows: rows
-            .iter()
-            .enumerate()
-            .map(|(y, (index, name, _, cells))| RowHit {
-                index: *index,
-                name: (*name).to_owned(),
-                y: i32::try_from(1 + y).unwrap_or(0),
-                cells: cells
-                    .iter()
-                    .map(|c| CellSpan {
-                        start: c.start + 1,
-                        end: c.end + 1,
-                        value: c.value.clone(),
-                    })
-                    .collect(),
-            })
-            .collect(),
+        rows: launch_hits(&rows),
         ..RowMap::default()
     };
+    let home = inp.home;
     let mut launch_lines: Vec<String> = rows.into_iter().map(|r| r.2).collect();
     // The self-update notice closes the launch panel, dim, a blank row under the rows.
     if let Some(n) = inp.notice {
@@ -387,7 +329,7 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         &LaunchHints {
             warnings: inp.warnings,
             restored: !restored.is_empty(),
-            recent: !inp.recent.is_empty(),
+            home: home.is_some(),
         },
     );
     let painter = |l: &str, enabled: bool| add_launch_color(l, enabled, &g, roster);
@@ -397,20 +339,27 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let lim_need = lims.len() + usize::from(!age.is_empty()) + 2;
     let launch_need = launch_lines.len() + 2;
     let top_h = if wide { launch_need.max(lim_need) } else { launch_need };
-    let right = versions(inp.version, &g);
-    let top_lw = if wide { launch_width(&launch_lines, &right, lw, &g) } else { lw };
+    let right = versions(inp.version, &g, wide);
+    // The identity goes with the focus: off the launch rows, the panel is plain `launch`.
+    let launch_focused = home.is_none_or(|h| h.focus == HomeFocus::Launch);
     let launch = Panel {
-        title: cockpit::identity(&g),
+        title: if launch_focused { cockpit::identity(&g) } else { "launch".into() },
         page: String::new(),
         right,
-        focus: Focus::Focused,
+        focus: if launch_focused { Focus::Focused } else { Focus::Plain },
         lines: launch_lines,
-        width: top_lw,
+        width: lw,
         height: top_h,
         painter: &painter,
         selected,
     };
-    let lim_h = if wide { top_h } else { lim_need };
+    let page_rows = inp.height.saturating_sub(1 + footer.lines.len());
+    // Stacked, the limits run to the footer (AC27).
+    let lim_h = if wide {
+        top_h
+    } else {
+        page_rows.saturating_sub(launch_need).max(lim_need)
+    };
     let limits = Panel {
         title: format!("limits {} {account}", g.dot),
         page: String::new(),
@@ -422,18 +371,21 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         painter: &cockpit::no_paint,
         selected: None,
     };
-    let page_rows = inp.height.saturating_sub(1 + footer.lines.len());
     let mut lines = if wide {
-        cockpit::beside(cockpit::render(&launch, inp.style), top_lw, &cockpit::render(&limits, inp.style))
+        cockpit::beside(cockpit::render(&launch, inp.style), lw, &cockpit::render(&limits, inp.style))
     } else {
         let mut l = cockpit::render(&launch, inp.style);
         l.extend(cockpit::render(&limits, inp.style));
         l
     };
+    if let Some(h) = home.filter(|_| wide) {
+        return home::home_frame(inp, h, lines, map, (lw, rw), &footer);
+    }
     let left_over = page_rows.saturating_sub(lines.len());
-    let top = lines.len();
-    lines.extend(bottom_panels(inp, wide, (top_lw, rw), left_over, &g));
-    map.rows.extend(recent_hits(inp, wide, left_over, top));
+    if wide {
+        lines.extend(bottom_panels(inp, (lw, rw), left_over, &g));
+    }
+    map.hit_x = RowMap::panel_interior(0, lw);
     let light = FooterLight {
         hover: frame::footer_hover(&footer, state.hover),
         selected: Vec::new(),
@@ -442,71 +394,69 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     Frame { lines, map }
 }
 
-/// The left column's width: what the launch rows and the title need, at most `most`; recent under
-/// it takes the same width.
-fn launch_width(lines: &[String], right: &str, most: usize, g: &Glyphs) -> usize {
-    let rows_w = lines.iter().map(|l| display_width(&theme::strip_ctl(l))).max().unwrap_or(0) + 4;
-    let title_w = display_width(&cockpit::identity(g)) + display_width(right) + 10;
-    rows_w.max(title_w).min(most)
+/// Narrow, the list and the sessions are pages after the launch page, in the same frame: the
+/// focused one drawn whole; `None` on the launch page or a wide terminal.
+fn narrow_page(inp: &LaunchFrameInput<'_>) -> Option<Frame> {
+    let h = inp
+        .home
+        .filter(|h| inp.width < cockpit::TWO_COLUMNS && h.focus != HomeFocus::Launch)?;
+    let page = Home {
+        focus: h.focus,
+        left_width: frame::frame_width(inp.width),
+    };
+    Some((h.draw)(page, inp.width, inp.height))
 }
 
-/// The row index a recent project's line has in the row map: `RECENT_ROW + i`, past every launch row.
-pub const RECENT_ROW: usize = 1000;
+/// The facts column beside the launch panel: `FACTS_WIDTH` cells, the left column the rest; on a
+/// page too narrow for both the facts give way, down to `FACTS_MIN`, so every launch row keeps its
+/// values.
+fn facts_width(roster: &Roster, inp: &LaunchFrameInput<'_>, restored: &[String], fw: usize, g: &Glyphs) -> usize {
+    let need = option_rows(roster, inp, restored, fw, g)
+        .iter()
+        .map(|r| display_width(&theme::strip_ctl(&r.2)) + 4)
+        .max()
+        .unwrap_or(0);
+    cockpit::FACTS_WIDTH
+        .min(fw.saturating_sub(need))
+        .max(cockpit::FACTS_MIN)
+        .min(fw / 2)
+}
 
-/// The recent panel's lines in the row map, under the top panels' `top` rows.
-fn recent_hits(inp: &LaunchFrameInput<'_>, wide: bool, left_over: usize, top: usize) -> Vec<RowHit> {
-    let per = if wide { 2 } else { 1 };
-    (0..recent_shown(inp, wide, left_over))
-        .map(|i| RowHit {
-            index: RECENT_ROW + i,
-            name: "recent".to_owned(),
-            y: i32::try_from(top + 1 + i * per).unwrap_or(0),
-            cells: Vec::new(),
+/// The launch rows' hits, their cells measured from the panel's first interior cell.
+fn launch_hits(rows: &[(usize, &'static str, String, Vec<CellSpan>)]) -> Vec<RowHit> {
+    rows.iter()
+        .enumerate()
+        .map(|(y, (index, name, _, cells))| RowHit {
+            index: *index,
+            name: (*name).to_owned(),
+            y: i32::try_from(1 + y).unwrap_or(0),
+            cells: cells
+                .iter()
+                .map(|c| CellSpan {
+                    start: c.start + 1,
+                    end: c.end + 1,
+                    value: c.value.clone(),
+                })
+                .collect(),
         })
         .collect()
 }
 
-/// How many recent projects the recent panel lists: one per row stacked, one per two rows beside.
-fn recent_shown(inp: &LaunchFrameInput<'_>, wide: bool, left_over: usize) -> usize {
-    let rows = if wide {
-        bottom_height(inp, left_over).saturating_sub(2) / 2
-    } else if left_over >= 3 {
-        left_over - 2
-    } else {
-        0
-    };
-    inp.recent.len().min(rows).min(5)
-}
-
-/// The bottom row's height beside: to the footer with items, the empty-state lines without.
-fn bottom_height(inp: &LaunchFrameInput<'_>, left_over: usize) -> usize {
-    if inp.recent.is_empty() && inp.running.is_empty() {
-        3 + STATUS_HEIGHT
-    } else {
-        left_over.max(3 + STATUS_HEIGHT)
-    }
+/// The bottom row's height beside: to the footer (AC27).
+fn bottom_height(left_over: usize) -> usize {
+    left_over.max(3 + STATUS_HEIGHT)
 }
 
 /// The Claude Code panel: its two lines and the borders.
 const STATUS_HEIGHT: usize = 4;
 
-/// Recent projects, running sessions and Claude Code's state under the top panels: they stretch to
-/// the footer when a list has items and shrink to their empty-state lines when both are empty.
-/// Stacked, only the recent panel shows, and only when `left_over` rows hold it.
-fn bottom_panels(inp: &LaunchFrameInput<'_>, wide: bool, (lw, rw): (usize, usize), left_over: usize, g: &Glyphs) -> Vec<String> {
+/// While the registry is read: the projects panel saying so, running sessions and Claude Code's
+/// state beside it, to the footer.
+fn bottom_panels(inp: &LaunchFrameInput<'_>, (lw, rw): (usize, usize), left_over: usize, g: &Glyphs) -> Vec<String> {
     let style = inp.style;
-    let hover = usize::try_from(inp.state.hover_row).ok().and_then(|r| r.checked_sub(RECENT_ROW));
-    if !wide {
-        if left_over < 3 {
-            return Vec::new();
-        }
-        let rh = if inp.recent.is_empty() { 4.min(left_over) } else { left_over };
-        let lines = recent_lines(inp, lw - 2, rh - 2, false, hover);
-        return cockpit::render(&Panel::plain("recent", lines, lw, rh), style);
-    }
     let status_h = STATUS_HEIGHT;
-    let bh = bottom_height(inp, left_over);
-    let recent = Panel::plain("recent", recent_lines(inp, lw - 2, bh - 2, true, hover), lw, bh);
+    let bh = bottom_height(left_over);
+    let projects = Panel::plain("projects", loading_lines(style.ascii), lw, bh);
     let running = Panel::plain(
         "running",
         running_lines(inp.running, rw - 2, bh - status_h - 2, g),
@@ -521,13 +471,14 @@ fn bottom_panels(inp: &LaunchFrameInput<'_>, wide: bool, (lw, rw): (usize, usize
     );
     let mut right = cockpit::render(&running, style);
     right.extend(cockpit::render(&status, style));
-    cockpit::beside(cockpit::render(&recent, style), lw, &right)
+    cockpit::beside(cockpit::render(&projects, style), lw, &right)
 }
 
-/// `0.9.0 · Claude Code 2.1.330 ↑ 2.1.331`: the launcher, the installed Claude Code and a newer one.
-fn versions(v: &VersionInfo, g: &Glyphs) -> String {
+/// `0.9.0`, the launcher; stacked, where no Claude Code panel shows, `0.9.0 · Claude Code 2.1.330
+/// ↑ 2.1.331` (the installed Claude Code and a newer one). Beside, its panel holds them.
+fn versions(v: &VersionInfo, g: &Glyphs, panel: bool) -> String {
     let mut s = env!("CARGO_PKG_VERSION").to_owned();
-    if let Some(i) = v.installed.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(i) = v.installed.as_deref().filter(|s| !s.is_empty() && !panel) {
         s = format!("{s} {} Claude Code {i}", g.dot);
         if let Some(n) = v.newest.as_deref().filter(|n| !n.is_empty() && *n != i) {
             s = format!("{s} {} {n}", g.up);
@@ -535,7 +486,6 @@ fn versions(v: &VersionInfo, g: &Glyphs) -> String {
     }
     s
 }
-
 /// The footer: arrows are not clickable ("w/s" names two directions), every single action is.
 /// Under 110 columns the long words shorten and `ctrl+r` goes first.
 pub fn launch_footer(g: &Glyphs, width: usize, color: bool, extra: &LaunchHints) -> Footer {
@@ -550,8 +500,8 @@ pub fn launch_footer(g: &Glyphs, width: usize, color: bool, extra: &LaunchHints)
         Hint::plain(if short { "a/d" } else { frame::switch_keys(g) }, "switch").kept(),
         Hint::key("enter", "next", "Enter"),
     ];
-    if extra.recent {
-        hints.push(Hint::plain("1-5", if short { "go" } else { "resume" }).kept());
+    if extra.home {
+        hints.push(Hint::key("tab", "projects", "Tab"));
     }
     hints.push(Hint::ch("u", if short { "maint" } else { "maintenance" }, 'u').badged(badge));
     if extra.restored {
@@ -561,7 +511,7 @@ pub fn launch_footer(g: &Glyphs, width: usize, color: bool, extra: &LaunchHints)
     // One line: what does not fit goes, ctrl+r first, then w/s (the arrows need no hint).
     for drop in ["^r", "w/s"] {
         let footer = new_hint_footer(&hints, g, width, !color);
-        if footer.lines.len() <= 1 {
+        if footer.lines.iter().map(|l| l.spans.len()).sum::<usize>() == hints.len() {
             return footer;
         }
         hints.retain(|h| h.token != drop);
@@ -576,8 +526,8 @@ pub struct LaunchHints {
     pub warnings: usize,
     /// A row was restored: `ctrl+r reset` is offered.
     pub restored: bool,
-    /// Recent projects are listed: `1-5 resume` is offered.
-    pub recent: bool,
+    /// The projects panel is on the page: `tab projects` is offered.
+    pub home: bool,
 }
 
 #[expect(
@@ -620,7 +570,8 @@ fn account_strip(
         .iter()
         .zip(&row.values)
         .map(|(c, v)| {
-            if hovered_here && v.eq_ignore_ascii_case(&state.hover_value) {
+            // The selected account keeps its tint under the pointer: a click draws what a key draws.
+            if hovered_here && v.eq_ignore_ascii_case(&state.hover_value) && !v.eq_ignore_ascii_case(&state.account) {
                 theme::add_hover_span(c)
             } else {
                 c.clone()
@@ -728,6 +679,9 @@ pub fn add_launch_color(line: &str, enabled: bool, g: &Glyphs, roster: &Roster) 
     AGE.replace_all(&out, format!("{}${{1}}{}", theme::DIM, theme::RESET).as_str())
         .into_owned()
 }
+
+mod home;
+pub(crate) use home::HomePanel;
 
 #[cfg(test)]
 mod tests;

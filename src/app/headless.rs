@@ -76,7 +76,6 @@ fn view(cfg: &Config, ctx: &PathCtx) -> LaunchView {
         default_model_label: defaults.model,
         default_advisor_label: defaults.advisor,
         labels_by_account: defaults.by_account,
-        recent: Vec::new(),
         running: Vec::new(),
         mcp: String::new(),
         style: NOT_DRAWN,

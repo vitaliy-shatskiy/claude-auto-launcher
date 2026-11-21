@@ -7,9 +7,9 @@ mod nav_view;
 mod navigator;
 mod paths;
 mod registry;
-mod screen;
+pub(crate) mod screen;
 mod select;
-mod view;
+pub(crate) mod view;
 mod win;
 
 use std::path::{Path, PathBuf};
@@ -238,73 +238,31 @@ pub fn run_project_screen(
     crate::ui::screen_loop::run(&mut s, term)
 }
 
-/// The launch page's recent projects: the five newest that are not hidden, newest first, each with
-/// its age at `now_ms` and the newest title `titles` holds for its slugs (lower-cased slug -> last write,
-/// title: `sessions::listing::newest_titles`).
-pub(crate) fn recent_projects(
+/// The project list as the wide launch page's projects panel: the project screen's own state
+/// (filter, pins, hiding, the selected project's detail), opened on the current directory.
+pub(crate) fn home_list<'a>(
     projects: &[Project],
-    now_ms: i64,
-    titles: &std::collections::HashMap<String, (i64, String)>,
-) -> Vec<crate::launch::frame::RecentProject> {
-    let mut shown: Vec<(&Project, i64)> = projects
-        .iter()
-        .filter(|p| !p.hidden)
-        .filter_map(|p| p.last_activity_ms.map(|t| (p, t)))
-        .collect();
-    shown.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
-    shown
-        .into_iter()
-        .take(5)
-        .map(|(p, t)| crate::launch::frame::RecentProject {
-            name: p.name.clone(),
-            path: p.path.clone(),
-            slug: p.slug.clone(),
-            slugs: p.slugs.clone(),
-            age: view::relative_age(t, now_ms),
-            last: select::all_slugs(p)
-                .iter()
-                .filter_map(|s| titles.get(&s.to_lowercase()))
-                .max_by_key(|(at, _)| *at)
-                .map(|(_, title)| title.clone())
-                .unwrap_or_default(),
-        })
-        .collect()
+    cwd: &Path,
+    style: Style,
+    hiding: &'a Hiding<'a>,
+    preview: bool,
+    stores: detail::Stores,
+    clock: &'a dyn Fn() -> i64,
+) -> screen::ProjectScreen<'a> {
+    screen::ProjectScreen::new(projects, &cwd.to_string_lossy(), "new", style, clock)
+        .with_hiding(Some(hiding))
+        .with_preview(preview)
+        .with_details(Some(if preview {
+            detail::DetailSource::in_place(stores)
+        } else {
+            detail::DetailSource::worker(stores)
+        }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn recent_projects_are_the_five_newest_shown_ones_newest_first() {
-        let at = |slug: &str, mins: i64, hidden: bool| Project {
-            last_activity_ms: Some(1_000_000_000 - mins * 60_000),
-            hidden,
-            ..crate::projects::select::tests::proj(slug, &format!(r"C:\w\{slug}"), slug)
-        };
-        let ps = vec![
-            at("a", 30, false),
-            at("b", 3, false),
-            at("h", 1, true),
-            at("c", 90, false),
-            at("d", 5, false),
-            at("e", 7, false),
-            at("f", 9, false),
-        ];
-        let titles = std::collections::HashMap::from([
-            ("b".to_owned(), (5, "older".to_owned())),
-            ("b".to_owned(), (9, "fix the paging".to_owned())),
-        ]);
-        let r = recent_projects(&ps, 1_000_000_000, &titles);
-        let names: Vec<&str> = r.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["b", "d", "e", "f", "a"], "hidden h and the sixth (c) are left out");
-        assert_eq!((r[0].age.as_str(), r[0].slug.as_str()), ("3 min", "b"));
-        assert_eq!(
-            (r[0].last.as_str(), r[1].last.as_str()),
-            ("fix the paging", ""),
-            "each its newest cached title"
-        );
-    }
     use crate::projects::registry::tests::Tree;
     use crate::projects::select::tests::proj;
 

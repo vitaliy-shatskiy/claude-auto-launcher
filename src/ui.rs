@@ -439,6 +439,15 @@ pub fn hit_at(map: Option<&RowMap>, x: i32, y: i32, window_top: i32) -> Hit {
         return Hit::Footer { span, index };
     }
     let row_y = y - window_top;
+    if let Some((_, rows)) = map.side.as_ref().filter(|((a, b), _)| x >= *a && x < *b) {
+        return rows.iter().find(|r| r.y == row_y).map_or(Hit::None, |r| Hit::LaunchRow {
+            row: r.index,
+            name: r.name.clone(),
+        });
+    }
+    if map.hit_x.is_some_and(|(a, b)| x < a || x >= b) {
+        return Hit::None;
+    }
     // Only from the action field's first cell on: beside a list, the same row is a list row.
     if let Some(a) = map
         .action
@@ -449,10 +458,8 @@ pub fn hit_at(map: Option<&RowMap>, x: i32, y: i32, window_top: i32) -> Hit {
             value: a.cells.iter().find(|c| x >= c.start && x <= c.end).map(|c| c.value.clone()),
         };
     }
-    if !map.rows.is_empty() {
-        let Some(row) = map.rows.iter().find(|r| r.y == row_y) else {
-            return Hit::None;
-        };
+    // A launch row on this line, else a list row (the launch page holds both).
+    if let Some(row) = map.rows.iter().find(|r| r.y == row_y) {
         return match row.cells.iter().find(|c| x >= c.start && x <= c.end) {
             Some(c) => Hit::Cell {
                 row: row.index,
