@@ -398,7 +398,9 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let footer = new_hint_footer(&footer_hints(v), &g, fw, !v.style.color);
     // Beside the launch panel with the launch rows focused, the list stands alone in its column.
     let wide = v.width >= cockpit::TWO_COLUMNS && v.home.is_none_or(|h| h.focus != HomeFocus::Launch);
-    let columns = v.width >= TWO_PANE_WIDTH;
+    // On the launch page the list keeps its name, path and age columns on every focus: a focus
+    // move never shifts a row.
+    let columns = v.width >= TWO_PANE_WIDTH || v.home.is_some();
     let page_rows = v.height.saturating_sub(1 + footer.lines.len()).max(8);
     let index = v.index.min(rows.len().saturating_sub(1));
     // AC27: the list takes every row of its panel, so the panel fills a tall terminal. The path of
@@ -427,7 +429,7 @@ pub(crate) fn project_frame(v: &ProjectView<'_>) -> Frame {
     let radio = action_radio(v.action, v.hover_value, inner, &g, true);
     body.resize(list_lines, String::new());
     let path = theme::strip_ctl(rows.get(index).map_or("", |r| r.path.as_str()));
-    body.push(if path.is_empty() || wide {
+    body.push(if path.is_empty() || wide || v.home.is_some() {
         String::new()
     } else {
         let line = format!("   {}", cockpit::dim(&limit_path(&path, inner.saturating_sub(4), v.style.ascii)));

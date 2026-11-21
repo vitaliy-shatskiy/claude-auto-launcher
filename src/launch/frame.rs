@@ -395,11 +395,9 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let top_h = if wide { launch_need.max(lim_need) } else { launch_need };
     let right = versions(inp.version, &g, wide);
     let top_lw = match (wide, home) {
-        // The workspace fills the page (AC27): the right column grows to a chat's 118 cells, the
-        // left column, the list's, takes the rest.
-        (true, Some(_)) => launch_width(&launch_lines, &right, lw, &g)
-            .max(fw.saturating_sub(HOME_RIGHT))
-            .min(lw),
+        // The workspace fills the page (AC27): the left column holds the launch rows and the list,
+        // two fifths of the page up to 120 cells; the right column (facts, session titles) the rest.
+        (true, Some(_)) => launch_width(&launch_lines, &right, lw, &g).max((fw * 2 / 5).min(HOME_LEFT)).min(lw),
         (true, None) => launch_width(&launch_lines, &right, lw, &g),
         (false, _) => lw,
     };
@@ -453,8 +451,8 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     Frame { lines, map }
 }
 
-/// The workspace's right column at its widest: a chat panel's 110-cell text, insets and borders.
-const HOME_RIGHT: usize = 118;
+/// The workspace's left column at its widest: a list row's name, path and age read as one line.
+const HOME_LEFT: usize = 120;
 
 /// The launch rows' hits, their cells measured from the panel's first interior cell.
 fn launch_hits(rows: &[(usize, &'static str, String, Vec<CellSpan>)]) -> Vec<RowHit> {
