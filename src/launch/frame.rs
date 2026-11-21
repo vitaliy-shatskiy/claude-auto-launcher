@@ -394,7 +394,15 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let launch_need = launch_lines.len() + 2;
     let top_h = if wide { launch_need.max(lim_need) } else { launch_need };
     let right = versions(inp.version, &g, wide);
-    let top_lw = if wide { launch_width(&launch_lines, &right, lw, &g) } else { lw };
+    let top_lw = match (wide, home) {
+        // The workspace fills the page (AC27): the right column grows to a chat's 118 cells, the
+        // left column, the list's, takes the rest.
+        (true, Some(_)) => launch_width(&launch_lines, &right, lw, &g)
+            .max(fw.saturating_sub(HOME_RIGHT))
+            .min(lw),
+        (true, None) => launch_width(&launch_lines, &right, lw, &g),
+        (false, _) => lw,
+    };
     // The identity goes with the focus: off the launch rows, the panel is plain `launch`.
     let launch_focused = home.is_none_or(|h| h.focus == HomeFocus::Launch);
     let launch = Panel {
@@ -409,15 +417,8 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
         selected,
     };
     let lim_h = if wide { top_h } else { lim_need };
-    // The workspace's right column runs from the launch panel to the frame's edge on every focus.
-    let (rw, (lims, age)) = if home.is_some() {
-        (
-            fw - top_lw,
-            limit_lines(inp.limits.get(&state.account), (fw - top_lw).saturating_sub(2), false),
-        )
-    } else {
-        (rw, (lims, age))
-    };
+    // The workspace's right column runs to the frame's edge; the limits keep their 46-cell lines.
+    let rw = if home.is_some() { fw - top_lw } else { rw };
     let limits = Panel {
         title: format!("limits {} {account}", g.dot),
         page: String::new(),
@@ -451,6 +452,9 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let lines = frame::append_footer(lines, &footer, fw, inp.style, &light, &mut map);
     Frame { lines, map }
 }
+
+/// The workspace's right column at its widest: a chat panel's 110-cell text, insets and borders.
+const HOME_RIGHT: usize = 118;
 
 /// The launch rows' hits, their cells measured from the panel's first interior cell.
 fn launch_hits(rows: &[(usize, &'static str, String, Vec<CellSpan>)]) -> Vec<RowHit> {

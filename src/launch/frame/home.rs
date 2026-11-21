@@ -95,7 +95,7 @@ pub(super) fn home_frame(
         let body: Vec<String> = f.lines.into_iter().take(rows).collect();
         let running = Panel::plain(
             "running",
-            running_lines(inp.running, rw - 2, rows - STATUS_HEIGHT - 2, &g),
+            running_lines(inp.running, (rw - 2).min(cockpit::FACTS_WIDTH - 2), rows - STATUS_HEIGHT - 2, &g),
             rw,
             rows - STATUS_HEIGHT,
         );
