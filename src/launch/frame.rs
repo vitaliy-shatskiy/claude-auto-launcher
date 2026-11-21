@@ -37,6 +37,8 @@ pub struct LaunchFrameInput<'a> {
     /// The registry is still being read: the empty recent panel says so instead of "none yet".
     pub recent_loading: bool,
     pub running: &'a [RunningSession],
+    /// The last maintenance MCP check (`2 of 2 · 3 h ago`), empty when unknown: never run here.
+    pub mcp: &'a str,
 }
 
 fn pad_right(s: &str, width: usize) -> String {
@@ -54,7 +56,7 @@ pub struct RecentProject {
     pub slugs: Vec<String>,
     /// `3 min`, `2 d`: how long ago its newest session ran.
     pub age: String,
-    /// Its newest session's title; empty shows the path.
+    /// Its newest session's title from the summary cache; empty when none is cached.
     pub last: String,
 }
 
@@ -161,13 +163,12 @@ fn recent_lines(inp: &LaunchFrameInput<'_>, inner: usize, rows: usize, two_line:
         };
         let left = format!("  {}  {name}", theme::tone(theme::TONE_ACCENT, &(i + 1).to_string()));
         out.push(cockpit::spread(&left, &age, inner.saturating_sub(2)));
+        // The newest session's title; none cached yet leaves the line blank (the row keeps its rhythm).
         if two_line {
-            let sub = if p.last.is_empty() {
-                layout::limit_path(&p.path, inner.saturating_sub(7), ascii)
-            } else {
-                layout::limit_line(&p.last, inner.saturating_sub(7), ascii)
-            };
-            out.push(format!("     {}", cockpit::dim(&sub)));
+            out.push(format!(
+                "     {}",
+                cockpit::dim(&layout::limit_line(&p.last, inner.saturating_sub(7), ascii))
+            ));
         }
     }
     out
@@ -194,7 +195,7 @@ fn running_lines(running: &[RunningSession], inner: usize, rows: usize, g: &Glyp
 }
 
 /// Claude Code's state: the version (and the newest when it differs), the warnings count.
-fn claude_code_lines(version: &VersionInfo, warnings: usize, g: &Glyphs) -> Vec<String> {
+fn claude_code_lines(version: &VersionInfo, warnings: usize, mcp: &str, g: &Glyphs) -> Vec<String> {
     let installed = version.installed.as_deref().filter(|s| !s.is_empty());
     let newest = version.newest.as_deref().filter(|s| !s.is_empty());
     let first = match (installed, newest) {
@@ -208,13 +209,20 @@ fn claude_code_lines(version: &VersionInfo, warnings: usize, g: &Glyphs) -> Vec<
         (None, _) => format!("  {}", cockpit::dim("not found")),
     };
     let mut out = vec![first];
+    let mcp = (!mcp.is_empty()).then(|| format!("{} {}", cockpit::dim("MCP"), layout::limit_line(mcp, 30, g.on == '*')));
     if warnings > 0 {
         let s = if warnings == 1 { "" } else { "s" };
-        out.push(format!(
-            "  {} {warnings} warning{s} {} u",
+        let warn = format!(
+            "{} {warnings} warning{s} {} u",
             theme::tone(theme::TONE_WARN, &g.warn.to_string()),
             g.dot
-        ));
+        );
+        out.push(match mcp {
+            Some(m) => format!("  {m}   {warn}"),
+            None => format!("  {warn}"),
+        });
+    } else if let Some(m) = mcp {
+        out.push(format!("  {m}"));
     }
     out
 }
@@ -335,8 +343,9 @@ pub fn launch_frame(roster: &Roster, inp: &LaunchFrameInput<'_>) -> Frame {
     let g = theme::glyphs(inp.style.ascii);
     let fw = frame::frame_width(inp.width);
     let wide = inp.width >= cockpit::TWO_COLUMNS;
-    let lw = if wide { cockpit::LEFT_WIDTH.min(fw) } else { fw };
-    let rw = fw - lw;
+    // The facts column keeps its width; the launch and recent panels take the spare cells.
+    let rw = if wide { cockpit::FACTS_WIDTH.min(fw / 2) } else { 0 };
+    let lw = fw - rw;
     let rows = option_rows(roster, inp, &restored, lw.saturating_sub(3), &g);
     let selected = rows.iter().position(|r| r.0 == state.row);
     let mut map = RowMap {
@@ -489,7 +498,12 @@ fn bottom_panels(inp: &LaunchFrameInput<'_>, wide: bool, (lw, rw): (usize, usize
         rw,
         bh - status_h,
     );
-    let status = Panel::plain("claude code", claude_code_lines(inp.version, inp.warnings, g), rw, status_h);
+    let status = Panel::plain(
+        "claude code",
+        claude_code_lines(inp.version, inp.warnings, inp.mcp, g),
+        rw,
+        status_h,
+    );
     let mut right = cockpit::render(&running, style);
     right.extend(cockpit::render(&status, style));
     cockpit::beside(cockpit::render(&recent, style), lw, &right)

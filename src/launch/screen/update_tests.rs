@@ -22,6 +22,7 @@ fn view() -> LaunchView {
         labels_by_account: BTreeMap::new(),
         recent: Vec::new(),
         running: Vec::new(),
+        mcp: String::new(),
         style: Style { color: false, ascii: true },
     }
 }

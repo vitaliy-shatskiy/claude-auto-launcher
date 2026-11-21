@@ -3,6 +3,7 @@
 //! logic lives in `install`, the release channel in `release`, the screen in `screen`.
 
 mod install;
+mod mcp_seen;
 mod release;
 mod rows;
 mod screen;
@@ -217,6 +218,17 @@ impl Ops for RealOps {
     fn launcher_state(&mut self) -> String {
         self.launcher.state_text()
     }
+
+    fn remember_mcp(&mut self, connected: usize, total: usize) {
+        if !self.preview {
+            mcp_seen::remember(&mcp_seen::path(&PathCtx::from_env().home), connected, total, now_ms());
+        }
+    }
+}
+
+/// The last MCP check maintenance ran, for the launch page's Claude Code panel; empty when none.
+pub fn last_mcp_check(home: &std::path::Path, dot: char) -> String {
+    mcp_seen::last_check(&mcp_seen::path(home), now_ms(), dot)
 }
 
 /// What the maintenance screen shows besides the install: collected warnings and the versions

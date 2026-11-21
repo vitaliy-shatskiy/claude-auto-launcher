@@ -10,6 +10,9 @@ use crate::theme::{self, Glyphs};
 pub const LEFT_WIDTH: usize = 82;
 pub const MAINTENANCE_LEFT_WIDTH: usize = 50;
 pub const SESSIONS_LEFT_WIDTH: usize = 62;
+/// A facts column beside a list (launch: limits, running, Claude Code): what `fable (1 d ago)  24%`
+/// needs with its padding, at every width; the list column takes the rest.
+pub const FACTS_WIDTH: usize = 46;
 /// Under this many columns the columns stack.
 pub const TWO_COLUMNS: usize = 120;
 

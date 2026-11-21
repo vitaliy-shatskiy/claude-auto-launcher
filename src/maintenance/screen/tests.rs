@@ -221,6 +221,8 @@ fn mcp_list_output_becomes_a_count_and_the_server_lines() {
     let v = mcp_summary(Verdict::done(out));
     assert!(!v.ok);
     assert_eq!(v.text.lines().next(), Some("1 of 2 connected"));
+    assert_eq!(mcp_counts(&v), Some((1, 2)), "what the launch page keeps");
+    assert_eq!(mcp_counts(&Verdict::done("No MCP servers configured.")), None);
     assert!(!v.text.contains("Checking"), "{}", v.text);
     let all = mcp_summary(Verdict::done("Checking\u{2026}\n\nalpha: npx alpha - \u{2714} Connected"));
     assert!(all.ok && all.text.starts_with("1 of 1 connected"), "{all:?}");
@@ -506,6 +508,7 @@ fn every_clickable_region_hovers_and_never_selects() {
             ..Default::default()
         }],
         running: Vec::new(),
+        mcp: String::new(),
         style: color,
     };
     let prefs = crate::prefs::Prefs::default();

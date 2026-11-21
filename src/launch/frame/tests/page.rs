@@ -25,6 +25,7 @@ fn page(r: &Roster, state: &LaunchState, size: (usize, usize)) -> (Frame, Vec<St
         recent: &[],
         recent_loading: false,
         running: &[],
+        mcp: "",
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,
@@ -63,9 +64,9 @@ fn a_400x150_terminal_gets_a_full_width_page_from_the_top_left() {
 fn sample_recent() -> Vec<RecentProject> {
     [
         ("aurora-web", "3 min", "claude-auto design variants"),
-        ("LumenTrack.API", "4 h", ""),
-        ("quill-tools", "1 d", ""),
-        ("relay-monitor", "2 d", ""),
+        ("invoice-api", "4 h", "fix the invoice export paging"),
+        ("apk-diff", "1 d", ""),
+        ("channel-monitor", "2 d", "restart loop on the VM"),
     ]
     .iter()
     .map(|(n, a, last)| RecentProject {
@@ -115,6 +116,7 @@ fn full(
         recent,
         recent_loading: false,
         running,
+        mcp: "2 of 2 \u{b7} 3 h ago",
         default_model_label: "default",
         default_advisor_label: "default",
         default_labels: &labels,

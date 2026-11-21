@@ -107,7 +107,7 @@ pub(crate) struct Row {
     pub matched: bool,
 }
 
-fn all_slugs(p: &Project) -> Vec<String> {
+pub(crate) fn all_slugs(p: &Project) -> Vec<String> {
     if p.slugs.is_empty() {
         vec![p.slug.clone()]
     } else {
