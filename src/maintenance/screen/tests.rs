@@ -933,6 +933,43 @@ fn a_click_selects_a_row_and_enter_runs_it() {
 }
 
 #[test]
+fn beside_the_rows_a_wide_page_shows_what_the_selected_action_does_and_how_to_run_it() {
+    let mut ops = FakeOps {
+        log: Rc::new(RefCell::new(Log::default())),
+        exit_code: 0,
+    };
+    let actions = reindex();
+    let mut m = MaintScreen::new(
+        &mut ops,
+        &actions,
+        Style {
+            color: false,
+            ascii: false,
+        },
+    );
+    let text = |m: &mut MaintScreen<'_>, at: i32| {
+        *m.cursor() = Cursor::at(at);
+        m.before();
+        m.draw((211, 52)).lines.join("\n")
+    };
+    let first = text(&mut m, 0);
+    assert!(
+        first.contains("─ update ─") && first.contains("downloads the newest Claude Code"),
+        "{first}"
+    );
+    assert!(first.contains("enter  or  u  runs it"), "{first}");
+    let doctor = m.page.entries.iter().position(|e| e.key == 'd').unwrap();
+    let d = text(&mut m, i32::try_from(doctor).unwrap());
+    assert!(d.contains("runs claude doctor") && d.contains("enter  or  d  runs it"), "{d}");
+    let narrow = {
+        *m.cursor() = Cursor::at(0);
+        m.before();
+        m.draw((100, 30)).lines.join("\n")
+    };
+    assert!(!narrow.contains("runs it"), "stacked, the details stay off the page: {narrow}");
+}
+
+#[test]
 fn a_second_click_on_the_selected_row_runs_it_and_a_click_on_another_only_selects() {
     let m = map_at((100, 24), &[]);
     let d = m.rows.iter().find(|r| r.name == "d").unwrap();
