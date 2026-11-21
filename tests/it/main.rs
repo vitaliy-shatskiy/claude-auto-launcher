@@ -331,7 +331,8 @@ fn two_accounts(name: &str) -> PathBuf {
         "rows": ["model", "effort"]
     });
     std::fs::write(d.join("home").join("config.json"), config.to_string()).unwrap();
-    let slug_dir = d.join("home").join(".claude-b").join("projects").join("SLUG");
+    // The folder Claude Code names after the cwd: an unregistered cwd lists only that one.
+    let slug_dir = d.join("home").join(".claude-b").join("projects").join(cwd_slug(&d));
     std::fs::create_dir_all(&slug_dir).unwrap();
     let record = serde_json::json!({
         "type": "user",
@@ -341,6 +342,10 @@ fn two_accounts(name: &str) -> PathBuf {
     std::fs::write(slug_dir.join("foreign-id.jsonl"), format!("{record}\n")).unwrap();
     std::fs::create_dir_all(d.join("home").join(".claude").join("projects")).unwrap();
     d
+}
+
+fn cwd_slug(d: &Path) -> String {
+    claude_auto::plugins::projects::claude_slug(&d.to_string_lossy())
 }
 
 #[test]
@@ -360,7 +365,7 @@ fn preview_resume_lists_another_accounts_session_and_copies_nothing() {
     );
     assert!(out.contains("launch args        : --resume foreign-id"), "{out}");
     assert!(
-        !d.join("home").join(".claude").join("projects").join("SLUG").exists(),
+        !d.join("home").join(".claude").join("projects").join(cwd_slug(&d)).exists(),
         "preview copies nothing"
     );
     std::fs::remove_dir_all(&d).unwrap();
