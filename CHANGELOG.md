@@ -4,6 +4,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-11-21
+
+### Fixed
+
+- Launch page: the focused sessions panel of a project with no sessions no longer marks
+  `no sessions yet` (or `loading…`) as a selected row; a placeholder takes no cursor or fill.
+
 ## [0.9.0] — 2026-11-21
 
 ### Added
@@ -710,7 +717,8 @@ First public release.
   decoded as text, for terminals that send them that way.
 - 15-check verification gate (`tests\checkpoint.ps1`).
 
-[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.0...v0.8.1
