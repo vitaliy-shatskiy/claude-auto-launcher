@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use super::script::GIB;
 use super::*;
 use crate::frame::{MIN_HEIGHT, RowMap, frame_width};
 use crate::input::{Event, MouseEvent};
