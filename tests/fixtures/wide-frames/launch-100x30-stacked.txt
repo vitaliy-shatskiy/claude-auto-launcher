@@ -1,4 +1,4 @@
-╭─ ✻ claude-auto ───────────────────────────────────────────────────────────────────────── 1.0.0 ─╮
+╭─ ✻ claude-auto ───────────────────────────────────────────────────────────────────────── 1.0.1 ─╮
 │ ❯ account      [work 88%] ┊ personal ┊ low                                                      │
 │   remote       ● [on] ○ off ○ on+QR ○ stop server                                               │
 │   model        ● [default] ○ Haiku 5.5 ○ Sonnet 5.5 ○ Opus 5.5[1M] ○ Fable 5.2                  │

@@ -4,6 +4,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-11-22
+
+### Fixed
+
+- Sessions: a directory the project list does not know, reached through a junction, a symlink,
+  an 8.3 short name or another letter case, also finds the sessions Claude Code stored under its
+  physical path, in the picker and in the `continue` held-session check.
+- Privacy scan (`examples/privacy_scan.rs`): it also checks the owner's work-names list, the one
+  the pre-push guard reads, when env `CLAUDE_WORK_TERMS_FILE` names it; a hit names only the file, the line and
+  `work term`. Without the list (CI, another machine) it is skipped with a note, never a failure.
+
+### Changed
+
+- README media: no backdrop margin and 2 px of window padding, so the 122 terminal columns fill
+  the image and the text reads at about 12 px (7.2 px a character) at the README's 880 px width,
+  up from about 11 px.
+- Tests: the versions panel's `installed - takes effect next start` text is checked to be drawn
+  yellow, and `up to date` not.
+
 ## [1.0.0] — 2026-11-21
 
 ### Fixed
@@ -726,7 +745,8 @@ First public release.
   decoded as text, for terminals that send them that way.
 - 15-check verification gate (`tests\checkpoint.ps1`).
 
-[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.1...v1.0.0
 [0.9.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.8.2...v0.9.0

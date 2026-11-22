@@ -1,4 +1,4 @@
-╭─ ✻ claude-auto ─ maintenance ────────── 1.0.0 ─╮╭─ update anyway (rename) ────────────────────────────────────────────────────╮
+╭─ ✻ claude-auto ─ maintenance ────────── 1.0.1 ─╮╭─ update anyway (rename) ────────────────────────────────────────────────────╮
 │  Claude Code                                   ││  moves the running claude.exe aside, then updates                           │
 │   [u] update                                   ││                                                                             │
 │   [r] update anyway (rename)                   ││  enter  or  r  runs it                                                      │
@@ -35,7 +35,7 @@
 │                                                ││  installed     2.1.230 · newest                                             │
 │                                                ││  newest        2.1.230                                                      │
 │                                                ││  on disk       3 builds · 0.8 GB                                            │
-│                                                ││  claude-auto   1.0.0 · self-update off                                      │
+│                                                ││  claude-auto   1.0.1 · self-update off                                      │
 │                                                │╰─────────────────────────────────────────────────────────────────────────────╯
 │                                                │╭─ warnings ──────────────────────────────────────────────────────────────────╮
 │                                                ││  warning  ⚠ config: unknown key "colour"                                    │
