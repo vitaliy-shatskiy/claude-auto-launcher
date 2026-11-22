@@ -126,8 +126,16 @@ pub(in crate::app) fn session_slugs(state: &LaunchState) -> Vec<String> {
     }
     // A directory the registry does not know: its own transcript folder, never the whole account
     // filtered by leaf name, which read every page to find none of its rows (149 pages, 5.5 s).
+    // A junction, short name or other case is another slug: Claude Code may have stored the
+    // sessions under the physical path's, so both are looked in.
     if slugs.is_empty() && !state.project.is_empty() {
-        slugs.push(crate::plugins::projects::claude_slug(&state.project));
+        let physical = crate::sessions::listing::physical_dir(Path::new(&state.project));
+        for dir in [state.project.as_str(), &physical.to_string_lossy()] {
+            let slug = crate::plugins::projects::claude_slug(dir);
+            if !slugs.contains(&slug) {
+                slugs.push(slug);
+            }
+        }
     }
     slugs
 }

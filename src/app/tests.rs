@@ -167,6 +167,31 @@ fn continue_in_an_unregistered_directory_checks_its_own_newest_session() {
     assert_eq!(id, "mine-1", "the cwd's own transcript is the one checked");
 }
 
+/// A cwd reached through a junction (or a short name, or another case) has its own slug; Claude
+/// Code may have stored the sessions under the physical path's, so both are looked in, once each.
+#[test]
+fn a_cwd_through_a_junction_finds_the_sessions_of_its_physical_folder() {
+    let root = std::env::temp_dir().join(format!("claude-auto-rs-junc-{}", crate::log::new_run_id()));
+    let (real, link) = (root.join("real"), root.join("link"));
+    std::fs::create_dir_all(&real).unwrap();
+    crate::env::win_fs::create_junction(&link, &real).unwrap();
+    let slug = |p: &Path| crate::plugins::projects::claude_slug(&p.to_string_lossy());
+    let physical = crate::sessions::listing::physical_dir(&real);
+    let own = root.join("projects").join(slug(&physical));
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("real-1.jsonl"), "{}").unwrap();
+    let mut s = LaunchState::fresh("work");
+    screens::start_in_cwd(&mut s, &link, &[]);
+    let slugs = screens::session_slugs(&s);
+    let id = crate::sessions::holder::continue_session_id(&root.join("projects"), &slugs, &[]);
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(slugs, [slug(&link), slug(&physical)], "the cwd as given, then its physical path");
+    assert_eq!(id, "real-1", "continue checks the physical folder's session too");
+    let mut plain = LaunchState::fresh("work");
+    screens::start_in_cwd(&mut plain, Path::new(r"C:\no\such\dir"), &[]);
+    assert_eq!(screens::session_slugs(&plain), ["C--no-such-dir"], "no second copy of one slug");
+}
+
 #[test]
 fn mouse_false_arms_nothing() {
     assert!(!screens::mouse_armed(false, None), "config mouse false");
