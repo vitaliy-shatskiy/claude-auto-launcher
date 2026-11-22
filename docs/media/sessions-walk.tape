@@ -12,14 +12,13 @@ Output docs/media/sessions-walk.mp4
 Set Shell "pwsh"
 Set FontFamily "Cascadia Mono"
 Set FontSize 20
-Set Width 1600
-Set Height 760
-Set Padding 20
-Set Margin 32
-Set MarginFill "target/vhs/backdrop-sessions-walk.png"
+Set Width 1502
+Set Height 660
+Set Padding 2
+Set Margin 0
 Set WindowBar Colorful
 Set WindowBarSize 40
-Set BorderRadius 10
+Set BorderRadius 0
 Set Theme "GitHub Dark"
 Set Framerate 24
 Set TypingSpeed 10ms

@@ -26,7 +26,7 @@ cargo build --release
 pwsh -File docs/media/render.ps1
 ```
 
-`render.ps1` runs `draw.mjs`, then the four tapes. The tapes record a 122-column terminal: the launch page shows as a workspace from 120 columns, and at that width the text keeps about 11 px at the README's full width. The preview walks hide the cursor through the console (`[Console]::CursorVisible`), since the escape alone does not hold under ConPTY. The tapes need `vhs` with `ttyd` and `ffmpeg` on PATH and the Cascadia Mono font. They take the
+`render.ps1` runs `draw.mjs`, then the four tapes. The tapes record a 122-column terminal: the launch page shows as a workspace from 120 columns, and the window has no backdrop margin and 2 px of padding, so those columns fill the image: at the README's 880 px a character cell is about 7.2 px wide (12 px text). Wider padding or a margin shrinks it again. The preview walks hide the cursor through the console (`[Console]::CursorVisible`), since the escape alone does not hold under ConPTY. The tapes need `vhs` with `ttyd` and `ffmpeg` on PATH and the Cascadia Mono font. They take the
 release binary under `$env:CARGO_TARGET_DIR` (default `target`), else the debug one. In the still and the launch walk
 the model names and the Claude Code version come from the `claude.exe` installed on the recording
 machine; the preview walks read no catalog and show the built-in model names.

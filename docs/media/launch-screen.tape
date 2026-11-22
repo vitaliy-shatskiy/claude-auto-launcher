@@ -8,14 +8,13 @@ Output target/vhs/launch-screen.gif
 Set Shell "pwsh"
 Set FontFamily "Cascadia Mono"
 Set FontSize 32
-Set Width 2580
-Set Height 1240
-Set Padding 36
-Set Margin 56
-Set MarginFill "target/vhs/backdrop-launch-screen.png"
+Set Width 2356
+Set Height 1060
+Set Padding 2
+Set Margin 0
 Set WindowBar Colorful
 Set WindowBarSize 64
-Set BorderRadius 14
+Set BorderRadius 0
 Set Theme "GitHub Dark"
 Set TypingSpeed 10ms
 
