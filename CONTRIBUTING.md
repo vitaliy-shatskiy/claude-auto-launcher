@@ -24,7 +24,9 @@ no Claude and writes only its own projects cache in `%TEMP%`, but a `claude` mus
 
 `cargo run --example privacy_scan` is the privacy scan (`examples/privacy_scan.rs`, not in the
 release exe). It reads an optional pattern list from `CLAUDE_AUTO_CLEAN_PATTERNS` or `--patterns`.
-Without one it only checks the current Windows username. It scans the git-tracked worktree, never
+Without one it only checks the current Windows username. The owner's work-names list
+(the file env `CLAUDE_WORK_TERMS_FILE` names) is checked too when present, a hit named only
+`work term`; absent, it is skipped with a note. It scans the git-tracked worktree, never
 commit history or authorship. Exit `0` clean · `1` a hit · `2` could not run, which is not a pass.
 
 ## What a PR needs

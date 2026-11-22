@@ -3,7 +3,9 @@
 //! `CLAUDE_AUTO_CLEAN_PATTERNS`). The private list never enters the repository - it IS the list of
 //! things that must not. Each file's path and its text (UTF-8, or UTF-16 with a BOM) are matched,
 //! case-insensitively. A hit names the pattern by its line number,
-//! never its text, so the list does not leak into a log.
+//! never its text, so the list does not leak into a log. The owner's work-names list (the one the
+//! pre-push guard reads) is checked too when env `CLAUDE_WORK_TERMS_FILE` names an existing file,
+//! its hits named only `work term`; no list (CI, another machine) skips it with a note.
 //!
 //! A dev tool, not part of the release exe: `cargo run --example privacy_scan -- [--root <dir>]
 //! [--patterns <file>]`. `cargo test` runs its unit tests on throwaway git repositories.
@@ -65,6 +67,42 @@ fn load_patterns(user: Option<&str>, list: Option<&Path>) -> Result<Vec<Pattern>
         return Err("no patterns: the user name is empty and no pattern file was given".into());
     }
     Ok(out)
+}
+
+/// The owner's work-names list the pre-push guard reads, named by `CLAUDE_WORK_TERMS_FILE`: its
+/// default home is private, so the gate that runs this scan sets the variable, never this repo.
+fn work_terms_file() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_WORK_TERMS_FILE")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// One literal term per line as the guard reads it (trimmed, `#` comments, under 2 characters
+/// skipped, case-insensitive duplicates once); a space in a term also matches `-`, `_`, `.` or
+/// nothing. Matched as a substring, a superset of the guard's word-edge match. `None` = no file on
+/// this PC (a skip, never a fail); a file that is there but unreadable cannot run.
+fn load_work_terms(path: &Path) -> Result<Option<Vec<Pattern>>, String> {
+    let raw = match std::fs::read(path) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("the work terms file cannot be read: {}", e.kind())),
+    };
+    let text = String::from_utf8_lossy(&raw);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.chars().count() < 2 || line.starts_with('#') || !seen.insert(line.to_lowercase()) {
+            continue;
+        }
+        let source = line.split_whitespace().map(regex::escape).collect::<Vec<_>>().join(r"[\s_.-]*");
+        let re = compile(&source).ok_or("a work term does not compile")?;
+        out.push(Pattern {
+            label: "work term".into(),
+            re,
+        });
+    }
+    Ok(Some(out))
 }
 
 /// Paths git would ship, NUL-separated with quoting off so a non-ASCII or odd name is not dropped.
@@ -160,22 +198,33 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<(PathBuf, Option
     Ok((root, list))
 }
 
-fn run() -> Verdict {
+/// The verdict, and a note when the work terms were skipped (no list on this PC, as in CI).
+fn run() -> (Verdict, &'static str) {
     let (root, list) = match parse_args(std::env::args().skip(1)) {
         Ok(v) => v,
-        Err(e) => return Verdict::CouldNotRun(e),
+        Err(e) => return (Verdict::CouldNotRun(e), ""),
     };
     let user = std::env::var("USERNAME").ok();
-    match load_patterns(user.as_deref(), list.as_deref()) {
-        Ok(patterns) => scan(&root, &patterns),
-        Err(e) => Verdict::CouldNotRun(e),
-    }
+    let mut patterns = match load_patterns(user.as_deref(), list.as_deref()) {
+        Ok(p) => p,
+        Err(e) => return (Verdict::CouldNotRun(e), ""),
+    };
+    let note = match work_terms_file().map(|f| load_work_terms(&f)).transpose() {
+        Ok(Some(Some(terms))) => {
+            patterns.extend(terms);
+            ""
+        }
+        Ok(_) => "; work terms skipped: no CLAUDE_WORK_TERMS_FILE list",
+        Err(e) => return (Verdict::CouldNotRun(e), ""),
+    };
+    (scan(&root, &patterns), note)
 }
 
 #[expect(clippy::print_stdout, reason = "the scan's CLI output")]
 fn main() -> ExitCode {
-    let (text, code) = match run() {
-        Verdict::Clean { files, patterns } => (format!("privacy scan: clean ({files} files, {patterns} pattern(s))"), 0),
+    let (verdict, note) = run();
+    let (text, code) = match verdict {
+        Verdict::Clean { files, patterns } => (format!("privacy scan: clean ({files} files, {patterns} pattern(s){note})"), 0),
         Verdict::Hit(hits) => {
             for h in &hits {
                 println!("{h}");
@@ -320,6 +369,25 @@ mod tests {
         let f = Fixture::patterns_only("nogit", "plantedsecret");
         let p = load_patterns(None, Some(&f.list())).unwrap();
         assert!(matches!(scan(&f.dir.join("nowhere"), &p), Verdict::CouldNotRun(_)));
+    }
+
+    #[test]
+    fn work_term_hit_names_file_line_and_never_the_term() {
+        let f = Fixture::new("work", &[("a.txt", "one\nsee planted-firm notes\n")], "");
+        let terms = f.dir.join("work-terms.txt");
+        std::fs::write(&terms, "\u{feff}# list\nx\nPlanted Firm\nplanted firm\n").unwrap();
+        let p = load_work_terms(&terms).unwrap().expect("the file is there");
+        assert_eq!(p.len(), 1, "comment, 1-char and duplicate lines skipped");
+        let hits = scan(&f.repo(), &p);
+        assert_eq!(hits, Verdict::Hit(vec!["a.txt:2  work term".into()]));
+        assert!(!format!("{hits:?}").to_lowercase().contains("planted"), "{hits:?}");
+    }
+
+    #[test]
+    fn no_work_terms_file_is_a_skip_not_a_failure() {
+        let f = Fixture::patterns_only("noterms", "");
+        assert!(matches!(load_work_terms(&f.dir.join("absent.txt")), Ok(None)));
+        assert!(load_work_terms(&f.dir).is_err(), "a folder where the file should be cannot run");
     }
 
     #[test]
