@@ -147,6 +147,26 @@ fn the_last_action_reads_done_failed_or_its_live_step() {
 }
 
 #[test]
+fn an_installed_build_waiting_for_the_next_start_is_yellow_and_up_to_date_is_not() {
+    let yellow = crate::theme::YELLOW;
+    let colored = |launcher: &str| {
+        let mut p = page_of(info(false, None, None), "", &[]);
+        launcher.clone_into(&mut p.launcher);
+        maintenance_frame(&p, (160, 40), Style { color: true, ascii: false })
+            .lines
+            .join("\n")
+    };
+    let waiting = colored("self-update notify, 9.9.9 installed - takes effect next start");
+    assert!(
+        waiting.contains(&format!("{yellow}9.9.9 installed - takes effect next start")),
+        "{waiting:?}"
+    );
+    let current = colored("self-update notify, up to date");
+    assert!(current.contains("up to date"), "{current:?}");
+    assert!(!current.contains(&format!("{yellow}up to date")), "{current:?}");
+}
+
+#[test]
 fn mcp_list_output_becomes_a_count_and_the_server_lines() {
     let out =
         "Checking MCP server health\u{2026}\n\nalpha: npx alpha - \u{2714} Connected\nbeta: http://x (HTTP) - \u{2717} Failed to connect";
