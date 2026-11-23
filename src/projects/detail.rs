@@ -1,5 +1,6 @@
 //! The selected project's context beside the list: its git branch, how many sessions it has and
-//! the newest of them, from the summary cache (a miss gets the quick head-and-tail row). Loaded off
+//! the newest of them, from the summary cache (a miss is summarised in full, read-only, so its title
+//! is the `/rename` or AI title, never the first prompt). Loaded off
 //! the UI thread; preview loads in place. Exports `Detail`, `DetailSource`, `git_branch`.
 
 use std::collections::HashSet;
@@ -91,7 +92,8 @@ fn load(stores: &Stores, ask: &Ask, live: &dyn Fn(&[PathBuf]) -> HashSet<String>
         .into_iter()
         .filter_map(|r| match r {
             Row::Hit(_, s) => Some(*s),
-            Row::Miss(e) => e.quick(),
+            // The full scan resumes from the cached scan of the same file, so it reads only what grew.
+            Row::Miss(e) => e.summarize(),
         })
         .map(|s| SessionLine {
             live: ids.contains(&s.session_id),
@@ -234,6 +236,15 @@ mod tests {
         assert_eq!(got.count, 2);
         let titles: Vec<(&str, bool)> = got.sessions.iter().map(|s| (s.title.as_str(), s.live)).collect();
         assert_eq!(titles, [("second task", true), ("first task", false)]);
+        let renamed = slug.join("new.jsonl");
+        let mut text = std::fs::read_to_string(&renamed).unwrap();
+        text.push_str("{\"type\":\"ai-title\",\"aiTitle\":\"Named by AI\"}\n");
+        std::fs::write(&renamed, text).unwrap();
+        let again = load(&stores, &ask, &|_| HashSet::new());
+        assert_eq!(
+            again.sessions[0].title, "Named by AI",
+            "an uncached session shows its title, not its first prompt"
+        );
         let none = load(&stores, &Ask { slugs: Vec::new(), ..ask }, &|_| HashSet::new());
         assert_eq!(none.count, 0, "no slug lists nothing, never every project");
         std::fs::remove_dir_all(&d).unwrap();
