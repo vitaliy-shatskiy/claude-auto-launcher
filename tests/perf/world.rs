@@ -20,7 +20,7 @@ use claude_auto::sessions::{PickerRequest, run_picker};
 use claude_auto::ui::{PreviewTerm, Shown, parse_preview_keys};
 
 /// Bump on any change to what `build` writes: an older world on disk is then rebuilt.
-const VERSION: &str = "perf-world-v4";
+pub(crate) const VERSION: &str = "perf-world-v4";
 /// The terminal the frame paths render at.
 pub(crate) const SIZE: (usize, usize) = (250, 68);
 const SLUGS: usize = 7;
@@ -170,35 +170,45 @@ fn root_in(base: &Path) -> io::Result<PathBuf> {
 }
 
 /// The world under `base` (the cargo target's `tmp`), built on first use and kept for later runs:
-/// it never changes, so every reader shares it. Built under a private name and renamed into place:
-/// two builders race safely, the loser uses the winner's copy.
+/// it never changes, so every reader shares it. One builder at a time across processes (nextest runs
+/// a process per test): the lock is taken before the readiness check, so a later caller finds it done.
 pub(crate) fn world(base: &Path) -> io::Result<World> {
     let w = World { root: root_in(base)? };
-    let ready = |r: &Path| std::fs::read_to_string(r.join("done")).is_ok_and(|v| v == VERSION);
+    let lock = std::fs::File::create(base.join(format!("claude-auto-{VERSION}.lock")))?;
+    lock.lock()?;
     if !ready(&w.root) {
         let tmp = base.join(format!("claude-auto-{VERSION}.{}.tmp", std::process::id()));
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
         build(&w, &tmp)?;
-        // A root without `done` is never a build in progress (builders rename a finished tree), only
-        // a stale one: CI's rust-cache restores `target` with such a root, and the rename into a
-        // non-empty dir failed every perf test (os error 145).
-        if w.root.exists() && !ready(&w.root) {
-            std::fs::remove_dir_all(&w.root)?;
-        }
-        let moved = std::fs::rename(&tmp, &w.root);
-        if moved.is_err() {
-            std::fs::remove_dir_all(&tmp)?;
-        }
-        if !ready(&w.root) {
-            let why = moved
-                .err()
-                .map_or_else(String::new, |e| format!(": the rename into it failed: {e}"));
-            return Err(io::Error::other(format!("{} is not a complete world{why}", w.root.display())));
-        }
+        publish(&tmp, &w.root)?;
     }
     Ok(w)
+}
+
+fn ready(root: &Path) -> bool {
+    std::fs::read_to_string(root.join("done")).is_ok_and(|v| v == VERSION)
+}
+
+/// Moves the built tree `tmp` to `root`, under the builders' lock. A root without `done` is stale,
+/// never a build in progress: CI's rust-cache restores `target` with one, and the rename into a
+/// non-empty dir failed every perf test (os error 145).
+pub(crate) fn publish(tmp: &Path, root: &Path) -> io::Result<()> {
+    if root.exists() && !ready(root) {
+        std::fs::remove_dir_all(root)?;
+    }
+    let moved = std::fs::rename(tmp, root);
+    if moved.is_err() {
+        std::fs::remove_dir_all(tmp)?;
+    }
+    if ready(root) {
+        return Ok(());
+    }
+    let why = moved
+        .err()
+        .map_or_else(String::new, |e| format!(": the rename into it failed: {e}"));
+    Err(io::Error::other(format!("{} is not a complete world{why}", root.display())))
 }
 
 /// A scratch dir of this process (prefs, caches), emptied first.
