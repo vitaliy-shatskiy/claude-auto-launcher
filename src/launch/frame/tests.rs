@@ -534,3 +534,42 @@ fn too_small_terminal_gets_the_size_frame() {
         Some("  need 50x16, have 40x10")
     );
 }
+
+#[test]
+fn the_focused_account_row_keeps_each_accounts_colour() {
+    // Given: personal (magenta) picked, the cursor on the account row, then on the next row.
+    let r = four();
+    let mut s = snapped(&r);
+    s.account = "personal".into();
+    let (none, version, labels) = (Limits::new(), VersionInfo::default(), DefaultLabels::new());
+    let account_line = |row: usize| {
+        let mut st = s.clone();
+        st.row = row;
+        let c = Case {
+            state: &st,
+            width: 100,
+            height: 30,
+            limits: &none,
+            version: &version,
+            labels: &labels,
+            model_label: "default",
+            style: Style { color: true, ascii: false },
+        };
+        let frame = render(&r, &c);
+        frame.lines().nth(1).unwrap_or_default().to_owned()
+    };
+    // When: drawn focused and unfocused.
+    let (focused, unfocused) = (account_line(0), account_line(1));
+    let values = |l: &str| {
+        l.get(l.find("work").unwrap()..l.find("low").unwrap() + 3)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    // Then: the picked account is bold magenta, and the values draw as on an unfocused row.
+    assert!(
+        focused.contains(&format!("{}{}[personal]", theme::BOLD, theme::MAGENTA)),
+        "{focused:?}"
+    );
+    assert_eq!(values(&focused), values(&unfocused), "{focused:?}\n{unfocused:?}");
+    assert!(focused.contains(theme::SELECT_BG), "the label still shows the focus: {focused:?}");
+}

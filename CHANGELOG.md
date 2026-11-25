@@ -11,6 +11,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   the account has it, else `Opus 5.5[1M]`, and every launch passes `--model`. The launcher API offers
   no `default` model value and no model entry in `defaultLabels`; `hiddenValues` `model: default` warns.
 
+### Fixed
+
+- The focused account row keeps each account's colour: the focus band covers only the `❯ account`
+  label, so the picked account stays bold in its tint (`[personal]` magenta) as on an unfocused row.
+
 ## [1.0.1] — 2026-11-22
 
 ### Fixed

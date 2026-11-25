@@ -55,7 +55,24 @@ pub(super) fn add_launch_color(line: &str, enabled: bool, g: &Glyphs, roster: &R
     if !enabled || line.is_empty() {
         return line.to_owned();
     }
-    let is_account_row = SGR_ROW_LABEL.is_match(line);
+    // The focused account row bands only its label: each account keeps its own colour.
+    let label_end = |l: &str| {
+        SGR_ROW_LABEL
+            .find(l)
+            .map(|m| m.end() + l.get(m.end()..).map_or(0, |v| v.len() - v.trim_start().len()))
+    };
+    let banded = line.strip_prefix(theme::SELECT_OPEN).and_then(|rest| {
+        let end = label_end(rest)?;
+        let (label, values) = (rest.get(..end)?, rest.get(end..)?);
+        Some(format!(
+            "{}{label}{}{}",
+            theme::SELECT_OPEN,
+            theme::SELECT_CLOSE,
+            values.replace(theme::SELECT_CLOSE, "")
+        ))
+    });
+    let is_account_row = banded.is_some() || SGR_ROW_LABEL.is_match(line);
+    let line = banded.as_deref().unwrap_or(line);
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::new();
     let mut i = 0;
