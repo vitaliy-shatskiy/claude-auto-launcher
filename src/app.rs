@@ -403,7 +403,7 @@ fn launch(run: &Run) -> i32 {
                     .cloned()
                     .unwrap_or_default()
             };
-            let (default_model, default_advisor) = (resolved("Model"), resolved("Advisor"));
+            let (default_model, default_advisor) = (resolved(crate::env::MODEL_ID), resolved("Advisor"));
             launch_args(
                 &o.roster,
                 &o.state,
@@ -412,6 +412,24 @@ fn launch(run: &Run) -> i32 {
                 available,
                 &default_model,
                 &default_advisor,
+            )
+        }
+        // The fallback prompts and the plain no-screen start: the account's settings default, as
+        // Enter on the screen would launch it.
+        None if run.args.is_empty() => {
+            let root = run.cfg.accounts.iter().find(|a| a.key == choice).map_or("", |a| a.root.as_str());
+            let labels = crate::env::default_labels(&std::path::Path::new(root).join("settings.json"));
+            let mut state = run.roster.new_state();
+            choice.clone_into(&mut state.account);
+            let label = |k: &str| labels.get(k).map_or("", String::as_str);
+            launch_args(
+                &run.roster,
+                &state,
+                None,
+                false,
+                None,
+                label(crate::env::MODEL_ID),
+                label("Advisor"),
             )
         }
         None => run.args.clone(),

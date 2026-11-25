@@ -397,13 +397,33 @@ fn prefs_are_the_rows_the_screen_would_restore_and_never_the_remote() {
 }
 
 #[test]
-fn a_remembered_family_the_account_lost_resolves_like_a_default_as_on_the_screen() {
+fn a_remembered_family_the_account_lost_is_no_pick_in_prefs() {
     let mut o = Options::new();
     o.prefs = parse_prefs(SAVED);
     o.limits = limits_without_fable("main");
-    assert_eq!(o.main_account()["prefs"]["model"], "opus1m", "no settings default: the pin");
-    o.labels = labels(&[("Model", "Sonnet 5.5")]);
-    assert_eq!(o.main_account()["prefs"]["model"], "sonnet1m", "the settings family");
+    o.labels = labels(&[("ModelId", "sonnet")]);
+    assert_eq!(
+        o.main_account()["prefs"]["model"],
+        "default",
+        "a snapped model is never a remembered one"
+    );
+}
+
+#[test]
+fn default_model_names_what_a_launch_without_a_pick_runs() {
+    let mut o = Options::new();
+    assert_eq!(o.main_account()["defaultModel"], "opus1m", "no settings model: the pin");
+    o.labels = labels(&[("ModelId", "sonnet")]);
+    assert_eq!(o.main_account()["defaultModel"], "sonnet1m");
+    o.labels = labels(&[("ModelId", "opusplan")]);
+    assert_eq!(o.main_account()["defaultModel"], "opusplan", "no family alias: verbatim");
+}
+
+#[test]
+fn a_run_request_may_ask_for_the_default_model() {
+    let mut req = request();
+    req.model = Some("default".into());
+    assert_eq!(resolve(&req).map(|s| s.model), Ok("default".to_owned()));
 }
 
 #[test]

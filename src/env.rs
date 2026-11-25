@@ -280,7 +280,10 @@ pub fn default_advisor_label(settings: &Path) -> String {
     }
 }
 
-/// Row name -> the bare value 'default' resolves to for this profile.
+/// The `DefaultLabels` key of the raw `settings.json` `model`.
+pub const MODEL_ID: &str = "ModelId";
+
+/// Row name -> the bare value 'default' resolves to for this profile; `MODEL_ID` the raw model.
 pub fn default_labels(settings: &Path) -> DefaultLabels {
     let mut model = default_model_label(settings);
     if let Some(inner) = model.strip_prefix("default (").and_then(|m| m.strip_suffix(')')) {
@@ -299,6 +302,10 @@ pub fn default_labels(settings: &Path) -> DefaultLabels {
     .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
     .collect();
     if let Some(v) = settings.exists().then(|| read_settings(settings)).flatten() {
+        // The raw `model`: what a default model launch resolves from (`launch::default_model_key`).
+        if let Some(m) = str_field(&v, "model") {
+            labels.insert(MODEL_ID.into(), m);
+        }
         if let Some(a) = str_field(&v, "advisorModel") {
             labels.insert("Advisor".into(), a);
         }

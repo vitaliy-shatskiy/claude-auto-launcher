@@ -93,26 +93,31 @@ fn start(r: &Roster, prev: &Prefs, settings_model: &str, pick: Option<&str>) -> 
 #[test]
 fn a_snapped_model_is_never_saved_and_follows_the_settings_on_the_next_start() {
     let r = four();
-    let (first, saved) = start(&r, &Prefs::default(), "Opus 5.5", None);
+    let (first, saved) = start(&r, &Prefs::default(), "opus", None);
     assert_eq!(first.model, "opus1m", "the settings family is shown");
     assert!(saved.profiles["work"].get("Model").is_none(), "{:?}", saved.profiles);
-    let (second, _) = start(&r, &saved, "Sonnet 5.5", None);
+    let (second, _) = start(&r, &saved, "sonnet", None);
     assert_eq!(second.model, "sonnet1m", "settings.json changed between the starts");
     assert_eq!(
-        crate::launch::launch_args(&r, &second, None, false, None, "Sonnet 5.5", "").join(" "),
+        crate::launch::launch_args(&r, &second, None, false, None, "sonnet", "").join(" "),
         "--model sonnet[1m]"
     );
 }
 
 #[test]
-fn a_picked_model_is_saved_and_a_remembered_default_is_no_pick() {
+fn a_picked_model_is_saved_and_wins_over_the_settings() {
     let r = four();
-    let (_, saved) = start(&r, &Prefs::default(), "Opus 5.5", Some("haiku"));
+    let (_, saved) = start(&r, &Prefs::default(), "opus", Some("haiku"));
     assert_eq!(saved.profiles["work"]["Model"], "haiku");
-    let (again, _) = start(&r, &saved, "Sonnet 5.5", None);
-    assert_eq!(again.model, "haiku", "a pick wins over the settings");
+    let (again, _) = start(&r, &saved, "sonnet", None);
+    assert_eq!(again.model, "haiku");
+}
+
+#[test]
+fn a_remembered_default_is_no_pick() {
+    let r = four();
     let old = parse_prefs(r#"{"Version":2,"Account":"work","Profiles":{"work":{"Model":"default","Effort":"max"}}}"#);
-    let (s, saved) = start(&r, &old, "Sonnet 5.5", None);
+    let (s, saved) = start(&r, &old, "sonnet", None);
     assert_eq!(s.model, "sonnet1m");
     assert!(saved.profiles["work"].get("Model").is_none(), "{:?}", saved.profiles);
 }
@@ -121,10 +126,10 @@ fn a_picked_model_is_saved_and_a_remembered_default_is_no_pick() {
 fn a_snapped_model_parked_on_a_tab_switch_is_still_no_pick() {
     let r = four();
     let mut s = r.new_state();
-    crate::launch::availability_snap(&r, &mut s, None, "Opus 5.5");
+    crate::launch::availability_snap(&r, &mut s, None, "opus");
     switch_account(&mut s, "personal", &Prefs::default(), &r, 0);
     switch_account(&mut s, "work", &Prefs::default(), &r, 0);
-    crate::launch::availability_snap(&r, &mut s, None, "Sonnet 5.5");
+    crate::launch::availability_snap(&r, &mut s, None, "sonnet");
     assert_eq!(s.model, "sonnet1m");
     assert!(
         build_prefs_data(&Prefs::default(), &s, 5, &r)["Profiles"]["work"]

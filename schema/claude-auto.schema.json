@@ -117,7 +117,7 @@
       }
     },
     "modelOrder": {
-      "description": "Model families on the model row after default, in this order; an unlisted family is hidden.",
+      "description": "Model families on the model row, in this order; an unlisted family is hidden.",
       "type": "array",
       "items": { "type": "string", "enum": ["haiku", "sonnet", "opus", "fable"] },
       "default": ["haiku", "sonnet", "opus", "fable"]

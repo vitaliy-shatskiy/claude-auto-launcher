@@ -89,30 +89,32 @@ impl<'a> OptionText<'a> {
 }
 
 static FAMILY_WORD: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    MODEL_FAMILY_KEYS
+    HIDEABLE_FAMILIES
         .iter()
         // Word start only: raw settings ids glue a version on (`fable5`, `fable_1m`).
-        .map(|(f, _)| (*f, theme::re(&format!(r"(?i)(?:^|[^a-z0-9]){f}"))))
+        .map(|f| (*f, theme::re(&format!(r"(?i)(?:^|[^a-z0-9]){f}"))))
         .collect()
 });
 
-/// The model row key a `default` model resolves to: the family the settings default names when
-/// the account has it and the row lists it, else the unavailable-default pin.
-pub fn default_model_key(roster: &Roster, default_model: &str, available: Option<&[String]>) -> String {
+/// The model row key a `default` model resolves to, from the raw `settings.json` `model`: a family
+/// alias (`opus`, `sonnet[1m]`) the account has and the row lists, else the unavailable-default
+/// pin (also for no setting); `None` = any other value (`opusplan`, a full id), passed verbatim.
+pub fn default_model_key(roster: &Roster, settings_model: &str, available: Option<&[String]>) -> Option<String> {
+    let alias = settings_model.trim().to_ascii_lowercase();
+    let alias = alias.strip_suffix("[1m]").unwrap_or(&alias);
+    let named = MODEL_FAMILY_KEYS.iter().find(|(f, _)| *f == alias).map(|(_, k)| *k);
+    if named.is_none() && !alias.is_empty() && !default_model_unavailable(settings_model, available) {
+        return None;
+    }
     let hidden = hidden_families(available);
     let listed = roster.def(RowName::Model).map_or(&[][..], |r| r.values.as_slice());
-    let named = FAMILY_WORD
-        .iter()
-        .find(|(_, re)| re.is_match(default_model))
-        .and_then(|(f, _)| MODEL_FAMILY_KEYS.iter().find(|(fam, _)| fam == f))
-        .map(|(_, k)| *k);
-    named
+    let key = named
         .into_iter()
         .chain([UNAVAILABLE_DEFAULT_KEY])
         .chain(listed.iter().map(String::as_str))
         .find(|k| listed.iter().any(|v| v.eq_ignore_ascii_case(k)) && option_family(RowName::Model, k).is_none_or(|f| !hidden.contains(&f)))
-        .unwrap_or(UNAVAILABLE_DEFAULT_KEY)
-        .to_owned()
+        .unwrap_or(UNAVAILABLE_DEFAULT_KEY);
+    Some(key.to_owned())
 }
 
 /// The resolved default names a family this account lacks.
@@ -191,8 +193,9 @@ pub fn is_hidden_row_value(roster: &Roster, row: &RowDef, key: &str, ctx: &Optio
 }
 
 /// A remembered Model/Advisor of a hidden family loses its restore mark and goes back to its
-/// default; the model row has no `default`, so a `default` model resolves to an explicit key.
-pub fn availability_snap(roster: &Roster, state: &mut LaunchState, available: Option<&[String]>, default_model: &str) {
+/// default; the model row has no `default`, so a `default` model resolves to an explicit key, or
+/// stays `default` (no cell selected) for a `settings_model` the launch passes verbatim.
+pub fn availability_snap(roster: &Roster, state: &mut LaunchState, available: Option<&[String]>, settings_model: &str) {
     let hidden = hidden_families(available);
     for rn in [RowName::Model, RowName::Advisor] {
         if option_family(rn, state.get(rn)).is_some_and(|f| hidden.contains(&f)) {
@@ -200,8 +203,10 @@ pub fn availability_snap(roster: &Roster, state: &mut LaunchState, available: Op
             state.restored.retain(|r| !r.eq_ignore_ascii_case(rn.as_str()));
         }
     }
-    if state.model.eq_ignore_ascii_case("default") {
-        state.model = default_model_key(roster, default_model, available);
+    if state.model.eq_ignore_ascii_case("default")
+        && let Some(key) = default_model_key(roster, settings_model, available)
+    {
+        state.model = key;
         state.model_snapped = true;
     }
 }

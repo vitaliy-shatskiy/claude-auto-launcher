@@ -485,8 +485,8 @@ apply, the rest warn as unknown.
 | `launchHooks[]` | paths | `[]` | `.ps1`/`.js`/`.mjs`/`.cmd`, run after the account choice with the chosen project as the working directory, each best-effort. Must be absolute. Entries run at the same time; an entry that is an array of paths runs them in order (`["a.ps1", ["b.ps1", "c.ps1"]]`) |
 | `maintenanceActions[]` | `{key, label, script, confirmTwice}` | `[]` | key is one character, a-z or 0-9, outside `u r d m p l c b` (the maintenance screen's own keys). `script` is required and must be absolute. An entry failing either check is skipped with a warning |
 | `rows[]` | row names | every row | the launch rows in drawing order: `account`, `remote`, `model`, `effort`, `advisor`, `permission`, `mode`. An unlisted row is hidden and launches with its `hiddenValues` entry, else its default (`mode` = normal), never a remembered choice. `account` is always shown, first when unlisted. `remote` keeps its place here while the `remote` key is off and shows once it is on. Duplicates: the first wins; unknown names are named in one warning. The rows editor (maintenance `l`) writes it |
-| `hiddenValues` | object | none | row name -> the value that row launches with while hidden, e.g. `{"effort": "high", "model": "fable"}`: the same claude arguments as picking it on a shown row. Values: [the table below](#row-values); `account` takes none. Saving in the rows editor keeps only hidden rows' entries: a shown row's entry and a bad entry are removed. A hidden row never takes a remembered value, not even from another account tab this run. An unknown row or value warns and is skipped. A model the account lacks falls back as a remembered one does: to `default` |
-| `modelOrder[]` | family names | `["haiku","sonnet","opus","fable"]` | the model row, in this order. An unlisted family is hidden. Unknown names warn |
+| `hiddenValues` | object | none | row name -> the value that row launches with while hidden, e.g. `{"effort": "high", "model": "fable"}`: the same claude arguments as picking it on a shown row. Values: [the table below](#row-values); `account` takes none. Saving in the rows editor keeps only hidden rows' entries: a shown row's entry and a bad entry are removed. A hidden row never takes a remembered value, not even from another account tab this run. An unknown row or value warns and is skipped. A model the account lacks falls back as a remembered one does: to the settings default (see `model` below) |
+| `modelOrder[]` | family names | `["haiku","sonnet","opus","fable"]` | the model row, in this order. An unlisted family is hidden; when it lists neither the settings family nor `opus`, a launch without a pick selects the first listed model. Unknown names warn |
 | `hiddenProjects[]` | paths | `[]` | projects the project screen leaves out. `h` appends the project's path, or removes every entry that expands to it; the other entries stay as written. A save that fails keeps the change for that run and says why. Absolute, case-insensitive; a path that no longer exists is kept. A filter or `v` still finds them |
 | `pinnedProjects[]` | paths | `[]` | projects the project screen lists first, in this order, whatever their recency; in a `/` search a pin only breaks ties. `p` appends the project's path, or removes every entry that expands to it. Pinning a hidden project removes it from `hiddenProjects`, hiding a pinned one removes it from here. A pinned folder that no longer exists is kept and listed dimmed, marked `(missing)`. Absolute, case-insensitive |
 | `hideHeadlessProjects` | bool | `true` | a project with no interactive session (only `sdk-*` transcripts) is hidden even when it is a git root. `false` keeps a headless git root listed |
@@ -518,7 +518,7 @@ A new account: pick its tab, start a session, type `/login` once in it.
 
 | Row | Values |
 |---|---|
-| `model` | `default`, then the families in `modelOrder`: `haiku`, `sonnet1m`, `opus1m`, `fable` |
+| `model` | the families in `modelOrder`: `haiku`, `sonnet1m`, `opus1m`, `fable`. Unset (hidden row, no pick): the `settings.json` `model` family (`opus`, `sonnet[1m]` ...), else `opus1m`; any other settings value (`opusplan`, a full id) is passed verbatim |
 | `effort` | `default`, `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` |
 | `advisor` | `default`, `fable`, `opus`, `off` |
 | `permission` | `default`, `plan`, `auto`, `acceptEdits`, `bypass` (= `bypassPermissions`) |
@@ -639,7 +639,7 @@ Each counts only as the first argument.
   downloaded Claude Code build), `actions`, `rows` (each shown row with its values and labels,
   without `account` and `remote`), `pluginRows` (each plugin row's `name` as `<plugin>.<row>`, `label`, `values`, `default`),
   and `accounts`: per shown account its `key`, `label`, `tint`, `configDir`, `default`,
-  `limitPct`, `hidden` values, `defaultLabels` and remembered `prefs`. It starts no process,
+  `limitPct`, `hidden` values, `defaultLabels`, `defaultModel` (what a launch without a model pick runs) and remembered `prefs`. It starts no process,
   touches no network and writes nothing, not even a log.
 - `claude-auto --launcher-run '<json>'` takes `{"account", "project", "action", <every row
   --launcher-options listed>, "pluginRows"?: {"<plugin>.<row>": "<value>"}, "resumeId"?,

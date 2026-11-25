@@ -82,6 +82,18 @@ fn arguments_pass_through_verbatim_with_exit_code_and_marker() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+#[test]
+fn a_start_without_the_screen_passes_the_settings_model() {
+    let d = scratch("no-screen-model");
+    fake_claude(&d);
+    std::fs::write(d.join("home").join(".claude").join("settings.json"), r#"{"model":"sonnet"}"#).unwrap();
+    let o = launcher(&d).stdin(std::process::Stdio::null()).output().unwrap();
+    let out = text(&o);
+    // Rust quotes a batch-file argument holding `[`.
+    assert!(out.contains("ARGV --model \"sonnet[1m]\""), "{out}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 fn timing_records(d: &Path) -> Vec<serde_json::Value> {
     let logs = d.join("home").join(".claude").join("launcher-logs");
     let Ok(entries) = std::fs::read_dir(&logs) else { return Vec::new() };

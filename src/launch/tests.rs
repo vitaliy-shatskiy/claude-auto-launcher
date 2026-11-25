@@ -101,15 +101,15 @@ fn the_action_row_follows_account_and_remote_and_project_adds_no_argument() {
 }
 
 #[test]
-fn a_default_state_passes_only_the_resolved_model() {
-    assert_eq!(args(&four(), |_| {}), "--model opus[1m]", "no settings default: the pin");
+fn a_default_state_without_a_settings_model_passes_the_opus_pin() {
+    assert_eq!(args(&four(), |_| {}), "--model opus[1m]");
+}
+
+#[test]
+fn a_default_state_passes_the_settings_family() {
     let r = four();
     let s = r.new_state();
-    assert_eq!(
-        launch_args(&r, &s, None, false, None, "Sonnet 5.5", "").join(" "),
-        "--model sonnet[1m]",
-        "the settings family, never a launch without --model"
-    );
+    assert_eq!(launch_args(&r, &s, None, false, None, "sonnet", "").join(" "), "--model sonnet[1m]");
 }
 
 #[test]
@@ -117,21 +117,39 @@ fn a_fresh_or_remembered_default_model_snaps_to_the_settings_family() {
     let r = four();
     let fable = vec!["fable".to_owned()];
     let none: Vec<String> = Vec::new();
-    for (label, have, key) in [
-        ("Opus 5.5", None, "opus1m"),
-        ("Sonnet 5.5", None, "sonnet1m"),
-        ("claude-haiku-5-5", Some(&fable), "haiku"),
-        ("Fable 5.1[1M]", Some(&fable), "fable"),
-        ("Fable 5.1[1M]", Some(&none), "opus1m"),
+    for (raw, have, key) in [
+        ("opus", None, "opus1m"),
+        ("opus[1m]", None, "opus1m"),
+        ("Sonnet", None, "sonnet1m"),
+        ("haiku", Some(&fable), "haiku"),
+        ("fable", Some(&fable), "fable"),
+        ("fable", Some(&none), "opus1m"),
+        ("claude-fable-5-1[1m]", Some(&none), "opus1m"),
     ] {
         let mut s = r.new_state();
-        availability_snap(&r, &mut s, have.map(Vec::as_slice), label);
-        assert_eq!(s.model, key, "{label}");
+        availability_snap(&r, &mut s, have.map(Vec::as_slice), raw);
+        assert_eq!(s.model, key, "{raw}");
     }
+}
+
+#[test]
+fn an_explicit_pick_survives_the_snap() {
+    let r = four();
     let mut picked = r.new_state();
-    picked.model = "haiku".into();
-    availability_snap(&r, &mut picked, None, "Opus 5.5");
-    assert_eq!(picked.model, "haiku", "an explicit pick stays");
+    picked.set(RowName::Model, "haiku");
+    availability_snap(&r, &mut picked, None, "opus");
+    assert_eq!(picked.model, "haiku");
+}
+
+#[test]
+fn a_settings_model_that_is_no_family_alias_selects_no_cell_and_passes_verbatim() {
+    let r = four();
+    for raw in ["opusplan", "claude-opus-4-5-20251101"] {
+        let mut s = r.new_state();
+        availability_snap(&r, &mut s, None, raw);
+        assert_eq!(s.model, "default", "{raw}: no row cell is selected");
+        assert_eq!(launch_args(&r, &s, None, false, None, raw, "").join(" "), format!("--model {raw}"));
+    }
 }
 
 #[test]
@@ -139,22 +157,28 @@ fn a_family_the_model_order_leaves_out_falls_to_the_pin() {
     let mut r = four();
     r.apply_model_order(&["haiku".to_owned(), "opus".to_owned()]);
     let mut s = r.new_state();
-    availability_snap(&r, &mut s, None, "Sonnet 5.5");
+    availability_snap(&r, &mut s, None, "sonnet");
     assert_eq!(s.model, "opus1m");
+    let mut no_opus = four();
+    no_opus.apply_model_order(&["haiku".to_owned(), "fable".to_owned()]);
+    let mut s = no_opus.new_state();
+    availability_snap(&no_opus, &mut s, None, "sonnet");
+    assert_eq!(s.model, "haiku", "neither the family nor opus listed: the first listed");
 }
 
 #[test]
-fn an_unreadable_settings_default_snaps_to_the_opus_pin() {
+fn an_unreadable_settings_default_snaps_to_the_opus_pin() -> std::io::Result<()> {
     let dir = std::env::temp_dir().join(format!("claude-auto-rs-snap-{}", crate::log::new_run_id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&dir)?;
     let p = dir.join("settings.json");
-    std::fs::write(&p, "{broken").unwrap();
+    std::fs::write(&p, "{broken")?;
     let labels = crate::env::default_labels(&p);
-    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&dir)?;
     let r = four();
     let mut s = r.new_state();
-    availability_snap(&r, &mut s, None, labels.get("Model").map_or("", String::as_str));
+    availability_snap(&r, &mut s, None, labels.get(crate::env::MODEL_ID).map_or("", String::as_str));
     assert_eq!(s.model, "opus1m");
+    Ok(())
 }
 
 #[test]
@@ -207,17 +231,17 @@ fn default_pins_opus_when_account_lacks_fable() {
     let s = r.new_state();
     let none: Vec<String> = Vec::new();
     assert_eq!(
-        launch_args(&r, &s, None, false, Some(&none), "Fable 5.1[1M]", "").join(" "),
+        launch_args(&r, &s, None, false, Some(&none), "fable", "").join(" "),
         "--model opus[1m]"
     );
     assert_eq!(
-        launch_args(&r, &s, None, false, None, "Fable 5.1[1M]", "").join(" "),
+        launch_args(&r, &s, None, false, None, "fable", "").join(" "),
         "--model fable",
         "no information: the settings family"
     );
     let fable = vec!["fable".to_owned()];
     assert_eq!(
-        launch_args(&r, &s, None, false, Some(&fable), "Fable 5.1[1M]", "").join(" "),
+        launch_args(&r, &s, None, false, Some(&fable), "fable", "").join(" "),
         "--model fable"
     );
 }
@@ -228,7 +252,7 @@ fn a_hidden_model_row_still_pins_the_unavailable_default() {
     r.apply_rows(&[RowName::Account, RowName::Effort]);
     let none: Vec<String> = Vec::new();
     assert_eq!(
-        launch_args(&r, &r.new_state(), None, false, Some(&none), "Fable 5.1[1M]", "").join(" "),
+        launch_args(&r, &r.new_state(), None, false, Some(&none), "fable", "").join(" "),
         "--model opus[1m]"
     );
 }
@@ -299,11 +323,11 @@ fn a_pinned_model_of_a_family_the_account_lacks_snaps_like_a_remembered_one() {
     r.apply_rows(&[RowName::Account]);
     r.set_hidden_values(&pinned(&[(RowName::Model, "fable")]));
     let mut s = r.new_state();
-    availability_snap(&r, &mut s, Some(&[]), "Fable 5.1[1M]");
+    availability_snap(&r, &mut s, Some(&[]), "fable");
     assert_eq!(s.model, "opus1m");
     let none: Vec<String> = Vec::new();
     assert_eq!(
-        launch_args(&r, &s, None, false, Some(&none), "Fable 5.1[1M]", "").join(" "),
+        launch_args(&r, &s, None, false, Some(&none), "fable", "").join(" "),
         "--model opus[1m]",
         "fable snaps to default, which pins opus on an account without fable (CS-231)"
     );

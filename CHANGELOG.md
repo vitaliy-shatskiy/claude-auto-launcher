@@ -10,8 +10,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   explicit `Opus 5.5[1M]`. A fresh or remembered `default` selects the family `settings.json` names when
   the account has it, else `Opus 5.5[1M]`, and every launch passes `--model`. That selection is never
   remembered: only a model picked on the row is saved, so an account without a pick follows
-  `settings.json` on every start. The launcher API offers
-  no `default` model value and no model entry in `defaultLabels`; `hiddenValues` `model: default` warns.
+  `settings.json` on every start. A `settings.json` model that is no family alias (`opusplan`, a full
+  model id) is passed verbatim, with no cell selected. The fallback prompts and a start without the
+  screen pass the same `--model`.
+- Launcher API: each account gains `defaultModel` (the row key a launch without a model pick runs,
+  or the verbatim settings value); `prefs.model` is `default` for a model the owner never picked;
+  `--launcher-run` takes `"model": "default"` to launch that. The model row's listed values
+  hold no `default` and `defaultLabels` has no model entry; `hiddenValues` `model: default` warns.
 
 ### Fixed
 

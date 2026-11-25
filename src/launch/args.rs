@@ -81,8 +81,9 @@ pub fn launch_mode_table_errors(modes: &[LaunchMode], reserved: &[char]) -> Vec<
     errors
 }
 
-/// A default state yields only `--model`: the model row has no `default`, so `default_model`
-/// (the settings default) resolves to an explicit key, the pin when the account lacks its family;
+/// A default state yields only `--model`: the model row has no `default`, so `settings_model`
+/// (the raw `settings.json` `model`) resolves to a row key, the pin when the account lacks its family,
+/// or passes verbatim when it is no family alias;
 /// `default_advisor` (the raw `advisorModel`) gets the same pin on the advisor row.
 pub fn launch_args(
     roster: &Roster,
@@ -90,7 +91,7 @@ pub fn launch_args(
     resume_id: Option<&str>,
     fork: bool,
     available: Option<&[String]>,
-    default_model: &str,
+    settings_model: &str,
     default_advisor: &str,
 ) -> Vec<String> {
     let mut a = Vec::new();
@@ -102,7 +103,10 @@ pub fn launch_args(
             .and_then(|r| r.args.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)))
             .map(|(_, v)| v.clone())
     };
-    let model_arg = arg_of(&state.model).or_else(|| arg_of(&default_model_key(roster, default_model, available)));
+    let model_arg = arg_of(&state.model).or_else(|| match default_model_key(roster, settings_model, available) {
+        Some(key) => arg_of(&key),
+        None => Some(settings_model.trim().to_owned()),
+    });
     if let Some(m) = model_arg {
         a.extend(["--model".to_owned(), m]);
     }

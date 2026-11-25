@@ -10,7 +10,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::config::Account;
-use crate::launch::{LAUNCH_MODES, LaunchState, OptionText, Roster, RowDef, RowName, availability_snap, launch_mode, visible_row_values};
+use crate::launch::{
+    LAUNCH_MODES, LaunchState, OptionText, Roster, RowDef, RowName, availability_snap, default_model_key, launch_mode, visible_row_values,
+};
 use crate::prefs::{self, Prefs};
 use crate::sessions::valid_session_id;
 use crate::types::{DefaultLabels, Limits};
@@ -164,6 +166,11 @@ pub fn resolve_run(req: &RunRequest, roster: &Roster, limits: &Limits, prefs_fil
             continue;
         };
         let value = req.row(name).ok_or_else(|| format!("{key}: required"))?;
+        // `default`: the model the screen selects without a pick (`defaultModel`), as Enter launches it.
+        if name == RowName::Model && value.eq_ignore_ascii_case("default") {
+            state.set(name, "default");
+            continue;
+        }
         let values = offered(roster, row, have);
         let Some(canon) = values.iter().find(|v| v.eq_ignore_ascii_case(value)) else {
             return Err(format!("{key}: '{value}' is not one of {}", values.join(", ")));
@@ -243,13 +250,20 @@ fn prefs_json(
     labels: Option<&DefaultLabels>,
 ) -> Map<String, Value> {
     let mut state = account_state(prefs_file, account, roster);
-    let model = labels.and_then(|l| l.get("Model")).map_or("", String::as_str);
+    let model = labels.and_then(|l| l.get(crate::env::MODEL_ID)).map_or("", String::as_str);
     availability_snap(roster, &mut state, have, model);
     let rows: Vec<RowName> = client_rows(roster).map(|r| r.name).collect();
     if !rows.iter().any(|r| state.is_restored(*r)) {
         return Map::new();
     }
-    rows.iter().map(|r| (field(*r).to_owned(), json!(state.get(*r)))).collect()
+    rows.iter().map(|r| (field(*r).to_owned(), json!(state.pick(*r)))).collect()
+}
+
+/// The model a launch without a pick runs: the row key the screen selects, or the `settings.json`
+/// value passed verbatim (no cell selected).
+fn default_model_json(roster: &Roster, have: Option<&[String]>, labels: Option<&DefaultLabels>) -> Value {
+    let raw = labels.and_then(|l| l.get(crate::env::MODEL_ID)).map_or("", String::as_str);
+    json!(default_model_key(roster, raw, have).unwrap_or_else(|| raw.trim().to_owned()))
 }
 
 /// The one line `--launcher-options` prints. `labels`: account -> its resolved defaults.
@@ -276,6 +290,7 @@ pub fn options_json(
                 "limitPct": limits.get(&a.key).and_then(|l| l.five_hour),
                 "hidden": hidden_json(roster, have),
                 "defaultLabels": default_labels_json(roster, have, labels.get(&a.key)),
+                "defaultModel": default_model_json(roster, have, labels.get(&a.key)),
                 "prefs": prefs_json(roster, prefs_file, &a.key, have, labels.get(&a.key)),
             })
         })
