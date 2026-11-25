@@ -181,7 +181,13 @@ pub(crate) fn world(base: &Path) -> io::Result<World> {
             std::fs::remove_dir_all(&tmp)?;
         }
         build(&w, &tmp)?;
-        let moved = rename_settled(&tmp, &w.root, || ready(&w.root));
+        // A root without `done` is never a build in progress (builders rename a finished tree), only
+        // a stale one: CI's rust-cache restores `target` with such a root, and the rename into a
+        // non-empty dir failed every perf test (os error 145).
+        if w.root.exists() && !ready(&w.root) {
+            std::fs::remove_dir_all(&w.root)?;
+        }
+        let moved = std::fs::rename(&tmp, &w.root);
         if moved.is_err() {
             std::fs::remove_dir_all(&tmp)?;
         }
@@ -195,23 +201,6 @@ pub(crate) fn world(base: &Path) -> io::Result<World> {
     Ok(w)
 }
 
-/// Renames `from` to `to`, retrying for up to 10 s while `to` is not yet complete: on a Windows
-/// runner the antivirus still holds the freshly written transcripts, and a directory with an open
-/// file inside cannot be renamed (CI failed every perf test on this). A complete `to` means another
-/// builder won: its error is returned at once and the caller uses the winner's copy.
-fn rename_settled(from: &Path, to: &Path, to_complete: impl Fn() -> bool) -> io::Result<()> {
-    let mut tries = 40;
-    loop {
-        match std::fs::rename(from, to) {
-            Ok(()) => return Ok(()),
-            Err(e) if tries == 0 || to_complete() => return Err(e),
-            Err(_) => {
-                tries -= 1;
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        }
-    }
-}
 /// A scratch dir of this process (prefs, caches), emptied first.
 pub(crate) fn scratch(name: &str) -> io::Result<PathBuf> {
     let d = std::env::temp_dir().join(format!("claude-auto-perf-{name}-{}", std::process::id()));
