@@ -135,6 +135,32 @@ fn every_budgeted_path_is_measured_and_every_measured_path_budgeted() -> TestRes
 }
 
 #[test]
+fn publish_replaces_a_stale_root_and_keeps_a_complete_one() -> TestResult {
+    let _only_io = IO_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("publish-test-{}", std::process::id()));
+    if d.exists() {
+        std::fs::remove_dir_all(&d)?;
+    }
+    let (root, tmp) = (d.join("root"), d.join("tmp"));
+    // Given: a stale root (a leftover file, no `done`), as rust-cache restores it.
+    std::fs::create_dir_all(root.join("home"))?;
+    std::fs::write(root.join("home").join("left.txt"), "x")?;
+    std::fs::create_dir_all(&tmp)?;
+    std::fs::write(tmp.join("done"), world::VERSION)?;
+    // When: the built tree is published. Then: it replaces the stale root.
+    world::publish(&tmp, &root)?;
+    assert!(!root.join("home").exists() && root.join("done").exists() && !tmp.exists());
+    // Given: a complete root and a second built tree. Then: the complete root stays, the tree goes.
+    std::fs::write(root.join("kept.txt"), "x")?;
+    std::fs::create_dir_all(&tmp)?;
+    std::fs::write(tmp.join("done"), world::VERSION)?;
+    world::publish(&tmp, &root)?;
+    assert!(root.join("kept.txt").exists() && !tmp.exists());
+    std::fs::remove_dir_all(&d)?;
+    Ok(())
+}
+
+#[test]
 fn breaches_deny_a_zero_count_a_missing_entry_and_an_unmeasured_metric() -> TestResult {
     // Given: a budget of 100 read bytes and 10 read calls, 10 % headroom.
     let b: Value = serde_json::from_str(r#"{"headroomPercent":10,"paths":{"p":{"counts":{"read_bytes":100,"read_ops":10}}}}"#)?;
