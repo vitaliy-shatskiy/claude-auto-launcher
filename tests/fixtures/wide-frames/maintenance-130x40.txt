@@ -1,4 +1,4 @@
-╭─ ✻ claude-auto ─ maintenance ────────── 1.0.1 ─╮╭─ update · last run ─────────────────────────────────────────────────────────╮
+╭─ ✻ claude-auto ─ maintenance ────────── 1.0.2 ─╮╭─ update · last run ─────────────────────────────────────────────────────────╮
 │  Claude Code                                   ││  Current version: 2.1.230                                                   │
 │   [u] update         Current version: 2.1.230  ││  Checking for updates...                                                    │
 │   [r] update anyway (rename)                   ││  Claude Code is up to date (2.1.230)                                        │
@@ -29,7 +29,7 @@
 │                                                ││  installed     2.1.230 · newest                                             │
 │                                                ││  newest        2.1.230                                                      │
 │                                                ││  on disk       3 builds · 0.8 GB                                            │
-│                                                ││  claude-auto   1.0.1 · self-update off                                      │
+│                                                ││  claude-auto   1.0.2 · self-update off                                      │
 │                                                │╰─────────────────────────────────────────────────────────────────────────────╯
 │                                                │╭─ warnings ──────────────────────────────────────────────────────────────────╮
 │                                                ││  warning  ⚠ config: unknown key "colour"                                    │

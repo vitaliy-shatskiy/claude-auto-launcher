@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-11-25
+
 ### Changed
 
 - The model row has no `default` cell: it showed the `settings.json` model (`Opus 5.5`) next to the
@@ -764,7 +766,8 @@ First public release.
   decoded as text, for terminals that send them that way.
 - 15-check verification gate (`tests\checkpoint.ps1`).
 
-[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.1...v1.0.0
 [0.9.1]: https://github.com/vitaliy-shatskiy/claude-auto-launcher/compare/v0.9.0...v0.9.1

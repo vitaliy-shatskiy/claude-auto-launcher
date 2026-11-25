@@ -1,4 +1,4 @@
-╭─ ✻ claude-auto ─ maintenance ────────────── 1.0.1 ─╮
+╭─ ✻ claude-auto ─ maintenance ────────────── 1.0.2 ─╮
 │  Claude Code  2.1.230 · newest · 3 builds          │
 │   [u] update                                       │
 │       Current version: 2.1.230                     │
@@ -8,7 +8,7 @@
 │  Checks                                            │
 │   [d] doctor                                       │
 │   [m] MCP servers                                  │
-│  claude-auto  1.0.1 · up to date                   │
+│  claude-auto  1.0.2 · up to date                   │
 │   [b] roll back claude-auto                        │
 │  Launcher                                          │
 │   [l] launch rows                                  │

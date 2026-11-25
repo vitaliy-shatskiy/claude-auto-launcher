@@ -1,4 +1,4 @@
-╭─ ✻ claude-auto ─ maintenance ────────── 1.0.1 ─╮╭─ update ────────────────────────────────────────────────────────────────────╮
+╭─ ✻ claude-auto ─ maintenance ────────── 1.0.2 ─╮╭─ update ────────────────────────────────────────────────────────────────────╮
 │  Claude Code                                   ││  downloads the newest Claude Code and switches to it                        │
 │   [u] update                                   ││                                                                             │
 │   [r] update anyway (rename)                   ││  enter  or  u  runs it                                                      │
@@ -34,6 +34,6 @@
 │                                                ││  installed     2.1.230 · newest                                             │
 │                                                ││  newest        2.1.230                                                      │
 │                                                ││  on disk       3 builds · 0.8 GB                                            │
-│                                                ││  claude-auto   1.0.1 · self-update off                                      │
+│                                                ││  claude-auto   1.0.2 · self-update off                                      │
 ╰────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────────────────────────╯
   w/s move  ┊  [enter] run  ┊  [esc] back
