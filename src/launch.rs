@@ -415,6 +415,8 @@ pub struct LaunchState {
     pub home_session: Option<(String, bool)>,
     /// The session the sessions panel's `v` opens in its project's picker. Never remembered.
     pub home_preview: Option<String>,
+    /// The model shown is the settings default the snap resolved, not a pick: never remembered.
+    pub model_snapped: bool,
 }
 
 impl LaunchState {
@@ -443,6 +445,16 @@ impl LaunchState {
             home_pick: None,
             home_session: None,
             home_preview: None,
+            model_snapped: false,
+        }
+    }
+
+    /// What a save or a tab's stash keeps: a snapped model is `default`, the owner never picked it.
+    pub fn pick(&self, row: RowName) -> &str {
+        if row == RowName::Model && self.model_snapped {
+            "default"
+        } else {
+            self.get(row)
         }
     }
 
@@ -469,7 +481,10 @@ impl LaunchState {
             RowName::Account => &mut self.account,
             RowName::Remote => &mut self.remote,
             RowName::Action => &mut self.action,
-            RowName::Model => &mut self.model,
+            RowName::Model => {
+                self.model_snapped = false;
+                &mut self.model
+            }
             RowName::Effort => &mut self.effort,
             RowName::Advisor => &mut self.advisor,
             RowName::Permission => &mut self.permission,

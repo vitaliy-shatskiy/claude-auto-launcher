@@ -170,7 +170,7 @@ pub fn build_prefs_data(prev: &Prefs, state: &LaunchState, now_ms: i64, roster: 
             }
             continue;
         }
-        let v = state.get(f);
+        let v = state.pick(f);
         if f == RowName::Remote && v.eq_ignore_ascii_case("stop server") {
             entry.insert(key.into(), json!("off"));
             continue;
@@ -294,7 +294,7 @@ pub fn merge_prefs(state: &mut LaunchState, prefs: &Prefs, roster: &Roster, now_
 /// arrived at from the stash, else the file, else the defaults.
 pub fn switch_account(state: &mut LaunchState, to: &str, prefs: &Prefs, roster: &Roster, now_ms: i64) {
     let mut stash = Stash {
-        values: PROFILE_FIELDS.iter().map(|f| (*f, state.get(*f).to_owned())).collect(),
+        values: PROFILE_FIELDS.iter().map(|f| (*f, state.pick(*f).to_owned())).collect(),
         restored: state.restored.clone(),
         restored_age: state.restored_age.clone(),
         project: state.project.clone(),

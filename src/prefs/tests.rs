@@ -78,6 +78,61 @@ fn save_keeps_other_profiles_and_previous_answer_for_default() {
     assert_eq!(d["Account"], "work");
 }
 
+/// One start of the launcher on `prev`: restore, snap against the settings model, save.
+fn start(r: &Roster, prev: &Prefs, settings_model: &str, pick: Option<&str>) -> (LaunchState, Prefs) {
+    let mut s = r.new_state();
+    merge_prefs(&mut s, prev, r, 0);
+    crate::launch::availability_snap(r, &mut s, None, settings_model);
+    if let Some(m) = pick {
+        s.set(RowName::Model, m);
+    }
+    let saved = build_prefs_data(prev, &s, 5, r).to_string();
+    (s, parse_prefs(&saved))
+}
+
+#[test]
+fn a_snapped_model_is_never_saved_and_follows_the_settings_on_the_next_start() {
+    let r = four();
+    let (first, saved) = start(&r, &Prefs::default(), "Opus 5.5", None);
+    assert_eq!(first.model, "opus1m", "the settings family is shown");
+    assert!(saved.profiles["work"].get("Model").is_none(), "{:?}", saved.profiles);
+    let (second, _) = start(&r, &saved, "Sonnet 5.5", None);
+    assert_eq!(second.model, "sonnet1m", "settings.json changed between the starts");
+    assert_eq!(
+        crate::launch::launch_args(&r, &second, None, false, None, "Sonnet 5.5", "").join(" "),
+        "--model sonnet[1m]"
+    );
+}
+
+#[test]
+fn a_picked_model_is_saved_and_a_remembered_default_is_no_pick() {
+    let r = four();
+    let (_, saved) = start(&r, &Prefs::default(), "Opus 5.5", Some("haiku"));
+    assert_eq!(saved.profiles["work"]["Model"], "haiku");
+    let (again, _) = start(&r, &saved, "Sonnet 5.5", None);
+    assert_eq!(again.model, "haiku", "a pick wins over the settings");
+    let old = parse_prefs(r#"{"Version":2,"Account":"work","Profiles":{"work":{"Model":"default","Effort":"max"}}}"#);
+    let (s, saved) = start(&r, &old, "Sonnet 5.5", None);
+    assert_eq!(s.model, "sonnet1m");
+    assert!(saved.profiles["work"].get("Model").is_none(), "{:?}", saved.profiles);
+}
+
+#[test]
+fn a_snapped_model_parked_on_a_tab_switch_is_still_no_pick() {
+    let r = four();
+    let mut s = r.new_state();
+    crate::launch::availability_snap(&r, &mut s, None, "Opus 5.5");
+    switch_account(&mut s, "personal", &Prefs::default(), &r, 0);
+    switch_account(&mut s, "work", &Prefs::default(), &r, 0);
+    crate::launch::availability_snap(&r, &mut s, None, "Sonnet 5.5");
+    assert_eq!(s.model, "sonnet1m");
+    assert!(
+        build_prefs_data(&Prefs::default(), &s, 5, &r)["Profiles"]["work"]
+            .get("Model")
+            .is_none()
+    );
+}
+
 #[test]
 fn save_round_trips_through_the_file_atomically() {
     let r = four();

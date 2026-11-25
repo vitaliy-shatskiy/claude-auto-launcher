@@ -202,6 +202,7 @@ pub fn availability_snap(roster: &Roster, state: &mut LaunchState, available: Op
     }
     if state.model.eq_ignore_ascii_case("default") {
         state.model = default_model_key(roster, default_model, available);
+        state.model_snapped = true;
     }
 }
 
