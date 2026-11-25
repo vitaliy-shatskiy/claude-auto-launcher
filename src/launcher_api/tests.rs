@@ -297,8 +297,12 @@ fn every_value_on_a_row_carries_the_label_the_screen_draws() {
     let v = Options::new().json();
     let model = &v["rows"][0];
     assert_eq!(model["label"], "model");
-    assert_eq!(model["values"][0], json!({"value": "default", "label": "default"}));
-    assert_eq!(model["values"][3], json!({"value": "opus1m", "label": "Opus 5.5[1M]"}));
+    assert_eq!(
+        model["values"][0],
+        json!({"value": "haiku", "label": "Haiku 5.5"}),
+        "no default model value"
+    );
+    assert_eq!(model["values"][2], json!({"value": "opus1m", "label": "Opus 5.5[1M]"}));
     let permission = &v["rows"][3];
     assert_eq!(permission["values"][3], json!({"value": "acceptEdits", "label": "acceptEdits"}));
 }
@@ -367,7 +371,8 @@ fn default_labels_say_what_default_resolves_to_and_leave_out_the_uninformative()
     ]);
     assert_eq!(
         o.main_account()["defaultLabels"],
-        json!({"model": "default (Opus 5.5)", "effort": "default (high)"})
+        json!({"effort": "default (high)"}),
+        "the model row has no default value to label"
     );
 }
 
@@ -376,10 +381,7 @@ fn a_default_of_a_lacking_family_is_labelled_by_the_pin_the_launch_will_pass() {
     let mut o = Options::new();
     o.limits = limits_without_fable("main");
     o.labels = labels(&[("Model", "Fable 5.1"), ("Advisor", "fable")]);
-    assert_eq!(
-        o.main_account()["defaultLabels"],
-        json!({"model": "default (Opus 5.5[1M])", "advisor": "default (opus)"})
-    );
+    assert_eq!(o.main_account()["defaultLabels"], json!({"advisor": "default (opus)"}));
 }
 
 const SAVED: &str = r#"{"Version":2,"Account":"main","Profiles":{"main":{"Model":"fable","Effort":"medium","Advisor":"OFF","Remote":"off","Project":"C:\\p"}}}"#;
@@ -395,11 +397,13 @@ fn prefs_are_the_rows_the_screen_would_restore_and_never_the_remote() {
 }
 
 #[test]
-fn a_remembered_family_the_account_lost_goes_back_to_default_as_on_the_screen() {
+fn a_remembered_family_the_account_lost_resolves_like_a_default_as_on_the_screen() {
     let mut o = Options::new();
     o.prefs = parse_prefs(SAVED);
     o.limits = limits_without_fable("main");
-    assert_eq!(o.main_account()["prefs"]["model"], "default");
+    assert_eq!(o.main_account()["prefs"]["model"], "opus1m", "no settings default: the pin");
+    o.labels = labels(&[("Model", "Sonnet 5.5")]);
+    assert_eq!(o.main_account()["prefs"]["model"], "sonnet1m", "the settings family");
 }
 
 #[test]

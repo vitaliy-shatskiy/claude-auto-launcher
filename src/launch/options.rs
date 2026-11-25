@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::{LaunchState, Roster, RowDef, RowName, UNAVAILABLE_DEFAULT_ADVISOR};
+use super::{LaunchState, MODEL_FAMILY_KEYS, Roster, RowDef, RowName, UNAVAILABLE_DEFAULT_ADVISOR, UNAVAILABLE_DEFAULT_KEY};
 use crate::theme;
 use crate::types::DefaultLabels;
 
@@ -89,12 +89,31 @@ impl<'a> OptionText<'a> {
 }
 
 static FAMILY_WORD: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    HIDEABLE_FAMILIES
+    MODEL_FAMILY_KEYS
         .iter()
         // Word start only: raw settings ids glue a version on (`fable5`, `fable_1m`).
-        .map(|f| (*f, theme::re(&format!(r"(?i)(?:^|[^a-z0-9]){f}"))))
+        .map(|(f, _)| (*f, theme::re(&format!(r"(?i)(?:^|[^a-z0-9]){f}"))))
         .collect()
 });
+
+/// The model row key a `default` model resolves to: the family the settings default names when
+/// the account has it and the row lists it, else the unavailable-default pin.
+pub fn default_model_key(roster: &Roster, default_model: &str, available: Option<&[String]>) -> String {
+    let hidden = hidden_families(available);
+    let listed = roster.def(RowName::Model).map_or(&[][..], |r| r.values.as_slice());
+    let named = FAMILY_WORD
+        .iter()
+        .find(|(_, re)| re.is_match(default_model))
+        .and_then(|(f, _)| MODEL_FAMILY_KEYS.iter().find(|(fam, _)| fam == f))
+        .map(|(_, k)| *k);
+    named
+        .into_iter()
+        .chain([UNAVAILABLE_DEFAULT_KEY])
+        .chain(listed.iter().map(String::as_str))
+        .find(|k| listed.iter().any(|v| v.eq_ignore_ascii_case(k)) && option_family(RowName::Model, k).is_none_or(|f| !hidden.contains(&f)))
+        .unwrap_or(UNAVAILABLE_DEFAULT_KEY)
+        .to_owned()
+}
 
 /// The resolved default names a family this account lacks.
 pub fn default_model_unavailable(label: &str, available: Option<&[String]>) -> bool {
@@ -171,18 +190,18 @@ pub fn is_hidden_row_value(roster: &Roster, row: &RowDef, key: &str, ctx: &Optio
     has(&visible_row_values(roster, row, &ctx.unfolded())) && !has(&visible_row_values(roster, row, ctx))
 }
 
-/// A remembered Model/Advisor of a hidden family goes back to
-/// 'default' and loses its restore mark.
-pub fn availability_snap(state: &mut LaunchState, available: Option<&[String]>) {
+/// A remembered Model/Advisor of a hidden family loses its restore mark and goes back to its
+/// default; the model row has no `default`, so a `default` model resolves to an explicit key.
+pub fn availability_snap(roster: &Roster, state: &mut LaunchState, available: Option<&[String]>, default_model: &str) {
     let hidden = hidden_families(available);
-    if hidden.is_empty() {
-        return;
-    }
     for rn in [RowName::Model, RowName::Advisor] {
         if option_family(rn, state.get(rn)).is_some_and(|f| hidden.contains(&f)) {
             state.set(rn, "default");
             state.restored.retain(|r| !r.eq_ignore_ascii_case(rn.as_str()));
         }
+    }
+    if state.model.eq_ignore_ascii_case("default") {
+        state.model = default_model_key(roster, default_model, available);
     }
 }
 

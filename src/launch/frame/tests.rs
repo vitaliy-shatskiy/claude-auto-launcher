@@ -1,7 +1,7 @@
 #![expect(clippy::many_single_char_names, reason = "short fixture names")]
 
 use super::*;
-use crate::launch::tests::four;
+use crate::launch::tests::{four, snapped};
 use crate::types::LimitRecord;
 
 mod page;
@@ -32,7 +32,7 @@ fn golden_limits() -> Limits {
 }
 
 fn real_state(r: &Roster) -> LaunchState {
-    let mut s = r.new_state();
+    let mut s = snapped(r);
     s.model = "opus1m".into();
     s.effort = "xhigh".into();
     s.advisor = "fable".into();
@@ -103,9 +103,9 @@ fn wide_frames_match_the_powershell_goldens() {
     let no_version = VersionInfo::default();
     let labels: DefaultLabels = NOW_LABELS.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
     let no_labels = DefaultLabels::new();
-    let fresh = r.new_state();
+    let fresh = snapped(&r);
     let real = real_state(&r);
-    let mut hover = r.new_state();
+    let mut hover = snapped(&r);
     hover.row = 3;
     hover.hover = 1;
     hover.hover_row = 3;
@@ -186,7 +186,7 @@ fn wide_frames_match_the_powershell_goldens() {
 fn narrow_tier_draws_compact_rows_inside_the_frame() {
     let r = four();
     let limits = golden_limits();
-    let s = r.new_state();
+    let s = snapped(&r);
     let labels = DefaultLabels::new();
     let v = VersionInfo::default();
     let inp = LaunchFrameInput {
@@ -257,7 +257,7 @@ fn row_line<'f>(f: &'f Frame, name: &str) -> &'f str {
 fn a_row_that_does_not_fit_keeps_its_mark_and_never_draws_arrows() {
     let r = four();
     let limits = golden_limits();
-    let s = r.new_state();
+    let s = snapped(&r);
     for width in [50, 58, 60, 70, 78, 80, 90, 99, 120] {
         let f = frame_at(&r, &s, &limits, width);
         for hit in f.map.rows.iter().filter(|h| h.name != "Account") {
@@ -278,14 +278,14 @@ fn narrow_and_wide_frames_match_their_goldens() {
     let plain = four();
     let mut action = four();
     action.add_action_row();
-    let s = plain.new_state();
+    let s = snapped(&plain);
     let none = Limits::new();
     for (name, r, width) in [
         ("launch-78x30", &plain, 78),
         ("launch-78x30-action", &action, 78),
         ("launch-100x30-action", &action, 100),
     ] {
-        let lines = frame_at(r, &r.new_state(), &none, width).lines;
+        let lines = frame_at(r, &snapped(r), &none, width).lines;
         assert_golden(name, &lines.join("\n"));
     }
     if std::env::var_os("CLAUDE_AUTO_BLESS").is_none() {
@@ -313,7 +313,7 @@ fn the_limits_panel_shows_the_selected_account_one_limit_per_line_and_the_age_la
         },
     )]
     .into();
-    let s = r.new_state();
+    let s = snapped(&r);
     let wide = frame_at(&r, &s, &golden_limits(), 160);
     assert!(wide.lines[0].contains("limits \u{b7} work"), "{}", wide.lines[0]);
     // The facts column: right of the launch panel's corner.
@@ -400,7 +400,7 @@ fn ctrl_r_reset_and_the_warning_badge_show_only_when_they_apply() {
 fn row_map_points_at_the_drawn_lines() {
     let r = four();
     let limits = golden_limits();
-    let s = r.new_state();
+    let s = snapped(&r);
     let labels = DefaultLabels::new();
     let v = VersionInfo::default();
     let inp = LaunchFrameInput {
@@ -439,7 +439,7 @@ fn row_map_points_at_the_drawn_lines() {
 #[test]
 fn footer_names_no_row_editing_keys() {
     let r = four();
-    let s = r.new_state();
+    let s = snapped(&r);
     let limits = golden_limits();
     let base = ["w/s row", "switch", "[enter] next", "[u] maint", "[esc] quit"];
     for width in [100, 120] {
@@ -482,7 +482,7 @@ fn under_110_columns_the_footer_shortens_and_stays_one_line_ctrl_r_going_first()
 #[test]
 fn model_row_weak_to_strong_and_fable_cell() {
     let r = four();
-    let s = r.new_state();
+    let s = snapped(&r);
     let mut limits = golden_limits();
     limits.get_mut("work").unwrap().model_age = Some("2 h ago".into());
     let f = frame_at(&r, &s, &limits, 100);
@@ -490,11 +490,11 @@ fn model_row_weak_to_strong_and_fable_cell() {
     let line = &f.lines[usize::try_from(hit.y).unwrap()];
     let at = |label: &str| line.find(label).unwrap_or_else(|| panic!("{label} missing: {line}"));
     assert!(
-        at("default") < at("Haiku 5.5")
+        !line.contains("default")
             && at("Haiku 5.5") < at("Sonnet 5.5")
             && at("Sonnet 5.5") < at("Opus 5.5[1M]")
             && at("Opus 5.5[1M]") < at("Fable 5.2"),
-        "haiku, sonnet, opus, fable: {line}"
+        "no default cell; haiku, sonnet, opus, fable: {line}"
     );
     assert!(f.lines.iter().any(|l| l.contains("fable (2 h ago) 15%")), "{:#?}", f.lines);
 
@@ -502,7 +502,7 @@ fn model_row_weak_to_strong_and_fable_cell() {
     ordered.apply_model_order(&["fable".to_owned(), "haiku".to_owned()]);
     assert_eq!(
         ordered.row(RowName::Model).unwrap().values,
-        ["default", "fable", "haiku"],
+        ["fable", "haiku"],
         "modelOrder: listed families in its order, the rest hidden"
     );
 }
@@ -510,7 +510,7 @@ fn model_row_weak_to_strong_and_fable_cell() {
 #[test]
 fn too_small_terminal_gets_the_size_frame() {
     let r = four();
-    let s = r.new_state();
+    let s = snapped(&r);
     let (l, v, d) = (Limits::new(), VersionInfo::default(), DefaultLabels::new());
     let inp = LaunchFrameInput {
         state: &s,

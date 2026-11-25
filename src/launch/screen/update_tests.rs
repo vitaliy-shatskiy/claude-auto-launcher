@@ -167,8 +167,8 @@ fn the_answer_redraws_header_and_model_row_and_keeps_the_selection() {
     let (mut r, vw, p) = (four(), view(), Prefs::default());
     let mut hook = |_: &KeyPress, _: &mut dyn Term| false;
     let st = r.new_state();
-    // Given: haiku picked on the model row while the check runs.
-    let mut t = UpdateTerm::new("DownArrow,DownArrow,RightArrow", go, 5000, "Enter");
+    // Given: haiku picked on the model row (two left of the Opus pin) while the check runs.
+    let mut t = UpdateTerm::new("DownArrow,DownArrow,LeftArrow,LeftArrow", go, 5000, "Enter");
     // When: the check answers a new version and new labels.
     let out = {
         let mut s = LaunchScreen::new(&mut r, st, &vw, &p, 0, &mut hook).with_update(&w);
@@ -176,10 +176,7 @@ fn the_answer_redraws_header_and_model_row_and_keeps_the_selection() {
     };
     // Then: one more frame shows them, and the pick launches unchanged.
     let last = t.frames().last().unwrap();
-    assert!(
-        has(last, "Claude Code 2.1.2") && has(last, "Haiku 9.9") && has(last, "Opus 9"),
-        "{last:#?}"
-    );
+    assert!(has(last, "Claude Code 2.1.2") && has(last, "Haiku 9.9"), "{last:#?}");
     assert_eq!(t.frames().len(), t.painted + 1, "exactly one redraw for the answer");
     assert_eq!(out.model, "haiku");
     assert_eq!(out.row, 2);

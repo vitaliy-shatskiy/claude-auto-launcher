@@ -144,7 +144,13 @@ impl RowsEditor {
             return;
         }
         let Some(def) = self.catalog.def(row) else { return };
-        let next = step_option(&def.values, &self.value(row), delta);
+        // The model row has no `default`; a hidden one still offers it: unset = the settings default.
+        let values: Vec<String> = (!def.has(&default_of(row)))
+            .then(|| default_of(row))
+            .into_iter()
+            .chain(def.values.iter().cloned())
+            .collect();
+        let next = step_option(&values, &self.value(row), delta);
         self.values.insert(row, next);
     }
 }

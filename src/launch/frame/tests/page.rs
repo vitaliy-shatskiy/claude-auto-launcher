@@ -128,7 +128,7 @@ fn cockpit_goldens_at_130x40_80x24_and_for_a_new_user() {
         "launch-80x24",
         &full(&r, &real_state(&r), (80, 24), &running, &golden_limits()).join("\n"),
     );
-    let s1 = full(&r, &r.new_state(), (130, 40), &[], &Limits::new());
+    let s1 = full(&r, &snapped(&r), (130, 40), &[], &Limits::new());
     assert_golden("launch-130x40-s1", &s1.join("\n"));
     assert_eq!(s1.len(), 39, "empty lists keep the panels to the footer: {}", s1.len());
 }

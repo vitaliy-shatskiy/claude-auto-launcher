@@ -219,12 +219,13 @@ fn hidden_json(roster: &Roster, have: Option<&[String]>) -> Map<String, Value> {
 }
 
 /// Row -> `default (what it resolves to)`, through the same text the screen draws, the pin of a
-/// lacking family included. A default that resolves to nothing says nothing.
+/// lacking family included. A default that resolves to nothing says nothing; a row without a
+/// `default` value (model) has none.
 fn default_labels_json(roster: &Roster, have: Option<&[String]>, labels: Option<&DefaultLabels>) -> Map<String, Value> {
     let labels = labels.unwrap_or(&NO_LABELS);
     let text = OptionText::plain(have, labels);
     client_rows(roster)
-        .filter(|row| labels.contains_key(row.name.as_str()))
+        .filter(|row| row.has("default") && labels.contains_key(row.name.as_str()))
         .filter_map(|row| {
             let resolved = text.text(roster, row, "default");
             (!resolved.eq_ignore_ascii_case("default")).then(|| (field(row.name).to_owned(), json!(format!("default ({resolved})"))))
@@ -234,9 +235,16 @@ fn default_labels_json(roster: &Roster, have: Option<&[String]>, labels: Option<
 
 /// The remembered rows as the screen would restore them. A profile with nothing a client can use
 /// is no data; `remote` is not among them, it is the PC's.
-fn prefs_json(roster: &Roster, prefs_file: &Prefs, account: &str, have: Option<&[String]>) -> Map<String, Value> {
+fn prefs_json(
+    roster: &Roster,
+    prefs_file: &Prefs,
+    account: &str,
+    have: Option<&[String]>,
+    labels: Option<&DefaultLabels>,
+) -> Map<String, Value> {
     let mut state = account_state(prefs_file, account, roster);
-    availability_snap(&mut state, have);
+    let model = labels.and_then(|l| l.get("Model")).map_or("", String::as_str);
+    availability_snap(roster, &mut state, have, model);
     let rows: Vec<RowName> = client_rows(roster).map(|r| r.name).collect();
     if !rows.iter().any(|r| state.is_restored(*r)) {
         return Map::new();
@@ -268,7 +276,7 @@ pub fn options_json(
                 "limitPct": limits.get(&a.key).and_then(|l| l.five_hour),
                 "hidden": hidden_json(roster, have),
                 "defaultLabels": default_labels_json(roster, have, labels.get(&a.key)),
-                "prefs": prefs_json(roster, prefs_file, &a.key, have),
+                "prefs": prefs_json(roster, prefs_file, &a.key, have, labels.get(&a.key)),
             })
         })
         .collect();

@@ -292,8 +292,9 @@ impl Screen for LaunchScreen<'_> {
         self.state.hover = self.cursor.hover;
         self.state.hover_row = self.cursor.hover_row;
         self.state.hover_value.clone_from(&self.cursor.hover_value);
-        let available = self.available().map(<[String]>::to_vec);
-        availability_snap(&mut self.state, available.as_deref());
+        let available = available_of(&self.view, &self.state.account);
+        let model = labels_of(&self.view, &self.state.account).get("Model").map_or("", String::as_str);
+        availability_snap(self.roster, &mut self.state, available, model);
     }
 
     fn draw(&mut self, size: (usize, usize)) -> Frame {

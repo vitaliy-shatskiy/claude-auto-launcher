@@ -104,7 +104,7 @@
       "items": { "type": "string", "enum": ["account", "remote", "model", "effort", "advisor", "permission", "mode"] }
     },
     "hiddenValues": {
-      "description": "Row name -> the value a hidden row launches with. Values: model default or a family key (haiku, sonnet1m, opus1m, fable); effort default, low, medium, high, xhigh, max, ultracode; advisor default, fable, opus, off; permission default, plan, auto, acceptEdits, bypass; mode normal, safe; remote on, off.",
+      "description": "Row name -> the value a hidden row launches with. Values: model a family key (haiku, sonnet1m, opus1m, fable), unlisted = the settings default; effort default, low, medium, high, xhigh, max, ultracode; advisor default, fable, opus, off; permission default, plan, auto, acceptEdits, bypass; mode normal, safe; remote on, off.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

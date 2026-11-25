@@ -89,7 +89,7 @@ fn a_value_a_click_selects_draws_as_the_arrows_draw_it() {
 }
 
 #[test]
-fn enter_alone_keeps_every_default() {
+fn enter_alone_keeps_every_default_and_the_model_pin() {
     let s = drive("Enter").unwrap();
     assert_eq!(
         (
@@ -99,7 +99,7 @@ fn enter_alone_keeps_every_default() {
             s.model.as_str(),
             s.mode.as_str()
         ),
-        ("work", "on", "new", "default", "normal")
+        ("work", "on", "new", "opus1m", "normal")
     );
 }
 
@@ -118,7 +118,7 @@ fn right_on_account_switches_tab_and_d_aliases_right() {
 #[test]
 fn down_then_right_steps_the_model() {
     let s = drive("DownArrow,DownArrow,RightArrow,Enter").unwrap();
-    assert_eq!(s.model, "haiku", "weakest first");
+    assert_eq!(s.model, "fable", "from the Opus pin to the next stronger");
     assert_eq!(s.row, 2);
 }
 
@@ -310,7 +310,7 @@ fn a_row_hidden_mid_run_never_takes_a_value_from_another_tabs_stash() {
     assert!(!out.is_restored(RowName::Effort) && !out.is_restored(RowName::Advisor));
     assert_eq!(
         super::super::launch_args(&r, &out, None, false, None, "", "").join(" "),
-        "--effort high"
+        "--model opus[1m] --effort high"
     );
 }
 
@@ -328,5 +328,5 @@ fn hidden_values_saved_in_maintenance_apply_on_return() {
     let st = r.new_state();
     let out = edit(&mut r, st, &mut store, "u,Enter").0.unwrap();
     assert_eq!(out.effort, "high", "the hidden effort launches with its pin");
-    assert_eq!(out.model, "default", "an unpinned hidden row keeps its default");
+    assert_eq!(out.model, "opus1m", "an unpinned hidden row resolves its default");
 }

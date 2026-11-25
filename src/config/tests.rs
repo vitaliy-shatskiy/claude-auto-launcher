@@ -394,7 +394,7 @@ fn hidden_values_parse_in_the_rows_casing_and_bad_entries_warn() {
     assert_eq!(cfg.hidden_values, want);
     assert_eq!(cfg.warnings.len(), 4, "{:?}", cfg.warnings);
     for w in [
-        "hiddenValues: 'fable' is not a model value (default, opus1m, sonnet1m); ignored",
+        "hiddenValues: 'fable' is not a model value (opus1m, sonnet1m); ignored",
         "hiddenValues: 'account' is not a row that can be hidden; ignored",
         "hiddenValues: 'bogus' is not a row that can be hidden; ignored",
         "hiddenValues: 'turbo' is not a mode value (normal, safe); ignored",

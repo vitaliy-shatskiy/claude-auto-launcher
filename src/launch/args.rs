@@ -1,6 +1,6 @@
 //! The launch modes and the claude arguments a launch state produces. Pure.
 
-use super::options::default_model_unavailable;
+use super::options::{default_model_key, default_model_unavailable};
 use super::{LaunchState, Roster, RowName, UNAVAILABLE_DEFAULT_ADVISOR};
 
 /// One launch mode: the project screen's action field values.
@@ -81,9 +81,9 @@ pub fn launch_mode_table_errors(modes: &[LaunchMode], reserved: &[char]) -> Vec<
     errors
 }
 
-/// A default state yields NOTHING. `available`/`default_model`: the one
-/// exception, the pin when the account lacks the default model's family; `default_advisor`
-/// (the raw `advisorModel`) gets the same pin on the advisor row.
+/// A default state yields only `--model`: the model row has no `default`, so `default_model`
+/// (the settings default) resolves to an explicit key, the pin when the account lacks its family;
+/// `default_advisor` (the raw `advisorModel`) gets the same pin on the advisor row.
 pub fn launch_args(
     roster: &Roster,
     state: &LaunchState,
@@ -94,18 +94,15 @@ pub fn launch_args(
     default_advisor: &str,
 ) -> Vec<String> {
     let mut a = Vec::new();
-    // A hidden model row pinned by `hiddenValues` passes its value as a shown one would.
+    // A hidden model row pinned by `hiddenValues` passes its value as a shown one would; a
+    // `default` the snap has not reached (a hidden row) resolves as the snap would.
     let model_row = roster.def(RowName::Model);
-    let mut model_arg = model_row
-        .and_then(|r| r.args.iter().find(|(k, _)| k.eq_ignore_ascii_case(&state.model)))
-        .map(|(_, v)| v.clone());
-    if model_arg.is_none()
-        && state.model.eq_ignore_ascii_case("default")
-        && !default_model.is_empty()
-        && default_model_unavailable(default_model, available)
-    {
-        model_arg = Some(roster.unavailable_default_model().0).filter(|s| !s.is_empty());
-    }
+    let arg_of = |key: &str| {
+        model_row
+            .and_then(|r| r.args.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)))
+            .map(|(_, v)| v.clone())
+    };
+    let model_arg = arg_of(&state.model).or_else(|| arg_of(&default_model_key(roster, default_model, available)));
     if let Some(m) = model_arg {
         a.extend(["--model".to_owned(), m]);
     }

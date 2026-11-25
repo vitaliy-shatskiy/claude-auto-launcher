@@ -22,6 +22,13 @@ pub(crate) fn four() -> Roster {
     )
 }
 
+/// A fresh state as the launch screen draws it: the snap has resolved its `default` model.
+pub(crate) fn snapped(r: &Roster) -> LaunchState {
+    let mut s = r.new_state();
+    availability_snap(r, &mut s, None, "");
+    s
+}
+
 fn args(r: &Roster, f: impl FnOnce(&mut LaunchState)) -> String {
     let mut s = r.new_state();
     f(&mut s);
@@ -61,7 +68,10 @@ fn hidden_mode_row_launches_normal() {
         ("normal", "default", "on", "max"),
         "a hidden row keeps its default, never a remembered pick"
     );
-    assert_eq!(launch_args(&r, &s, None, false, None, "", "").join(" "), "--effort max");
+    assert_eq!(
+        launch_args(&r, &s, None, false, None, "", "").join(" "),
+        "--model opus[1m] --effort max"
+    );
     let mut reordered = four();
     reordered.apply_rows(&[RowName::Mode, RowName::Account]);
     let names: Vec<&str> = reordered.rows.iter().map(|x| x.name.as_str()).collect();
@@ -82,7 +92,7 @@ fn the_action_row_follows_account_and_remote_and_project_adds_no_argument() {
     assert_eq!(r.new_state().action, "new", "Enter at once launches new");
     let mut s = r.new_state();
     s.action = PROJECT_ACTION.into();
-    assert_eq!(launch_args(&r, &s, None, false, None, "", "").join(" "), "");
+    assert_eq!(launch_args(&r, &s, None, false, None, "", "").join(" "), "--model opus[1m]");
     let mut only = four();
     only.apply_rows(&[RowName::Model, RowName::Account]);
     only.add_action_row();
@@ -91,8 +101,60 @@ fn the_action_row_follows_account_and_remote_and_project_adds_no_argument() {
 }
 
 #[test]
-fn default_state_adds_no_arguments() {
-    assert_eq!(args(&four(), |_| {}), "");
+fn a_default_state_passes_only_the_resolved_model() {
+    assert_eq!(args(&four(), |_| {}), "--model opus[1m]", "no settings default: the pin");
+    let r = four();
+    let s = r.new_state();
+    assert_eq!(
+        launch_args(&r, &s, None, false, None, "Sonnet 5.5", "").join(" "),
+        "--model sonnet[1m]",
+        "the settings family, never a launch without --model"
+    );
+}
+
+#[test]
+fn a_fresh_or_remembered_default_model_snaps_to_the_settings_family() {
+    let r = four();
+    let fable = vec!["fable".to_owned()];
+    let none: Vec<String> = Vec::new();
+    for (label, have, key) in [
+        ("Opus 5.5", None, "opus1m"),
+        ("Sonnet 5.5", None, "sonnet1m"),
+        ("claude-haiku-5-5", Some(&fable), "haiku"),
+        ("Fable 5.1[1M]", Some(&fable), "fable"),
+        ("Fable 5.1[1M]", Some(&none), "opus1m"),
+    ] {
+        let mut s = r.new_state();
+        availability_snap(&r, &mut s, have.map(Vec::as_slice), label);
+        assert_eq!(s.model, key, "{label}");
+    }
+    let mut picked = r.new_state();
+    picked.model = "haiku".into();
+    availability_snap(&r, &mut picked, None, "Opus 5.5");
+    assert_eq!(picked.model, "haiku", "an explicit pick stays");
+}
+
+#[test]
+fn a_family_the_model_order_leaves_out_falls_to_the_pin() {
+    let mut r = four();
+    r.apply_model_order(&["haiku".to_owned(), "opus".to_owned()]);
+    let mut s = r.new_state();
+    availability_snap(&r, &mut s, None, "Sonnet 5.5");
+    assert_eq!(s.model, "opus1m");
+}
+
+#[test]
+fn an_unreadable_settings_default_snaps_to_the_opus_pin() {
+    let dir = std::env::temp_dir().join(format!("claude-auto-rs-snap-{}", crate::log::new_run_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("settings.json");
+    std::fs::write(&p, "{broken").unwrap();
+    let labels = crate::env::default_labels(&p);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let r = four();
+    let mut s = r.new_state();
+    availability_snap(&r, &mut s, None, labels.get("Model").map_or("", String::as_str));
+    assert_eq!(s.model, "opus1m");
 }
 
 #[test]
@@ -100,11 +162,22 @@ fn each_row_maps_to_its_flag() {
     let r = four();
     assert_eq!(args(&r, |s| s.model = "opus1m".into()), "--model opus[1m]");
     assert_eq!(args(&r, |s| s.model = "sonnet1m".into()), "--model sonnet[1m]");
-    assert_eq!(args(&r, |s| s.permission = "bypass".into()), "--permission-mode bypassPermissions");
-    assert_eq!(args(&r, |s| s.advisor = "off".into()), "", "off is an environment variable");
-    assert_eq!(args(&r, |s| s.action = "continue".into()), "-c");
-    assert_eq!(args(&r, |s| s.action = "worktree".into()), "-w");
-    assert_eq!(args(&r, |s| s.action = "resume".into()), "", "resume without an id adds nothing");
+    assert_eq!(
+        args(&r, |s| s.permission = "bypass".into()),
+        "--model opus[1m] --permission-mode bypassPermissions"
+    );
+    assert_eq!(
+        args(&r, |s| s.advisor = "off".into()),
+        "--model opus[1m]",
+        "off is an environment variable"
+    );
+    assert_eq!(args(&r, |s| s.action = "continue".into()), "--model opus[1m] -c");
+    assert_eq!(args(&r, |s| s.action = "worktree".into()), "--model opus[1m] -w");
+    assert_eq!(
+        args(&r, |s| s.action = "resume".into()),
+        "--model opus[1m]",
+        "resume without an id adds nothing"
+    );
     assert_eq!(
         args(&r, |s| {
             s.model = "opus1m".into();
@@ -124,7 +197,7 @@ fn resume_carries_id_and_fork() {
     s.action = "resume".into();
     assert_eq!(
         launch_args(&r, &s, Some("abc123"), true, None, "", "").join(" "),
-        "--resume abc123 --fork-session"
+        "--model opus[1m] --resume abc123 --fork-session"
     );
 }
 
@@ -139,11 +212,14 @@ fn default_pins_opus_when_account_lacks_fable() {
     );
     assert_eq!(
         launch_args(&r, &s, None, false, None, "Fable 5.1[1M]", "").join(" "),
-        "",
-        "no information pins nothing"
+        "--model fable",
+        "no information: the settings family"
     );
     let fable = vec!["fable".to_owned()];
-    assert_eq!(launch_args(&r, &s, None, false, Some(&fable), "Fable 5.1[1M]", "").join(" "), "");
+    assert_eq!(
+        launch_args(&r, &s, None, false, Some(&fable), "Fable 5.1[1M]", "").join(" "),
+        "--model fable"
+    );
 }
 
 #[test]
@@ -186,7 +262,7 @@ fn a_hidden_row_with_a_pinned_value_launches_as_if_picked_on_a_shown_row() {
 fn a_pin_on_a_shown_row_or_no_pins_change_nothing() {
     let mut r = four();
     r.set_hidden_values(&pinned(&[(RowName::Effort, "high")]));
-    assert_eq!(args(&r, |_| {}), "", "effort is shown: the screen picks it");
+    assert_eq!(args(&r, |_| {}), "--model opus[1m]", "effort is shown: the screen picks it");
     let mut bare = four();
     bare.apply_rows(&[RowName::Account]);
     assert_eq!(
@@ -194,7 +270,7 @@ fn a_pin_on_a_shown_row_or_no_pins_change_nothing() {
         four().new_state(),
         "no hiddenValues: every hidden row stays default"
     );
-    assert_eq!(args(&bare, |_| {}), "");
+    assert_eq!(args(&bare, |_| {}), "--model opus[1m]");
 }
 
 #[test]
@@ -223,7 +299,8 @@ fn a_pinned_model_of_a_family_the_account_lacks_snaps_like_a_remembered_one() {
     r.apply_rows(&[RowName::Account]);
     r.set_hidden_values(&pinned(&[(RowName::Model, "fable")]));
     let mut s = r.new_state();
-    availability_snap(&mut s, Some(&[]));
+    availability_snap(&r, &mut s, Some(&[]), "Fable 5.1[1M]");
+    assert_eq!(s.model, "opus1m");
     let none: Vec<String> = Vec::new();
     assert_eq!(
         launch_args(&r, &s, None, false, Some(&none), "Fable 5.1[1M]", "").join(" "),
@@ -242,7 +319,7 @@ fn step_wraps_and_skips_hidden_fable() {
     let ctx = OptionText::plain(Some(&none), &labels);
     s.model = "opus1m".into();
     step_launch_value(&r, &mut s, 1, &ctx);
-    assert_eq!(s.model, "default", "fable is hidden on this account; wraps");
+    assert_eq!(s.model, "haiku", "fable is hidden on this account; wraps");
     step_launch_value(&r, &mut s, -1, &ctx);
     assert_eq!(s.model, "opus1m", "wraps backwards over the hidden fable");
 }
@@ -267,11 +344,12 @@ fn folded_twin_takes_the_default_slot_and_stepping_onto_it_stores_the_twin() {
 
 #[test]
 fn snap_resets_hidden_family_and_its_mark() {
-    let mut s = four().new_state();
+    let r = four();
+    let mut s = r.new_state();
     s.model = "fable".into();
     s.restored = vec!["Model".into(), "Effort".into()];
-    availability_snap(&mut s, Some(&[]));
-    assert_eq!(s.model, "default");
+    availability_snap(&r, &mut s, Some(&[]), "");
+    assert_eq!(s.model, "opus1m");
     assert_eq!(s.restored, ["Effort"]);
 }
 
@@ -315,7 +393,8 @@ fn default_advisor_pins_opus_when_account_lacks_fable() {
     let r = four();
     let s = r.new_state();
     let none: Vec<String> = Vec::new();
-    let run = |avail: Option<&[String]>, adv: &str| launch_args(&r, &s, None, false, avail, "", adv).join(" ");
+    // The first pair is the resolved `--model`.
+    let run = |avail: Option<&[String]>, adv: &str| launch_args(&r, &s, None, false, avail, "", adv)[2..].join(" ");
     assert_eq!(run(Some(&none), "fable5"), "--advisor opus");
     assert_eq!(run(None, "fable"), "", "no information pins nothing");
     assert_eq!(run(Some(&["fable".to_owned()]), "fable"), "");
@@ -323,7 +402,7 @@ fn default_advisor_pins_opus_when_account_lacks_fable() {
     let mut off = r.new_state();
     off.advisor = "off".into();
     assert_eq!(
-        launch_args(&r, &off, None, false, Some(&none), "", "fable").join(" "),
+        launch_args(&r, &off, None, false, Some(&none), "", "fable")[2..].join(" "),
         "",
         "off stays off"
     );

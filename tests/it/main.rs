@@ -272,7 +272,10 @@ fn preview_dumps_the_launch_frame_and_launches_nothing() {
     let panels = expected.rsplit_once('\n').map_or(expected.as_str(), |(p, _)| p);
     assert!(blank(&out).starts_with(&blank(panels)), "frame differs:\n{out}");
     assert!(out.contains("--- preview, nothing launched ---"));
-    assert!(out.contains("launch args        : \n"), "a default launch adds no arguments: {out}");
+    assert!(
+        out.contains("launch args        : --model opus[1m]\n"),
+        "a default launch adds only the model pin: {out}"
+    );
     assert!(!out.contains("ARGV"), "preview never starts claude");
     assert!(!d.join("prefs.json").exists(), "preview writes no prefs");
     assert!(
@@ -363,7 +366,7 @@ fn preview_resume_lists_another_accounts_session_and_copies_nothing() {
         out.contains("session transfer   : foreign-id from beta -> alpha (copied on a real launch)"),
         "{out}"
     );
-    assert!(out.contains("launch args        : --resume foreign-id"), "{out}");
+    assert!(out.contains("launch args        : --model opus[1m] --resume foreign-id"), "{out}");
     assert!(
         !d.join("home").join(".claude").join("projects").join(cwd_slug(&d)).exists(),
         "preview copies nothing"
@@ -385,7 +388,7 @@ fn preview_steps_rows_into_launch_arguments() {
     let o = launcher(&d)
         .env("CLAUDE_AUTO_CONFIG", &config)
         .env("CLAUDE_AUTO_PREVIEW", "1")
-        .env("CLAUDE_AUTO_PREVIEW_KEYS", "RightArrow,s,s,d,d,d,d,s,d,d,d,d,s,d,Enter,Enter")
+        .env("CLAUDE_AUTO_PREVIEW_KEYS", "RightArrow,s,s,d,s,d,d,d,d,s,d,Enter,Enter")
         .output()
         .unwrap();
     let out = text(&o);

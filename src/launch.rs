@@ -14,8 +14,8 @@ use crate::theme;
 
 pub use args::{LAUNCH_MODES, LaunchMode, PROJECT_SCREEN_OWN_KEYS, launch_args, launch_mode, launch_mode_table_errors};
 pub use options::{
-    OptionText, availability_snap, default_model_unavailable, hidden_families, honest_default_label, is_hidden_row_value,
-    step_launch_value, step_option, visible_row_values,
+    OptionText, availability_snap, default_model_key, default_model_unavailable, hidden_families, honest_default_label,
+    is_hidden_row_value, step_launch_value, step_option, visible_row_values,
 };
 
 /// The rows of the launch screen.
@@ -129,7 +129,7 @@ fn base_rows() -> Vec<RowDef> {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect::<BTreeMap<_, _>>()
     };
-    let mut model = RowDef::plain(RowName::Model, "model", &["default"]);
+    let mut model = RowDef::plain(RowName::Model, "model", &[]);
     model.values.extend(MODEL_FAMILY_KEYS.iter().map(|(_, k)| (*k).to_owned()));
     model.labels = pairs(&[
         ("fable", "Fable 5.2"),
@@ -311,19 +311,20 @@ impl Roster {
         self.rows.insert(after, RowDef::plain(RowName::Action, "action", &values));
     }
 
-    /// `modelOrder`: the model row lists `default`, then these families in this order; an unlisted
-    /// family is no option, so a remembered pick of it falls back to `default`.
+    /// `modelOrder`: the model row lists these families in this order; an unlisted family is no
+    /// option, so a remembered pick of it resolves like a fresh state.
     pub fn apply_model_order(&mut self, families: &[String]) {
         let Some(row) = self.rows.iter_mut().chain(&mut self.spare).find(|r| r.name == RowName::Model) else {
             return;
         };
-        row.values = std::iter::once("default".to_owned())
-            .chain(families.iter().filter_map(|f| {
+        row.values = families
+            .iter()
+            .filter_map(|f| {
                 MODEL_FAMILY_KEYS
                     .iter()
                     .find(|(fam, _)| fam.eq_ignore_ascii_case(f))
                     .map(|(_, k)| (*k).to_owned())
-            }))
+            })
             .collect();
     }
 
@@ -342,8 +343,8 @@ impl Roster {
         }
     }
 
-    /// Pressing Enter at once adds no arguments at all, unless `hiddenValues`
-    /// pins a value on a row the screen does not show.
+    /// Every row at its default (the model's `default` is resolved by `availability_snap` or the
+    /// launch), unless `hiddenValues` pins a value on a row the screen does not show.
     pub fn new_state(&self) -> LaunchState {
         let mut s = LaunchState::fresh(&self.default_account);
         for (i, v) in &self.plugin_defaults {

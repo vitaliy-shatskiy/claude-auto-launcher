@@ -4,6 +4,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
 
 ## [Unreleased]
 
+### Changed
+
+- The model row has no `default` cell: it showed the `settings.json` model (`Opus 5.5`) next to the
+  explicit `Opus 5.5[1M]`. A fresh or remembered `default` selects the family `settings.json` names when
+  the account has it, else `Opus 5.5[1M]`, and every launch passes `--model`. The launcher API offers
+  no `default` model value and no model entry in `defaultLabels`; `hiddenValues` `model: default` warns.
+
 ## [1.0.1] — 2026-11-22
 
 ### Fixed

@@ -1,7 +1,7 @@
 ╭─ ✻ claude-auto ───────────────────── 1.0.1 · Claude Code 2.1.329 ↑ 2.1.330 ─╮
 │ ❯ account      [work 41%] ┊ personal 17% ┊ low 43%                          │
 │   remote       ● [on] ○ off ○ on+QR ○ stop server                           │
-│   model*       ● [Opus 5.5[1M]]  +4                                         │
+│   model*       ○ Haiku 5.5 ○ Sonnet 5.5 ● [Opus 5.5[1M]] ○ Fable 5.2        │
 │   effort*      ○ default ○ low ○ medium ○ high ● [xhigh] ○ max ○ ultracode  │
 │   advisor*     ○ default ● [fable] ○ opus ○ off                             │
 │   permission*  ○ default ○ plan ○ auto ○ acceptEdits ● [bypass]             │
